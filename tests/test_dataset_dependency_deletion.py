@@ -95,12 +95,12 @@ class DatasetDeletionPlanTests(unittest.TestCase):
                          self.original_sha)
 
     def test_cancel_or_stale_preview_never_deletes_data(self):
-        first, p1 = self._model_run("old000001")
+        first, p1 = self._model_run("abb0000001")
         plan = self._plan()
         refused = self._trash(plan["preview_token"], confirm=False)
         self.assertEqual(refused.status_code, 400)
         self.assertTrue(p1.exists() and self.folder.exists())
-        _, p2 = self._model_run("new000002")
+        _, p2 = self._model_run("abb0000002")
         changed = self._trash(plan["preview_token"])
         self.assertEqual(changed.status_code, 400)
         self.assertIn("changed", changed.json()["detail"])
@@ -108,7 +108,7 @@ class DatasetDeletionPlanTests(unittest.TestCase):
         self.assertTrue(self.folder.exists())
 
     def test_notebook_reference_blocks_cascade_but_archive_is_available(self):
-        run_id, p1 = self._model_run("notebook01")
+        run_id, p1 = self._model_run("c0ffee0001")
         research_library.create("notebook", "Do not orphan this notebook",
                                 {"cells": [{"run_id": run_id}]})
         plan = self._plan()
@@ -136,7 +136,7 @@ class DatasetDeletionPlanTests(unittest.TestCase):
         self.assertTrue(self.folder.exists())
 
     def test_direct_existing_delete_still_refuses_unsafe_or_protected_sources(self):
-        self._model_run("other1234")
+        self._model_run("deface1234")
         direct = self.client.post("/api/workspace/resources/action", json={
             "kind": "dataset", "item_id": self.dataset_id,
             "action": "trash", "confirm": True})
@@ -146,7 +146,7 @@ class DatasetDeletionPlanTests(unittest.TestCase):
         self.assertEqual(other.status_code, 400)
 
     def test_failed_cascade_restores_prior_run_moves(self):
-        run_id, path = self._model_run("rollback01")
+        run_id, path = self._model_run("badc0de001")
         plan = self._plan()
         original = research_library.resource_action
 
