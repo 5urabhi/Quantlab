@@ -24,6 +24,11 @@ type Detail = {id:string;meta:{config:Dict; metrics_by_split:Record<string,Dict>
 type Health = {ok:boolean; mode:string; framework:string; read_only_market_data:boolean; broker_orders_enabled:boolean; dhan_token_configured:boolean; datasets:number;completed_runs:number}
 type DhanStatus = {token_configured:boolean;instrument_master_available:boolean;instrument_master_bytes:number;read_only:boolean}
 type DatasetTrash = {id:string;kind:string;title:string;trashed:boolean;protected:boolean}
+type DatasetDeletePlan = {dataset_id:string;label:string;can_archive:boolean;
+  can_trash_with_saved_runs:boolean;dependent_run_count:number;
+  dependent_runs:{kind:string;id:string;title:string}[];
+  blocking_references:{kind:string;id:string;title:string;reason?:string}[];
+  preview_token:string;recoverable:boolean;raw_market_data_preserved:boolean;summary:string}
 
 type RunConfig = {
   name:string;factor_weights:Record<string,number>;top_n:number;weighting:string;
@@ -242,6 +247,7 @@ function App(){
   const [datasets,setDatasets]=useState<Dataset[]>([])
   const [selectedDataset,setSelectedDataset]=useState('')
   const [deletedDatasets,setDeletedDatasets]=useState<DatasetTrash[]>([])
+  const [deletePlan,setDeletePlan]=useState<DatasetDeletePlan|null>(null)
   const [triFile,setTriFile]=useState<File|null>(null)
   const [triDateColumn,setTriDateColumn]=useState('Date')
   const [triLevelColumn,setTriLevelColumn]=useState('Total Returns Index')
@@ -353,11 +359,25 @@ function App(){
         ' calendar-end labels resolved). No missing prices fabricated. Source reviews remain unverified.')
     })
   }
-  const trashDataset=(d:Dataset)=>{
-    if(!window.confirm('Move '+d.label+' to recoverable Trash? Original Dhan candle history is protected. Saved runs referring to this dataset may block deletion.'))return
+  const inspectDatasetDeletion=(d:Dataset)=>{
+    setDeletePlan(null)
+    void execute(()=>request<DatasetDeletePlan>(
+      '/workspace/datasets/'+encodeURIComponent(d.id)+'/delete-plan'),
+      plan=>setDeletePlan({...plan,label:d.label}))
+  }
+  const archiveDataset=(plan:DatasetDeletePlan)=>{
     void execute(()=>post('/workspace/resources/action',{
-      kind:'dataset',item_id:d.id,action:'trash',confirm:true,
-    }),()=>{void refresh();notify('Dataset moved to Trash. Original market cache is intact.')})
+      kind:'dataset',item_id:plan.dataset_id,action:'archive',
+    }),()=>{setDeletePlan(null);void refresh();notify(
+      'Dataset archived. All saved research results and original market data remain available.')})
+  }
+  const trashDataset=(plan:DatasetDeletePlan)=>{
+    if(!plan.can_trash_with_saved_runs)return
+    void execute(()=>post<{dependent_run_count:number}>(
+      '/workspace/datasets/'+encodeURIComponent(plan.dataset_id)+'/trash-with-saved-runs',
+      {preview_token:plan.preview_token,confirm:true}),
+      result=>{setDeletePlan(null);void refresh();notify(
+        'Dataset and '+result.dependent_run_count+' saved run(s) moved to recoverable Trash. Shared Dhan history is intact.')})
   }
   const restoreDataset=(id:string)=>{
     void execute(()=>post('/workspace/resources/action',{
@@ -405,6 +425,50 @@ function App(){
                 className={tab===module?'active':''} onClick={()=>begin(module)}>
                 {titles[module]}</button>)}
           </nav>}
+        {deletePlan&&<div className="ws-delete-overlay">
+          <section className="ws-delete-dialog" role="dialog" aria-modal="true"
+            aria-label={'Manage dataset '+deletePlan.label}>
+            <header>
+              <div><span className="ws-overline">DATASET MANAGEMENT · REVIEW BEFORE DELETING</span>
+                <h2>Manage {deletePlan.label}</h2></div>
+              <button type="button" className="ws-icon" aria-label="Close dataset deletion preview"
+                disabled={busy} onClick={()=>setDeletePlan(null)}><X size={16}/></button>
+            </header>
+            <p className="ws-caption">{deletePlan.summary}</p>
+            <div className="ws-delete-summary">
+              <span><strong>{deletePlan.dependent_run_count}</strong> saved research runs referencing this dataset</span>
+              <span><CheckCircle2 size={15}/> Shared Dhan originals protected</span>
+            </div>
+            {deletePlan.dependent_runs.length>0&&<section className="ws-delete-dependencies">
+              <h3>Saved runs that would also move to Trash</h3>
+              <ul>{deletePlan.dependent_runs.map(run=><li key={run.kind+':'+run.id}>
+                <strong>{run.title}</strong><small>{run.kind.replaceAll('_',' ')} · {run.id}</small>
+              </li>)}</ul>
+            </section>}
+            {deletePlan.blocking_references.length>0&&<section className="ws-delete-blocked" role="status">
+              <h3>Deletion blocked by other saved work</h3>
+              <p>These references cannot be deleted automatically. You can archive this dataset
+                without breaking reports and notebooks.</p>
+              <ul>{deletePlan.blocking_references.map((ref,i)=><li key={ref.kind+':'+ref.id+':'+i}>
+                <strong>{ref.title}</strong><small>{ref.kind.replaceAll('_',' ')} · {ref.id}
+                  {ref.reason?' · '+ref.reason:''}</small></li>)}</ul>
+            </section>}
+            <p className="ws-caption">Trash is recoverable. Nothing is permanently purged;
+              original Dhan history and shared caches are never deleted by this action.</p>
+            <div className="ws-delete-actions">
+              <button type="button" className="ws-button secondary" disabled={busy}
+                onClick={()=>setDeletePlan(null)}>Cancel</button>
+              <button type="button" className="ws-button secondary" disabled={busy}
+                onClick={()=>archiveDataset(deletePlan)}>Archive dataset · keep saved work</button>
+              <button type="button" className="ws-button ws-delete-confirm"
+                disabled={busy||!deletePlan.can_trash_with_saved_runs}
+                onClick={()=>trashDataset(deletePlan)}>
+                <Trash2 size={15}/> Move dataset
+                {deletePlan.dependent_run_count>0?' + '+deletePlan.dependent_run_count+' saved runs':''} to Trash
+              </button>
+            </div>
+          </section>
+        </div>}
         {notice&&<div role="status" className={'ws-notice '+(notice.error?'error':'')}><span>{notice.error?<CircleAlert size={17}/>:<CheckCircle2 size={17}/>}</span>{notice.text}<button onClick={()=>setNotice(null)} aria-label="Dismiss"><X size={16}/></button></div>}
         {tab==='journey'&&<ResearchJourney datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
@@ -474,7 +538,8 @@ function App(){
           <Card title="Imported dataset library"><Table rows={datasets.map(d=>({name:d.label,kind:d.kind,ready:d.ready,benchmark:d.benchmark_kind==='price_index_spot_only'?'PRICE INDEX (not TRI)':d.benchmark_kind||'missing',daily_prices:d.has_daily_prices?'yes':'no',source_resolution:d.source_interval_minutes===null?'daily':d.source_interval_minutes?d.source_interval_minutes+' min':'unreported',missing:d.missing.join(', ')||'none',basis:d.basis}))}/></Card>
           <Card title="Saved datasets · manage & delete">
             <p className="ws-caption">You can delete uploaded datasets and derived Dhan research views here.
-              Original shared Dhan candles are protected, and referenced datasets cannot be deleted until dependent results are removed.</p>
+              Original shared Dhan candles are protected. Select Delete to review referenced
+              saved runs, archive the dataset, or move the dataset and eligible saved runs to recoverable Trash.</p>
             <div className="ws-dataset-manage-list">
               {datasets.map(d=><div className="ws-dataset-manage-row" key={d.id}>
                 <div><strong>{d.label}</strong>
@@ -486,7 +551,7 @@ function App(){
                 </button>
                 {(d.id.startsWith('upload_')||d.id.startsWith('dhan_batch_'))?
                   <button type="button" className="ws-button ws-delete" disabled={busy}
-                    aria-label={'Delete dataset '+d.label} onClick={()=>trashDataset(d)}>
+                    aria-label={'Delete dataset '+d.label} onClick={()=>inspectDatasetDeletion(d)}>
                     <Trash2 size={14}/> Delete
                   </button>:<small className="ws-protected-label">Protected source</small>}
               </div>)}
