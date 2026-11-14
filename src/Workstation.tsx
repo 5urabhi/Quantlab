@@ -23,7 +23,7 @@ type Job = {id:string; kind:string; status:'queued'|'running'|'complete'|'error'
 type Detail = {id:string;meta:{config:Dict; metrics_by_split:Record<string,Dict>; coverage:Dict; limitations:string[]; first_price_date:string;last_price_date:string; generated_utc:string};source:Dict;returns:Dict[];latest_weights:{name:string;weight:number}[];rank_ic:Dict[];factor_exposures:Dict[];concentration:Dict[];rolling:Dict[];cost_sensitivity:Dict[];robustness:Dict[];methodologies:Dict[];audit:Dict;data_quality:Dict;artifacts:string[]}
 type Health = {ok:boolean; mode:string; framework:string; read_only_market_data:boolean; broker_orders_enabled:boolean; dhan_token_configured:boolean; datasets:number;completed_runs:number}
 type DhanStatus = {token_configured:boolean;instrument_master_available:boolean;instrument_master_bytes:number;read_only:boolean}
-type DatasetTrash = {id:string;kind:string;title:string;trashed:boolean;protected:boolean}
+type DatasetTrash = {id:string;kind:string;title:string;trashed:boolean;archived:boolean;protected:boolean}
 type DatasetDeletePlan = {dataset_id:string;label:string;can_archive:boolean;
   can_trash_with_saved_runs:boolean;dependent_run_count:number;
   dependent_runs:{kind:string;id:string;title:string}[];
@@ -247,6 +247,7 @@ function App(){
   const [datasets,setDatasets]=useState<Dataset[]>([])
   const [selectedDataset,setSelectedDataset]=useState('')
   const [deletedDatasets,setDeletedDatasets]=useState<DatasetTrash[]>([])
+  const [archivedDatasets,setArchivedDatasets]=useState<DatasetTrash[]>([])
   const [deletePlan,setDeletePlan]=useState<DatasetDeletePlan|null>(null)
   const [triFile,setTriFile]=useState<File|null>(null)
   const [triDateColumn,setTriDateColumn]=useState('Date')
@@ -284,6 +285,7 @@ function App(){
       ])
       setHealth(h);setDatasets(ds.datasets);setRuns(rr.runs);setDhan(dh)
       setDeletedDatasets(resources.resources.filter(r=>r.kind==='dataset'&&r.trashed))
+      setArchivedDatasets(resources.resources.filter(r=>r.kind==='dataset'&&r.archived&&!r.trashed))
       setSelectedDataset(s=>{
         const existing=ds.datasets.find(d=>d.id===s)
         if(existing&&existing.kind!=='synthetic')return s
@@ -383,6 +385,11 @@ function App(){
     void execute(()=>post('/workspace/resources/action',{
       kind:'dataset',item_id:id,action:'restore',
     }),()=>{void refresh();setSelectedDataset(id);notify('Dataset restored.')})
+  }
+  const unarchiveDataset=(id:string)=>{
+    void execute(()=>post('/workspace/resources/action',{
+      kind:'dataset',item_id:id,action:'unarchive',
+    }),()=>{void refresh();notify('Archived dataset restored to Data Library.')})
   }
   const purgeDataset=(id:string)=>{
     if(!window.confirm('Permanently delete this trashed derived dataset? This cannot be undone. Shared original candles are not removed.'))return
@@ -556,6 +563,16 @@ function App(){
                   </button>:<small className="ws-protected-label">Protected source</small>}
               </div>)}
             </div>
+            <details className="ws-tri-advanced ws-dataset-archive">
+              <summary>Archived datasets ({archivedDatasets.length}) · restore to Data Library</summary>
+              {archivedDatasets.length===0?<p className="ws-caption">No archived datasets.</p>:
+                <div className="ws-dataset-manage-list">{archivedDatasets.map(d=>
+                  <div className="ws-dataset-manage-row" key={d.id}>
+                    <div><strong>{d.title}</strong><small>{d.id} · Saved work remains available</small></div>
+                    <button type="button" className="ws-button secondary" disabled={busy}
+                      onClick={()=>unarchiveDataset(d.id)}><RotateCcw size={14}/> Unarchive</button>
+                  </div>)}</div>}
+            </details>
             <details className="ws-tri-advanced ws-dataset-trash">
               <summary>Deleted datasets ({deletedDatasets.length}) · restore or permanently delete</summary>
               {deletedDatasets.length===0?<p className="ws-caption">No deleted datasets.</p>:
