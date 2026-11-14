@@ -42,7 +42,7 @@ const TASKS:{id:Task;name:string;description:string}[]=[
 export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenDhan,onOpenData}:Props){
   const [capabilities,setCapabilities]=useState<Capability|null>(null)
   const [task,setTask]=useState<Task>('corporate_actions')
-  const [symbol,setSymbol]=useState('')
+  const [symbol,setSymbol]=useState('RELIANCE')
   const [term,setTerm]=useState('')
   const [indexName,setIndexName]=useState('Nifty 50')
   const [fromDate,setFromDate]=useState(yearAgo)
@@ -118,8 +118,9 @@ export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenD
     <header className="nse-header">
       <div><span className="nse-eyebrow">OFFICIAL NSE MCP · INTEGRATED</span>
         <h3>NSE Source Assistant</h3>
-        <p>Look up a source in QuantLab. No terminal, API key or website scraper required.
-          QuantLab chooses the official MCP tool for your request.</p></div>
+        <p>Choose what to check below, then click <strong>Check NSE source</strong>.
+          RELIANCE is prefilled as an editable example. Official NSE MCP runs inside
+          QuantLab—no terminal commands or NSE key needed for these informational checks.</p></div>
       <button type="button" disabled={busy!==null} onClick={()=>void check()}>
         <RefreshCw size={14}/> {busy==='check'?'Checking…':'Check connection'}</button>
     </header>
@@ -135,8 +136,9 @@ export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenD
     <div className="nse-context" role="note">
       {datasetId?'Current research dataset: '+datasetId+'. ':'No research dataset selected. '}
       {suggestedSymbol?'A missing-data source suggests checking '+suggestedSymbol+'. ':''}
-      Price-history observations for backtesting still use your authorized Dhan feed.
-      Official NSE index price levels never replace TRI.
+      MCP checks do not append observations to a research dataset.
+      Historical backtest prices still use your authorized Dhan feed;
+      NSE index prices never replace your saved TRI.
     </div>
     <div className="nse-task-tabs" role="tablist" aria-label="Choose NSE source check">
       {TASKS.map(item=><button key={item.id} type="button" role="tab"
@@ -147,7 +149,7 @@ export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenD
     <div className="nse-form">
       {(task==='corporate_actions'||task==='stock_history')&&
         <label>Stock symbol<input aria-label="NSE stock symbol" value={symbol}
-          placeholder="RELIANCE" maxLength={25} onChange={e=>setSymbol(e.target.value.toUpperCase())}/></label>}
+          placeholder="e.g. RELIANCE" maxLength={25} onChange={e=>setSymbol(e.target.value.toUpperCase())}/></label>}
       {task==='symbol_search'&&
         <label>Company name or symbol<input aria-label="Search NSE symbols" value={term}
           placeholder="TATA" maxLength={50} onChange={e=>setTerm(e.target.value)}/></label>}

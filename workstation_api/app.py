@@ -765,6 +765,31 @@ def workspace_resources(include_trashed: bool = False):
     return {"resources": research_library.resource_listing(include_trashed=include_trashed)}
 
 
+class DatasetDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    preview_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirm: bool = False
+
+
+@app.get("/api/workspace/datasets/{dataset_id}/delete-plan")
+def workspace_dataset_delete_plan(dataset_id: str):
+    """Explain exact saved dependencies BEFORE offering dataset deletion."""
+    try:
+        return research_library.dataset_delete_plan(dataset_id)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/workspace/datasets/{dataset_id}/trash-with-saved-runs")
+def workspace_dataset_delete_with_saved_runs(dataset_id: str, body: DatasetDeleteRequest):
+    """Explicit, recoverable cascade only for safe derived run dependencies."""
+    try:
+        return research_library.trash_dataset_with_saved_runs(
+            dataset_id, preview_token=body.preview_token, confirm=body.confirm)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/workspace/resources/dependencies")
 def workspace_dependencies(kind: Literal["dataset","model_run","research_run"], item_id: str):
     try:
