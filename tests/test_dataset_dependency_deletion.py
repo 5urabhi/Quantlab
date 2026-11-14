@@ -107,33 +107,74 @@ class DatasetDeletionPlanTests(unittest.TestCase):
         self.assertTrue(p1.exists() and p2.exists())
         self.assertTrue(self.folder.exists())
 
-    def test_notebook_reference_blocks_cascade_but_archive_is_available(self):
-        run_id, p1 = self._model_run("c0ffee0001")
-        research_library.create("notebook", "Do not orphan this notebook",
-                                {"cells": [{"run_id": run_id}]})
+    def test_notebook_report_and_saved_run_move_together_with_one_confirmation(self):
+        run_id, file = self._model_run("c0ffee0001")
+        notebook = research_library.create(
+            "notebook", "Notebook using this run",
+            {"cells": [{"run_id": run_id}]})
+        report = research_library.create(
+            "report", "Report based on notebook",
+            {"notebook_id": notebook["id"]})
         plan = self._plan()
-        self.assertFalse(plan["can_trash_with_saved_runs"])
-        self.assertTrue(plan["blocking_references"])
-        self.assertEqual(self._trash(plan["preview_token"]).status_code, 400)
-        self.assertTrue(p1.exists() and self.folder.exists())
-        research_library.resource_action("dataset", self.dataset_id, "archive")
+        self.assertTrue(plan["can_delete_all"])
+        self.assertEqual(plan["dependent_run_count"], 1)
+        self.assertEqual(plan["dependent_count"], 3)
+        self.assertEqual({item["id"] for item in plan["dependent_items"]},
+                         {run_id, notebook["id"], report["id"]})
+        self.assertEqual(plan["blocking_references"], [])
         self.assertTrue(self.folder.exists())
-        self.assertFalse(any(x["id"] == self.dataset_id for x in service.datasets()))
-        self.assertTrue(any(x["id"] == self.dataset_id
-                            for x in service.datasets(include_archived=True)))
-        research_library.resource_action("dataset", self.dataset_id, "unarchive")
+        self.assertFalse(research_library.get(notebook["id"])["trashed"])
+        response = self._trash(plan["preview_token"])
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(file.exists())
+        self.assertFalse(self.folder.exists())
+        self.assertTrue(research_library.get(notebook["id"])["trashed"])
+        self.assertTrue(research_library.get(report["id"])["trashed"])
+        self.assertTrue(self.shared.exists())
+        # All can be restored from local recoverable Trash.
+        research_library.resource_action("dataset", self.dataset_id, "restore")
+        research_library.resource_action("model_run", run_id, "restore")
+        research_library.action(notebook["id"], "restore")
+        research_library.action(report["id"], "restore")
+        self.assertTrue(file.exists())
+        self.assertTrue(self.folder.exists())
 
-    def test_linked_derived_tri_version_protects_original_source(self):
+    def test_linked_derived_tri_version_and_its_results_move_together(self):
         child = service.DATA / "workstation_imports" / "derived_tri_case"
         child.mkdir()
         (child / "workstation_source.json").write_text(
             json.dumps({"parent_dataset_id": self.dataset_id}))
+        run_id, path = self._model_run("f00dcafe01")
+        payload = json.loads(path.read_text())
+        payload["source"]["dataset_id"] = "upload_derived_tri_case"
+        path.write_text(json.dumps(payload))
         plan = self._plan()
-        self.assertFalse(plan["can_trash_with_saved_runs"])
+        self.assertTrue(plan["can_delete_all"])
         self.assertTrue(any(x["kind"] == "dataset" and "derived" in x["id"]
-                            for x in plan["blocking_references"]))
-        self.assertEqual(self._trash(plan["preview_token"]).status_code, 400)
+                            for x in plan["dependent_items"]))
+        self.assertTrue(any(x["id"] == run_id for x in plan["dependent_items"]))
+        receipt = self._trash(plan["preview_token"])
+        self.assertEqual(receipt.status_code, 200, receipt.text)
+        self.assertFalse(child.exists())
+        self.assertFalse(path.exists())
+        self.assertFalse(self.folder.exists())
+        self.assertTrue(self.shared.exists())
+        research_library.resource_action("dataset", self.dataset_id, "restore")
+        research_library.resource_action("dataset", "upload_derived_tri_case", "restore")
+        research_library.resource_action("model_run", run_id, "restore")
+        self.assertTrue(child.exists() and path.exists() and self.folder.exists())
+
+    def test_old_archive_option_keeps_every_saved_reference_unchanged(self):
+        run_id, path = self._model_run("abcde00123")
+        notebook = research_library.create(
+            "notebook", "Keep notebook", {"run_id": run_id})
+        research_library.resource_action("dataset", self.dataset_id, "archive")
+        self.assertTrue(path.exists())
         self.assertTrue(self.folder.exists())
+        self.assertFalse(research_library.get(notebook["id"])["trashed"])
+        self.assertFalse(any(x["id"] == self.dataset_id for x in service.datasets()))
+        research_library.resource_action("dataset", self.dataset_id, "unarchive")
+        self.assertTrue(any(x["id"] == self.dataset_id for x in service.datasets()))
 
     def test_direct_existing_delete_still_refuses_unsafe_or_protected_sources(self):
         self._model_run("deface1234")

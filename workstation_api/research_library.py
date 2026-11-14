@@ -385,8 +385,8 @@ def resource_dependencies(kind: str, item_id: str) -> list[dict]:
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT id,kind,title FROM records WHERE trashed=0 "
-                            "AND payload LIKE ? LIMIT 150",
-                            ("%" + item_id + "%",)).fetchall()
+                            "AND instr(payload, ?) > 0 LIMIT 150",
+                            (item_id,)).fetchall()
     refs.extend([{"kind": row["kind"], "id": row["id"], "title": row["title"]}
                  for row in rows])
     if kind == "dataset":
@@ -475,131 +475,17 @@ def resource_action(kind: str, item_id: str, operation: str, *,
 
 
 def dataset_delete_plan(dataset_id: str) -> dict:
-    """Preview deletion without modifying files or hiding saved dependencies.
-
-    Safe cascading is deliberately restricted to derived model/research runs
-    with no dependent notes, notebooks, charts or other library references.
-    Historic source datasets and linked TRI versions remain protected.
-    """
-    _resource_key("dataset", dataset_id)
-    dataset_folder = _resource_path("dataset", dataset_id)
-    if resource_status("dataset", dataset_id)["trashed"]:
-        raise ValueError("Dataset is already in recoverable Trash")
-    refs = resource_dependencies("dataset", dataset_id)
-    run_refs = []
-    blockers = []
-    visited = set()
-    if len(refs) >= 150:
-        blockers.append({"kind": "review_required", "id": dataset_id,
-                         "title": "At least 150 references exist; review them individually"})
-    for ref in refs:
-        pair = (ref["kind"], ref["id"])
-        if pair in visited:
-            continue
-        visited.add(pair)
-        if ref["kind"] not in {"model_run", "research_run"}:
-            blockers.append({**ref, "reason": "Saved record refers to the dataset"})
-            continue
-        try:
-            _resource_path(ref["kind"], ref["id"])
-            nested = resource_dependencies(ref["kind"], ref["id"])
-            if nested:
-                blockers.append({**ref, "reason": "A saved note, notebook, chart or report "
-                                 "refers to this run; remove or archive it separately"})
-            else:
-                run_refs.append(ref)
-        except (ValueError, OSError, FileNotFoundError) as exc:
-            blockers.append({**ref, "reason": "Cannot safely move the saved run: " + str(exc)})
-    # A newer derived TRI view may depend on the original upload. Do not
-    # orphan it by trashing the original independently.
-    for record in service.datasets(include_archived=True):
-        child_id = record["id"]
-        if child_id == dataset_id or not child_id.startswith("upload_"):
-            continue
-        try:
-            folder, _ = service.dataset_path(child_id)
-            metadata = folder / "workstation_source.json"
-            if (metadata.is_symlink() or not metadata.is_file()
-                    or metadata.stat().st_size > 80_000):
-                continue
-            info = json.loads(metadata.read_text(encoding="utf-8"))
-            if isinstance(info, dict) and info.get("parent_dataset_id") == dataset_id:
-                blockers.append({"kind": "dataset", "id": child_id,
-                                 "title": record["label"],
-                                 "reason": "A derived dataset version depends on this original"})
-        except (OSError, ValueError, TypeError, KeyError):
-            continue
-    run_refs.sort(key=lambda row: (row["kind"], row["id"]))
-    blockers.sort(key=lambda row: (row["kind"], row["id"]))
-    can_delete = len(blockers) == 0
-    inputs = {
-        "dataset_id": dataset_id,
-        "source_path": str(dataset_folder),
-        "dependent_runs": [(x["kind"], x["id"]) for x in run_refs],
-        "blocking_references": [(x["kind"], x["id"], x.get("reason", ""))
-                                for x in blockers],
-    }
-    preview_token = hashlib.sha256(
-        json.dumps(inputs, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
-    return {
-        "dataset_id": dataset_id,
-        "can_archive": True, "can_trash_with_saved_runs": can_delete,
-        "dependent_run_count": len(run_refs), "dependent_runs": run_refs,
-        "blocking_references": blockers, "preview_token": preview_token,
-        "recoverable": True, "raw_market_data_preserved": True,
-        "summary": ("Move to recoverable Trash, including explicitly listed "
-                    "saved runs. Shared raw Dhan caches and historical prices are preserved."
-                    if can_delete else "Deletion is blocked by linked datasets or saved records; "
-                    "archiving hides this dataset without breaking their references."),
-    }
+    """Inspect every linked saved artifact and derived dataset without deleting."""
+    from . import dataset_cleanup
+    return dataset_cleanup.plan(dataset_id)
 
 
 def trash_dataset_with_saved_runs(dataset_id: str, *, preview_token: str,
                                   confirm: bool = False) -> dict:
-    """Confirmed, checked, recoverable cascade. Never purges or trades.
-
-    Check the source and every dependent run before touching any file; reject
-    changed dependency lists. Roll back prior moves if any later action fails.
-    """
-    if not confirm or not isinstance(preview_token, str) or not re.fullmatch(
-            r"[0-9a-f]{64}", preview_token):
-        raise ValueError("Review the deletion plan and explicitly confirm the action")
-    with LOCK:
-        plan = dataset_delete_plan(dataset_id)
-        if not plan["can_trash_with_saved_runs"]:
-            raise ValueError("Saved records or linked dataset versions still need this "
-                             "dataset. Archive it instead or resolve the listed blockers.")
-        if plan["preview_token"] != preview_token:
-            raise ValueError("Saved dependencies changed. Review the refreshed deletion "
-                             "plan before confirming again.")
-        moved = []
-        try:
-            for run in plan["dependent_runs"]:
-                resource_action(run["kind"], run["id"], "trash", confirm=True)
-                moved.append((run["kind"], run["id"]))
-            # After moving dependent run files, direct dataset deletion must
-            # pass the preexisting dependency gate instead of bypassing it.
-            resource_action("dataset", dataset_id, "trash", confirm=True)
-            moved.append(("dataset", dataset_id))
-        except Exception as exc:
-            failures = []
-            for kind, item_id in reversed(moved):
-                try:
-                    resource_action(kind, item_id, "restore")
-                except Exception as rollback_exc:
-                    failures.append(kind + ":" + item_id + " (" + str(rollback_exc) + ")")
-            if failures:
-                raise ValueError("Delete failed and some items could not be restored: " +
-                                 ", ".join(failures)) from exc
-            raise ValueError("Delete was cancelled safely and previous moves restored: " +
-                             str(exc)) from exc
-    return {
-        "status": "moved_to_recoverable_trash", "dataset_id": dataset_id,
-        "dependent_runs_moved": moved[:-1],
-        "dependent_run_count": len(moved) - 1,
-        "shared_original_market_data_preserved": True,
-        "permanently_purged": False,
-    }
+    """Backward-compatible entrypoint; confirmation now includes ALL saved work."""
+    from . import dataset_cleanup
+    return dataset_cleanup.delete(dataset_id, preview_token=preview_token,
+                                  confirm=confirm)
 
 
 def resource_listing(*, include_trashed: bool = False) -> list[dict]:

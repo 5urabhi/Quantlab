@@ -100,14 +100,15 @@ restrictions still apply.
 
 ## Dataset deletion and clearer NSE MCP instructions
 
-The Data Library **Delete dataset** control now opens a dependency preview
-instead of reporting unhelpful raw run IDs as a hard error. It offers Archive
-(leave all references intact), or an explicit, recoverable dataset-plus-saved-
-runs Trash action if **only** standalone run files depend on that dataset.
-Linked derived TRI versions and saved notebooks/reports are blockers rather
-than silently destroyed; every backend cascade rechecks a preview token and
-rolls back prior moves on failure. Shared original Dhan market caches are
-never touched.
+Data Library now starts with **Your datasets** and a direct Use/Delete
+action per dataset. A single Yes/No popup lists **all** dependent saved work
+(model runs, experiment runs, notes, notebooks, reports and linked dataset
+versions). One confirmed action moves the entire group to recoverable Trash;
+manual removal of each old run is unnecessary. A stale confirmation token
+or unsafe/protected source blocks the operation, and partial moves are rolled
+back. Original Dhan market-data caches remain protected. Raw file and source
+metadata tables are folded into Advanced panels so beginners can use the
+main data workflow without deciphering technical columns.
 
 The NSE Sources assistant now fills an editable RELIANCE example and explains
 that its **Check NSE source** action is an informational MCP lookup, not an

@@ -55,16 +55,17 @@ For derived datasets, the archive and trash actions use distinct semantics:
 * **Permanently delete:** requires an additional confirmation; the action is
   irreversible. Raw shared Dhan candle cache and canonical shared market data
   are deliberately excluded.
-* **Guided dependency deletion:** Data Library's **Delete** button first
-  displays exact saved runs and other references. If the dataset is referenced
-  only by standalone saved model and experiment runs, a second explicit action
-  moves the dataset **and those listed runs** to recoverable Trash as a group.
-  A stale preview token blocks deletion if another run appears after review.
-  Non-run references (notes, notebooks, charts, reports) or linked derived
-  datasets block the cascade; use **Archive dataset · keep saved work** or
-  resolve those dependencies individually. Files and source market caches are
-  not permanently purged. Restoring saved runs requires restoring each
-  resource from the library Trash after restoring its dataset.
+* **One confirmation deletes all linked work:** Under **Data Library → Your
+  datasets**, select **Delete**. The popup lists every dependent saved run,
+  notebook, report, chart, project and linked derived dataset version known
+  to the research library. **Yes, delete dataset + N saved items** moves the
+  entire displayed dependency group to recoverable local Trash. No manual
+  deletion of model runs is needed. A changed dependency list invalidates
+  the old confirmation, and file moves roll back on failure. Protected
+  shared market histories remain untouched, and unsafe sources prevent a
+  partial cascade. **No, keep everything** cancels. Archive is an optional
+  non-destructive alternative. The normal data view hides raw dataset
+  metadata under expandable Advanced panels.
 
 Saved configurations, charts, notebooks and reports are JSON-backed
 metadata records in data/research_workspace/library.sqlite3.

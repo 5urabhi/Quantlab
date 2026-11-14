@@ -113,3 +113,36 @@
 @media(max-width:640px){.ws-delete-dialog{padding:15px}
 .ws-delete-actions{display:grid;grid-template-columns:1fr}
 .ws-delete-actions button{white-space:normal;min-height:40px}}
+
+
+/* Data Library: one prominent list, clear actions, technical details on demand. */
+.ws-data-library-card{border-color:#346d66;background:#0e202b}
+.ws-data-library-card>.ws-cardhead{margin-bottom:8px}
+.ws-data-library-card>.ws-cardhead h3{font:650 16px 'Space Grotesk',sans-serif;color:#e7fff6}
+.ws-data-library-card>.ws-caption{margin:8px 0 16px;max-width:960px}
+.ws-data-library-card .ws-dataset-manage-row{background:#112734;border-color:#315363}
+.ws-data-library-card .ws-dataset-manage-row>div{flex:1 1 260px}
+.ws-data-library-card .ws-dataset-manage-row .ws-tag{margin-left:auto}
+.ws-data-setup{align-items:start}
+.ws-data-setup>.ws-card{min-height:0}
+.ws-data-setup .ws-cardhead{flex-wrap:wrap}
+.ws-data-setup .ws-cardhead .ws-select{margin:0}
+.ws-data-setup .ws-synthetic-option{width:100%;flex-basis:100%;margin-top:2px}
+.ws-data-setup .ws-synthetic-option summary{color:#a5c8c4}
+.ws-dataset-advanced{margin-top:12px;padding:13px}
+.ws-dataset-advanced summary{color:#b6dbc9;font-weight:650}
+.ws-dataset-advanced .ws-table-scroll{margin-top:14px}
+.ws-delete-intro{font-size:13px;line-height:1.7;color:#d6e9eb;margin:14px 0}
+.ws-delete-intro strong{color:#a8f2d8}
+.ws-delete-footnote{font-size:11px;line-height:1.65;color:#a7c1c6;margin:17px 0 2px}
+.ws-delete-footnote button{color:#96ead2;background:none;border:none;
+ text-decoration:underline;text-underline-offset:3px;padding:2px 5px;cursor:pointer}
+.ws-delete-dialog .ws-delete-dependencies{max-height:300px;overflow:hidden}
+.ws-delete-dialog .ws-delete-dependencies ul{max-height:240px;overflow:auto}
+.ws-delete-dialog .ws-delete-actions .ws-delete-confirm{min-height:41px}
+.ws-delete-dialog .ws-delete-blocked{max-height:220px;overflow:auto}
+@media(max-width:700px){
+.ws-data-library-card .ws-dataset-manage-row .ws-tag{margin-left:0}
+.ws-data-library-card .ws-dataset-manage-row .ws-button{flex:1 1 auto}
+.ws-data-setup .ws-cardhead .ws-select{width:100%}
+}
