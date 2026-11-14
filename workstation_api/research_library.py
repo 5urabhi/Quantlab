@@ -385,8 +385,8 @@ def resource_dependencies(kind: str, item_id: str) -> list[dict]:
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT id,kind,title FROM records WHERE trashed=0 "
-                            "AND payload LIKE ? LIMIT 150",
-                            ("%" + item_id + "%",)).fetchall()
+                            "AND instr(payload, ?) > 0 LIMIT 150",
+                            (item_id,)).fetchall()
     refs.extend([{"kind": row["kind"], "id": row["id"], "title": row["title"]}
                  for row in rows])
     if kind == "dataset":
