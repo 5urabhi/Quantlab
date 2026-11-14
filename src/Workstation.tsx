@@ -4,13 +4,14 @@ import {
   CheckCircle2, ChevronRight, CircleAlert, Clock3, Database, FileArchive,
   FileText, FlaskConical, Gauge, LoaderCircle,
   LockKeyhole, Menu, Play, RefreshCw, Settings2,
-  ShieldCheck, Sigma, Upload, Trash2, RotateCcw, X
+  ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X
 } from 'lucide-react'
 import './workstation.css'
 import DhanDataManager from './DhanDataManager'
 import ModelLaboratory from './ModelLaboratory'
 import ResearchGuide from './ResearchGuide'
 import ResearchWorkspace from './ResearchWorkspace'
+import NSESourceAssistant from './NSESourceAssistant'
 import ResultsStudio from './ResultsStudio'
 import ResearchJourney from './ResearchJourney'
 import HistoricalValidationPanel from './HistoricalValidationPanel'
@@ -31,11 +32,11 @@ type RunConfig = {
   validation_start:string;final_test_start:string;sector_cap:number|null
 }
 const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momentum:1,low_volatility:0,value:0,quality:0,size:0},top_n:10,weighting:'equal',max_weight:.2,rebalance_every:3,cost_bps:10,execution_lag:1,momentum_formation:12,momentum_skip:1,volatility_lookback:12,validation_start:'',final_test_start:'',sector_cap:null}
-type Tab = 'journey'|'overview'|'workspace'|'projects'|'data'|'dhan'|'research'|'factors'|'construction'|'comparisons'|'mathematics'|'rolling'|'models'|'risk'|'robustness'|'visual'|'reports'|'history'|'settings'|'guide'
+type Tab = 'journey'|'overview'|'workspace'|'projects'|'data'|'dhan'|'nse'|'research'|'factors'|'construction'|'comparisons'|'mathematics'|'rolling'|'models'|'risk'|'robustness'|'visual'|'reports'|'history'|'settings'|'guide'
 const primarySections:{id:Tab;label:string;icon:typeof Activity;tabs:Tab[]}[]=[
  {id:'journey',label:'Guided Research',icon:Play,tabs:['journey']},
  {id:'overview',label:'Home',icon:Gauge,tabs:['overview']},
- {id:'data',label:'Data Library',icon:Database,tabs:['data','dhan']},
+ {id:'data',label:'Data Library',icon:Database,tabs:['data','dhan','nse']},
  {id:'mathematics',label:'Model Laboratory',icon:Sigma,
    tabs:['mathematics','models','risk','factors','construction']},
  {id:'research',label:'Experiment Studio',icon:FlaskConical,
@@ -47,7 +48,7 @@ const primarySections:{id:Tab;label:string;icon:typeof Activity;tabs:Tab[]}[]=[
  {id:'guide',label:'Help & Settings',icon:Settings2,tabs:['guide','settings']},
 ]
 
-const titles:Record<Tab,string>={journey:'Guided Research · Five steps',overview:'Research command center',workspace:'Research workspace',projects:'Projects and notebooks',data:'Data manager',dhan:'Download market data',research:'Index research engine',factors:'Factor laboratory',construction:'Index construction',comparisons:'Index comparisons',mathematics:'Advanced mathematics',rolling:'Rolling validation',models:'Quantitative models',risk:'Risk attribution',robustness:'Robustness & sensitivity',visual:'Visual validation',reports:'Research reports',history:'Results Studio · Research Intelligence',settings:'Workstation settings',guide:'How to use QuantLab'}
+const titles:Record<Tab,string>={journey:'Guided Research · Five steps',overview:'Research command center',workspace:'Research workspace',projects:'Projects and notebooks',data:'Data manager',dhan:'Download market data',nse:'NSE Sources',research:'Index research engine',factors:'Factor laboratory',construction:'Index construction',comparisons:'Index comparisons',mathematics:'Advanced mathematics',rolling:'Rolling validation',models:'Quantitative models',risk:'Risk attribution',robustness:'Robustness & sensitivity',visual:'Visual validation',reports:'Research reports',history:'Results Studio · Research Intelligence',settings:'Workstation settings',guide:'How to use QuantLab'}
 const factors=[['momentum','Momentum'],['low_volatility','Low volatility'],['value','Value'],['quality','Quality'],['size','Size']] as const
 const number=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? v.toLocaleString('en-US',{maximumFractionDigits:d,minimumFractionDigits:d}) : '—'
 const percent=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? (v*100).toFixed(d)+'%' : '—'
@@ -418,7 +419,7 @@ function App(){
           <div className="ws-grid halves"><Card title="Research datasets" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{datasets.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{datasets.length===0&&<p className="ws-caption">No datasets found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
         </>}
         {tab==='data'&&<>
-          <div className="ws-grid halves"><Card title="Select research dataset" extra={dataPicker}><p className="ws-caption">Need data? Use the guided downloader: choose stocks, choose dates, download, then prepare. Completed downloads stay saved locally. Historical investment claims still require source checks.</p><div className="ws-actions"><button className="ws-button primary" onClick={()=>begin('dhan')}><Database size={15}/> Download market data</button><button className="ws-button" disabled={busy} onClick={synthetic}><Beaker size={15}/> Create synthetic test dataset</button><label className={'ws-button secondary '+(busy?'disabled':'')}><Upload size={15}/> Import research ZIP<input hidden type="file" accept=".zip" disabled={busy} onChange={e=>{const f=e.target.files?.[0];if(f)void upload(f);e.target.value=''}}/></label></div><p className="ws-caption">ZIP requires prices.csv, membership.csv and benchmark.csv; optionally fundamentals.csv, sectors.csv and corporate_actions.csv. Import does not certify the data.</p></Card><Card title="Selected dataset readiness">{dataset?<><div className="ws-selected-dataset"><strong>{dataset.label}</strong><Tag tone={dataset.ready?'good':'warn'}>{dataset.ready?'CORE FILES PRESENT':'MISSING CORE INPUTS'}</Tag></div>
+          <div className="ws-grid halves"><Card title="Select research dataset" extra={dataPicker}><p className="ws-caption">Need data? Use the guided downloader: choose stocks, choose dates, download, then prepare. Completed downloads stay saved locally. Historical investment claims still require source checks.</p><div className="ws-actions"><button className="ws-button primary" onClick={()=>begin('dhan')}><Database size={15}/> Download market data</button><button className="ws-button secondary" onClick={()=>begin('nse')}><Search size={15}/> NSE Sources · official MCP</button><button className="ws-button" disabled={busy} onClick={synthetic}><Beaker size={15}/> Create synthetic test dataset</button><label className={'ws-button secondary '+(busy?'disabled':'')}><Upload size={15}/> Import research ZIP<input hidden type="file" accept=".zip" disabled={busy} onChange={e=>{const f=e.target.files?.[0];if(f)void upload(f);e.target.value=''}}/></label></div><p className="ws-caption">ZIP requires prices.csv, membership.csv and benchmark.csv; optionally fundamentals.csv, sectors.csv and corporate_actions.csv. Import does not certify the data.</p></Card><Card title="Selected dataset readiness">{dataset?<><div className="ws-selected-dataset"><strong>{dataset.label}</strong><Tag tone={dataset.ready?'good':'warn'}>{dataset.ready?'CORE FILES PRESENT':'MISSING CORE INPUTS'}</Tag></div>
           {!dataset.ready&&dataset.has_prices&&<div className="ws-complete-guide">
             <div className="ws-complete-heading">
               <strong>Complete the missing dataset inputs</strong>
@@ -505,6 +506,8 @@ function App(){
           </Card>
         </>}
         {tab==='dhan'&&<DhanDataManager onDataChanged={refresh}/>}
+        {tab==='nse'&&<NSESourceAssistant datasetId={selectedDataset}
+          onOpenDhan={()=>begin('dhan')} onOpenData={()=>begin('data')}/>}
         {(tab==='workspace'||tab==='projects')&&<ResearchWorkspace key={tab}
           initialPage={tab==='projects'?'projects':'home'} datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
