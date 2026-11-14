@@ -294,6 +294,8 @@ try {
     await screenshot('02-dataset-dependencies-preview')
     await deletion.getByRole('button',{name:'Cancel'}).click()
     assert.equal(await deletion.count(),0,'Preview must not delete any data when cancelled')
+    await page.locator('.ws-dataset-archive summary').waitFor()
+    assert.match(await page.locator('.ws-dataset-archive summary').innerText(),/Archived datasets/)
     await page.locator('.ws-dataset-trash summary').waitFor()
     await page.locator('.ws-dataset-trash summary').click()
     await page.locator('.ws-dataset-trash').evaluate(el=>el.open===true)
