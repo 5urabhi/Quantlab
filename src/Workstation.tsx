@@ -503,17 +503,18 @@ function App(){
         </>}
         {tab==='data'&&<>
           <Card title="Your datasets" className="ws-data-library-card">
-            <p className="ws-caption">You can delete uploaded datasets and derived Dhan research views here.
-              Original shared Dhan candles are protected. Select Delete to review referenced
-              saved runs, archive the dataset, or move the dataset and eligible saved runs to recoverable Trash.</p>
+            <p className="ws-caption">Choose a dataset to use, or delete an old one.
+              If saved work depends on it, the confirmation shows everything that will
+              be deleted together. Shared original Dhan data stays protected.</p>
             <div className="ws-dataset-manage-list">
               {datasets.map(d=><div className="ws-dataset-manage-row" key={d.id}>
                 <div><strong>{d.label}</strong>
                   <small>{d.id} · {d.ready?'Input files available': 'Incomplete — '+(d.missing.join(', ')||'missing inputs')}</small>
                 </div>
+                <Tag tone={d.ready?'good':'warn'}>{d.ready?'FILES READY':'INCOMPLETE'}</Tag>
                 <button className="ws-button" type="button"
                   onClick={()=>{setSelectedDataset(d.id);window.scrollTo({top:0,behavior:'smooth'})}}>
-                  Select
+                  Use
                 </button>
                 {(d.id.startsWith('upload_')||d.id.startsWith('dhan_batch_'))?
                   <button type="button" className="ws-button ws-delete" disabled={busy}
