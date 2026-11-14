@@ -98,6 +98,21 @@ Automatic site scraping and unrestricted historical MCP harvesting are not
 part of the implementation. The original research and licensing
 restrictions still apply.
 
+## Dataset deletion and clearer NSE MCP instructions
+
+The Data Library **Delete dataset** control now opens a dependency preview
+instead of reporting unhelpful raw run IDs as a hard error. It offers Archive
+(leave all references intact), or an explicit, recoverable dataset-plus-saved-
+runs Trash action if **only** standalone run files depend on that dataset.
+Linked derived TRI versions and saved notebooks/reports are blockers rather
+than silently destroyed; every backend cascade rechecks a preview token and
+rolls back prior moves on failure. Shared original Dhan market caches are
+never touched.
+
+The NSE Sources assistant now fills an editable RELIANCE example and explains
+that its **Check NSE source** action is an informational MCP lookup, not an
+automatic research dataset import. The existing TRI remains unchanged.
+
 ## Why empirical research is still blocked
 
 A complete valid historical NIFTY study requires:
