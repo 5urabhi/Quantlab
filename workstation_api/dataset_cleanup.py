@@ -87,10 +87,15 @@ def _index_sources() -> tuple[list[dict], list[dict], list[dict], list[dict]]:
                 continue
             manifest = folder / "workstation_run.json"
             if not manifest.is_file():
+                manifest = folder / "research_manifest.json"
+            if not manifest.is_file():
                 continue
             meta = _read_metadata(manifest)
+            config = meta.get("config") if isinstance(meta.get("config"), dict) else {}
+            source = meta.get("source") if isinstance(meta.get("source"), dict) else {}
             links = {val for val in (
-                meta.get("dataset_id"), meta.get("parent_run_id"),
+                meta.get("dataset_id"), config.get("dataset_id"),
+                source.get("dataset_id"), meta.get("parent_run_id"),
                 meta.get("source_run_id"),
             ) if isinstance(val, str)}
             runs.append({"kind": "research_run", "id": folder.name,
@@ -247,7 +252,6 @@ def delete(dataset_id: str, *, preview_token: str, confirm: bool = False) -> dic
         for x in deps:
             if x["kind"] == "dataset":
                 dataset_depths[x["id"]] = 1
-        sources = {x["id"]: x for x in service.datasets(include_archived=True)}
         for _ in range(len(dataset_depths)):
             changed = False
             for child in list(dataset_depths):
