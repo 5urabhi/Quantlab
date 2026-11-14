@@ -25,10 +25,11 @@ type Health = {ok:boolean; mode:string; framework:string; read_only_market_data:
 type DhanStatus = {token_configured:boolean;instrument_master_available:boolean;instrument_master_bytes:number;read_only:boolean}
 type DatasetTrash = {id:string;kind:string;title:string;trashed:boolean;archived:boolean;protected:boolean}
 type DatasetDeletePlan = {dataset_id:string;label:string;can_archive:boolean;
-  can_trash_with_saved_runs:boolean;dependent_run_count:number;
-  dependent_runs:{kind:string;id:string;title:string}[];
+  can_delete_all:boolean;dependent_count:number;dependent_run_count:number;
+  dependent_items:{kind:string;id:string;title:string;reason:string}[];
   blocking_references:{kind:string;id:string;title:string;reason?:string}[];
-  preview_token:string;recoverable:boolean;raw_market_data_preserved:boolean;summary:string}
+  counts:Record<string,number>;preview_token:string;recoverable:boolean;
+  raw_market_data_preserved:boolean;summary:string}
 
 type RunConfig = {
   name:string;factor_weights:Record<string,number>;top_n:number;weighting:string;
@@ -363,6 +364,7 @@ function App(){
   }
   const inspectDatasetDeletion=(d:Dataset)=>{
     setDeletePlan(null)
+    setNotice(null)
     void execute(()=>request<DatasetDeletePlan>(
       '/workspace/datasets/'+encodeURIComponent(d.id)+'/delete-plan'),
       plan=>setDeletePlan({...plan,label:d.label}))
@@ -374,12 +376,12 @@ function App(){
       'Dataset archived. All saved research results and original market data remain available.')})
   }
   const trashDataset=(plan:DatasetDeletePlan)=>{
-    if(!plan.can_trash_with_saved_runs)return
-    void execute(()=>post<{dependent_run_count:number}>(
+    if(!plan.can_delete_all)return
+    void execute(()=>post<{deleted_count:number;dependent_count:number}>(
       '/workspace/datasets/'+encodeURIComponent(plan.dataset_id)+'/trash-with-saved-runs',
       {preview_token:plan.preview_token,confirm:true}),
       result=>{setDeletePlan(null);void refresh();notify(
-        'Dataset and '+result.dependent_run_count+' saved run(s) moved to recoverable Trash. Shared Dhan history is intact.')})
+        'Deleted dataset and '+result.dependent_count+' linked saved item(s) from the active library. Everything is recoverable in Trash.')})
   }
   const restoreDataset=(id:string)=>{
     void execute(()=>post('/workspace/resources/action',{
@@ -434,46 +436,56 @@ function App(){
           </nav>}
         {deletePlan&&<div className="ws-delete-overlay">
           <section className="ws-delete-dialog" role="dialog" aria-modal="true"
-            aria-label={'Manage dataset '+deletePlan.label}>
+            aria-label={'Delete dataset '+deletePlan.label}>
             <header>
-              <div><span className="ws-overline">DATASET MANAGEMENT · REVIEW BEFORE DELETING</span>
-                <h2>Manage {deletePlan.label}</h2></div>
-              <button type="button" className="ws-icon" aria-label="Close dataset deletion preview"
+              <div><span className="ws-overline">DATA LIBRARY · DELETE CONFIRMATION</span>
+                <h2>Delete {deletePlan.label}?</h2></div>
+              <button type="button" className="ws-icon" aria-label="Close deletion popup"
                 disabled={busy} onClick={()=>setDeletePlan(null)}><X size={16}/></button>
             </header>
-            <p className="ws-caption">{deletePlan.summary}</p>
+            <p className="ws-delete-intro">
+              This will remove the dataset and <strong>{deletePlan.dependent_count} linked saved
+              {deletePlan.dependent_count===1?' item':' items'}</strong> from QuantLab in one action.
+              All of them will move to recoverable Trash.
+            </p>
             <div className="ws-delete-summary">
-              <span><strong>{deletePlan.dependent_run_count}</strong> saved research runs referencing this dataset</span>
-              <span><CheckCircle2 size={15}/> Shared Dhan originals protected</span>
+              <span><strong>{deletePlan.dependent_count+1}</strong> total items to delete</span>
+              <span><CheckCircle2 size={15}/> Shared raw Dhan history remains safe</span>
             </div>
-            {deletePlan.dependent_runs.length>0&&<section className="ws-delete-dependencies">
-              <h3>Saved runs that would also move to Trash</h3>
-              <ul>{deletePlan.dependent_runs.map(run=><li key={run.kind+':'+run.id}>
-                <strong>{run.title}</strong><small>{run.kind.replaceAll('_',' ')} · {run.id}</small>
-              </li>)}</ul>
-            </section>}
-            {deletePlan.blocking_references.length>0&&<section className="ws-delete-blocked" role="status">
-              <h3>Deletion blocked by other saved work</h3>
-              <p>These references cannot be deleted automatically. You can archive this dataset
-                without breaking reports and notebooks.</p>
-              <ul>{deletePlan.blocking_references.map((ref,i)=><li key={ref.kind+':'+ref.id+':'+i}>
-                <strong>{ref.title}</strong><small>{ref.kind.replaceAll('_',' ')} · {ref.id}
-                  {ref.reason?' · '+ref.reason:''}</small></li>)}</ul>
-            </section>}
-            <p className="ws-caption">Trash is recoverable. Nothing is permanently purged;
-              original Dhan history and shared caches are never deleted by this action.</p>
+            {deletePlan.dependent_items.length>0&&
+              <div className="ws-delete-dependencies">
+                <h3>These saved items will also be deleted</h3>
+                <ul>{deletePlan.dependent_items.map(item=>
+                  <li key={item.kind+':'+item.id}>
+                    <strong>{item.title}</strong>
+                    <small>{label(item.kind)} · {item.id}</small>
+                  </li>)}</ul>
+              </div>}
+            {deletePlan.blocking_references.length>0&&
+              <div className="ws-delete-blocked" role="alert">
+                <h3>Some items cannot be moved safely</h3>
+                <ul>{deletePlan.blocking_references.map((item,i)=>
+                  <li key={item.kind+':'+item.id+':'+i}>
+                    <strong>{item.title}</strong><small>{item.reason||item.id}</small>
+                  </li>)}</ul>
+                <p>Archive the dataset to hide it, or resolve the unsafe source before deleting.</p>
+              </div>}
             <div className="ws-delete-actions">
-              <button type="button" className="ws-button secondary" disabled={busy}
-                onClick={()=>setDeletePlan(null)}>Cancel</button>
-              <button type="button" className="ws-button secondary" disabled={busy}
-                onClick={()=>archiveDataset(deletePlan)}>Archive dataset · keep saved work</button>
+              <button type="button" className="ws-button secondary"
+                disabled={busy} onClick={()=>setDeletePlan(null)}>No, keep everything</button>
               <button type="button" className="ws-button ws-delete-confirm"
-                disabled={busy||!deletePlan.can_trash_with_saved_runs}
+                disabled={busy||!deletePlan.can_delete_all}
                 onClick={()=>trashDataset(deletePlan)}>
-                <Trash2 size={15}/> Move dataset
-                {deletePlan.dependent_run_count>0?' + '+deletePlan.dependent_run_count+' saved runs':''} to Trash
+                <Trash2 size={15}/> Yes, delete dataset
+                {deletePlan.dependent_count>0?' + '+deletePlan.dependent_count+' saved items':''}
               </button>
             </div>
+            <p className="ws-delete-footnote">
+              Deletion is recoverable; this action does not permanently erase files.
+              Shared original market-data caches are never removed.
+              <button type="button" disabled={busy}
+                onClick={()=>archiveDataset(deletePlan)}>Archive instead</button>
+            </p>
           </section>
         </div>}
         {notice&&<div role="status" className={'ws-notice '+(notice.error?'error':'')}><span>{notice.error?<CircleAlert size={17}/>:<CheckCircle2 size={17}/>}</span>{notice.text}<button onClick={()=>setNotice(null)} aria-label="Dismiss"><X size={16}/></button></div>}
