@@ -502,7 +502,57 @@ function App(){
           <div className="ws-grid halves"><Card title="Research datasets" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{datasets.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{datasets.length===0&&<p className="ws-caption">No datasets found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
         </>}
         {tab==='data'&&<>
-          <div className="ws-grid halves"><Card title="Select research dataset" extra={dataPicker}><p className="ws-caption">Need data? Use the guided downloader: choose stocks, choose dates, download, then prepare. Completed downloads stay saved locally. Historical investment claims still require source checks.</p><div className="ws-actions"><button className="ws-button primary" onClick={()=>begin('dhan')}><Database size={15}/> Download market data</button><button className="ws-button secondary" onClick={()=>begin('nse')}><Search size={15}/> NSE Sources · official MCP</button><button className="ws-button" disabled={busy} onClick={synthetic}><Beaker size={15}/> Create synthetic test dataset</button><label className={'ws-button secondary '+(busy?'disabled':'')}><Upload size={15}/> Import research ZIP<input hidden type="file" accept=".zip" disabled={busy} onChange={e=>{const f=e.target.files?.[0];if(f)void upload(f);e.target.value=''}}/></label></div><p className="ws-caption">ZIP requires prices.csv, membership.csv and benchmark.csv; optionally fundamentals.csv, sectors.csv and corporate_actions.csv. Import does not certify the data.</p></Card><Card title="Selected dataset readiness">{dataset?<><div className="ws-selected-dataset"><strong>{dataset.label}</strong><Tag tone={dataset.ready?'good':'warn'}>{dataset.ready?'CORE FILES PRESENT':'MISSING CORE INPUTS'}</Tag></div>
+          <Card title="Your datasets" className="ws-data-library-card">
+            <p className="ws-caption">You can delete uploaded datasets and derived Dhan research views here.
+              Original shared Dhan candles are protected. Select Delete to review referenced
+              saved runs, archive the dataset, or move the dataset and eligible saved runs to recoverable Trash.</p>
+            <div className="ws-dataset-manage-list">
+              {datasets.map(d=><div className="ws-dataset-manage-row" key={d.id}>
+                <div><strong>{d.label}</strong>
+                  <small>{d.id} · {d.ready?'Input files available': 'Incomplete — '+(d.missing.join(', ')||'missing inputs')}</small>
+                </div>
+                <button className="ws-button" type="button"
+                  onClick={()=>{setSelectedDataset(d.id);window.scrollTo({top:0,behavior:'smooth'})}}>
+                  Select
+                </button>
+                {(d.id.startsWith('upload_')||d.id.startsWith('dhan_batch_'))?
+                  <button type="button" className="ws-button ws-delete" disabled={busy}
+                    aria-label={'Delete dataset '+d.label} onClick={()=>inspectDatasetDeletion(d)}>
+                    <Trash2 size={14}/> Delete
+                  </button>:<small className="ws-protected-label">Protected source</small>}
+              </div>)}
+            </div>
+            <details className="ws-tri-advanced ws-dataset-archive">
+              <summary>Archived datasets ({archivedDatasets.length}) · restore to Data Library</summary>
+              {archivedDatasets.length===0?<p className="ws-caption">No archived datasets.</p>:
+                <div className="ws-dataset-manage-list">{archivedDatasets.map(d=>
+                  <div className="ws-dataset-manage-row" key={d.id}>
+                    <div><strong>{d.title}</strong><small>{d.id} · Saved work remains available</small></div>
+                    <button type="button" className="ws-button secondary" disabled={busy}
+                      onClick={()=>unarchiveDataset(d.id)}><RotateCcw size={14}/> Unarchive</button>
+                  </div>)}</div>}
+            </details>
+            <details className="ws-tri-advanced ws-dataset-trash">
+              <summary>Deleted datasets ({deletedDatasets.length}) · restore or permanently delete</summary>
+              {deletedDatasets.length===0?<p className="ws-caption">No deleted datasets.</p>:
+                <div className="ws-dataset-manage-list">{deletedDatasets.map(d=>
+                  <div className="ws-dataset-manage-row" key={d.id}>
+                    <div><strong>{d.title}</strong><small>{d.id}</small></div>
+                    <button type="button" className="ws-button" disabled={busy}
+                      onClick={()=>restoreDataset(d.id)}><RotateCcw size={14}/> Restore</button>
+                    <button type="button" className="ws-button ws-delete" disabled={busy}
+                      onClick={()=>purgeDataset(d.id)}><Trash2 size={14}/> Delete permanently</button>
+                  </div>)}</div>}
+            </details>
+          </Card>
+          <div className="ws-grid halves ws-data-setup"><Card title="Add or import data"><p className="ws-caption">Download prices, check an NSE source, or import a prepared research ZIP.
+              Existing downloads and your saved TRI are reused where available.</p><div className="ws-actions"><button className="ws-button primary" onClick={()=>begin('dhan')}><Database size={15}/> Download market data</button><button className="ws-button secondary" onClick={()=>begin('nse')}><Search size={15}/> NSE Sources · official MCP</button><details className="ws-tri-advanced ws-synthetic-option">
+                <summary>Advanced: create synthetic test data</summary>
+                <p className="ws-caption">Artificial examples are only for learning and testing calculations,
+                  not historical investment research.</p>
+                <button className="ws-button" disabled={busy} onClick={synthetic}>
+                  <Beaker size={15}/> Create synthetic test dataset</button>
+              </details><label className={'ws-button secondary '+(busy?'disabled':'')}><Upload size={15}/> Import research ZIP<input hidden type="file" accept=".zip" disabled={busy} onChange={e=>{const f=e.target.files?.[0];if(f)void upload(f);e.target.value=''}}/></label></div><p className="ws-caption">ZIP requires prices.csv, membership.csv and benchmark.csv; optionally fundamentals.csv, sectors.csv and corporate_actions.csv. Import does not certify the data.</p></Card><Card title="Selected dataset" extra={dataPicker}>{dataset?<><div className="ws-selected-dataset"><strong>{dataset.label}</strong><Tag tone={dataset.ready?'good':'warn'}>{dataset.ready?'FILES AVAILABLE':'INCOMPLETE'}</Tag></div>
           {!dataset.ready&&dataset.has_prices&&<div className="ws-complete-guide">
             <div className="ws-complete-heading">
               <strong>Complete the missing dataset inputs</strong>
@@ -552,52 +602,21 @@ function App(){
           </div>}
           {dataset.benchmark_kind==='price_index_spot_only'&&<div className="ws-warning">
             <p>PRICE-INDEX BENCHMARK ONLY — Dhan NIFTY spot data does not include reinvested dividends. Files may be structurally complete for exploratory comparisons, but this is NOT an independently verified total-return benchmark or research certification. Stock splits, dividends and corporate actions still require review.</p>
-          </div>}<p className="ws-caption">{dataset.basis}</p><div className="ws-checklist">{['prices.csv','daily_prices.csv','membership.csv','benchmark.csv','fundamentals.csv','sectors.csv'].map(name=><div key={name}>{dataset.files.includes(name)?<Check size={16}/>:<CircleAlert size={16}/>}<span>{name}</span><small>{dataset.files.includes(name)?'PRESENT':(['daily_prices.csv','fundamentals.csv','sectors.csv'].includes(name)?'OPTIONAL':'MISSING')}</small></div>)}</div><div className="ws-actions"><button className="ws-button secondary" disabled={!dataset.ready||busy} onClick={()=>execute(()=>request<Dict>('/datasets/'+dataset.id+'/audit'),r=>{notify('Internal consistency audit completed; external validation remains required.');setAuditResult(r)})}>Run data audit</button><button className="ws-button primary" onClick={()=>begin('research')}>Use in research <ArrowRight size={14}/></button></div></>:<Empty title="Choose a dataset">Upload verified input files or create a synthetic software demonstration.</Empty>}</Card></div>
+          </div>}<details className="ws-tri-advanced ws-data-advanced">
+              <summary>View file list, source evidence and technical details</summary>
+              <p className="ws-caption">{dataset.basis}</p><div className="ws-checklist">{['prices.csv','daily_prices.csv','membership.csv','benchmark.csv','fundamentals.csv','sectors.csv'].map(name=><div key={name}>{dataset.files.includes(name)?<Check size={16}/>:<CircleAlert size={16}/>}<span>{name}</span><small>{dataset.files.includes(name)?'PRESENT':(['daily_prices.csv','fundamentals.csv','sectors.csv'].includes(name)?'OPTIONAL':'MISSING')}</small></div>)}</div></details><div className="ws-actions"><button className="ws-button secondary" disabled={!dataset.ready||busy} onClick={()=>execute(()=>request<Dict>('/datasets/'+dataset.id+'/audit'),r=>{notify('Internal consistency audit completed; external validation remains required.');setAuditResult(r)})}>Run data audit</button><button className="ws-button primary" onClick={()=>begin('research')}>Use in research <ArrowRight size={14}/></button></div></>:<Empty title="Choose a dataset">Upload verified input files or create a synthetic software demonstration.</Empty>}</Card></div>
           {auditResult&&<Card title="Internal consistency audit"><div className="ws-data-audit">{Object.entries(auditResult).filter(([k])=>k!=='warnings').map(([k,v])=><div key={k}><span>{label(k)}</span><strong>{typeof v==='object'?JSON.stringify(v):String(v)}</strong></div>)}</div>{Array.isArray(auditResult.warnings)&&<div className="ws-warning">{auditResult.warnings.map((w,i)=><p key={i}>• {String(w)}</p>)}</div>}</Card>}
-          <Card title="Imported dataset library"><Table rows={datasets.map(d=>({name:d.label,kind:d.kind,ready:d.ready,benchmark:d.benchmark_kind==='price_index_spot_only'?'PRICE INDEX (not TRI)':d.benchmark_kind||'missing',daily_prices:d.has_daily_prices?'yes':'no',source_resolution:d.source_interval_minutes===null?'daily':d.source_interval_minutes?d.source_interval_minutes+' min':'unreported',missing:d.missing.join(', ')||'none',basis:d.basis}))}/></Card>
-          <Card title="Saved datasets · manage & delete">
-            <p className="ws-caption">You can delete uploaded datasets and derived Dhan research views here.
-              Original shared Dhan candles are protected. Select Delete to review referenced
-              saved runs, archive the dataset, or move the dataset and eligible saved runs to recoverable Trash.</p>
-            <div className="ws-dataset-manage-list">
-              {datasets.map(d=><div className="ws-dataset-manage-row" key={d.id}>
-                <div><strong>{d.label}</strong>
-                  <small>{d.id} · {d.ready?'Core inputs present':'Missing '+(d.missing.join(', ')||'inputs')}</small>
-                </div>
-                <button className="ws-button" type="button"
-                  onClick={()=>{setSelectedDataset(d.id);window.scrollTo({top:0,behavior:'smooth'})}}>
-                  Select
-                </button>
-                {(d.id.startsWith('upload_')||d.id.startsWith('dhan_batch_'))?
-                  <button type="button" className="ws-button ws-delete" disabled={busy}
-                    aria-label={'Delete dataset '+d.label} onClick={()=>inspectDatasetDeletion(d)}>
-                    <Trash2 size={14}/> Delete
-                  </button>:<small className="ws-protected-label">Protected source</small>}
-              </div>)}
-            </div>
-            <details className="ws-tri-advanced ws-dataset-archive">
-              <summary>Archived datasets ({archivedDatasets.length}) · restore to Data Library</summary>
-              {archivedDatasets.length===0?<p className="ws-caption">No archived datasets.</p>:
-                <div className="ws-dataset-manage-list">{archivedDatasets.map(d=>
-                  <div className="ws-dataset-manage-row" key={d.id}>
-                    <div><strong>{d.title}</strong><small>{d.id} · Saved work remains available</small></div>
-                    <button type="button" className="ws-button secondary" disabled={busy}
-                      onClick={()=>unarchiveDataset(d.id)}><RotateCcw size={14}/> Unarchive</button>
-                  </div>)}</div>}
-            </details>
-            <details className="ws-tri-advanced ws-dataset-trash">
-              <summary>Deleted datasets ({deletedDatasets.length}) · restore or permanently delete</summary>
-              {deletedDatasets.length===0?<p className="ws-caption">No deleted datasets.</p>:
-                <div className="ws-dataset-manage-list">{deletedDatasets.map(d=>
-                  <div className="ws-dataset-manage-row" key={d.id}>
-                    <div><strong>{d.title}</strong><small>{d.id}</small></div>
-                    <button type="button" className="ws-button" disabled={busy}
-                      onClick={()=>restoreDataset(d.id)}><RotateCcw size={14}/> Restore</button>
-                    <button type="button" className="ws-button ws-delete" disabled={busy}
-                      onClick={()=>purgeDataset(d.id)}><Trash2 size={14}/> Delete permanently</button>
-                  </div>)}</div>}
-            </details>
-          </Card>
+          <details className="ws-tri-advanced ws-dataset-advanced">
+            <summary>Advanced · Dataset source metadata and technical comparison</summary>
+            <p className="ws-caption">These fields are useful for technical audits but not required
+              to choose, use, or delete a dataset.</p>
+            <Table rows={datasets.map(d=>({name:d.label,kind:d.kind,ready:d.ready,
+              benchmark:d.benchmark_kind==='price_index_spot_only'?'PRICE INDEX (not TRI)':d.benchmark_kind||'missing',
+              daily_prices:d.has_daily_prices?'yes':'no',
+              source_resolution:d.source_interval_minutes===null?'daily':d.source_interval_minutes?d.source_interval_minutes+' min':'unreported',
+              missing:d.missing.join(', ')||'none',basis:d.basis}))}/>
+          </details>
+
         </>}
         {tab==='dhan'&&<DhanDataManager onDataChanged={refresh}/>}
         {tab==='nse'&&<NSESourceAssistant datasetId={selectedDataset}
