@@ -32,6 +32,17 @@ type Table = {columns:string[];selected_columns:string[];rows:Array<Record<strin
 type Quality = {file:string;sampled_rows:number;sample_limit_reached:boolean;
   first_date_in_sample:string|null;last_date_in_sample:string|null;
   checks:Record<string,number>;status:string;caveat:string}
+type OperationalHealth = {
+  checked_utc:string;overall_state:'operational'|'needs_attention'|'needs_repair';
+  read_only:boolean;market_data_certified:boolean;
+  databases:{id:string;label:string;state:string;size_bytes?:number}[];
+  storage:{free_bytes:number|null;total_bytes:number|null;low_space:boolean|null};
+  job_failures_or_interrupted:number|null;dhan_interrupted_batches:number|null;
+  dhan_paused_batches:number|null;columnar:{state:string;ready?:boolean};
+  kite:{app_configured:boolean;local_session_present:boolean;master_current:boolean};
+  blockers:{component:string;kind:string;action:string}[];
+  warnings:{kind:string;message:string}[];note:string
+}
 type Section = 'datasets'|'research'|'acquire'|'explorer'|'database'|'analytics'|'microstructure'|'sources'|'activity'
 const fmt = (n:number)=>n.toLocaleString()
 const humanBytes = (bytes:number)=>bytes<1024?bytes+' B':bytes<1024*1024?(bytes/1024).toFixed(1)+' KB':
@@ -50,6 +61,9 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
   onOpenDhan?:()=>void;onOpenModels?:()=>void
 }){
   const [section,setSection]=useState<Section>('datasets')
+  const [systemHealth,setSystemHealth]=useState<OperationalHealth|null>(null)
+  const [healthBusy,setHealthBusy]=useState(false)
+  const [healthError,setHealthError]=useState('')
   const [overview,setOverview]=useState<Overview|null>(null)
   const [selected,setSelected]=useState('')
   const [detail,setDetail]=useState<Detail|null>(null)
@@ -99,6 +113,15 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
+  const checkHealth=useCallback(async()=>{
+    setHealthBusy(true);setHealthError('')
+    try{setSystemHealth(await get<OperationalHealth>('/system-health'))}
+    catch(e){setHealthError(e instanceof Error?e.message:String(e))}
+    finally{setHealthBusy(false)}
+  },[])
+  useEffect(()=>{
+    if(section==='activity')void checkHealth()
+  },[section,checkHealth])
   const select=(id:string)=>{setSelected(id);setPage(1);setQuery('');setInput('');setSection('explorer')}
   const items=overview?.datasets||[]
   const onAcquisitionComplete=useCallback((datasetId:string)=>{
@@ -204,6 +227,51 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
       </div>)}
       <p className="qm-caption">An informational NSE MCP lookup is not an authorized replacement for original backtest data or TRI.</p>
     </div></>}
+    {section==='activity'&&<div className="qm-panel">
+      <div className="qm-panel-title"><h3><ShieldCheck size={18}/> Whole-workstation health</h3>
+        <button className="ws-button secondary" disabled={healthBusy}
+          onClick={()=>void checkHealth()}>
+          <RefreshCw size={14}/>{healthBusy?'Checking…':'Run integrity checks'}
+        </button></div>
+      <p className="qm-caption">Read-only local checks of research databases, disk space,
+        source-mirror freshness and interrupted jobs. No broker calls, no automatic
+        source rewrite and no claim of verified historical market evidence.</p>
+      {healthError&&<p className="qm-alert" role="alert"><AlertTriangle size={16}/>{healthError}</p>}
+      {systemHealth&&<div>
+        <div className="qm-stat-grid">
+          <div><ShieldCheck size={16}/><span>Operational state</span>
+            <strong>{systemHealth.overall_state.replaceAll('_',' ')}</strong></div>
+          <div><HardDrive size={16}/><span>Available storage</span>
+            <strong>{systemHealth.storage.free_bytes===null?'Unavailable':
+              humanBytes(systemHealth.storage.free_bytes)}</strong></div>
+          <div><Activity size={16}/><span>Failed/interrupted jobs</span>
+            <strong>{systemHealth.job_failures_or_interrupted??'Unavailable'}</strong></div>
+          <div><Database size={16}/><span>Data cache</span>
+            <strong>{systemHealth.columnar.state.replaceAll('_',' ')}</strong></div>
+        </div>
+        <div className="qm-job-grid">
+          <div><strong>Managed database integrity</strong>
+            {systemHealth.databases.map(x=><div className="qm-job" key={x.id}>
+              <span>{x.label}</span><small>{x.state.replaceAll('_',' ')}
+                {x.size_bytes!==undefined?' · '+humanBytes(x.size_bytes):''}</small>
+            </div>)}</div>
+          <div><strong>Recovery readiness</strong>
+            <div className="qm-job"><span>Dhan interrupted batches</span>
+              <small>{systemHealth.dhan_interrupted_batches??'Unavailable'} ·
+                {' '}{systemHealth.dhan_paused_batches??'Unavailable'} paused</small></div>
+            <div className="qm-job"><span>Zerodha local configuration</span>
+              <small>{systemHealth.kite.app_configured?'Configured':'Not configured'} ·
+                {' '}{systemHealth.kite.local_session_present?'Session present':'Sign-in required'}</small></div>
+          </div>
+        </div>
+        {systemHealth.blockers.map((x,i)=><div className="qm-alert" key={i}>
+          <AlertTriangle size={15}/><div><strong>{x.component.replaceAll('_',' ')}</strong>
+            <small>{x.action}</small></div></div>)}
+        {systemHealth.warnings.map((x,i)=><div className="qm-event" key={i}>
+          <AlertTriangle size={15}/><div><strong>{x.kind.replaceAll('_',' ')}</strong>
+            <small>{x.message}</small></div></div>)}
+      </div>}
+    </div>}
     {section==='activity'&&<div className="qm-panel"><div className="qm-panel-title"><h3><Activity size={18}/> Jobs and recovery</h3>
         <button className="ws-button secondary" onClick={()=>void refresh()}><RefreshCw size={14}/> Refresh</button></div>
       <div className="qm-job-grid"><div><strong>Recent jobs</strong>

@@ -28,6 +28,7 @@ type Audit={id:string;dataset_id:string|null;attempted_models:number;software_pa
   software_fail:number;source_blocked:number;checked_utc:string}
 type Acceptance={id:string;dataset_id:string;created_utc:string;status:string;
   structural_ready?:boolean;independently_certified:boolean;
+  current_source_match?:boolean;current_source_status?:string;
   source_checks_passed:number;source_checks_blocked:number;source_checks_review?:number;
   model_software_pass:number;model_software_fail:number;
   blockers?:{component:string;state:string;detail:string;next_action:string}[];
@@ -234,6 +235,10 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
         genuinely untouched final-test months. Failed checks identify the
         exact original files or observations still required.</p>
       {acceptance&&<div role="status" className="qm-acceptance-report">
+        {acceptance.current_source_match===false&&<div className="qm-alert" role="alert">
+          <AlertTriangle size={16}/>Original inputs have changed or disappeared since
+          this report. Run a new audit; this saved historical result is not current.
+        </div>}
         <div className="qm-acquire-metrics">
           <div><small>Historical structural checks</small>
             <strong>{acceptance.source_checks_passed} passed</strong></div>

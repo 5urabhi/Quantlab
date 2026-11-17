@@ -70,7 +70,8 @@ def _connect():
       CREATE TABLE IF NOT EXISTS job_history (
         id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
         created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL,
-        error TEXT, result_excerpt TEXT
+        error TEXT, result_excerpt TEXT,
+        stage TEXT NOT NULL DEFAULT '', percent REAL NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS jobs_updated ON job_history(updated_utc);
       CREATE TABLE IF NOT EXISTS resource_labels (
@@ -80,6 +81,13 @@ def _connect():
         updated_utc TEXT NOT NULL
       );
     """)
+        # Existing local research libraries predate durable stage/% fields.
+        # Add columns non-destructively without replacing any saved job rows.
+        job_columns = {row[1] for row in conn.execute("PRAGMA table_info(job_history)")}
+        if "stage" not in job_columns:
+            conn.execute("ALTER TABLE job_history ADD COLUMN stage TEXT NOT NULL DEFAULT ''")
+        if "percent" not in job_columns:
+            conn.execute("ALTER TABLE job_history ADD COLUMN percent REAL NOT NULL DEFAULT 0")
         yield conn
         conn.commit()
     except Exception:
@@ -824,14 +832,20 @@ def store_job(snapshot: dict) -> None:
             if key in result}, ensure_ascii=False, allow_nan=False)[:2500]
     elif isinstance(result, str):
         excerpt = json.dumps({"run_id": result[:90]})
+    stage = str(snapshot.get("stage") or "")[:140]
+    raw_percent = snapshot.get("percent", 0)
+    percent = (float(raw_percent) if isinstance(raw_percent, (float, int)) and
+               not isinstance(raw_percent, bool) and 0 <= raw_percent <= 100 else 0.)
     with LOCK, _connect() as conn:
         conn.execute("""
-        INSERT INTO job_history(id,kind,status,created_utc,updated_utc,error,result_excerpt)
-        VALUES(?,?,?,?,?,?,?)
+        INSERT INTO job_history(id,kind,status,created_utc,updated_utc,error,result_excerpt,stage,percent)
+        VALUES(?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET status=excluded.status,
          updated_utc=excluded.updated_utc,error=excluded.error,
-         result_excerpt=excluded.result_excerpt
-        """, (job_id,kind,status,snapshot.get("created_utc",stamp),stamp,error,excerpt))
+         result_excerpt=excluded.result_excerpt,stage=excluded.stage,
+         percent=excluded.percent
+        """, (job_id,kind,status,snapshot.get("created_utc",stamp),
+              stamp,error,excerpt,stage,percent))
 
 
 def list_job_history(limit: int = 100) -> list[dict]:
@@ -850,5 +864,6 @@ def list_job_history(limit: int = 100) -> list[dict]:
         if item["status"] in {"running","queued"}:
             item["status"] = "interrupted"
             item["error"] = "The Python process was restarted before this job finished."
+            item["stage"] = "Interrupted after last safely saved checkpoint"
         results.append(item)
     return results

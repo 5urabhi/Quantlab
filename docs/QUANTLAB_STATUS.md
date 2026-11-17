@@ -1,9 +1,50 @@
 # QuantLab — Canonical Release and Empirical Evidence Status
 
-Last software review: **November 14, 2026**.
+Last software review: **November 17, 2026**.
 
 Run `bash run.sh check` for current React build, Python regression, mathematics and a read-only original-source readiness doctor. `bash run.sh evaluate` additionally generates clearly labeled synthetic experiment and chart artifacts. Both keep unavailable authenticated/licensed input distinct from a code failure. The previous `scripts/local_acceptance.py` legacy-Streamlit default is retired; archived Streamlit checks require explicit `--legacy-streamlit`. This is the authoritative status
 register; older archived Streamlit/branch-specific status documents are not.
+
+## November 17: repository-side reliability, research and operational hardening
+
+The Data Manager **Activity & recovery** panel now exposes read-only source
+SQLite integrity, disk capacity, enabled Parquet state, interrupted jobs and
+broker session-presence diagnostics. This check does **not** contact a broker
+or certify a historical dataset. Job progress/stages are persisted with
+backward-compatible SQLite migrations; recent job links after a restart show
+the last durable receipt and an explicit interrupted state rather than
+pretending completion. Dhan batches scheduled but not yet started are correctly
+shown as queued; interrupted user-authorized batches retain their saved
+per-window data and are not forcibly restarted after credential failure.
+
+Registered empirical model readiness and numerical runs share one canonical
+historical-price matrix contract. A current, source-locked DuckDB/Parquet
+mirror may accelerate the shared Dhan daily/monthly matrix, matching original
+price dates/security columns and refusing corrupt source receipts. On stale
+or unavailable acceleration, the original validated CSV remains authoritative.
+No historical session is forward-filled. Broker secrets and tokens are
+redacted from durable operational errors; the localhost-only credential
+boundary and no-orders policy remain unchanged.
+
+Results Studio **Overfitting & regimes** adds an expanding training-only
+selection stability analysis: choose initial training months, nonoverlapping
+later test months and an explicit 1–6 month embargo. It exports full
+fold-by-fold observations and matching benchmark returns. This is a useful
+retrospective candidate-selection diagnostic, **not** per-fold strategy
+retraining, label-purged CPCV, a never-viewed preregistered final test,
+or an independent market-performance certificate.
+
+Old source/mathematical acceptance reports are rechecked against current
+source hashes. If a source changes or disappears, QuantLab marks the old
+receipt stale without rewriting its historical evidence. Reports also cannot
+claim a model pass if no model actually executed.
+
+**Deliberate software limits:** Source-changing operations remain serial to
+protect original price and account records. Complete historical index
+constituents, licensed TRI and corporate events, true exchange execution
+fills and independent publication review still require original external
+data. The current source-safe mathematical/ML catalog does not represent a
+trained production PPO/SAC/LSTM trading agent or a broker execution router.
 
 ## November 17: Zerodha as second historical provider and source acceptance
 

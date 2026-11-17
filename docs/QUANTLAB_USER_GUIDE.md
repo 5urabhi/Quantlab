@@ -23,6 +23,32 @@ bash run.sh
 
 The checkout might not be nested if you cloned directly under `~/Desktop/codes`; use the directory that contains `run.sh`. The startup script installs/uses local dependencies. The terminal must stay running while you use the workstation.
 
+## Updated reliability and research-analysis controls
+
+The Data Library's **Database Manager → Activity & recovery** checks local
+SQLite integrity, disk capacity, source-cache freshness and interrupted jobs
+without requesting broker history. Recent numerical job progress is persisted
+safely across Python restarts. Original Dhan price history and user-owned
+dataset files are never silently overwritten by a repair action.
+
+If you opt into fast analytics for shared Dhan data, the model engine may read
+the same source-bound daily/monthly history through verified DuckDB/Parquet.
+The displayed source receipt explains whether the model used original CSV or
+the valid columnar mirror; original data, missing observations and return
+conventions do not change.
+
+In **Results Studio → Overfitting & regimes**, choose at least two compatible
+archived index experiments to run *chronological model-selection stability*.
+Specify the past training window, later test block and a one-to-six-month
+embargo. Per-fold return comparisons are shown and can be exported as JSON.
+This checks how an earlier-selected archived candidate behaved later; it
+does not refit the underlying strategy or replace an untouched final holdout.
+
+Previously saved acceptance receipts are rechecked against source hashes
+before being shown. A changed dataset produces a visible stale-evidence
+warning and requires a new validation run. Broker data rights and genuine
+PIT/TRI/corporate-action evidence are separate from these software tests.
+
 ## 2. Guided UI navigation
 
 **Beginner default: Guided Research**. The default sidebar destination now provides **Select data → Choose model → Run → Analyze → Save** in one page. It embeds the genuine Model Laboratory and Results Studio, so no separate simulated calculation engine is introduced. In Save you can attach your interpretation and download a source-bound research evidence ZIP. Experimental index construction remains available in Experiment Studio for advanced users.

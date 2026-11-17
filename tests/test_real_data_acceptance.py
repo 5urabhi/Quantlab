@@ -93,6 +93,35 @@ class RealSourceAcceptanceTests(unittest.TestCase):
         self.assertFalse(report["independently_certified"])
         never.assert_not_called()
 
+    def test_previous_source_hash_report_cannot_be_called_current_after_changes(self):
+        # Exercise the actual report-fetch freshness gate; no real broker data.
+        original=service.DATA.parent/"observed"
+        original.mkdir(exist_ok=True)
+        (original/"prices.csv").write_text("date,SECURITY_A\\n2021-01-31,100\\n")
+        with patch.object(real_data_acceptance.historical_readiness,"inspect",
+                          return_value=self._evidence(ready=True)), \
+             patch.object(research_acceptance,"verify",return_value={
+                 "attempted_models":1,"software_pass":1,
+                 "software_fail":0,"checks":[{"state":"software_pass"}]}) as verify, \
+             patch.object(service,"dataset_path",
+                          return_value=(original,{"kind":"dhan"})):
+            snap=real_data_acceptance.execute(
+                "example_observed","2024-01-01","2025-01-01")
+            read=real_data_acceptance.report(snap["id"])
+            self.assertFalse(read["current_source_match"])
+            self.assertFalse(read["current_evidence_usable"])
+            self.assertIn("changed",read["current_source_status"])
+            self.assertFalse(read["independently_certified"])
+            verify.assert_called_once()
+            # Return the actual current hash to mark only a matching snapshot
+            # as current, without granting external exchange certification.
+            from workstation_api import historical_readiness
+            with patch.object(historical_readiness,"source_hashes",
+                              return_value=snap["source_hashes"]):
+                matching=real_data_acceptance.report(snap["id"])
+            self.assertTrue(matching["current_source_match"])
+            self.assertFalse(matching["independently_certified"])
+
     def test_api_requires_consent_and_nonoverlapping_chronology(self):
         data={"dataset_id":"not_real","validation_start":"2025-01-01",
               "final_test_start":"2024-01-01","confirm_real_data_audit":False}

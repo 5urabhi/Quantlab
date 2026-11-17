@@ -27,6 +27,27 @@ type SelectionReport={
     regime_by_month:Record<string,unknown>[];limitation:string};
   interpretation:string;paired_comparison_warning:string;never_certified:string[]
 }
+type ChronologicalReport={
+  run_ids:string[];dataset_id:string;source_hashes:Record<string,string>;
+  evidence_class:string;fold_count:number;test_months_evaluated:number;
+  training_months_initial:number;test_months_per_fold:number;embargo_months:number;
+  aggregate:{compounded_selected_net_return_fraction:number;
+    compounded_benchmark_return_fraction:number;
+    mean_monthly_active_return_fraction:number;
+    selected_max_drawdown_fraction:number;
+    selected_monthly_sharpe:number|null};
+  candidate_selection_counts:{run_id:string;selected_folds:number}[];
+  folds:{train_first:string;train_last:string;train_months:number;
+    embargo_first:string;embargo_last:string;
+    test_first:string;test_last:string;test_months:number;
+    selected_run_id:string;train_monthly_sharpe:number;
+    test_compounded_net_return_fraction:number;
+    benchmark_test_compounded_return_fraction:number;
+    test_mean_active_return_fraction:number}[];
+  selected_forward_months:{date:string;selected_run_id:string;
+    strategy_net:number;benchmark:number;active_return:number}[];
+  certifies_real_market_performance:boolean;warning:string
+}
 const pct=(n:number)=> (100*n).toFixed(1)+'%'
 const saveJSON=(name:string,value:unknown)=>{
   const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}))
@@ -42,14 +63,19 @@ export default function SelectionValidation({runs,currentId,onCompare}:{
   const [declaredTrials,setDeclaredTrials]=useState<number>(2)
   const [trail,setTrail]=useState<3|6|12>(6)
   const [report,setReport]=useState<SelectionReport|null>(null)
+  const [chronological,setChronological]=useState<ChronologicalReport|null>(null)
+  const [trainMonths,setTrainMonths]=useState(36)
+  const [testMonths,setTestMonths]=useState(6)
+  const [embargoMonths,setEmbargoMonths]=useState(1)
+  const [chronBusy,setChronBusy]=useState(false)
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
   useEffect(()=>{
     setSelected(currentId&&eligible.some(r=>r.id===currentId)?[currentId]:[])
-    setReport(null);setError('')
+    setReport(null);setChronological(null);setError('')
   },[currentId])
   const toggle=(id:string)=>{
-    setReport(null);setError('')
+    setReport(null);setChronological(null);setError('')
     setSelected(old=>old.includes(id)?old.filter(x=>x!==id):
       old.length<8?[...old,id]:old)
   }
@@ -73,6 +99,24 @@ export default function SelectionValidation({runs,currentId,onCompare}:{
       setReport(result)
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
+  }
+  const executeChronological=async()=>{
+    if(selected.length<2)return
+    setChronBusy(true);setError('');setChronological(null)
+    try{
+      const response=await fetch('/api/workspace/results/chronological-selection',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        credentials:'same-origin',
+        body:JSON.stringify({run_ids:selected,train_months:trainMonths,
+          test_months:testMonths,embargo_months:embargoMonths})})
+      if(!response.ok){
+        let body:{detail?:string}|null=null
+        try{body=await response.json() as {detail?:string}}catch{}
+        throw new Error(body?.detail||'Chronological research returned HTTP '+response.status)
+      }
+      setChronological(await response.json() as ChronologicalReport)
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setChronBusy(false)}
   }
   const validSelected=selected.length>=2
   const availableYears=report?(report.common_months/12).toFixed(1):''
@@ -133,6 +177,34 @@ export default function SelectionValidation({runs,currentId,onCompare}:{
           </button>
         </fieldset>
       </div>
+      <div className="sv-form" aria-label="Chronological model selection">
+        <fieldset><legend>3 · Chronological expanding-window selection</legend>
+          <p className="rs-small">Evaluate saved candidates on successive later blocks,
+            choosing each winner using <strong>only earlier observed returns</strong>.
+            This adds an explicit embargo, but cannot re-fit archived candidate
+            strategies or replace a never-viewed final test.</p>
+          <label>Initial past training months
+            <select aria-label="Chronological training months" value={trainMonths}
+              onChange={e=>{setTrainMonths(Number(e.target.value));setChronological(null)}}>
+              {[24,36,48,60,72,96,120].map(n=><option key={n} value={n}>{n} months</option>)}
+            </select></label>
+          <label>Later test-block length
+            <select aria-label="Chronological test months" value={testMonths}
+              onChange={e=>{setTestMonths(Number(e.target.value));setChronological(null)}}>
+              {[3,6,9,12].map(n=><option key={n} value={n}>{n} months</option>)}
+            </select></label>
+          <label>Embargo after each training window
+            <select aria-label="Chronological embargo months" value={embargoMonths}
+              onChange={e=>{setEmbargoMonths(Number(e.target.value));setChronological(null)}}>
+              {[1,2,3,6].map(n=><option key={n} value={n}>{n} month(s)</option>)}
+            </select></label>
+          <button className="rs-primary" disabled={chronBusy||!validSelected}
+            type="button" onClick={()=>void executeChronological()}>
+            {chronBusy?<LoaderCircle size={14}/>:<ShieldCheck size={14}/>}
+            {chronBusy?'Checking future-only blocks…':'Test chronological selection stability'}
+          </button>
+        </fieldset>
+      </div>
       {error&&<div className="rs-error" role="alert"><ShieldAlert size={14}/>{error}</div>}
     </section>
     {report&&<section className="rs-panel" aria-label="Model-selection research results">
@@ -183,6 +255,56 @@ export default function SelectionValidation({runs,currentId,onCompare}:{
       <div className="rs-check"><ShieldCheck size={14}/>
         File checksums and a reproducible calculation do NOT mean vendor data or historical
         investment performance were independently audited.</div>
+    </section>}
+    {chronological&&<section className="rs-panel"
+      aria-label="Chronological selection stability results">
+      <div className="rs-panel-heading"><div>
+        <span className="rs-kicker">CHRONOLOGICAL RESEARCH / SOURCE-LOCKED</span>
+        <h3>Expanding-window selection stability</h3>
+        <p className="rs-small">{chronological.fold_count} forward folds ·
+          {' '}{chronological.test_months_evaluated} genuinely later months ·
+          {' '}{chronological.evidence_class.replaceAll('_',' ')}</p></div>
+        <button type="button"
+          onClick={()=>saveJSON('quantlab_chronological_selection.json',chronological)}>
+          <Download size={14}/> Full forward-block evidence JSON</button></div>
+      <div className="rs-kpi-grid">
+        <article><small>Selected net return across later test blocks</small>
+          <strong>{pct(chronological.aggregate.compounded_selected_net_return_fraction)}</strong>
+          <span>Compounded only over the evaluated forward months</span></article>
+        <article><small>Matching benchmark compounded return</small>
+          <strong>{pct(chronological.aggregate.compounded_benchmark_return_fraction)}</strong>
+          <span>Same strictly later observed months</span></article>
+        <article><small>Mean active monthly return</small>
+          <strong>{pct(chronological.aggregate.mean_monthly_active_return_fraction)}</strong>
+          <span>Selected minus benchmark; arithmetic fraction</span></article>
+        <article><small>Worst compounded drawdown</small>
+          <strong>{pct(chronological.aggregate.selected_max_drawdown_fraction)}</strong>
+          <span>Selected net strategy; no interpolated missing months</span></article>
+      </div>
+      {chronological.selected_forward_months.length>0&&
+        <ResearchPlot plot={{kind:'line2d',
+          title:'Nonoverlapping chronological test returns · selected strategy vs benchmark',
+          x:chronological.selected_forward_months.map(x=>x.date),
+          x_label:'Actual later observation month',
+          y_label:'Original net monthly return (fraction)',
+          traces:[
+            {name:'Selected strategy',y:chronological.selected_forward_months.map(x=>x.strategy_net)},
+            {name:'Matched benchmark',y:chronological.selected_forward_months.map(x=>x.benchmark)}
+          ]}} provenance={chronological.evidence_class}/>}
+      <h4>Fold-by-fold source-bound evaluation</h4>
+      <div className="sv-table"><table><thead><tr>
+        <th>As-of training end</th><th>Embargo</th><th>Future test dates</th>
+        <th>Selected candidate</th><th>Net test return</th><th>Benchmark</th>
+      </tr></thead><tbody>{chronological.folds.map((x,i)=><tr key={i}>
+        <td>{x.train_last}</td><td>{x.embargo_first} to {x.embargo_last}</td>
+        <td>{x.test_first} to {x.test_last}</td>
+        <td>{x.selected_run_id}</td>
+        <td>{pct(x.test_compounded_net_return_fraction)}</td>
+        <td>{pct(x.benchmark_test_compounded_return_fraction)}</td>
+      </tr>)}</tbody></table></div>
+      <div className="sv-warnings"><p><ShieldAlert size={13}/>{chronological.warning}</p>
+        <p><ShieldAlert size={13}/>No per-fold retraining or label purging is claimed,
+          even when the source return dates are aligned.</p></div>
     </section>}
   </div>
 }

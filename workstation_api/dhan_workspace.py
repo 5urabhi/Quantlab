@@ -30,7 +30,27 @@ KEY = re.compile(r"^(NSE_EQ|BSE_EQ):([0-9]{1,12})$")
 BATCH_ID = re.compile(r"^batch_[a-f0-9]{16}$")
 SAFE_SYMBOL = re.compile(r"^[A-Za-z0-9&_.-]{1,80}$")
 ACTIVE_BATCHES: set[str] = set()
+SCHEDULED_BATCHES: set[str] = set()
 ACTIVE_LOCK = threading.Lock()
+
+
+def schedule_batch(batch_id: str) -> None:
+    """Mark a job as accepted by the current process before worker starts.
+
+    The on-disk batch remains 'queued'. Without this flag a locally queued
+    batch was incorrectly shown as 'interrupted' before thread scheduling.
+    """
+    if not BATCH_ID.fullmatch(batch_id):
+        raise ValueError("Unknown Dhan batch ID")
+    with ACTIVE_LOCK:
+        if batch_id in SCHEDULED_BATCHES or batch_id in ACTIVE_BATCHES:
+            raise ValueError("Dhan batch is already scheduled")
+        SCHEDULED_BATCHES.add(batch_id)
+
+
+def unschedule_batch(batch_id: str) -> None:
+    with ACTIVE_LOCK:
+        SCHEDULED_BATCHES.discard(batch_id)
 MAX_INSTRUMENTS = 6000
 LOG = logging.getLogger("quantlab.dhan.batch")
 
@@ -309,7 +329,8 @@ def _summarize(data: dict) -> dict:
     status = data["status"]
     with ACTIVE_LOCK:
         active = data["id"] in ACTIVE_BATCHES
-    if status in ("running", "queued") and not active:
+        scheduled = data["id"] in SCHEDULED_BATCHES
+    if status in ("running", "queued") and not (active or scheduled):
         status = "interrupted"
     return {
         "id": data["id"], "status": status, "created_utc": data["created_utc"],
@@ -666,6 +687,7 @@ def run_batch(batch_id: str, cancel_event: threading.Event | None = None) -> dic
         if batch_id in ACTIVE_BATCHES:
             raise ValueError("Download batch is already active")
         ACTIVE_BATCHES.add(batch_id)
+        SCHEDULED_BATCHES.discard(batch_id)
     data["status"] = "running"
     _save_batch(data)
     LOG.info("Dhan batch started: batch_id=%s instruments=%d interval=%s from=%s to=%s",
@@ -737,6 +759,7 @@ def run_batch(batch_id: str, cancel_event: threading.Event | None = None) -> dic
     finally:
         with ACTIVE_LOCK:
             ACTIVE_BATCHES.discard(batch_id)
+            SCHEDULED_BATCHES.discard(batch_id)
 
 
 def _batch_daily_ohlcv(row: dict, interval: int | None,

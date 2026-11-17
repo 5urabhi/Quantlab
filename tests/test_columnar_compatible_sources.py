@@ -16,7 +16,7 @@ import unittest
 import pandas as pd
 from fastapi.testclient import TestClient
 
-from workstation_api import columnar_cache, compatible_sources, service, shared_market_data
+from workstation_api import columnar_cache, compatible_sources, service, shared_market_data, model_matrix, model_lab
 from workstation_api.app import app
 
 
@@ -75,6 +75,47 @@ class CompatibleMarketSourcesAndParquetTests(unittest.TestCase):
         self.assertEqual(data.json()["basis"], "unadjusted_close")
         self.assertEqual(original_digest,
                          sha256(shared_market_data.database_path().read_bytes()).hexdigest())
+
+    def test_original_model_input_reuses_parquet_without_changing_daily_values(self):
+        from index_research.data import read_matrix
+        folder=shared_market_data.shared_folder()
+        original_daily=read_matrix(folder/"daily_prices.csv",positive=True)
+        original_monthly=read_matrix(folder/"prices.csv",positive=True)
+        before,engine=model_matrix.load("dhan_shared",folder,"daily_prices.csv")
+        self.assertTrue(engine.startswith("original_csv"))
+        pd.testing.assert_frame_equal(before,original_daily,check_names=False)
+        columnar_cache.build()
+        cached,engine=model_matrix.load("dhan_shared",folder,"daily_prices.csv")
+        self.assertEqual(engine,"source_locked_duckdb_parquet")
+        pd.testing.assert_frame_equal(cached,original_daily,check_names=False)
+        monthly,engine=model_matrix.load("dhan_shared",folder,"prices.csv")
+        pd.testing.assert_frame_equal(monthly,original_monthly,check_names=False)
+        self.assertEqual(model_lab.readiness("dhan_shared")["price_matrix_engine"],
+                         "source_locked_duckdb_parquet")
+        # Source receipt pins the canonical CSV, not just Parquet bytes.
+        original_bytes=(folder/"daily_prices.csv").read_bytes()
+        # An extra trailing newline is a real byte-level source mutation,
+        # regardless of the CSV float serialization convention.
+        (folder/"daily_prices.csv").write_bytes(original_bytes+b"\n")
+        with self.assertRaisesRegex(ValueError,"source receipt"):
+            model_matrix.load("dhan_shared",folder,"daily_prices.csv")
+
+    def test_parquet_model_input_falls_back_only_when_source_cache_is_stale(self):
+        columnar_cache.build()
+        mapping={**self.mapping,"source_sha256":sha256(b"another real session").hexdigest()}
+        frame=pd.DataFrame({"close":[107.0]},index=pd.to_datetime(["2026-09-08"]))
+        shared_market_data.ingest([(mapping,frame)],origin="original_followup")
+        self.assertEqual(columnar_cache.status()["state"],"stale")
+        prices,engine=model_matrix.load("dhan_shared",
+            shared_market_data.shared_folder(),"daily_prices.csv")
+        self.assertIn("cache_stale",engine)
+        self.assertEqual(prices.iloc[-1,0],107.0)
+        refreshed=columnar_cache.refresh_if_enabled()
+        self.assertEqual(refreshed["state"],"refreshed")
+        after,engine=model_matrix.load("dhan_shared",
+            shared_market_data.shared_folder(),"daily_prices.csv")
+        pd.testing.assert_frame_equal(after,prices,check_names=False)
+        self.assertEqual(engine,"source_locked_duckdb_parquet")
 
     def test_cache_is_stale_on_source_write_then_automatically_refreshed(self):
         columnar_cache.build()
