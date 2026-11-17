@@ -18,7 +18,7 @@ type Plan = {
   candidate_datasets:{dataset_id:string;label:string;daily_prices:boolean;files_ready:boolean}[];
   source_chain:Source[];next_action:{kind:string;label:string;detail:string};can_acquire:boolean;confirmation_required:boolean;
   estimated_new_dhan_requests:number;preview_token:string;evidence_note:string;
-  upstox_fallback_eligible:boolean;upstox_fallback_note:string
+  zerodha_fallback_eligible:boolean;zerodha_fallback_note:string
 }
 type Job = {id:string;status:string;stage?:string;percent?:number;error?:string;
   result?:{status:string;message:string;dataset_id?:string;selected_ticker?:string;
@@ -50,7 +50,7 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
   const [working,setWorking]=useState<Job|null>(null)
   const [error,setError]=useState('')
   const [revision,setRevision]=useState(0)
-  const [allowUpstox,setAllowUpstox]=useState(false)
+  const [allowZerodha,setAllowZerodha]=useState(false)
   const [runAfter,setRunAfter]=useState(true)
   const selected=useMemo(()=>models.find(m=>m.id===modelId),[models,modelId])
   const isSingle=['gbm_fit','ou_fit','merton_fit','heston_proxy'].includes(modelId)
@@ -130,7 +130,7 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model_id:plan.model_id,dataset_id:plan.dataset_id,
           params:plan.params,preview_token:plan.preview_token,confirm_download:true,
-          confirm_upstox_fallback:allowUpstox&&plan.upstox_fallback_eligible,
+          confirm_zerodha_fallback:allowZerodha&&plan.zerodha_fallback_eligible,
           prepare_buffer:true})
       })
       setWorking({id:data.job_id,status:data.status})
@@ -149,12 +149,12 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
     <div className="qm-acquire-controls">
       <label>Research model
         <select aria-label="Data acquisition model" value={modelId}
-          onChange={e=>{setModelId(e.target.value);setTicker('');setWorking(null);setAllowUpstox(false)}}>
+          onChange={e=>{setModelId(e.target.value);setTicker('');setWorking(null);setAllowZerodha(false)}}>
           {models.map(m=><option key={m.id} value={m.id}>{m.title}</option>)}
         </select></label>
       <label>Original dataset
         <select aria-label="Data acquisition dataset" value={datasetId}
-          onChange={e=>{setDatasetId(e.target.value);setTicker('');setWorking(null);setAllowUpstox(false)}}>
+          onChange={e=>{setDatasetId(e.target.value);setTicker('');setWorking(null);setAllowZerodha(false)}}>
           <option value="">Choose observed dataset</option>
           {datasets.filter(d=>d.kind!=='synthetic').map(d=><option key={d.id} value={d.id}>{d.label}</option>)}
         </select></label>
@@ -198,13 +198,13 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
         <p><ShieldCheck size={15}/> SHA-verified cached Dhan observations are reused first.
           Estimated new provider requests: <strong>{plan.estimated_new_dhan_requests}</strong>.
           No TRI, corporate action or historical index evidence is fabricated.</p>
-        {plan.upstox_fallback_eligible?
+        {plan.zerodha_fallback_eligible?
           <label className="qm-acquire-provider-consent"><input type="checkbox"
-            aria-label="Allow Upstox fallback" checked={allowUpstox}
-            onChange={e=>setAllowUpstox(e.target.checked)}/>
-            If Dhan fails, use my locally configured Upstox V3 entitlement
-            (read-only; exact ISIN and price-overlap checks still required).</label>:
-          <p className="qm-caption">{plan.upstox_fallback_note}</p>}
+            aria-label="Allow Zerodha fallback" checked={allowZerodha}
+            onChange={e=>setAllowZerodha(e.target.checked)}/>
+            If Dhan fails, use my locally configured Zerodha Kite Connect market-data entitlement
+            (read-only; exact exchange-token/symbol match and Dhan price-overlap checks still required).</label>:
+          <p className="qm-caption">{plan.zerodha_fallback_note}</p>}
         <label className="qm-acquire-provider-consent"><input type="checkbox"
           aria-label="Run and save model after data completion" checked={runAfter}
           onChange={e=>setRunAfter(e.target.checked)}/>
