@@ -142,7 +142,8 @@ def status() -> dict:
     files = _parts(manifest) if manifest else []
     same = bool(manifest and manifest.get("source_signature") == original)
     ready = bool(exists and same and files and
-                 len(files) == len(manifest.get("years", [])) and\n                 _part_receipts(manifest, files))
+                 len(files) == len(manifest.get("years", [])) and
+                 _part_receipts(manifest, files))
     return {
         "state": ("source_missing" if not exists else
                   "engine_missing" if not installed else
