@@ -318,7 +318,10 @@ def import_csv(payload: bytes, identity: str, provider: str,
         raise ValueError("Enter an approved short provider name")
     if not payload or len(payload)>MAX_ORIGINAL_BYTES:
         raise ValueError("Historical depth CSV must be at most 30 MB")
-    data=payload.decode("utf-8-sig")
+    try:
+        data=payload.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Historical order book CSV must be UTF-8") from exc
     reader=csv.DictReader(io.StringIO(data,newline=""))
     fields={"timestamp_utc","side","level","price","quantity","orders"}
     if not fields.issubset(reader.fieldnames or []):
@@ -437,7 +440,7 @@ def analyze(session_id: str,limit: int = 1500) -> dict:
             "bid_depth":bid_qty,"ask_depth":ask_qty,
             "imbalance":imbalance,
             "bid_levels":len(bids),"ask_levels":len(asks),
-            "next_snapshot_mid_return_bps":(
+            "return_from_previous_mid_bps":(
                 (mid/previous_mid-1)*10000 if previous_mid else None),
             "full_depth":checked["full_depth"],
         })
