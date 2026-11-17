@@ -59,7 +59,8 @@ class ResearchCompletionTests(unittest.TestCase):
         with patch.object(model_lab,"run_model") as run:
             result=research_workflow.execute("min_variance",None,params={})
         self.assertEqual(result["status"],"blocked")
-        self.assertEqual(result["action"],"choose_dataset")
+        self.assertEqual(result["action"],"get_market_data")
+        self.assertIn("Market Data Library", result["message"])
         run.assert_not_called()
 
     def test_synthetic_fixture_cannot_be_saved_as_empirical_by_direct_api(self):
