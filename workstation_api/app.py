@@ -389,6 +389,7 @@ class DataAcquisitionRequest(BaseModel):
     params: dict[str, float | int | str] = Field(default_factory=dict)
     preview_token: str = Field(pattern=r"^[0-9a-f]{64}$")
     confirm_download: bool = False
+    confirm_upstox_fallback: bool = False
 
 
 @app.post("/api/data-manager/acquisition/start")
@@ -397,8 +398,12 @@ def data_manager_acquisition_start(body: DataAcquisitionRequest):
         current = data_acquisition.check_confirmation(
             body.model_id, body.dataset_id, body.params,
             body.preview_token, body.confirm_download)
+        if body.confirm_upstox_fallback and not current["upstox_fallback_eligible"]:
+            raise ValueError("Upstox fallback needs a local token and verified "
+                             "ISIN mapping for every selected security")
         return {**_spawn("lab_shared_data_extension", data_acquisition.execute,
-                         body.model_id, body.dataset_id, current["params"]),
+                         body.model_id, body.dataset_id, current["params"],
+                         allow_upstox=body.confirm_upstox_fallback),
                 "planned": current,
                 "destination_dataset_id": shared_market_data.SHARED_ID}
     except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
