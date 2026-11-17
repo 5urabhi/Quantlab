@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -705,6 +705,50 @@ def data_manager_research_evidence_audit(
             validation_start=validation_start or None,
             final_test_start=final_test_start or None)
     except (ValueError, OSError, KeyError, TypeError) as exc:
+        bad(exc)
+
+
+
+@app.get("/api/data-manager/research/acceptance/reports")
+def data_manager_real_acceptance_reports(limit: int = 20):
+    try:
+        return real_data_acceptance.recent(limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/research/acceptance/report/{report_id}")
+def data_manager_real_acceptance_report(report_id: str):
+    try:
+        return real_data_acceptance.report(report_id)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class RealDataAcceptanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dataset_id: str = Field(min_length=1, max_length=120)
+    validation_start: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    final_test_start: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    run_models: bool = True
+    confirm_real_data_audit: bool = False
+
+
+@app.post("/api/data-manager/research/acceptance/run")
+def data_manager_real_acceptance_run(body: RealDataAcceptanceRequest):
+    if not body.confirm_real_data_audit:
+        raise HTTPException(400, "Confirm original source and numerical acceptance")
+    try:
+        service.dataset_path(body.dataset_id)
+        from datetime import date
+        beginning = date.fromisoformat(body.validation_start)
+        test = date.fromisoformat(body.final_test_start)
+        if beginning >= test:
+            raise ValueError("Final holdout must start after the validation period")
+        return _spawn("real_data_acceptance", real_data_acceptance.execute,
+                      body.dataset_id, body.validation_start, body.final_test_start,
+                      run_models=body.run_models)
+    except (ValueError, OSError) as exc:
         bad(exc)
 
 
