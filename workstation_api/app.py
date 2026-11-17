@@ -2117,6 +2117,22 @@ class DhanBatchCreate(BaseModel):
 
 
 
+class DhanLocalConnect(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    access_token: str = Field(min_length=16, max_length=8192)
+    confirm_local_storage: bool = False
+
+
+@app.post("/api/market-data/providers/dhan/connect")
+def market_data_connect_dhan(body: DhanLocalConnect):
+    """Explicit local-only, no-token-in-response Dhan account preflight."""
+    try:
+        return market_data_workflow.store_verified_dhan_access_token(
+            body.access_token, confirm_local_storage=body.confirm_local_storage)
+    except Exception as exc:
+        bad(exc)
+
+
 class MarketDataStart(BaseModel):
     model_config = ConfigDict(extra="forbid")
     selection: Literal["nifty50_pit", "banknifty_pit", "watchlist", "all_nse", "all_bse"]
