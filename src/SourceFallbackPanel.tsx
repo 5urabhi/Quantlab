@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useState} from 'react'
 import {AlertTriangle, CheckCircle2, FileUp, RefreshCw, ShieldCheck} from 'lucide-react'
+import ZerodhaProviderPanel from './ZerodhaProviderPanel'
 
 type Provider = {id:string;label:string;mode:string;compatible:boolean}
 type Registry = {providers:Provider[];source_claims_independently_audited:boolean}
