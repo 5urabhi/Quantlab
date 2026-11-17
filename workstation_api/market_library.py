@@ -182,7 +182,11 @@ def browse(*, view: str = "all", as_of: str = "", sector: str = "",
                 where.append("i.identity IN ("+",".join("?" for _ in keys)+")")
                 args.extend(sorted(keys))
         if view=="sector":
-            if not sector:
+            if not has_sector or not sectors:
+                where.append("0=1")
+                source={"state":"missing_source",
+                        "reason":"Import original effective-dated sector classifications first."}
+            elif not sector:
                 where.append("0=1")
                 source={"state":"choose_sector","reason":"Select an original sector classification."}
             else:
