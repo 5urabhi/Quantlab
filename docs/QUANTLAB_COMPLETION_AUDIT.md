@@ -1,6 +1,6 @@
 # QuantLab — 12-Item Completion Acceptance and Remaining Evidence
 
-**Last integrated software milestone:** PR #27 (November 14, 2026). This checklist distinguishes a delivered application capability from a completed *real-market* research outcome. Do not mark an empirical claim certified until evidence has been independently checked.
+**Current software-audit scope:** through the November 17 reliability/research hardening. Historical roadmap rows are retained below. This checklist distinguishes a delivered application capability from a completed *real-market* research outcome. Do not mark an empirical claim certified until evidence has been independently checked.
 
 | Priority | Capability | Connected implementation | Software acceptance and residual limits |
 | --- | --- | --- | --- |
@@ -11,11 +11,31 @@
 | P0 | Model readiness | Registry-backed minimums, exact selected symbols, source-specific actions, option-quote import and read-only Dhan access. | Readiness to compute is distinct from input correctness, out-of-sample evidence and publishability. |
 | P1 | Financial results dashboard | Saved-run Sharpe, Sortino, CAGR, drawdown, volatility, beta, tracking error and matched benchmark statistics, when defined; source/audit warnings. | Theoretical or short-sample models cannot supply every financial return metric. Missing values remain unavailable. |
 | P1 | Advanced chart interaction | Hover/keyboard, annotations, uncertainty bands, 3D rotation/zoom and 2D pan/zoom/reset plus synchronized crosshairs on identical date labels. Full CSV exports retain raw rows. | Date-only and equivalent midnight UTC labels synchronize crosshairs; zoom/pan require shared exact observed dates. No interpolation or unsupported comparisons. |
-| P1 | Research job management | Bounded six-job local FIFO queue with **one serial worker**, queue positions, progress, cancellation only at checkpoints, eligible retry and source-specific error actions. | Explicit restart retry is available for source-hash-locked local research jobs only; data downloads, frozen-test consumption and unsafe jobs never auto-resume. |
+| P1 | Research job management | Bounded six-job local FIFO queue with **one serial worker**, queue positions, progress, cancellation only at checkpoints, eligible retry and source-specific error actions. | Source-locked, user-authorized idempotent research jobs and one interrupted Dhan batch may resume automatically after a Python restart when original inputs and credentials are still valid; unsafe/frozen/entitlement-blocked jobs never auto-run. Stage and percent are durably checkpointed. |
 | P1 | Dataset lifecycle management | Recoverable Trash, archive/restore, dependency-protected deletion, disk usage, vendor cache reuse, read-only byte-identical prepared view scan. | Only user-confirmed, byte-identical complete prepared views without dependencies can move to recoverable Trash. Raw Dhan cache is protected. |
 | P1 | Experiment comparison | Saved overlays with compatible axes and strict paired return comparisons using identical source hashes, common calendar, matched benchmark and Holm-adjusted inference. | Different models may lack comparable economic estimands. A descriptive overlay is not a valid performance ranking. |
 | P2 | Reproducibility | Saved results and source manifests, environment/code version, source-integrity audit, portable ZIP package and offline `verify_bundle.py`. | Licensed original source inputs are not shipped; full replication requires authorized inputs and matching environment. |
-| P2 | Advanced statistical validation | Walk-forward/holdout; paired HAC and block bootstrap; CSCV/PBO, approximate DSR with declared trial count, lagged benchmark-volatility descriptive regimes. | CSCV is retrospective, **not purged CPCV**, and not a frozen independent final test. Original PIT/TRI/cost audits remain required. |
+| P2 | Advanced statistical validation | Walk-forward/holdout; paired HAC and block bootstrap; CSCV/PBO, approximate DSR with declared trial count, lagged benchmark-volatility descriptive regimes. | CSCV remains retrospective and is not purged CPCV. An additional expanding selection-only chronology now applies explicit embargo and nonoverlapping later blocks but does not refit each strategy. Neither replaces a frozen independent final test. |
+
+## Further operational acceptance (November 17)
+
+- **System Health:** verify source SQLite databases with bounded read-only
+  `PRAGMA quick_check`, check optional cache freshness, disk space and
+  interrupted-job inventory inside Database Manager → Activity & recovery.
+- **Durable jobs:** last safe progress/checkpoint must survive a Python restart,
+  and an old job permalink must show interrupted vs complete honestly.
+- **Parquet acceleration:** eligible shared-Dhan empirical models use a
+  source-locked read-through matrix that agrees exactly with canonical CSV
+  prices; stale mirrors fall back to original data; tampering fails closed.
+- **Chronological comparisons:** selection based only on past archived
+  returns, with embargo and genuine later blocks, explicitly not a refitted
+  or never-viewed final holdout.
+- **Evidence freshness:** saved research acceptance receipts are immutable
+  but marked stale when any original source file changes or disappears.
+
+These are code-level tests, not proof of live broker data or certified market
+research. Serial source-writing remains an intentional single-local-worker
+safety limit; larger-scale multi-user distributed execution is out of scope.
 
 ## Explicit authentic-source worklist
 
