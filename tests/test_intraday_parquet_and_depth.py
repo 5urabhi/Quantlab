@@ -110,6 +110,31 @@ class OriginalMicrostructureTests(unittest.TestCase):
         self.assertAlmostEqual(report["metrics"][0]["spread_bps"],10000*.1/100.05)
         self.assertEqual(report["summary"]["average_imbalance"],0)
 
+    def test_dhan_200_level_parser_uses_declared_row_count_not_sequence(self):
+        # Dhan 200-depth's last header int is NoOfRows, unlike 20-depth.
+        def packet(code, prices):
+            values=b"".join(struct.pack("<dII",price,100,3) for price in prices)
+            return struct.pack("<hBBiI",12+len(values),code,1,1333,
+                               len(prices)) + values
+        packets=market_depth.packet_stream(
+            packet(41,[100.,99.95,99.9])+
+            packet(51,[100.05,100.10,100.15]),200)
+        self.assertEqual(len(packets),2)
+        self.assertEqual(packets[0]["declared_rows"],3)
+        self.assertIsNone(packets[0]["message_sequence"])
+        self.assertEqual(len(packets[1]["levels"]),3)
+        snap=market_depth._snapshot(
+            packets[0],packets[1],self.identity,datetime.now(timezone.utc),200)
+        self.assertFalse(snap["full_depth"])
+        with self.assertRaisesRegex(ValueError,"row count"):
+            market_depth.packet_stream(
+                struct.pack("<hBBiI",12+3*16,41,1,1333,201)+
+                b"\\x00"*(3*16),200)
+        with self.assertRaisesRegex(ValueError,"packet size"):
+            market_depth.packet_stream(
+                struct.pack("<hBBiI",12+3*16,41,1,1333,3)+
+                b"\\x00"*(2*16),200)
+
     def test_historical_orderbook_csv_import_never_invents_levels(self):
         stamp="2026-09-01T09:15:00+05:30"
         csv_rows=["timestamp_utc,side,level,price,quantity,orders"]
