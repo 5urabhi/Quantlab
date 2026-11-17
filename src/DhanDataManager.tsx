@@ -534,6 +534,12 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
         The end date must come after the start date.</p>}
       {!daily&&<p className="dh-simple-warning">
         Intraday data uses more Dhan requests and storage. Choose Daily above unless you specifically need minute-level data.</p>}
+      {!daily&&pitMode&&dateDays>365&&<div className="dh-simple-warning">
+        Multi-year intraday index history can require many Dhan requests per constituent.
+        <button type="button" className="dh-small-btn" onClick={()=>setInterval('daily')}>
+          Switch to recommended daily candles
+        </button>
+      </div>}
       <details className="dh-simple-details dh-advanced-data">
         <summary>Advanced options: API calls and index spot prices</summary>
         <div className="dh-estimate"><div><span>Estimated minimum requests</span>
