@@ -266,3 +266,144 @@ def audit(run_ids: list[str], *, folds: int = 4, declared_trials: int | None = N
             "and execution costs still need independent source review.",
         ],
     }
+
+
+def chronological_selection(returns: np.ndarray, benchmark: np.ndarray,
+                            dates: list[str], run_ids: list[str], *,
+                            train_months: int = 36,
+                            test_months: int = 6,
+                            embargo_months: int = 1) -> dict:
+    """Expanding train-only candidate selection with later untouched-at-step blocks.
+
+    Each later test block is excluded from the current selection fit.
+    Saved candidate return streams may themselves be full-sample fitted:
+    this is *selection stability*, not retraining individual models or a
+    preregistered untouched final holdout. We explicitly forbid missing
+    calendar months, synthetic fills and future-selected Sharpe ranks.
+    """
+    if (not isinstance(train_months, int) or isinstance(train_months, bool)
+            or not 24 <= train_months <= 120):
+        raise ValueError("Choose 24–120 months of initial training observations")
+    if (not isinstance(test_months, int) or isinstance(test_months, bool)
+            or not 3 <= test_months <= 12):
+        raise ValueError("Choose 3–12 months per future selection block")
+    if (not isinstance(embargo_months, int) or isinstance(embargo_months, bool)
+            or not 1 <= embargo_months <= 6):
+        raise ValueError("Use a 1–6 month explicit embargo between training and test")
+    if not isinstance(returns, np.ndarray) or returns.ndim != 2:
+        raise ValueError("Original return matrix must be two-dimensional")
+    n, m = returns.shape
+    if (not isinstance(benchmark, np.ndarray) or benchmark.shape != (n,)
+            or len(dates) != n or len(run_ids) != m
+            or not 2 <= m <= 8):
+        raise ValueError("Candidates, benchmark and dates must align exactly")
+    if n > MAX_MONTHS or n < train_months + embargo_months + 2*test_months:
+        raise ValueError("Need at least two untouched-at-step future blocks "
+                         "after the training period and embargo")
+    if (not np.isfinite(returns).all() or not np.isfinite(benchmark).all()
+            or np.any(returns <= -1) or np.any(benchmark <= -1)):
+        raise ValueError("Nonfinite or ruin-level returns cannot be compounded")
+    try:
+        monthly = pd.PeriodIndex(pd.to_datetime(dates, errors="raise"), freq="M")
+        if len(set(monthly)) != n or not all(
+                monthly[i].ordinal - monthly[i-1].ordinal == 1 for i in range(1,n)):
+            raise ValueError("Observed return months are not consecutive")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Walk-forward selection requires consecutive original months, "
+                         "with no missing-date interpolation") from exc
+
+    reports = []
+    test_rows = []
+    positions = np.zeros(m, dtype=int)
+    for train_end in range(train_months, n, test_months):
+        begin = train_end + embargo_months
+        end = min(begin + test_months, n)
+        if end - begin != test_months:
+            break
+        train = returns[:train_end]
+        deviation = np.std(train, axis=0, ddof=1)
+        # Constant series cannot win by being treated as infinite Sharpe.
+        scores = np.divide(np.mean(train, axis=0), deviation,
+                           out=np.full(m, -np.inf), where=deviation > 1e-12)
+        if not np.isfinite(scores).any():
+            raise ValueError("All saved candidates have undefined in-training Sharpe")
+        selected = int(np.argmax(scores))
+        positions[selected] += 1
+        chosen = returns[begin:end, selected]
+        baseline = benchmark[begin:end]
+        reports.append({
+            "train_first": dates[0],
+            "train_last": dates[train_end-1],
+            "train_months": train_end,
+            "embargo_first": dates[train_end],
+            "embargo_last": dates[begin-1],
+            "embargo_months": embargo_months,
+            "test_first": dates[begin],
+            "test_last": dates[end-1],
+            "test_months": len(chosen),
+            "selected_run_id": run_ids[selected],
+            "train_monthly_sharpe": float(scores[selected]),
+            "test_compounded_net_return_fraction": float(np.prod(1 + chosen) - 1),
+            "benchmark_test_compounded_return_fraction": float(np.prod(1 + baseline) - 1),
+            "test_mean_active_return_fraction": float(np.mean(chosen - baseline)),
+            "test_down_months": int(np.sum(chosen < 0)),
+        })
+        test_rows.extend({
+            "date": dates[begin+i], "selected_run_id": run_ids[selected],
+            "strategy_net": float(chosen[i]), "benchmark": float(baseline[i]),
+            "active_return": float(chosen[i] - baseline[i])
+        } for i in range(test_months))
+    if len(reports) < 2:
+        raise ValueError("At least two full chronological future blocks are required")
+    strategy = np.array([x["strategy_net"] for x in test_rows], dtype=float)
+    base = np.array([x["benchmark"] for x in test_rows], dtype=float)
+    wealth = np.r_[1., np.cumprod(1.+strategy)]
+    drawdown = wealth / np.maximum.accumulate(wealth) - 1.
+    return {
+        "protocol": "expanding_train_only_selection_with_forward_nonoverlap",
+        "run_ids": run_ids,
+        "training_months_initial": train_months,
+        "test_months_per_fold": test_months,
+        "embargo_months": embargo_months,
+        "matched_observed_months": n,
+        "fold_count": len(reports),
+        "test_months_evaluated": len(test_rows),
+        "candidate_selection_counts": [
+            {"run_id": run_ids[i], "selected_folds": int(positions[i])}
+            for i in range(m)],
+        "aggregate": {
+            "compounded_selected_net_return_fraction": float(np.prod(1 + strategy) - 1),
+            "compounded_benchmark_return_fraction": float(np.prod(1 + base) - 1),
+            "mean_monthly_active_return_fraction": float(np.mean(strategy - base)),
+            "selected_max_drawdown_fraction": float(np.min(drawdown)),
+            "selected_monthly_sharpe": (
+                float(np.mean(strategy) / np.std(strategy, ddof=1))
+                if np.std(strategy, ddof=1) > 1e-12 else None),
+        },
+        "folds": reports, "selected_forward_months": test_rows,
+        "certifies_real_market_performance": False,
+        "warning": "Selection uses only earlier saved monthly return observations, "
+                   "with a declared embargo and later nonoverlapping tests. "
+                   "It does NOT re-fit each archived strategy as-of each fold, "
+                   "purge overlapping event-end labels, freeze a never-viewed final "
+                   "holdout, or prove original PIT, TRI and execution costs.",
+    }
+
+
+def chronological_audit(run_ids: list[str], *, train_months: int = 36,
+                        test_months: int = 6, embargo_months: int = 1) -> dict:
+    """Run chronological candidate selection behind the canonical source gate."""
+    dates, returns, benchmark, ids, checked = _series(run_ids)
+    selected = chronological_selection(
+        returns, benchmark, dates, ids,
+        train_months=train_months,
+        test_months=test_months,
+        embargo_months=embargo_months)
+    return {
+        **selected,
+        "dataset_id": checked["dataset_id"],
+        "source_hashes": checked["source_hashes"],
+        "evidence_class": checked["evidence_class"],
+        "paired_comparison_warning": checked["warning"],
+        "cannot_replace_preregistered_final_test": True,
+    }
