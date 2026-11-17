@@ -149,6 +149,8 @@ def _normalize(body: bytes) -> list[tuple[str, float]]:
             session = stamp.astimezone(ZoneInfo("Asia/Kolkata")).date()
             opening, high, low, close, volume = (float(candle[i]) for i in (1,2,3,4,5))
         except (TypeError, ValueError, OverflowError) as exc:
+            if isinstance(exc, ValueError) and str(exc) == "Upstox candle lacks a timezone":
+                raise ValueError("Upstox candle lacks a timezone") from exc
             raise ValueError("Upstox candle contains an invalid timestamp or OHLCV") from exc
         if (session > date.today() or session.year < 1990
                 or not all(math.isfinite(v) and v > 0 for v in (opening, high, low, close))
