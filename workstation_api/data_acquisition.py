@@ -40,8 +40,12 @@ def _settings(model_id: str, params: dict | None) -> dict:
         chosen["ticker"] = str(chosen.get("ticker") or "")
     if "quote" in known:
         chosen["quote"] = str(chosen.get("quote") or "")
-    # Enforce the same numerical parameter ranges as the execution engine.
-    model_registry.validate_parameters(model_id, chosen)
+    # Readiness must work before a stock has been selected. The actual
+    # executor still requires a real, exact symbol and never auto-chooses one.
+    validation = dict(chosen)
+    if model_id in SINGLE and validation.get("target") == "stock" and not validation.get("ticker"):
+        validation["ticker"] = "SELECTION_PENDING"
+    model_registry.validate_parameters(model_id, validation)
     return chosen
 
 
