@@ -4,12 +4,47 @@
 stochastic and portfolio mathematics, historical source management, risk
 attribution, visual experiments, reproducibility and publication tooling.
 
-**Release scope (November 14, 2026):** software and synthetic-browser acceptance
-are tested. **No independently validated NIFTY historical investment result is
+**Release scope (November 17, 2026):** the local-first platform's software and
+synthetic-browser acceptance are tested. **No independently validated NIFTY historical investment result is
 published.** Real TRI, point-in-time constituents, historical filings, dividends
 and other corporate events still require an original-source audit.
 
-## Verify the current workstation end to end\n\n    bash run.sh check\n\nThis checks the React build, Python/math acceptance, synthetic factor research artifacts, and runs the source-aware doctor. Missing authentic market inputs report **HISTORICAL RESEARCH: NOT READY** without pretending software failed. The full browser interaction remains checked on GitHub Actions. Use `bash run.sh evaluate` to add labeled synthetic outputs. The legacy Streamlit checks are explicitly opt-in.\n\n## Fast status (default: OK / NOT READY / ERROR)
+## Verify the current workstation end to end
+
+```bash
+bash run.sh check
+```
+
+This checks the React build, Python/math acceptance, synthetic factor research
+artifacts, and source-aware doctor. Missing authentic market inputs report
+**HISTORICAL RESEARCH: NOT READY** without falsely failing the software.
+GitHub Actions separately checks actual Chromium browser interactions.
+Use `bash run.sh evaluate` for labeled synthetic results; legacy Streamlit
+checks remain explicitly opt-in.
+
+### Reliability, data acceleration and research validation
+
+**Data Library → Data Manager → Activity & recovery** exposes a read-only
+operational overview: managed database integrity, storage, interrupted jobs,
+source mirror state and broker-session presence without making broker API calls.
+The job queue keeps bounded checkpointed progress across Python restarts and
+recovers only previously authorized idempotent source-locked work.
+
+The optional source-locked DuckDB/Parquet market-data mirror can now serve
+historical shared-Dhan model matrices. Original verified CSV remains canonical
+when no fresh mirror is enabled; corrupt source evidence fails closed.
+
+**Results Studio → Overfitting & regimes → Chronological expanding-window
+selection** compares saved source-compatible research runs using train-only
+selection, explicit embargo, and genuinely later test blocks. It reports a
+retrospective stability diagnostic, not independently certified strategy alpha.
+
+See [canonical feature/evidence status](docs/QUANTLAB_STATUS.md) and
+[research completion guide](docs/QUANTLAB_RESEARCH_COMPLETION_GUIDE.md).
+All quantitative claims must reflect actual observed data and documented
+source limitations.
+
+## Fast status (default: OK / NOT READY / ERROR)
 
 The doctor prints a **short, readable status**, never a wall of JSON or
 step-by-step instructions. It saves the optional detailed report separately.
