@@ -627,15 +627,16 @@ def data_manager_zerodha_auth_callback(
         zerodha_fallback.finish_login(request_token, quantlab_state)
         html = ("<!doctype html><html><head><meta charset='utf-8'></head>"
                 "<body><h2>Zerodha connected to local QuantLab</h2>"
-                "<p>Close this tab and refresh QuantLab's source dashboard.</p>"
+                "<p><a href='http://127.0.0.1:5173/'>Return to QuantLab</a> "
+                "and refresh the source dashboard.</p>"
                 "</body></html>")
         return HTMLResponse(html, headers={"Cache-Control":"no-store",
                                            "Referrer-Policy":"no-referrer"})
     except (ValueError, OSError):
         html = ("<!doctype html><html><head><meta charset='utf-8'></head>"
                 "<body><h2>Zerodha connection not completed</h2>"
-                "<p>Return to QuantLab and start a new login. Check your "
-                "registered localhost callback URL.</p></body></html>")
+                "<p><a href='http://127.0.0.1:5173/'>Return to QuantLab</a>, "
+                "start a new login and check the registered callback.</p></body></html>")
         return HTMLResponse(html, status_code=400,
                             headers={"Cache-Control":"no-store",
                                      "Referrer-Policy":"no-referrer"})
