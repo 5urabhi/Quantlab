@@ -2255,6 +2255,7 @@ def _run_bulk(batch_id: str, cancel: Event):
                 outcome["minute_cache_refresh"] = [{"status":"manual_refresh_needed"}]
         return outcome
     finally:
+        dhan_workspace.unschedule_batch(batch_id)
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
 
 
@@ -2273,8 +2274,14 @@ def create_dhan_batch(body: DhanBatchCreate):
     batch_id = created["id"]
     cancel = Event()
     BATCH_CANCEL_EVENTS[batch_id] = cancel
-    job = _spawn("dhan_bulk", _run_bulk, batch_id, cancel)
-    return {**job, "batch": created}
+    dhan_workspace.schedule_batch(batch_id)
+    try:
+        job = _spawn("dhan_bulk", _run_bulk, batch_id, cancel)
+    except Exception:
+        dhan_workspace.unschedule_batch(batch_id)
+        BATCH_CANCEL_EVENTS.pop(batch_id, None)
+        raise
+    return {**job, "batch": dhan_workspace.batch_details(batch_id)}
 
 
 @app.post("/api/dhan/batches/{batch_id}/resume")
@@ -2289,12 +2296,14 @@ def resume_dhan_batch(batch_id: str):
         raise HTTPException(409, "Batch is already running")
     cancel = Event()
     BATCH_CANCEL_EVENTS[batch_id] = cancel
+    dhan_workspace.schedule_batch(batch_id)
     try:
         job = _spawn("dhan_bulk", _run_bulk, batch_id, cancel)
     except Exception:
+        dhan_workspace.unschedule_batch(batch_id)
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
         raise
-    return {**job, "batch": state}
+    return {**job, "batch": dhan_workspace.batch_details(batch_id)}
 
 
 @app.post("/api/dhan/batches/{batch_id}/cancel")
@@ -2769,10 +2778,12 @@ def reconcile_interrupted_research():
                 cancel = Event()
                 BATCH_CANCEL_EVENTS[original_id] = cancel
                 try:
+                    dhan_workspace.schedule_batch(original_id)
                     _spawn("dhan_bulk", _run_bulk, original_id, cancel)
                     data_orchestrator.event("batch_recovery", "complete",
                                             "Resumed interrupted Dhan batch " + original_id)
                 except Exception:
+                    dhan_workspace.unschedule_batch(original_id)
                     BATCH_CANCEL_EVENTS.pop(original_id, None)
                     data_orchestrator.event("batch_recovery", "blocked",
                                             "Could not resume interrupted batch " + original_id)
