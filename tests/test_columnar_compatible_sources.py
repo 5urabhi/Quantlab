@@ -131,8 +131,8 @@ class CompatibleMarketSourcesAndParquetTests(unittest.TestCase):
             ("2026-09-04T15:30:00+0530",104.0),
             ("2026-09-08T15:30:00+0530",107.5),
         ]
-        payload=("datetime,close\\n"+"\\n".join(
-            f"{d},{p}" for d,p in rows)+"\\n").encode("utf-8")
+        payload=("datetime,close\n"+"\n".join(
+            f"{d},{p}" for d,p in rows)+"\n").encode("utf-8")
         output=compatible_sources.import_original(
             payload=payload,identity=self.source_id,provider="dhan_export",
             confirm_authorized=True,confirm_unadjusted=True)
