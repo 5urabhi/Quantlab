@@ -758,7 +758,8 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
             <div><strong>{fmt(batch.counts.no_data||0)}</strong><small>No source candles</small></div>
           </div>
           {batch.current_symbol&&<p className="mdw-inline-status" role="status">
-            <LoaderCircle size={16} className="mdw-spin"/> Working on {batch.current_symbol}
+            {active?<LoaderCircle size={16} className="mdw-spin"/>:<Clock3 size={16}/>}
+            {active?'Working on':'Last attempted'} {batch.current_symbol}
             {batch.current_window?' · Window '+batch.current_window:''}</p>}
           {!!batch.rejected_provider_bars&&<div className="mdw-callout warn">
             <AlertCircle size={17}/> {fmt(batch.rejected_provider_bars)} invalid source bars
