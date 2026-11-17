@@ -1370,12 +1370,22 @@ def _download_master():
             raise ValueError(
                 "Downloaded Dhan master is not the compact CSV with exchange "
                 "trading symbols. Existing catalog was preserved.")
+        # Validate the entire downloaded catalog *before* replacing the
+        # previous working version; an HTTP 200 CSV can still contain a valid
+        # header but zero usable NSE cash-equity symbols.
+        stat = destination.stat()
+        candidate = dhan_workspace._catalog_cached(
+            str(destination), stat.st_mtime_ns, stat.st_size)
+        equities = [row for row in candidate
+                    if row["exchange_segment"] == "NSE_EQ"
+                    and row["regular_eq"] and row["trading_symbol_verified"]]
+        expected_tickers = {"RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "ITC"}
+        observed = {row["symbol"].strip().upper() for row in equities}
+        if len(equities) < 100 or len(expected_tickers & observed) < 3:
+            raise ValueError("Downloaded Dhan master has too few verified NSE "
+                             "cash-equity symbols. Existing catalog was preserved.")
         destination.replace(path)
         dhan_workspace._catalog_cached.cache_clear()
-        health = dhan_workspace.catalog_health()
-        if not health["ready"]:
-            raise ValueError("Compact Dhan master downloaded, but its NSE ticker "
-                             "mapping failed validation: " + health["message"])
     finally:
         destination.unlink(missing_ok=True)
     return {"path": "data/dhan/instrument_master.csv", "bytes": len(data)}
