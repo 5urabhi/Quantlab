@@ -19,6 +19,21 @@ PARAMETERS = frozenset({"assets", "train_window", "target", "ticker", "quote"})
 SINGLE = frozenset({"gbm_fit", "ou_fit", "merton_fit", "heston_proxy"})
 
 
+def primary_source(dataset_id: str | None) -> str | None:
+    """Prefer one canonical shared market library, never guess from uploads.
+
+    Old snapshots remain addressable explicitly for saved-run reproducibility.
+    The shared source is selected only when genuine observed prices exist.
+    No GET or model preview downloads market data.
+    """
+    if dataset_id:
+        return dataset_id
+    if any(d["id"]=="dhan_shared" and d.get("has_daily_prices")
+           for d in service.datasets(include_archived=False)):
+        return "dhan_shared"
+    return None
+
+
 def _settings(model_id: str, params: dict | None) -> dict:
     if model_id not in model_registry.CATALOG:
         raise ValueError("Unknown registered model")
@@ -100,7 +115,7 @@ def plan(model_id: str, dataset_id: str | None = None,
          params: dict | None = None, *, with_sources: bool = True) -> dict:
     settings = _settings(model_id, params)
     model = model_registry.CATALOG[model_id]
-    selected_id = dataset_id or None
+    selected_id = primary_source(dataset_id)
     measured = model_data_manager.inspect(model_id, selected_id, settings)
     action = model_data_manager.recommend_next_action(measured)
     available = _sources() if with_sources else []
@@ -155,6 +170,7 @@ def plan(model_id: str, dataset_id: str | None = None,
     return {
         "model_id": model_id, "model_title": model["title"],
         "dataset_id": selected_id, "params": settings,
+        "one_library_default": selected_id == "dhan_shared" and not dataset_id,
         "mode": mode, "phase": phase,
         "requirements": measured, "next_action": action,
         "candidate_datasets": available, "source_chain": chain,

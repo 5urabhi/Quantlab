@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import './market-data-workspace.css'
 
+const MarketLibraryPanel = lazy(() => import('./MarketLibraryPanel'))
 const DhanDataManager = lazy(() => import('./DhanDataManager'))
 const DataManager = lazy(() => import('./DataManager'))
 const SourceFallbackPanel = lazy(() => import('./SourceFallbackPanel'))
@@ -760,44 +761,49 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
       </section>}
     </div>}
     {page==='datasets'&&<section className="mdw-card">
-      <div className="mdw-section-top"><div><span className="mdw-kicker">MY DATASETS</span>
+      <div className="mdw-section-top"><div><span className="mdw-kicker">ONE MARKET LIBRARY</span>
         <h3>Everything you've collected</h3>
-        <p>Actual source files, preparation and model readiness are separate checks.
-          A downloaded candle is not automatically a certified index backtest.</p></div>
+        <p>Your original sources remain available for audit. One shared price
+          library organizes downloaded stocks by exchange, dated index membership,
+          and original sector classification.</p></div>
         <button className="mdw-button" onClick={()=>setPage('get')}>
           <Download size={16}/> Get more data</button></div>
-      {!availableDatasets.length&&<div className="mdw-empty"><HardDrive size={30}/>
-        <strong>No observed datasets yet</strong>
-        <p>Choose NIFTY 50, BANK NIFTY or your stocks and prepare your first dataset.</p>
-        <button className="mdw-button" onClick={()=>setPage('get')}>Get your first dataset <ArrowRight size={15}/></button>
-      </div>}
-      <div className="mdw-dataset-list">{availableDatasets.map(d=><article className="mdw-dataset" key={d.id}>
-        <div className="mdw-dataset-icon"><Database size={22}/></div>
-        <div className="mdw-dataset-body"><strong>{d.label}</strong>
-          <small>{d.kind} · {fmt(d.daily_session_count||0)} daily sessions
-            {' '}· {fmt(d.monthly_price_observations||0)} monthly marks</small>
-          <p>{d.has_prices?'Price observations saved':'Awaiting observed prices'}
-            {d.ready?' · Source files satisfy this dataset’s structural readiness checks':
-              ' · Not yet research-ready for all workflows'}</p>
-          {!!d.missing?.length&&<details><summary>{d.missing.length} missing requirement(s)</summary>
-            {d.missing.map((m,i)=><p key={i} className="mdw-warning">{m}</p>)}</details>}
+      <Suspense fallback={<p className="mdw-empty">Loading one Market Data Library…</p>}>
+        <MarketLibraryPanel
+          onOpenDownloads={()=>{setPage('get');setStage(0)}}
+          onChooseModel={onOpenModels}
+          onChanged={()=>{onDataChanged();void refresh()}}/>
+      </Suspense>
+      <details className="mdw-options">
+        <summary>Advanced: original source snapshots & legacy research datasets
+          <ChevronDown size={15}/></summary>
+        <p>These snapshots preserve where every observation came from. They are not
+          separate databases that you need to manage for everyday research.</p>
+        <div className="mdw-dataset-list">
+        {availableDatasets.map(d=><article className="mdw-dataset" key={d.id}>
+          <div className="mdw-dataset-icon"><Database size={22}/></div>
+          <div className="mdw-dataset-body"><strong>{d.label}</strong>
+            <small>{d.kind} · {fmt(d.daily_session_count||0)} daily sessions
+              {' '}· {fmt(d.monthly_price_observations||0)} monthly marks</small>
+            <p>{d.has_prices?'Original prices saved':'Awaiting observed prices'}
+              {d.ready?' · Snapshot structurally ready':
+                ' · Additional model inputs may be required'}</p>
+            {!!d.missing?.length&&<details><summary>Source limitations</summary>
+              {d.missing.map((m,i)=><p key={i} className="mdw-warning">{m}</p>)}</details>}
+          </div>
+          <div className="mdw-dataset-actions">
+            <button type="button" onClick={()=>{onSelectDataset(d.id);onOpenModels()}}>
+              Open in models <ArrowRight size={15}/></button>
+            <button type="button" onClick={()=>{
+              setModelDataset(d.id);setModelId(v=>v||'min_variance')
+              setPage('get');setStage(2)
+            }}>Extend / complete</button>
+            <button type="button" className="mdw-delete" onClick={()=>onRequestDelete(d.id)}>
+              <Trash2 size={15}/> Delete</button>
+          </div>
+        </article>)}
         </div>
-        <div className="mdw-dataset-actions">
-          <span className={'mdw-badge '+(d.ready?'good':'warn')}>{d.ready?'Files ready':'Needs inputs'}</span>
-          <button type="button" onClick={()=>{onSelectDataset(d.id);onOpenModels()}}>
-            Use in models <ArrowRight size={15}/></button>
-          <button type="button" onClick={()=>{
-            setModelDataset(d.id)
-            setModelId(v=>v||'min_variance')
-            setPage('get')
-            setStage(2)
-            window.setTimeout(()=>document.getElementById('mdw-model-extension')
-              ?.scrollIntoView({behavior:'smooth',block:'start'}),180)
-          }}>Extend / complete</button>
-          <button type="button" className="mdw-delete"
-            onClick={()=>onRequestDelete(d.id)}><Trash2 size={15}/> Delete</button>
-        </div>
-      </article>)}</div>
+      </details>
     </section>}
     {page==='downloads'&&<section className="mdw-card">
       <div className="mdw-section-top"><div><span className="mdw-kicker">DOWNLOADS & JOBS</span>

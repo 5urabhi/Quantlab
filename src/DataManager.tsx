@@ -2,6 +2,7 @@ import {lazy,Suspense,useCallback, useEffect, useState} from 'react'
 import {Activity, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft, ChevronRight,
   Database, FileSpreadsheet, HardDrive, History, RefreshCw, Search, ShieldCheck, Wrench} from 'lucide-react'
 import './data-manager.css'
+const MarketLibraryPanel=lazy(()=>import('./MarketLibraryPanel'))
 const DataAcquisitionPanel=lazy(()=>import('./DataAcquisitionPanel'))
 const ManagedDatabaseBrowser=lazy(()=>import('./ManagedDatabaseBrowser'))
 const ColumnarAnalyticsPanel=lazy(()=>import('./ColumnarAnalyticsPanel'))
@@ -44,7 +45,7 @@ type OperationalHealth = {
   blockers:{component:string;kind:string;action:string}[];
   warnings:{kind:string;message:string}[];note:string
 }
-type Section = 'datasets'|'research'|'acquire'|'explorer'|'database'|'analytics'|'microstructure'|'sources'|'activity'
+type Section = 'library'|'datasets'|'research'|'acquire'|'explorer'|'database'|'analytics'|'microstructure'|'sources'|'activity'
 const fmt = (n:number)=>n.toLocaleString()
 const humanBytes = (bytes:number)=>bytes<1024?bytes+' B':bytes<1024*1024?(bytes/1024).toFixed(1)+' KB':
   (bytes/(1024*1024)).toFixed(1)+' MB'
@@ -61,7 +62,7 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
   onSelectDataset:(id:string)=>void;onChanged:()=>void;
   onOpenDhan?:()=>void;onOpenModels?:()=>void
 }){
-  const [section,setSection]=useState<Section>('datasets')
+  const [section,setSection]=useState<Section>('library')
   const [systemHealth,setSystemHealth]=useState<OperationalHealth|null>(null)
   const [healthBusy,setHealthBusy]=useState(false)
   const [healthError,setHealthError]=useState('')
@@ -146,22 +147,27 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
     {error&&<div role="alert" className="qm-alert"><AlertTriangle size={16}/>{error}</div>}
     {notice&&<div role="status" className="qm-notice"><CheckCircle2 size={16}/>{notice}</div>}
     <div className="qm-stat-grid">
-      <div><Database size={18}/><span>Datasets</span><strong>{overview?fmt(overview.statistics.datasets):'…'}</strong></div>
+      <div><Database size={18}/><span>Source snapshots</span><strong>{overview?fmt(overview.statistics.datasets):'…'}</strong></div>
       <div><ShieldCheck size={18}/><span>Files ready</span><strong>{overview?fmt(overview.statistics.file_ready):'…'}</strong></div>
       <div><AlertTriangle size={18}/><span>Need attention</span><strong>{overview?fmt(overview.statistics.needs_attention):'…'}</strong></div>
       <div><HardDrive size={18}/><span>Catalog databases</span><strong>{overview?humanBytes(overview.statistics.catalog_database_bytes):'…'}</strong></div>
     </div>
     <nav aria-label="Database Manager sections" className="qm-tabs">
-      {(['datasets','research','acquire','explorer','database','analytics','microstructure','sources','activity'] as Section[]).map(key=>
+      {(['library','acquire','research','datasets','explorer','database','analytics','microstructure','sources','activity'] as Section[]).map(key=>
         <button key={key} className={section===key?'active':''} onClick={()=>setSection(key)}>
-          {{datasets:'Datasets',research:'Research readiness',acquire:'Get model data',explorer:'Data Explorer',database:'Database tables',analytics:'Fast analytics',microstructure:'Minute & order book',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
+          {{library:'Market Library',datasets:'Source snapshots',research:'Research readiness',acquire:'Get model data',explorer:'Data Explorer',database:'Database tables',analytics:'Fast analytics',microstructure:'Minute & order book',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
         </button>)}
     </nav>
     <Suspense fallback={<div className="qm-panel" role="status">
       Loading data tools for {section.replaceAll('_',' ')}…
     </div>}>
+    {section==='library'&&<MarketLibraryPanel
+      onOpenDownloads={onOpenDhan} onChooseModel={()=>setSection('acquire')}
+      onInspectOriginal={id=>select(id)}
+      onChanged={()=>{void refresh();onChanged()}}/>}
     {section==='datasets'&&<div className="qm-panel">
-      <div className="qm-panel-title"><h3>Dataset inventory</h3><span>Original market history is protected</span></div>
+      <div className="qm-panel-title"><h3>Original snapshots & research source files</h3>
+        <span>Advanced · raw evidence retained for reproducibility</span></div>
       {items.length===0?<p>No datasets available yet. Use Download Market Data to acquire data.</p>:
       <div className="qm-datasets">{items.map(d=><button key={d.id} onClick={()=>select(d.id)}>
         <div className="qm-dataset-icon"><FileSpreadsheet size={19}/></div>
@@ -169,7 +175,10 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
         <span className={'qm-badge '+(d.ready?'ok':'warn')}>{d.ready?'Files ready':'Needs inputs'}</span>
         <ArrowRight size={17}/>
       </button>)}</div>}
-      <p className="qm-caption">Files ready means required files are present, not that financial data is independently verified.</p>
+      <p className="qm-caption">These are original, immutable source snapshots and legacy imports,
+        not separate stock databases to manage. Browse the unified Market Library
+        for deduplicated stocks and dated index or sector views. Files ready does
+        not independently certify financial data.</p>
     </div>}
     {section==='research'&&<ResearchReadinessPanel datasets={items}
       onAcquire={()=>setSection('acquire')} onModel={onOpenModels||(()=>setSection('acquire'))}/>}

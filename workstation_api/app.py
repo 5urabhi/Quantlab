@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -310,6 +310,51 @@ def health():
 @app.get("/api/datasets")
 def datasets():
     return {"datasets": service.datasets()}
+
+
+@app.get("/api/data-manager/market-library")
+def data_manager_market_library(view: str = "all", as_of: str = "",
+                                sector: str = "", query: str = "",
+                                page: int = 1, per_page: int = 35):
+    """One read-only market library, indexed by canonical exchange/security."""
+    try:
+        return market_library.browse(view=view,as_of=as_of,sector=sector,
+                                     query=query,page=page,per_page=per_page)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+class MarketLibraryConsolidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm_preserve_originals: bool = False
+
+
+@app.post("/api/data-manager/market-library/consolidate")
+def data_manager_market_library_consolidate(body: MarketLibraryConsolidateRequest):
+    if not body.confirm_preserve_originals:
+        raise HTTPException(400, "Confirm indexing locally prepared original Dhan "
+                            "sources without changing or deleting the snapshots.")
+    with JOBS_LOCK:
+        if any(job["status"] in {"queued","running"} for job in JOBS.values()):
+            raise HTTPException(409, "Finish the current data job before consolidating history.")
+    return _spawn("market_library_consolidate",market_library.consolidate)
+
+
+@app.post("/api/data-manager/market-library/sectors/import")
+async def data_manager_market_library_import_sectors(
+        file: UploadFile = File(...),
+        confirm_original: bool = Form(False)):
+    """User-confirmed, original and effective-dated sector classification."""
+    if not confirm_original:
+        raise HTTPException(400, "Confirm rights to original dated sector records.")
+    if file.filename and not file.filename.lower().endswith(".csv"):
+        raise HTTPException(400, "Choose an original UTF-8 .csv sector file")
+    payload=await file.read(market_library.MAX_IMPORT + 1)
+    try:
+        return market_library.import_sector_history(
+            payload,confirm_original=confirm_original)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
 
 
 @app.get("/api/data-manager/system-health")
@@ -2432,6 +2477,23 @@ def _run_bulk(batch_id: str, cancel: Event):
                 outcome["preparation_error"] = str(exc)[:180]
                 data_orchestrator.event("batch_preparation", "blocked",
                                         "Dhan batch needs preparation review: " + batch_id)
+        # There is ONE canonical customer-facing market library. Prepared
+        # per-batch artifacts are provenance snapshots, not databases users
+        # should have to manage. Append source-verified daily closes into
+        # the exchange/Security ID store idempotently; keep PIT/benchmark
+        # evidence with the original batch, not in a falsified pooled index.
+        prepared_id = ((outcome.get("automatic_preparation") or {}).get("dataset_id")
+                       or outcome.get("prepared_dataset_id"))
+        if (outcome.get("status")=="completed" and prepared_id and not cancel.is_set()):
+            try:
+                outcome["market_library"] = shared_market_data.ingest_prepared(prepared_id)
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                outcome["market_library"] = {
+                    "status":"needs_review",
+                    "message":"The prepared original source was preserved, but indexing "
+                              "it in the shared market library needs review: "+
+                              job_safety.scrub(exc)[:140],
+                    "next_action":"Database Manager → Market Library → Index original batches"}
         # If the user previously enabled a small 1-minute cache, refresh
         # it after a successful original Dhan batch. Larger data remains a
         # visible manual action rather than an unexpected CPU/disk spike.
