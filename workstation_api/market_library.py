@@ -124,6 +124,15 @@ def browse(*, view: str = "all", as_of: str = "", sector: str = "",
     if len(query)>80 or len(sector)>80:
         raise ValueError("Search or sector label is too long")
     day = _date(as_of)
+    inferred_as_of = False
+    if not as_of and view in INDEX_VIEWS:
+        try:
+            covered = str(pit_index.status().get("covered_through") or "")
+            if covered and covered < day:
+                day = covered
+                inferred_as_of = True
+        except (ValueError,OSError,KeyError):
+            pass
     source = {"state":"canonical", "reason":"Original shared unadjusted closing prices"}
     keys: set[str] | None = None
     if view in INDEX_VIEWS:
@@ -145,7 +154,8 @@ def browse(*, view: str = "all", as_of: str = "", sector: str = "",
     ]
     if con is None:
         return {"library_id":shared_market_data.SHARED_ID,"available":False,
-                "as_of":day,"view":view,"sector":sector,
+                "as_of":day,"as_of_defaulted":inferred_as_of,
+                "view":view,"sector":sector,
                 "total":0,"items":[],"groups":groups,
                 "sectors":[],"has_more":False,
                 "source_state":source,
@@ -222,7 +232,8 @@ def browse(*, view: str = "all", as_of: str = "", sector: str = "",
             })
         return {
             "library_id":shared_market_data.SHARED_ID,"available":True,
-            "view":view,"as_of":day,"sector":sector,
+            "view":view,"as_of":day,"as_of_defaulted":inferred_as_of,
+            "sector":sector,
             "total":total,"page":page,"per_page":per_page,
             "items":selected,"groups":groups,"sectors":sectors,
             "has_more":page*per_page<total,"source_state":source,
