@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import date
 from hashlib import sha256
 import json
+import sqlite3
 
 from . import data_orchestrator, model_data_manager, model_registry, service
 
@@ -158,6 +159,17 @@ def check_confirmation(model_id: str, dataset_id: str, params: dict,
     return current
 
 
+def _record_event(status: str, model_id: str) -> None:
+    # Activity logging must never turn a successfully validated download
+    # into a failed job if its independent SQLite ledger is unavailable.
+    try:
+        data_orchestrator.event(
+            "data_acquisition", status,
+            "Rechecked original market data for " + model_id[:45])
+    except (OSError, sqlite3.Error, ValueError):
+        pass
+
+
 def execute(model_id: str, dataset_id: str, params: dict | None = None,
             *, progress=None) -> dict:
     """Existing model engine remains the only downloader/validator."""
@@ -166,13 +178,9 @@ def execute(model_id: str, dataset_id: str, params: dict | None = None,
             model_id, dataset_id, params or {}, progress=progress)
     except (ValueError, OSError, RuntimeError):
         # No raw exception/vendor response is stored in the activity ledger.
-        data_orchestrator.event(
-            "data_acquisition", "blocked",
-            "Model history needs review: " + model_id[:45])
+        _record_event("blocked", model_id)
         raise
-    data_orchestrator.event(
-        "data_acquisition",
+    _record_event(
         "complete" if result.get("status") in {"ready", "minimum_ready"} else "warning",
-        "Rechecked original history for model " + model_id[:45] +
-        " (no invented observations)")
+        model_id)
     return result
