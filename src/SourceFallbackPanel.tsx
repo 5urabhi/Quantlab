@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useState} from 'react'
-import {AlertTriangle, CheckCircle2, Database, FileUp, RefreshCw, ShieldCheck} from 'lucide-react'
+import {AlertTriangle, CheckCircle2, FileUp, RefreshCw, ShieldCheck} from 'lucide-react'
 
 type Provider = {id:string;label:string;mode:string;compatible:boolean}
 type Registry = {providers:Provider[];source_claims_independently_audited:boolean}
@@ -51,7 +51,7 @@ export default function SourceFallbackPanel({onChanged}:{onChanged:()=>void}){
       void api<{instruments:Instrument[]}>('/columnar/instruments?'+new URLSearchParams({
         query:search,limit:'80'}).toString()).then(r=>{
         if(live){setInstruments(r.instruments);setError('')}
-      }).catch(e=>{if(live)setInstruments([])})
+      }).catch(()=>{if(live)setInstruments([])})
     },230)
     return()=>{live=false;window.clearTimeout(timeout)}
   },[search,refreshNo])
