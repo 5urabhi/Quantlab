@@ -121,7 +121,7 @@ export default function DataManager({onSelectDataset,onChanged}:{
         </button>)}
     </nav>
     {section==='datasets'&&<div className="qm-panel">
-      <div className="qm-panel-title"><h3>Your datasets</h3><span>Original market history is protected</span></div>
+      <div className="qm-panel-title"><h3>Dataset inventory</h3><span>Original market history is protected</span></div>
       {items.length===0?<p>No datasets available yet. Use Download Market Data to acquire data.</p>:
       <div className="qm-datasets">{items.map(d=><button key={d.id} onClick={()=>select(d.id)}>
         <div className="qm-dataset-icon"><FileSpreadsheet size={19}/></div>
