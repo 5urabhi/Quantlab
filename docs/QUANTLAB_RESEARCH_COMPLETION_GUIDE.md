@@ -18,7 +18,7 @@ Model mathematics (Black–Scholes, simulated stochastic processes, etc.) can ru
 The primary authorized daily price provider remains Dhan. An **optional** secondary provider uses Zerodha Kite Connect **daily** historical candle API only when a Dhan request is unavailable or fails for a recognized connectivity, entitlement or vendor reason.
 
 - Enter your Kite developer **API key and secret** in **Sources & provenance → Zerodha**. QuantLab stores them only in a local mode-0600 file, never in a report or in GitHub; alternatively configure `KITE_API_KEY` and `KITE_API_SECRET` in ignored `.env`. Register `http://127.0.0.1:8765/api/data-manager/zerodha/auth/callback` in your Kite developer app; sign in from the **Sources & provenance** tab. Do not share secrets in ChatGPT, GitHub issues or public logs. The local setup form sends the secret only to the loopback API and never echoes it. The access token expires at 6 AM IST the next day; daily official login/2FA cannot be automated away.
-- The alternative instrument must be determined by an original Dhan security's **ISIN** in the official instrument master. The instrument/exchange identity remains unchanged; ticker resemblance or fuzzy matching is never accepted.
+- The alternative instrument must match the original Dhan equity by **exchange + exchange-issued security token + exact canonical trading symbol**. Kite's instrument master does not include an ISIN; no ticker-only, guessed-company or fuzzy identity mapping is accepted. Even an exact match still requires at least three agreeing historical Dhan close sessions.
 - Check the distinct **Allow Zerodha fallback** checkbox before authorizing. The preview includes provider availability. No background credential escalation or live order submission occurs.
 - A retrieved secondary daily-price history is admitted only after the same original-close validator finds **three or more matching observed Dhan sessions** for that security, with no contradictory overlapping observations. Original records are append-only. Unsupported adjustment conventions, security mismatches, missing original overlap or source licensing uncertainty remain blockers; the source receipt is preserved for review.
 - Tokens expire and provider plans/rate limits vary. A configured alternative cannot guarantee download success. Dhan and Zerodha historical intraday entitlement and maximum lookback are separate from daily candles. The API does not make historical delisted constituents or genuine dividend-reinvested TRI available.
@@ -70,7 +70,7 @@ The remaining evidence-dependent work, which cannot be completed by repository c
 Core modules:
 - `workstation_api/data_acquisition.py`: source plan, readiness +20%, explicit approval, single pipeline.
 - `workstation_api/model_data_manager.py` and `single_series_completion.py`: cache-first original Dhan acquisition, guarded alternative provider.
-- `workstation_api/upstox_fallback.py`: optional authenticated read-only V3 daily API with fixed host, exact exchange token and trading symbol and overlap.
+- `workstation_api/zerodha_fallback.py`: authorized local Kite app setup, official daily sign-in, read-only verified NSE/BSE instrument master, token/symbol mapping and original Dhan price-overlap fallback.
 - `workstation_api/compatible_sources.py`: append-only original-price evidence gate.
 - `workstation_api/research_workflow.py`: resolve original source, run mathematical algorithm and save output.
 - `workstation_api/research_acceptance.py`: all registered model statuses and source/software audit receipts.
@@ -81,7 +81,7 @@ Core modules:
 Read the existing `docs/QUANTLAB_USER_GUIDE.md` for general project navigation and `docs/DATA_MANAGER_MODEL_ACQUISITION.md` for database-level detail.
 
 Official API references:
-- Zerodha Kite Connect historical daily candles: https://upstox.com/developer/api-documentation/v3/get-historical-candle-data/
+- Zerodha Kite Connect historical daily candles: https://kite.trade/docs/connect/v3/historical/
 - Dhan HQ full market depth WebSocket: https://dhanhq.co/docs/v2/full-market-depth/
 
 ### Real-source acceptance on your machine
