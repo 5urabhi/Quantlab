@@ -437,12 +437,8 @@ try {
   await step('Data Manager exposes source completion and recoverable dataset management',async()=>{
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
-    await page.getByRole('heading',{name:'Your datasets'}).waitFor()
-    await page.getByRole('heading',{name:'Your datasets'}).scrollIntoViewIfNeeded()
-    await page.locator('.ws-dataset-advanced summary').waitFor()
-    assert.equal(await page.locator('.ws-dataset-advanced').first().evaluate(el=>el.open),false,
-      'Raw metadata must be tucked under an advanced disclosure')
-    const imported=page.getByRole('button',{name:/Delete dataset/})
+    await page.getByRole('heading',{name:"Everything you've collected"}).waitFor()
+    const imported=page.locator('.mdw-dataset').getByRole('button',{name:'Delete',exact:true})
     assert.ok(await imported.count()>0,'User-owned datasets need a visible delete action')
     await imported.first().click()
     const deletion=page.getByRole('dialog',{name:/Delete dataset/})
@@ -454,6 +450,10 @@ try {
     await screenshot('02-dataset-dependencies-preview')
     await deletion.getByRole('button',{name:'No, keep everything'}).click()
     assert.equal(await deletion.count(),0,'Preview must not delete any data when cancelled')
+    await page.locator('details.ws-tri-advanced.ws-data-advanced').first().locator('summary').first().click()
+    await page.locator('.ws-dataset-advanced summary').waitFor()
+    assert.equal(await page.locator('.ws-dataset-advanced').first().evaluate(el=>el.open),false,
+      'Raw metadata must remain behind a disclosure')
     await page.locator('.ws-dataset-archive summary').waitFor()
     assert.match(await page.locator('.ws-dataset-archive summary').innerText(),/Archived datasets/)
     await page.locator('.ws-dataset-trash summary').waitFor()
