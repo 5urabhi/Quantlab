@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import './workstation.css'
 import DhanDataManager from './DhanDataManager'
+import DataManager from './DataManager'
 import ModelLaboratory from './ModelLaboratory'
 import ResearchGuide from './ResearchGuide'
 import ResearchWorkspace from './ResearchWorkspace'
@@ -502,6 +503,8 @@ function App(){
           <div className="ws-grid halves"><Card title="Research datasets" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{datasets.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{datasets.length===0&&<p className="ws-caption">No datasets found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
         </>}
         {tab==='data'&&<>
+          <DataManager onSelectDataset={setSelectedDataset} onChanged={refresh}/>
+          <details className="ws-tri-advanced ws-data-advanced"><summary>Existing dataset controls · Download, import, delete and restore</summary>
           <Card title="Your datasets" className="ws-data-library-card">
             <p className="ws-caption">Choose a dataset to use, or delete an old one.
               If saved work depends on it, the confirmation shows everything that will
@@ -618,7 +621,7 @@ function App(){
               missing:d.missing.join(', ')||'none',basis:d.basis}))}/>
           </details>
 
-        </>}
+        </details></>}
         {tab==='dhan'&&<DhanDataManager onDataChanged={refresh}/>}
         {tab==='nse'&&<NSESourceAssistant datasetId={selectedDataset}
           onOpenDhan={()=>begin('dhan')} onOpenData={()=>begin('data')}/>}
