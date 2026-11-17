@@ -174,7 +174,21 @@ def candles_to_frame(response: dict, instrument: Instrument,
     impossible_low=frame["low"]-1e-8>frame[["open","high","close"]].min(axis=1)
     bad=invalid_price|invalid_volume|impossible_high|impossible_low
     rejected=int(bad.sum())
+    rejected_rows=frame.loc[bad, ["datetime","open","high","low","close","volume"]].copy()
     if rejected:
+        reasons=[]
+        for idx in rejected_rows.index:
+            flags=[]
+            if invalid_price.at[idx]:
+                flags.append("nonpositive_OHLC")
+            if invalid_volume.at[idx]:
+                flags.append("negative_volume")
+            if impossible_high.at[idx]:
+                flags.append("impossible_high")
+            if impossible_low.at[idx]:
+                flags.append("impossible_low")
+            reasons.append("|".join(flags))
+        rejected_rows["reason"]=reasons
         LOG.warning("Dhan returned invalid bars: security_id=%s total=%s rejected=%s "
                     "zero_price=%s negative_volume=%s bad_high=%s bad_low=%s",
                     instrument.security_id,len(frame),rejected,int(invalid_price.sum()),
@@ -183,13 +197,17 @@ def candles_to_frame(response: dict, instrument: Instrument,
             raise ValueError("Dhan returned no valid OHLCV bars in this window; "
                              f"all {rejected} observations failed quality checks")
         frame=frame.loc[~bad].copy()
-    frame.attrs["rejected_provider_bars"]=rejected
-    frame.attrs["total_provider_bars"]=len(data["timestamp"])
     frame["label"]=instrument.label
     frame["security_id"]=instrument.security_id
     frame["exchange_segment"]=instrument.exchange_segment
     frame["instrument"]=instrument.instrument
-    return frame.drop(columns="timestamp").sort_values("datetime").reset_index(drop=True)
+    accepted=frame.drop(columns="timestamp").sort_values("datetime").reset_index(drop=True)
+    accepted.attrs["rejected_provider_bars"]=rejected
+    accepted.attrs["total_provider_bars"]=len(data["timestamp"])
+    # This is a local in-memory sidecar, not a price adjustment. The batch
+    # importer persists rejected OHLCV rows separately from accepted data.
+    accepted.attrs["rejected_provider_rows"]=rejected_rows.reset_index(drop=True)
+    return accepted
 
 
 def download_candles(instrument: Instrument, from_date: str, to_date: str,
@@ -214,6 +232,7 @@ def download_candles(instrument: Instrument, from_date: str, to_date: str,
     parts=[]
     rejected_total=0
     provider_total=0
+    discarded_parts=[]
     for first,last in date_windows(from_date,to_date,90 if interval is not None else 365):
         payload={"securityId":instrument.security_id,
                  "exchangeSegment":instrument.exchange_segment,
@@ -233,6 +252,9 @@ def download_candles(instrument: Instrument, from_date: str, to_date: str,
         df=candles_to_frame(response,instrument)
         rejected_total+=int(df.attrs.get("rejected_provider_bars",0))
         provider_total+=int(df.attrs.get("total_provider_bars",len(df)))
+        rejected_frame=df.attrs.get("rejected_provider_rows")
+        if isinstance(rejected_frame,pd.DataFrame) and not rejected_frame.empty:
+            discarded_parts.append(rejected_frame)
         if not df.empty:
             local_dates=df.datetime.dt.date
             df=df.loc[(local_dates>=first)&(local_dates<last)].copy()
@@ -247,6 +269,9 @@ def download_candles(instrument: Instrument, from_date: str, to_date: str,
     result=result.reset_index(drop=True)
     result.attrs["rejected_provider_bars"]=rejected_total
     result.attrs["total_provider_bars"]=provider_total
+    result.attrs["rejected_provider_rows"]=(pd.concat(discarded_parts,ignore_index=True)
+        if discarded_parts else pd.DataFrame(columns=[
+            "datetime","open","high","low","close","volume","reason"]))
     return result
 
 
