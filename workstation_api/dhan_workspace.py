@@ -814,134 +814,141 @@ def prepare_batch(batch_id: str) -> dict:
     eligible = [row for row in data["items"] if row["status"] in ("complete", "cached")]
     if not eligible:
         raise ValueError("No completed daily instruments to prepare")
-    output = service.DATA / "dhan" / "monthly_research" / batch_id
-    output.mkdir(parents=True, exist_ok=True)
-    if (output / "prices.csv").exists():
-        raise ValueError("Prepared dataset already exists; refusing to overwrite")
-    streams, mappings = [], []
-    daily_ohlcv: dict[str, pd.DataFrame] = {}
-    used: set[str] = set()
-    begin = date.fromisoformat(data["from_date"])
-    finish = date.fromisoformat(data["to_date"])
-    for row in eligible:
-        observed_ohlcv, mapping = _batch_daily_ohlcv(
-            row, data["interval"], begin, finish)
-        symbol = row.get("pit_symbol", row["symbol"])
-        if data.get("historical_index"):
-            if symbol in used or not SAFE_SYMBOL.fullmatch(symbol):
-                raise ValueError("Historical index symbol is duplicated or unsafe: " + symbol)
-        elif symbol in used or not SAFE_SYMBOL.fullmatch(symbol):
-            symbol = row["exchange_segment"] + "_" + row["security_id"]
-        used.add(symbol)
-        observed = observed_ohlcv["close"].copy()
-        observed.name = symbol
-        streams.append(observed)
-        daily_ohlcv[symbol] = observed_ohlcv
-        mapping["column"] = symbol
-        mappings.append(mapping)
-    if not streams:
-        raise ValueError("No observed trading closes within the selected batch dates")
-    daily_panel = pd.concat(streams, axis=1).sort_index()
-    if daily_panel.empty or daily_panel.index.has_duplicates:
-        raise ValueError("No unique observed trading sessions in downloaded candles")
-    # Use the last market session actually present in the batch per month.
-    # A stock lacking that day's close remains NaN, never forward-filled.
-    final_sessions = (
-        pd.Series(daily_panel.index, index=daily_panel.index)
-        .groupby(daily_panel.index.to_period("M")).max()
-    )
-    marks = pd.DatetimeIndex(final_sessions.to_list(), name="date")
-    prices = daily_panel.reindex(marks)
-    if prices.empty:
-        raise ValueError("No monthly market sessions in downloaded candles")
-    # Preserve a daily close matrix for factor research and one per-security
-    # daily OHLCV record for auditing. Never forward-fill missing sessions.
-    daily_panel.to_csv(output / "daily_prices.csv", index_label="date")
-    daily_folder = output / "daily_ohlcv"
-    daily_folder.mkdir(exist_ok=True)
-    for symbol, bars in daily_ohlcv.items():
-        bars.to_csv(daily_folder / (symbol + ".csv"), index_label="date")
-    _atomic_json(output / "DAILY_AGGREGATION_PROVENANCE.json", {
-        "source_batch": batch_id,
-        "source_interval_minutes": data["interval"],
-        "generated_utc": _now(),
-        "timezone": "Asia/Kolkata",
-        "daily_close_rule": "last observed bar on each exchange-local date",
-        "monthly_close_rule": "last observed market session in each fully-covered calendar month",
-        "total_daily_observed_dates": len(daily_panel),
-        "securities": mappings,
-        "warning": "Potential missing intraday bars or exchange holidays require "
-                   "independent session-calendar validation; aggregating does "
-                   "not create missing observations, corporate-action adjustments, "
-                   "or a dividend-reinvested benchmark.",
-    })
-    historical = data.get("historical_index")
-    missing_symbols: list[str] = []
-    missing_membership_prices = 0
-    if historical:
-        # The Dhan cache may contain only part of the requested first/last
-        # calendar month. Reject partial-month marks for an index backtest.
-        start = date.fromisoformat(data["from_date"])
-        stop = date.fromisoformat(data["to_date"])
-        full_months = [
-            stamp for stamp in prices.index
-            if start <= stamp.to_period("M").start_time.date()
-            and stop > stamp.to_period("M").end_time.date()
-        ]
-        if not full_months:
-            raise ValueError("Historical index preparation needs at least one fully "
-                             "covered calendar month. Extend the date range.")
-        prices = prices.loc[full_months]
-        membership = pit_index.monthly_membership(data, prices.index, list(prices.columns))
-        mask = membership.pivot(index="date", columns="ticker", values="eligible")
-        mask.index = pd.to_datetime(mask.index)
-        mask = mask.reindex(index=prices.index, columns=prices.columns).fillna(False)
-        missing_membership_prices = int((mask & prices.isna()).to_numpy().sum())
-        missing_symbols = sorted(set(historical["union_members"]) - set(prices.columns))
-        membership.to_csv(output / "membership.csv", index=False)
-        _atomic_json(output / "PIT_MEMBERSHIP_PROVENANCE.json", {
-            **historical,
-            "generated_utc": _now(),
-            "membership_dates": [stamp.date().isoformat() for stamp in prices.index],
-            "missing_historical_symbols": missing_symbols,
-            "missing_eligible_price_observations": missing_membership_prices,
-            "fully_covered_months_only": True,
-            "month_marks": "last observed market session; no stale price carryforward",
-            "session_calendar_basis": "observed Dhan cash equity sessions, not independently NSE-calendar certified",
-            "index_spot": data.get("index_spot"),
-            "warning": "Independently reconstructed interval history (not NSE-certified). "
-                       "Dhan price candles lack a verified dividend-total-return adjustment."
-        })
-    prices.to_csv(output / "prices.csv", index_label="date")
-    _atomic_json(output / "DHAN_BATCH_PROVENANCE.json", {
-        "source_batch": batch_id, "generated_utc": _now(),
-        "from_inclusive": data["from_date"], "to_exclusive": data["to_date"],
-        "columns": mappings, "observations": len(prices),
-        "source_interval_minutes": data["interval"],
-        "daily_prices_file": "daily_prices.csv",
-        "daily_ohlcv_directory": "daily_ohlcv",
-        "month_marks": "last observed trading session; missing prices remain NaN",
-        "warning": "UNADJUSTED MONTHLY PRICES ONLY. No benchmark, PIT constituents, "
-                   "delisting coverage or dividend-reinvested total returns established.",
-    })
-    data["prepared_dataset_id"] = "dhan_" + batch_id
-    _save_batch(data)
-    return {"dataset_id": data["prepared_dataset_id"],
-            "file": str(Path("data") / "dhan" / "monthly_research" / batch_id / "prices.csv"),
-            "securities": len(mappings), "months": len(prices),
-            "membership_generated": bool(historical),
-            "daily_aggregation_generated": True,
-            "daily_observed_sessions": len(daily_panel),
+    final_output = service.DATA / "dhan" / "monthly_research" / batch_id
+    if final_output.exists() or final_output.is_symlink():
+        raise ValueError("Prepared dataset path already exists; refusing to overwrite")
+    final_output.parent.mkdir(parents=True, exist_ok=True)
+    output = final_output.with_name("." + batch_id + "." + uuid.uuid4().hex[:8] + ".tmp")
+    output.mkdir(parents=False, exist_ok=False)
+    try:
+        streams, mappings = [], []
+        daily_ohlcv: dict[str, pd.DataFrame] = {}
+        used: set[str] = set()
+        begin = date.fromisoformat(data["from_date"])
+        finish = date.fromisoformat(data["to_date"])
+        for row in eligible:
+            observed_ohlcv, mapping = _batch_daily_ohlcv(
+                row, data["interval"], begin, finish)
+            symbol = row.get("pit_symbol", row["symbol"])
+            if data.get("historical_index"):
+                if symbol in used or not SAFE_SYMBOL.fullmatch(symbol):
+                    raise ValueError("Historical index symbol is duplicated or unsafe: " + symbol)
+            elif symbol in used or not SAFE_SYMBOL.fullmatch(symbol):
+                symbol = row["exchange_segment"] + "_" + row["security_id"]
+            used.add(symbol)
+            observed = observed_ohlcv["close"].copy()
+            observed.name = symbol
+            streams.append(observed)
+            daily_ohlcv[symbol] = observed_ohlcv
+            mapping["column"] = symbol
+            mappings.append(mapping)
+        if not streams:
+            raise ValueError("No observed trading closes within the selected batch dates")
+        daily_panel = pd.concat(streams, axis=1).sort_index()
+        if daily_panel.empty or daily_panel.index.has_duplicates:
+            raise ValueError("No unique observed trading sessions in downloaded candles")
+        # Use the last market session actually present in the batch per month.
+        # A stock lacking that day's close remains NaN, never forward-filled.
+        final_sessions = (
+            pd.Series(daily_panel.index, index=daily_panel.index)
+            .groupby(daily_panel.index.to_period("M")).max()
+        )
+        marks = pd.DatetimeIndex(final_sessions.to_list(), name="date")
+        prices = daily_panel.reindex(marks)
+        if prices.empty:
+            raise ValueError("No monthly market sessions in downloaded candles")
+        # Preserve a daily close matrix for factor research and one per-security
+        # daily OHLCV record for auditing. Never forward-fill missing sessions.
+        daily_panel.to_csv(output / "daily_prices.csv", index_label="date")
+        daily_folder = output / "daily_ohlcv"
+        daily_folder.mkdir(exist_ok=True)
+        for symbol, bars in daily_ohlcv.items():
+            bars.to_csv(daily_folder / (symbol + ".csv"), index_label="date")
+        _atomic_json(output / "DAILY_AGGREGATION_PROVENANCE.json", {
+            "source_batch": batch_id,
             "source_interval_minutes": data["interval"],
-            "membership_missing_symbols": missing_symbols,
-            "missing_eligible_price_observations": missing_membership_prices,
-            "ready_for_backtesting": False,
-            "missing": ["benchmark.csv"] if historical else ["membership.csv", "benchmark.csv"],
-            "warning": ("Point-in-time index membership generated from source-dated events. "
-                        "Historical pricing may be incomplete; a compatible total-return "
-                        "benchmark and independent source audit remain required."
-                        if historical else
-                        "This price matrix is incomplete for survivorship-free index research.")}
+            "generated_utc": _now(),
+            "timezone": "Asia/Kolkata",
+            "daily_close_rule": "last observed bar on each exchange-local date",
+            "monthly_close_rule": "last observed market session in each fully-covered calendar month",
+            "total_daily_observed_dates": len(daily_panel),
+            "securities": mappings,
+            "warning": "Potential missing intraday bars or exchange holidays require "
+                       "independent session-calendar validation; aggregating does "
+                       "not create missing observations, corporate-action adjustments, "
+                       "or a dividend-reinvested benchmark.",
+        })
+        historical = data.get("historical_index")
+        missing_symbols: list[str] = []
+        missing_membership_prices = 0
+        if historical:
+            # The Dhan cache may contain only part of the requested first/last
+            # calendar month. Reject partial-month marks for an index backtest.
+            start = date.fromisoformat(data["from_date"])
+            stop = date.fromisoformat(data["to_date"])
+            full_months = [
+                stamp for stamp in prices.index
+                if start <= stamp.to_period("M").start_time.date()
+                and stop > stamp.to_period("M").end_time.date()
+            ]
+            if not full_months:
+                raise ValueError("Historical index preparation needs at least one fully "
+                                 "covered calendar month. Extend the date range.")
+            prices = prices.loc[full_months]
+            membership = pit_index.monthly_membership(data, prices.index, list(prices.columns))
+            mask = membership.pivot(index="date", columns="ticker", values="eligible")
+            mask.index = pd.to_datetime(mask.index)
+            mask = mask.reindex(index=prices.index, columns=prices.columns).fillna(False)
+            missing_membership_prices = int((mask & prices.isna()).to_numpy().sum())
+            missing_symbols = sorted(set(historical["union_members"]) - set(prices.columns))
+            membership.to_csv(output / "membership.csv", index=False)
+            _atomic_json(output / "PIT_MEMBERSHIP_PROVENANCE.json", {
+                **historical,
+                "generated_utc": _now(),
+                "membership_dates": [stamp.date().isoformat() for stamp in prices.index],
+                "missing_historical_symbols": missing_symbols,
+                "missing_eligible_price_observations": missing_membership_prices,
+                "fully_covered_months_only": True,
+                "month_marks": "last observed market session; no stale price carryforward",
+                "session_calendar_basis": "observed Dhan cash equity sessions, not independently NSE-calendar certified",
+                "index_spot": data.get("index_spot"),
+                "warning": "Independently reconstructed interval history (not NSE-certified). "
+                           "Dhan price candles lack a verified dividend-total-return adjustment."
+            })
+        prices.to_csv(output / "prices.csv", index_label="date")
+        _atomic_json(output / "DHAN_BATCH_PROVENANCE.json", {
+            "source_batch": batch_id, "generated_utc": _now(),
+            "from_inclusive": data["from_date"], "to_exclusive": data["to_date"],
+            "columns": mappings, "observations": len(prices),
+            "source_interval_minutes": data["interval"],
+            "daily_prices_file": "daily_prices.csv",
+            "daily_ohlcv_directory": "daily_ohlcv",
+            "month_marks": "last observed trading session; missing prices remain NaN",
+            "warning": "UNADJUSTED MONTHLY PRICES ONLY. No benchmark, PIT constituents, "
+                       "delisting coverage or dividend-reinvested total returns established.",
+        })
+        output.rename(final_output)
+        data["prepared_dataset_id"] = "dhan_" + batch_id
+        _save_batch(data)
+        return {"dataset_id": data["prepared_dataset_id"],
+                "file": str(Path("data") / "dhan" / "monthly_research" / batch_id / "prices.csv"),
+                "securities": len(mappings), "months": len(prices),
+                "membership_generated": bool(historical),
+                "daily_aggregation_generated": True,
+                "daily_observed_sessions": len(daily_panel),
+                "source_interval_minutes": data["interval"],
+                "membership_missing_symbols": missing_symbols,
+                "missing_eligible_price_observations": missing_membership_prices,
+                "ready_for_backtesting": False,
+                "missing": ["benchmark.csv"] if historical else ["membership.csv", "benchmark.csv"],
+                "warning": ("Point-in-time index membership generated from source-dated events. "
+                            "Historical pricing may be incomplete; a compatible total-return "
+                            "benchmark and independent source audit remain required."
+                            if historical else
+                            "This price matrix is incomplete for survivorship-free index research.")}
+    except Exception:
+        shutil.rmtree(output, ignore_errors=True)
+        raise
 
 
 def preview_history(instrument_id: str, interval: int | None = None,

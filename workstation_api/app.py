@@ -8,6 +8,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from threading import Event, Lock
+import sqlite3
 from typing import Literal
 from urllib.request import Request as UrlRequest, urlopen
 import os
@@ -27,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -296,6 +297,65 @@ def health():
 @app.get("/api/datasets")
 def datasets():
     return {"datasets": service.datasets()}
+
+
+@app.get("/api/data-manager/overview")
+def data_manager_overview():
+    return data_orchestrator.overview()
+
+
+@app.get("/api/data-manager/sources")
+def data_manager_sources():
+    return data_orchestrator.sources()
+
+
+@app.get("/api/data-manager/activity")
+def data_manager_activity(limit: int = 40):
+    try:
+        return {"events": data_orchestrator.activity(limit)}
+    except ValueError as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/datasets/{dataset_id}")
+def data_manager_dataset(dataset_id: str):
+    try:
+        return data_orchestrator.detail(dataset_id)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/datasets/{dataset_id}/table")
+def data_manager_table(dataset_id: str, file: str = "prices.csv", page: int = 1,
+                       per_page: int = 50, columns: str = "", query: str = ""):
+    try:
+        return data_orchestrator.table(dataset_id, file, page=page,
+                                       per_page=per_page, columns=columns, query=query)
+    except (ValueError, OSError, UnicodeError, __import__("csv").Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/datasets/{dataset_id}/quality")
+def data_manager_quality(dataset_id: str, file: str = "prices.csv"):
+    try:
+        return data_orchestrator.profile(dataset_id, file)
+    except (ValueError, OSError, UnicodeError, __import__("csv").Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/model-requirements/{model_id}")
+def data_manager_model_requirements(model_id: str, dataset_id: str = ""):
+    try:
+        return data_orchestrator.requirements(model_id, dataset_id)
+    except (ValueError, OSError, KeyError) as exc:
+        bad(exc)
+
+
+@app.post("/api/data-manager/maintenance")
+def data_manager_maintenance():
+    # Local original candles and evidence are immutable. Only missing
+    # derived views are eligible for source-safe automatic reconstruction.
+    return _spawn("data_manager_maintenance", data_orchestrator.safe_maintenance)
 
 
 @app.post("/api/datasets/synthetic")
@@ -1654,8 +1714,29 @@ def dhan_batch(batch_id: str, page: int = 1, per_page: int = 60,
 
 
 def _run_bulk(batch_id: str, cancel: Event):
+    """Finish approved Dhan download and publish a derived dataset when complete."""
     try:
-        return dhan_workspace.run_batch(batch_id, cancel_event=cancel)
+        outcome = dhan_workspace.run_batch(batch_id, cancel_event=cancel)
+        counts = outcome.get("counts") or {}
+        successful = counts.get("complete", 0) + counts.get("cached", 0)
+        if (outcome.get("status") == "completed"
+                and successful == outcome.get("total") and successful > 0
+                and not outcome.get("prepared_dataset_id")
+                and not cancel.is_set()):
+            # Run the existing source-preserving converter only after every
+            # instrument has authenticated, validated OHLCV. Missing benchmark,
+            # corporate actions and PIT evidence remain explicitly incomplete.
+            try:
+                prepared = dhan_workspace.prepare_batch(batch_id)
+                outcome["automatic_preparation"] = prepared
+                data_orchestrator.event("batch_preparation", "complete",
+                                        "Prepared validated Dhan batch " + batch_id)
+            except (ValueError, OSError, RuntimeError) as exc:
+                # Original candle cache is safe; staged view is rolled back.
+                outcome["preparation_error"] = str(exc)[:180]
+                data_orchestrator.event("batch_preparation", "blocked",
+                                        "Dhan batch needs preparation review: " + batch_id)
+        return outcome
     finally:
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
 
@@ -2114,3 +2195,70 @@ def register_research_hypothesis(body:ResearchHypothesisRequest):
             body.planned_dataset_id,body.primary_metric,body.success_criterion,body.design)
     except Exception as exc:
         bad(exc)
+
+
+# Startup reconciliation is intentionally restricted to operations that were
+# previously authorized, persisted, and safe to replay from identical inputs.
+# Do not silently rerun frozen studies, reports, trading operations, or NSE MCP.
+@app.on_event("startup")
+def reconcile_interrupted_research():
+    try:
+        records = research_library.list_job_history(100)
+    except (OSError, sqlite3.Error, ValueError):
+        LOG.warning("Automatic recovery catalog unavailable; other endpoints stay online")
+        return
+    restarted = 0
+    for record in records:
+        if restarted >= 2:
+            break
+        job_id = record["id"]
+        if record["status"] != "interrupted" or record["kind"] not in {
+                "workspace_parameter_sweep", "workspace_grid_sweep",
+                "workspace_validation"}:
+            continue
+        if not job_recovery.available(job_id):
+            continue
+        # Changed source files/code or a missing dataset block automatic replay.
+        try:
+            kind, args, kwargs = job_recovery.restore(job_id)
+        except (ValueError, OSError, TypeError):
+            continue
+        if not data_orchestrator.claim_automatic_retry(job_id):
+            continue
+        try:
+            result = _spawn(kind, RECOVERABLE_ACTIONS[kind], *args, **kwargs)
+            data_orchestrator.record_automatic_retry(job_id, "queued")
+            data_orchestrator.event(
+                "job_recovery", "complete",
+                "Resumed source-locked research job as " + result["job_id"])
+            restarted += 1
+        except Exception:
+            data_orchestrator.record_automatic_retry(job_id, "failed")
+            data_orchestrator.event("job_recovery", "blocked",
+                                    "Research retry could not be scheduled; source was preserved.")
+
+    # Resume at most one previously authorized read-only Dhan batch.
+    # A paused/cancelled/failed batch is never restarted without the user.
+    if os.getenv("DHAN_ACCESS_TOKEN"):
+        try:
+            for batch in dhan_workspace.list_batches():
+                if batch["status"] != "interrupted":
+                    continue
+                original_id = batch["id"]
+                with JOBS_LOCK:
+                    if len([row for row in JOBS.values()
+                            if row["status"] in {"queued", "running"}]) >= MAX_ACTIVE_LOCAL_JOBS:
+                        break
+                cancel = Event()
+                BATCH_CANCEL_EVENTS[original_id] = cancel
+                try:
+                    _spawn("dhan_bulk", _run_bulk, original_id, cancel)
+                    data_orchestrator.event("batch_recovery", "complete",
+                                            "Resumed interrupted Dhan batch " + original_id)
+                except Exception:
+                    BATCH_CANCEL_EVENTS.pop(original_id, None)
+                    data_orchestrator.event("batch_recovery", "blocked",
+                                            "Could not resume interrupted batch " + original_id)
+                break
+        except (OSError, ValueError):
+            LOG.warning("Read-only Dhan batch recovery inventory unavailable")
