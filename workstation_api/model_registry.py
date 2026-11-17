@@ -64,7 +64,7 @@ def model(key: str, group: str, title: str, mode: str, observations: int,
     elif mode == "market":
         special = [
             "Choose an existing source-backed dataset for a dated option quote.",
-            "Capture a real read-only Dhan option chain or import an authorized quote CSV.",
+            "Capture an original read-only Dhan option chain or import an authorized original provider quote CSV.",
             "Select the exact saved contract, strike, bid/ask and expiry.",
             "Set rate/dividend assumptions, then run the quote-anchored model.",
         ]
