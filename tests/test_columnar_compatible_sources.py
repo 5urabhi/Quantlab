@@ -93,8 +93,10 @@ class CompatibleMarketSourcesAndParquetTests(unittest.TestCase):
         self.assertEqual(model_lab.readiness("dhan_shared")["price_matrix_engine"],
                          "source_locked_duckdb_parquet")
         # Source receipt pins the canonical CSV, not just Parquet bytes.
-        (folder/"daily_prices.csv").write_text(
-            (folder/"daily_prices.csv").read_text().replace("103.0","999.0"))
+        original_bytes=(folder/"daily_prices.csv").read_bytes()
+        # An extra trailing newline is a real byte-level source mutation,
+        # regardless of the CSV float serialization convention.
+        (folder/"daily_prices.csv").write_bytes(original_bytes+b"\n")
         with self.assertRaisesRegex(ValueError,"source receipt"):
             model_matrix.load("dhan_shared",folder,"daily_prices.csv")
 
