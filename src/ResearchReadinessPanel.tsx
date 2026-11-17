@@ -5,7 +5,9 @@ import {AlertTriangle,ArrowRight,CheckCircle2,Clock,Database,
 type Dataset={id:string;label:string;kind:string}
 type ModelStatus={
   id:string;title:string;group:string;mode:string;status:string;
-  source_ready:boolean;mathematics_ready:boolean;
+  source_ready:boolean;mathematics_ready:boolean;implementation_ready:boolean;
+  implementation_status:string;evidence_type:string;
+  setup_steps:{title:string;state:string;detail:string;action_kind:string}[];
   detail:string;next_action:string;
   requirement:{minimum_observed_returns:number;preferred_with_20_percent:number;frequency:string};
   action:{kind:string;label:string;automatable:boolean}
@@ -13,7 +15,7 @@ type ModelStatus={
 type Evidence={id:string;label:string;verified_by_exchange:boolean;available:boolean;action:string}
 type Readiness={
   dataset_id:string|null;dataset_label:string;total_models:number;
-  math_ready:number;historical_source_ready:number;option_source_ready:number;
+  implemented_models:number;math_ready:number;historical_source_ready:number;option_source_ready:number;
   blocked:number;synthetic_fixture:boolean;models:ModelStatus[];
   sources:{historical_membership:{available:boolean;covered_through?:string;
     limitations?:string[];source?:string};requirements:Evidence[];
@@ -138,6 +140,10 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
       setAcceptance(report)
     }catch(e){setError(e instanceof Error?e.message:String(e))}
   }
+  const openExactModel=(id:string)=>{
+    try{window.localStorage.setItem('ql-target-model',id)}catch{/* no storage */}
+    onModel()
+  }
   const active=busy||Boolean(job&&['queued','running'].includes(job.status))
   const shown=info?.models.filter(m=>!onlyBlocked||
     !['source_available','math_ready'].includes(m.status))||[]
@@ -162,7 +168,7 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
     {error&&<div role="alert" className="qm-alert"><AlertTriangle size={16}/>{error}</div>}
     {notice&&<div role="status" className="qm-notice"><CheckCircle2 size={16}/>{notice}</div>}
     {info&&<div className="qm-acquire-metrics">
-      <div><small>Registered models</small><strong>{info.total_models}</strong></div>
+      <div><small>Algorithms implemented</small><strong>{info.implemented_models}/{info.total_models}</strong></div>
       <div><small>Mathematics runnable</small><strong>{info.math_ready}</strong></div>
       <div><small>Observed-history inputs ready</small><strong>{info.historical_source_ready}</strong></div>
       <div><small>Need original inputs</small><strong>{info.blocked}</strong></div>
@@ -277,17 +283,31 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
         <label className="qm-check"><input type="checkbox" checked={onlyBlocked}
           onChange={e=>setOnlyBlocked(e.target.checked)}/> Only models needing inputs</label></div>
       {shown.map(m=><div className="qm-readiness-row" key={m.id}>
-        <span className={'qm-badge '+(['source_available','math_ready'].includes(m.status)?'ok':'warn')}>
-          {m.status.replaceAll('_',' ')}</span>
+        <div className="qm-readiness-status-pair">
+          <span className={'qm-badge '+(m.implementation_ready?'ok':'warn')}>
+            {m.implementation_ready?'Implemented':'Needs implementation'}</span>
+          <span className={'qm-badge '+(['source_available','math_ready'].includes(m.status)?'ok':'warn')}>
+            {m.status==='math_ready'?'No market source required':
+             m.status==='source_available'?'Source available · select exact inputs':
+             m.status.replaceAll('_',' ')}</span>
+        </div>
         <div><strong>{m.title}</strong>
           <small>{m.group} · {m.detail}</small>
           <small>Minimum: {m.requirement.minimum_observed_returns} returns;
             preferred (+20%): {m.requirement.preferred_with_20_percent}.</small>
           <small><strong>Next:</strong> {m.next_action}</small>
+          <details className="qm-model-setup-details">
+            <summary>See exactly how to run this model ({m.setup_steps.length} steps)</summary>
+            <ol>{m.setup_steps.map((step,i)=><li key={i}>
+              <strong>{step.title}</strong> — {step.detail}
+              <span>{step.state==='ready'?' · ready':' · action required'}</span>
+            </li>)}</ol>
+          </details>
         </div>
         <button type="button" className="ws-button secondary"
-          onClick={m.action.kind==='run'?onModel:onAcquire}>
-          {m.action.kind==='run'?'Choose model':'Get data'} <ArrowRight size={13}/></button>
+          onClick={()=>openExactModel(m.id)}>
+          {m.mode==='historical'||m.mode==='market'?'Set up & run':'Run mathematics'}
+          <ArrowRight size={13}/></button>
       </div>)}
       {!info&&<p className="qm-caption">Inspecting source evidence and model requirements…</p>}
     </div>
