@@ -125,7 +125,7 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
       // This button is the user's explicit authorization. The backend
       // rechecks the source-locked preview before requesting a vendor.
       const data=await api<{job_id:string;status:string}>(
-        runAfter?'/api/data-manager/research/resolve-run':
+        (runAfter||!plan.can_acquire)?'/api/data-manager/research/resolve-run':
         '/api/data-manager/acquisition/start',{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model_id:plan.model_id,dataset_id:plan.dataset_id,
