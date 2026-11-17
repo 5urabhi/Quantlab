@@ -93,7 +93,7 @@ export default function SourceFallbackPanel({onChanged}:{onChanged:()=>void}){
     finally{setBusy(false)}
   }
   const running=busy||(job!==null&&['queued','running'].includes(job.status))
-  return <section className="qm-panel qm-fallback" aria-label="Compatible alternate historical source">
+  return <div className="qm-source-fallback-stack"><ZerodhaProviderPanel onSourceChange={()=>setRefreshNo(n=>n+1)}/><section className="qm-panel qm-fallback" aria-label="Compatible alternate historical source">
     <div className="qm-panel-title"><h3><FileUp size={18}/> Compatible source fallback</h3>
       <span>Only original observations · no alias-based matching</span></div>
     <p className="qm-caption">If Dhan cannot provide a missing historical window, you can add an
@@ -157,5 +157,5 @@ export default function SourceFallbackPanel({onChanged}:{onChanged:()=>void}){
           <small>{r.status} · {r.matched_sessions} matched · {r.rows_added??0} added</small>
         </div>)}
     </details>
-  </section>
+  </section></div>
 }
