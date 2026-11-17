@@ -176,7 +176,11 @@ export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPr
   useEffect(()=>{
     if(!status||attemptedAutomaticSync.current||syncId)return
     const coveredEnd=status.covered_through?following(status.covered_through):''
-    if(status.available&&(!coveredEnd||toDate<=coveredEnd))return
+    const syncedAt=Date.parse(status.synced_utc||'')
+    const recentSync=Number.isFinite(syncedAt)&&Date.now()-syncedAt<24*60*60*1000
+    // Do not repeatedly fetch an unchanged upstream source when the user
+    // switches between NIFTY 50 and BANK NIFTY or edits an unsupported end.
+    if(status.available&&(!coveredEnd||toDate<=coveredEnd||recentSync))return
     attemptedAutomaticSync.current=true
     void sync()
   },[status?.available,status?.covered_through,toDate,syncId])
