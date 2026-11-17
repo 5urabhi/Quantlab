@@ -140,42 +140,54 @@ def _save(session_id: str, snapshots: list[dict], *,
 
 
 def packet_stream(blob: bytes, depth: int) -> list[dict]:
-    """Decode all stacked Dhan binary depth frames (little-endian 12B header)."""
-    if depth not in (20,200):
-        raise ValueError("Unsupported depth level count")
-    size=12+depth*16
-    if not isinstance(blob,(bytes,bytearray)) or not blob:
-        return []
-    if len(blob)>size*50:
-        raise ValueError("Depth feed frame exceeds safe decoded length")
-    out=[]
-    offset=0
-    while offset < len(blob):
-        if len(blob)-offset < 12:
-            raise ValueError("Truncated Dhan depth packet header")
-        length,code,segment,secid,sequence=struct.unpack_from(
-            "<HBBII",blob,offset)
-        if length != size or offset+size>len(blob):
-            raise ValueError("Unexpected Dhan full-depth binary packet size")
-        if code not in (41,51):
-            # Explicitly refuse to misparse a connection control message.
-            raise ValueError("Not a bid/ask full-depth binary packet")
-        values=[]
-        for i in range(depth):
-            price,quantity,orders=struct.unpack_from(
-                "<dII",blob,offset+12+i*16)
-            if price==0 and quantity==0 and orders==0:
-                continue
-            values.append(_level(price,quantity,orders))
-        out.append({
-            "side":"bid" if code==41 else "ask",
-            "security_id":str(secid),"segment_code":segment,
-            "message_sequence":sequence,"levels":values,
-            "raw_packet_sha256":sha256(blob[offset:offset+size]).hexdigest(),
-        })
-        offset+=size
-    return out
+    """Decode stacked real Dhan depth frames with protocol-specific headers.
 
+    Dhan 20-depth uses the last uint32 as an ignorable sequence, while
+    200-depth uses that field as NoOfRows. A 200-depth frame may therefore
+    contain fewer than 200 levels: packet length is 12 + 16*NoOfRows.
+    Never promote control packets or unsupported payload layouts to quotes.
+    """
+    if depth not in (20, 200):
+        raise ValueError("Unsupported depth level count")
+    max_packet = 12 + depth * 16
+    if not isinstance(blob, (bytes, bytearray)) or not blob:
+        return []
+    if len(blob) > max_packet * 50:
+        raise ValueError("Depth feed frame exceeds safe decoded length")
+    out = []
+    offset = 0
+    while offset < len(blob):
+        if len(blob) - offset < 12:
+            raise ValueError("Truncated Dhan depth packet header")
+        length, code, segment, secid, seq_or_rows = struct.unpack_from(
+            "<hBBiI", blob, offset)
+        if code not in (41, 51):
+            raise ValueError("Not a bid/ask full-depth binary packet")
+        if segment not in (1, 2) or secid <= 0:
+            raise ValueError("Dhan market-depth header has invalid exchange/security ID")
+        count = 20 if depth == 20 else seq_or_rows
+        if not 1 <= count <= depth:
+            raise ValueError("Invalid declared depth row count")
+        if length != 12 + count * 16 or offset + length > len(blob):
+            raise ValueError("Unexpected Dhan full-depth binary packet size")
+        levels = []
+        for i in range(count):
+            price, quantity, orders = struct.unpack_from(
+                "<dII", blob, offset + 12 + i * 16)
+            if price == 0 and quantity == 0 and orders == 0:
+                continue
+            levels.append(_level(price, quantity, orders))
+        out.append({
+            "side": "bid" if code == 41 else "ask",
+            "security_id": str(secid),
+            "segment_code": segment,
+            "message_sequence": seq_or_rows if depth == 20 else None,
+            "declared_rows": count,
+            "levels": levels,
+            "raw_packet_sha256": sha256(blob[offset:offset+length]).hexdigest(),
+        })
+        offset += length
+    return out
 
 def _snapshot(bid: dict,ask: dict,identity: str,
               observed_at: datetime,depth: int) -> dict:
@@ -259,7 +271,8 @@ def start_live(identity: str, depth: int = 20, duration_seconds: int = 120,
                             # The feed also sends keepalive/control packets.
                             continue
                         for packet in packets:
-                            if packet["security_id"] != security:
+                            if (packet["security_id"] != security or
+                                packet["segment_code"] != (1 if seg=="NSE_EQ" else 2)):
                                 continue
                             last[packet["side"]]=(packet,now)
                             if "bid" in last and "ask" in last:
