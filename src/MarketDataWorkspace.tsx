@@ -28,6 +28,9 @@ type Plan = {selection:Selection;from_date:string;to_date:string;interval:number
     union_count?:number;changes?:number};
   model_requirements?:{model_id:string;title:string;mode:string;minimum?:number;
     preferred?:number;suggested_from?:string;note:string}|null;
+  capacity:{rows_upper_estimate:number;bytes_upper_estimate:number;large:boolean;
+    over_limit:boolean;note:string};
+  model_followup:{eligible:boolean;params:Record<string,number>;note:string};
   dhan:{token_present:boolean;catalog_available:boolean;credential_verified:boolean;note:string};
   provider_policy:string}
 type Batch = {id:string;selection:string;status:string;from_date:string;to_date:string;
@@ -167,6 +170,8 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
   const [actionBusy,setActionBusy]=useState(false)
   const [allowPartial,setAllowPartial]=useState(false)
   const [confirmBulk,setConfirmBulk]=useState(false)
+  const [confirmLarge,setConfirmLarge]=useState(false)
+  const [runModelAfter,setRunModelAfter]=useState(true)
   const [indexSpot,setIndexSpot]=useState(false)
   const [showDiagnostics,setShowDiagnostics]=useState(false)
   const [message,setMessage]=useState('')
@@ -332,6 +337,8 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
         tickers:selection==='watchlist'?tickers:[],model_id:modelId,
         preview_token:plan.preview_token,confirm_readonly:true,
         confirm_incomplete:allowPartial,confirm_bulk:confirmBulk,
+        confirm_large_history:confirmLarge,
+        run_model_after_prepare:Boolean(modelId&&plan.model_followup.eligible&&runModelAfter),
         include_index_spot:indexSpot
       }),result=>{
         setJob({id:result.job_id,status:result.status})
@@ -551,6 +558,12 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
               onChange={e=>setAllowPartial(e.target.checked)}/>
               I understand this source will be incomplete because historical instruments cannot be mapped.</label>
           </details>:null}
+          {plan&&plan.capacity.large&&
+            <div className="mdw-callout warn"><HardDrive size={16}/>
+              <span>Large request: about {(plan.capacity.bytes_upper_estimate/2**30).toFixed(1)} GiB
+                across all instruments before cached-window reuse. Estimate only;
+                confirm available disk space before starting.</span>
+            </div>}
           {plan&&plan.instrument_count>100&&
             <label className="mdw-consent"><input type="checkbox" checked={confirmBulk}
               onChange={e=>setConfirmBulk(e.target.checked)}/>
@@ -642,19 +655,41 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           <p className="mdw-help">{plan?.provider_policy}</p>
         </details>
         {!(modelId&&selected)&&<>
+          {plan?.capacity.large&&<label className="mdw-consent">
+            <input type="checkbox" checked={confirmLarge}
+              aria-label="Approve large historical data download"
+              onChange={e=>setConfirmLarge(e.target.checked)}/>
+            I reviewed the approximately {(plan.capacity.bytes_upper_estimate/2**30).toFixed(1)} GiB
+            source estimate and approve this large download.
+          </label>}
+          {modelId&&<div className="mdw-model-run-consent">
+            {plan?.model_followup.eligible?
+              <label className="mdw-consent"><input type="checkbox"
+                aria-label="Run model after download" checked={runModelAfter}
+                onChange={e=>setRunModelAfter(e.target.checked)}/>
+                After downloading, run and save {models.find(m=>m.id===modelId)?.title||'the model'}
+                only if actual aligned source returns meet its preferred +20% history.
+              </label>:<p className="mdw-help">{plan?.model_followup.note||
+                'Complete this model using its exact input selectors after downloading.'}</p>}
+          </div>}
+
         <button type="button" className="mdw-primary" disabled={!plan?.can_start||
           (plan.unresolved_count>0&&!allowPartial)||
           (plan.instrument_count>100&&!confirmBulk)||
+          (plan.capacity.large&&!confirmLarge)||
           actionBusy||verifying||checkingPlan||sourceWorking||Boolean(job&&
             ['queued','running'].includes(job.status))}
           onClick={()=>void start()}>
           {actionBusy||verifying?<LoaderCircle size={19} className="mdw-spin"/>:
-            <Download size={19}/>} Get & prepare data <ArrowRight size={19}/>
+            <Download size={19}/>}
+          {modelId&&plan?.model_followup.eligible&&runModelAfter?
+            'Get, prepare & run model':'Get & prepare data'} <ArrowRight size={19}/>
         </button>
-        <p className="mdw-footnote">This button authorizes a read-only request to the
-          configured provider for the displayed scope. Successful complete batches
-          automatically prepare their dataset. Provider access and observed coverage
-          cannot be guaranteed in advance.</p>
+        <p className="mdw-footnote">This button approves read-only data requests
+          only for this signed date and instrument scope. Complete batches prepare
+          automatically. If model execution is selected, it runs only after genuine
+          observations pass the preferred sample check. Missing market history,
+          historical membership or entitlements cannot be invented.</p>
         </>}
         {modelId&&<div className="mdw-model-link"><BookOpen size={17}/>
           Already have a dataset for this model?
@@ -731,6 +766,19 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
       {job&&['queued','running'].includes(job.status)&&<div className="mdw-job" role="status">
         <LoaderCircle size={22} className="mdw-spin"/><div><strong>{job.stage||'Original market data job'}</strong>
           <small>{Math.round(job.percent||0)}% · Job {job.id}</small></div></div>}
+      {job?.status==='complete'&&job.result?.model_research&&
+        <div className={'mdw-callout '+(
+          (job.result.model_research as {status?:string}).status==='complete'?
+            'success':'warn')} role="status">
+          <FileCheck2 size={17}/>
+          <div><strong>Model continuation: {(
+            job.result.model_research as {status?:string}).status||'review needed'}</strong>
+            <p>{(job.result.model_research as {message?:string}).message||
+              'Source-bound research is saved only when its required real returns are available.'}</p>
+            <button type="button" onClick={onOpenModels}>
+              View Model Laboratory <ArrowRight size={14}/>
+            </button></div>
+        </div>}
       {!batches.length&&<div className="mdw-empty"><Clock3 size={27}/>
         <strong>No downloads yet</strong><p>Data acquisition jobs appear here immediately after authorization.</p>
         <button className="mdw-button" onClick={()=>setPage('get')}>Get data</button>
