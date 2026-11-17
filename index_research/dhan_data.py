@@ -164,12 +164,27 @@ def candles_to_frame(response: dict, instrument: Instrument,
         frame[col]=pd.to_numeric(frame[col],errors="raise")
     if not np.isfinite(frame[["open","high","low","close","volume"]].to_numpy()).all():
         raise ValueError("nonfinite OHLCV")
-    if (frame[["open","high","low","close"]]<=0).any().any() or (frame["volume"]<0).any():
-        raise ValueError("nonpositive OHLC or negative volume")
-    if (frame["high"]+1e-8<frame[["open","low","close"]].max(axis=1)).any():
-        raise ValueError("impossible candle high")
-    if (frame["low"]-1e-8>frame[["open","high","close"]].min(axis=1)).any():
-        raise ValueError("impossible candle low")
+    # Dhan sometimes returns zero-price placeholder bars within otherwise
+    # usable intraday arrays. Never manufacture prices or treat these as
+    # legitimate market observations. Quarantine only invalid rows, retain
+    # the exact observed good OHLCV values and audit rejected counts.
+    invalid_price=(frame[["open","high","low","close"]]<=0).any(axis=1)
+    invalid_volume=frame["volume"]<0
+    impossible_high=frame["high"]+1e-8<frame[["open","low","close"]].max(axis=1)
+    impossible_low=frame["low"]-1e-8>frame[["open","high","close"]].min(axis=1)
+    bad=invalid_price|invalid_volume|impossible_high|impossible_low
+    rejected=int(bad.sum())
+    if rejected:
+        LOG.warning("Dhan returned invalid bars: security_id=%s total=%s rejected=%s "
+                    "zero_price=%s negative_volume=%s bad_high=%s bad_low=%s",
+                    instrument.security_id,len(frame),rejected,int(invalid_price.sum()),
+                    int(invalid_volume.sum()),int(impossible_high.sum()),int(impossible_low.sum()))
+        if rejected==len(frame):
+            raise ValueError("Dhan returned no valid OHLCV bars in this window; "
+                             f"all {rejected} observations failed quality checks")
+        frame=frame.loc[~bad].copy()
+    frame.attrs["rejected_provider_bars"]=rejected
+    frame.attrs["total_provider_bars"]=len(data["timestamp"])
     frame["label"]=instrument.label
     frame["security_id"]=instrument.security_id
     frame["exchange_segment"]=instrument.exchange_segment
@@ -197,6 +212,8 @@ def download_candles(instrument: Instrument, from_date: str, to_date: str,
     if not token and post is None:
         raise ValueError("DHAN_ACCESS_TOKEN missing; set it in your shell")
     parts=[]
+    rejected_total=0
+    provider_total=0
     for first,last in date_windows(from_date,to_date,90 if interval is not None else 365):
         payload={"securityId":instrument.security_id,
                  "exchangeSegment":instrument.exchange_segment,
@@ -214,6 +231,8 @@ def download_candles(instrument: Instrument, from_date: str, to_date: str,
             endpoint="/charts/intraday"
         response=post(endpoint,payload,token) if post else _post_json(endpoint,payload,token)
         df=candles_to_frame(response,instrument)
+        rejected_total+=int(df.attrs.get("rejected_provider_bars",0))
+        provider_total+=int(df.attrs.get("total_provider_bars",len(df)))
         if not df.empty:
             local_dates=df.datetime.dt.date
             df=df.loc[(local_dates>=first)&(local_dates<last)].copy()
@@ -225,7 +244,10 @@ def download_candles(instrument: Instrument, from_date: str, to_date: str,
     result=pd.concat(parts,ignore_index=True).sort_values("datetime")
     if result.datetime.duplicated().any():
         raise ValueError("Duplicate candle timestamps across Dhan chunks")
-    return result.reset_index(drop=True)
+    result=result.reset_index(drop=True)
+    result.attrs["rejected_provider_bars"]=rejected_total
+    result.attrs["total_provider_bars"]=provider_total
+    return result
 
 
 def save_download(frame: pd.DataFrame, instrument: Instrument, folder: str | Path,
