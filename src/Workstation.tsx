@@ -504,7 +504,7 @@ function App(){
         </>}
         {tab==='data'&&<>
           <DataManager onSelectDataset={setSelectedDataset} onChanged={refresh}/>
-          <details className="ws-tri-advanced ws-data-advanced"><summary>Existing dataset controls · Download, import, delete and restore</summary>
+          <details open className="ws-tri-advanced ws-data-advanced"><summary>Existing dataset controls · Download, import, delete and restore</summary>
           <Card title="Your datasets" className="ws-data-library-card">
             <p className="ws-caption">Choose a dataset to use, or delete an old one.
               If saved work depends on it, the confirmation shows everything that will
