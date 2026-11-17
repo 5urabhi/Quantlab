@@ -52,11 +52,6 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
   const selected=useMemo(()=>models.find(m=>m.id===modelId),[models,modelId])
   const isSingle=['gbm_fit','ou_fit','merton_fit','heston_proxy'].includes(modelId)
   const isMarket=selected?.mode==='market'
-  const params=useMemo(()=>{
-    const chosen:Record<string,number|string>={assets,train_window:60}
-    if(isSingle){chosen.target=target;chosen.ticker=ticker}
-    return chosen
-  },[assets,isSingle,target,ticker])
   useEffect(()=>{
     let live=true
     void api<{models:Model[]}>('/api/data-manager/model-catalog').then(r=>{
