@@ -13,7 +13,7 @@ import math
 import os
 import re
 
-from . import dhan_workspace, model_data_manager, model_registry, pit_index, service
+from . import dhan_auth, dhan_workspace, model_data_manager, model_registry, pit_index, service
 
 SELECTIONS = frozenset({"nifty50_pit", "banknifty_pit", "watchlist", "all_nse", "all_bse"})
 INTERVALS = frozenset({None, 1, 5, 15, 25, 60})
@@ -200,3 +200,51 @@ def approve(expected_token: str, selection: str, from_date: str, to_date: str,
     if current["instrument_count"] > 100 and not confirm_bulk:
         raise ValueError("Confirm the scope of this large download.")
     return current
+
+
+
+def store_verified_dhan_access_token(token: str, *, confirm_local_storage: bool) -> dict:
+    """Persist *verified* read-only Dhan access into ignored local .env only.
+
+    The UI's one-time password field never persists in browser state or reports.
+    Keep existing .env settings and refuse symlinks, newline injection, unknown
+    credentials, or a network-uncertain profile response. Exact token values
+    are never returned or sent to application logs.
+    """
+    if not confirm_local_storage:
+        raise ValueError("Confirm local-only credential storage before connecting Dhan.")
+    if not isinstance(token, str) or not 16 <= len(token) <= 8192 or (
+        token != token.strip() or
+        any(ord(ch) < 33 or ord(ch) > 126 for ch in token)
+    ):
+        raise ValueError("Enter the exact, nonempty one-line Dhan access token.")
+    checked = dhan_auth.check_profile(token_override=token)
+    if not checked.get("ok"):
+        raise ValueError(str(checked.get("message") or
+                             "Dhan credentials could not be verified."))
+    target = service.ROOT / ".env"
+    if target.is_symlink() or target.parent.is_symlink():
+        raise ValueError("Local .env path is a symbolic link; refusing credential storage.")
+    if not target.parent.is_dir():
+        raise ValueError("QuantLab project root is unavailable.")
+    if target.exists() and not target.is_file():
+        raise ValueError("Local .env is not a regular file.")
+    if not target.exists():
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        handle = os.open(target, flags, 0o600)
+        os.close(handle)
+    # set_key quotes values and preserves other local keys. Dhan credentials
+    # never go into user-facing JSON receipts or tracked repository content.
+    from dotenv import set_key
+    os.chmod(target, 0o600)
+    try:
+        set_key(str(target), "DHAN_ACCESS_TOKEN", token, quote_mode="always")
+        os.chmod(target, 0o600)
+    except (OSError, ValueError) as exc:
+        raise ValueError("Could not save Dhan access to the private local configuration.") from None
+    os.environ["DHAN_ACCESS_TOKEN"] = token
+    return {"connected": True, "data_plan_active": True,
+            "message": "Dhan Data API verified and saved in the ignored local .env.",
+            "token_present": True}
