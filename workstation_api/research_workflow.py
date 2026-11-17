@@ -53,7 +53,8 @@ def execute(model_id: str, dataset_id: str | None, params: dict | None = None,
     source=current["requirements"]
     acquisition=None
     needs_extension=(not source.get("runnable") or
-                     (prepare_buffer and (source.get("missing_to_target") or 0)>0))
+                     (prepare_buffer and current.get("can_acquire") and
+                      (source.get("missing_to_target") or 0)>0))
     if needs_extension:
         if not current["can_acquire"]:
             return {"status":"blocked","action":current["next_action"]["kind"],
