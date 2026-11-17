@@ -427,6 +427,10 @@ try {
     await kite.waitFor()
     await kite.getByRole('heading',{name:/Zerodha.*second historical provider/}).waitFor()
     await kite.getByRole('button',{name:'Sign in with Zerodha'}).waitFor()
+    await kite.getByLabel('Kite app API key').waitFor()
+    await kite.getByLabel('Kite app API secret').waitFor()
+    assert.equal(await kite.getByRole('button',{name:'Save private local Kite app settings'}).isDisabled(),true,
+      'Do not save incomplete Kite app credentials')
     const status=await apiJson('/api/data-manager/zerodha/status')
     assert.equal(status.provider,'zerodha_kite')
     assert.equal(typeof status.token_present,'boolean')
