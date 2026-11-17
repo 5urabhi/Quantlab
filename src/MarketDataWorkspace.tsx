@@ -812,8 +812,8 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
         <div className="mdw-callout warn" role="status">
           <ShieldCheck size={17}/>
           <div><strong>Secondary source: {(
-            job.result.secondary_recovery as {status?:string}).status||'review needed'}</strong>
-            <p>{(job.result.secondary_recovery as {message?:string}).message||
+            job.result?.secondary_recovery as {status?:string}).status||'review needed'}</strong>
+            <p>{(job.result?.secondary_recovery as {message?:string}).message||
               'Only eligible, exact-source-matched secondary records were retained.'}</p>
           </div>
         </div>}
@@ -823,12 +823,12 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
         </div>}
       {job?.status==='complete'&&Boolean(job.result?.model_research)&&
         <div className={'mdw-callout '+(
-          (job.result.model_research as {status?:string}).status==='complete'?
+          (job.result?.model_research as {status?:string}).status==='complete'?
             'success':'warn')} role="status">
           <FileCheck2 size={17}/>
           <div><strong>Model continuation: {(
-            job.result.model_research as {status?:string}).status||'review needed'}</strong>
-            <p>{(job.result.model_research as {message?:string}).message||
+            job.result?.model_research as {status?:string}).status||'review needed'}</strong>
+            <p>{(job.result?.model_research as {message?:string}).message||
               'Source-bound research is saved only when its required real returns are available.'}</p>
             <button type="button" onClick={onOpenModels}>
               View Model Laboratory <ArrowRight size={14}/>
