@@ -129,3 +129,10 @@
 .qm-micro-controls{display:grid;grid-template-columns:1fr;width:100%}
 .qm-micro-controls label{max-width:none!important}
 }
+
+/* Zerodha sign-in is always official-site only; no browser-exposed broker tokens. */
+.qm-source-fallback-stack{display:grid;gap:16px}
+.qm-kite code{font-size:11px;overflow-wrap:anywhere;border-radius:4px;padding:2px 4px;background:rgba(102,139,186,.16)}
+.qm-kite .qm-readiness-action-row{gap:8px}
+.qm-kite .qm-readiness-action-row button{min-height:39px}
+@media(max-width:700px){.qm-kite .qm-acquire-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
