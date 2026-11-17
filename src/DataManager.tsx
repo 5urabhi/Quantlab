@@ -3,7 +3,6 @@ import {Activity, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft, ChevronR
   Database, FileSpreadsheet, HardDrive, History, RefreshCw, Search, ShieldCheck, Wrench} from 'lucide-react'
 import './data-manager.css'
 
-type RecordValue = string | number | boolean | null | undefined
 type Dataset = {id:string;label:string;kind:string;ready:boolean;missing:string[];basis:string}
 type Event = {id:number;occurred_utc:string;category:string;status:string;summary:string}
 type Batch = {id:string;status:string;selection:string;processed:number;total:number;errors:number}
