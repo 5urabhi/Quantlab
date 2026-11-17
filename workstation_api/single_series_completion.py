@@ -179,8 +179,8 @@ def inspect(model_id: str, dataset_id: str | None,
     }
 
 
-def execute(model_id: str, dataset_id: str, params: dict, *, progress=None) -> dict:
-    from . import model_data_manager, dhan_auth
+def execute(model_id: str, dataset_id: str, params: dict, *, allow_secondary_provider: bool = False, progress=None) -> dict:
+    from . import model_data_manager, dhan_auth, upstox_fallback
     plan = model_data_manager.inspect(model_id, dataset_id, params)
     if not plan.get("can_download") or model_id not in SINGLE:
         raise ValueError(plan.get("download_explanation") or
@@ -215,16 +215,37 @@ def execute(model_id: str, dataset_id: str, params: dict, *, progress=None) -> d
     spans = [(a.isoformat(),b.isoformat()) for _,a,b
              in shared_market_data.cached_spans(row)]
     windows = dhan_workspace._uncovered(start, end, spans)
+    primary_available = True
     if windows:
-        # Verify only on the local backend, never send credentials to browser.
+        # No browser token; secondary source must be specifically authorized
+        # and verified against this exact Dhan identity's ISIN.
         state = dhan_auth.check_profile()
-        if not state["ok"]:
-            raise ValueError(state["message"])
+        primary_available = bool(state["ok"])
+        if not primary_available:
+            if not allow_secondary_provider or not upstox_fallback.eligibility(row)["eligible"]:
+                raise ValueError(state["message"] +
+                    "; optional Upstox fallback is not enabled or source mapping is missing")
     stage(15, f"{len(windows)} uncovered date windows for {selected}")
     for i,(first,last) in enumerate(windows):
-        downloaded = dhan_workspace._fetch_history(
-            row, first.isoformat(), last.isoformat(), None)
-        events["downloaded_rows"] += downloaded["rows_added"]
+        if primary_available:
+            try:
+                downloaded = dhan_workspace._fetch_history(
+                    row, first.isoformat(), last.isoformat(), None)
+                events["downloaded_rows"] += downloaded["rows_added"]
+            except (ValueError, OSError, TimeoutError) as exc:
+                description = str(exc).lower()
+                transient = any(word in description for word in (
+                    "http 429","http 5","timeout","connection",
+                    "token","unauthorized","access","provider","service unavailable"))
+                if not allow_secondary_provider or not transient:
+                    raise
+                alternate = upstox_fallback.retrieve(
+                    row, first, last, confirm_authorized=True)
+                events.setdefault("secondary_provider_receipts", []).append(alternate)
+        else:
+            alternate = upstox_fallback.retrieve(
+                row, first, last, confirm_authorized=True)
+            events.setdefault("secondary_provider_receipts", []).append(alternate)
         events["windows_downloaded"] += 1
         stage(15+70*(i+1)/max(1,len(windows)),
               f"Saved original {selected} Dhan history, window {i+1}/{len(windows)}")
