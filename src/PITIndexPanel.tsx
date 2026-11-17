@@ -28,6 +28,7 @@ type Props = {
   onToDate:(s:string)=>void;onPlan:(plan:MembershipPlan|null)=>void
   onPreview:(plan:MembershipPlan|null)=>void
   onSyncBusy:(busy:boolean)=>void
+  onCatalogReady:()=>void
 }
 async function get<T>(path:string, init?:RequestInit):Promise<T>{
   const result=await fetch('/api'+path,init)
@@ -59,7 +60,7 @@ function exportCsv(name:string, rows:string[][]){
   window.setTimeout(()=>URL.revokeObjectURL(url),1000)
 }
 
-export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPreview,onSyncBusy}:Props){
+export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPreview,onSyncBusy,onCatalogReady}:Props){
   const [status,setStatus]=useState<MembershipStatus|null>(null)
   const [asOf,setAsOf]=useState(fromDate)
   const [plan,setPlan]=useState<MembershipPlan|null>(null)
@@ -147,13 +148,14 @@ export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPr
         window.clearInterval(timer);setCatalogJobId('')
         if(j.status==='error'){setCatalogProblem(j.error||'Dhan catalog refresh failed');return}
         setCatalogEpoch(n=>n+1)
+        onCatalogReady()
       }).catch(e=>{
         if(live){window.clearInterval(timer);setCatalogJobId('')
           setCatalogProblem(e instanceof Error?e.message:String(e))}
       })
     },1500)
     return()=>{live=false;window.clearInterval(timer)}
-  },[catalogJobId,onSyncBusy])
+  },[catalogJobId,onSyncBusy,onCatalogReady])
   const refreshCatalog=async()=>{
     setCatalogProblem('')
     try{
