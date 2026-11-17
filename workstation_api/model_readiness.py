@@ -16,7 +16,96 @@ from . import model_registry, model_input_selector, service, option_quotes
 MATH = {"synthetic":"simulation", "theoretical":"theory"}
 
 
+def _step(title: str, ready: bool, detail: str, action: str) -> dict:
+    return {"title":title,"state":"ready" if ready else "action_required",
+            "detail":detail,"action_kind":action}
+
+
+def _setup_for(spec: dict, *, dataset_id: str | None,
+               original_prices: bool, quote_count: int,
+               source_ready: bool, status: str, detail: str) -> tuple[list[dict],str]:
+    """Every catalog model gets an honest, executable in-app route.
+
+    Source-ready is NOT the same as runnable with as-yet-unselected parameter
+    values. A successful preflight cannot certify a real historical backtest.
+    """
+    mode=spec["mode"]
+    if mode in MATH:
+        return ([
+            _step("Mathematical implementation",True,
+                  "Python solver implemented and covered by software tests.","run_math"),
+            _step("Parameter values",True,
+                  "Editable assumed inputs are available; use defaults or change them.","edit_parameters"),
+            _step("Generate calculation",False,
+                  "Run in Model Laboratory. Any simulated path remains hypothetical.","run_math"),
+        ],"run_math")
+    if mode=="market":
+        return ([
+            _step("Python numerical valuation",True,
+                  "Quote-based option model implementation is available.","open_model"),
+            _step("Local source dataset",bool(dataset_id),
+                  "Choose the shared market library or a source-backed saved dataset.","select_dataset"),
+            _step("Actual option bid/ask and expiry",quote_count>0,
+                  f"{quote_count} saved original contracts. Capture Dhan's current chain "
+                  "or import a provider CSV if none are available.","option_quotes"),
+            _step("Exact contract selection",False,
+                  "Select an individual saved quote; check its expiry and set rate/yield assumptions.",
+                  "select_quote"),
+            _step("Calculate source-anchored model values",False,
+                  "Run in Model Laboratory. Output is theoretical even when the input is real.",
+                  "open_model"),
+        ],("select_dataset" if not dataset_id else
+           "option_quotes" if not quote_count else "select_quote"))
+    single=spec["id"] in model_input_selector.MINIMUM
+    minimum=int(spec["min_observations"])
+    count=1 if single else 8
+    steps=[
+        _step("Python research implementation",True,
+              "Numerical algorithm is implemented; convergence depends on valid inputs.","open_model"),
+        _step("Observed price library",bool(dataset_id and original_prices),
+              "Use real, original stock history. The shared library is selected by default.",
+              "select_dataset"),
+    ]
+    if single:
+        steps.append(_step("Exact stock or original TRI selection",False,
+            "Pick one named stock from eligible instruments. Only GBM/Merton accept "
+            "original dividend-reinvested NIFTY TRI when explicitly selected.",
+            "select_stock"))
+    else:
+        steps.append(_step("Required asset selection",bool(source_ready),
+            "Default is eight aligned stocks, configurable to 2–18 in the model. "
+            "Choose an actual source-backed universe; do not fabricate missing members.",
+            "configure_assets"))
+    steps.extend([
+        _step("Observed return sample",bool(source_ready),
+              f"At least {minimum} usable returns "
+              f"({math.ceil(minimum*1.2)} preferred with +20% buffer). {detail}",
+              "get_history"),
+        _step("Run and inspect result",False,
+              "After inputs pass the exact model preflight, run and inspect source "
+              "lineage, assumptions and limitations.","open_model"),
+    ])
+    if not dataset_id or not original_prices:
+        action="select_dataset"
+    elif single:
+        action="select_stock" if source_ready else "get_history"
+    else:
+        action="open_model" if source_ready else "get_history"
+    if status=="fixture_only":
+        action="select_dataset"
+    return steps,action
+
+
 def overview(dataset_id: str | None = None) -> dict:
+    # Model-first default: use the one source-backed shared library when saved.
+    # No auto-broker call, synthetic fallback, or mutation on a readiness GET.
+    if not dataset_id:
+        try:
+            dataset_id=next((row["id"] for row in service.datasets()
+                             if row["id"]=="dhan_shared" and
+                             row.get("has_prices") and row.get("kind")=="dhan"),None)
+        except (ValueError,OSError,KeyError):
+            dataset_id=None
     prices: pd.DataFrame | None=None
     daily=False
     tri=False
@@ -134,10 +223,22 @@ def overview(dataset_id: str | None = None) -> dict:
                 status="source_available" if source_ready else "need_historical_data"
             if key=="heston_proxy":
                 detail+="; proxy only — latent risk-neutral Heston NOT calibrated"
+        setup_steps, next_action_kind=_setup_for(
+            spec,dataset_id=dataset_id,
+            original_prices=prices is not None and not synthetic_fixture,
+            quote_count=snapshot_count,source_ready=source_ready,
+            status=status,detail=detail)
         source_counts[key]={
             "id":key,"group":spec["group"],"title":spec["title"],"mode":mode,
             "status":status,"source_ready":source_ready,
             "mathematics_ready":mode in MATH,
+            "implementation_status":spec["implementation_status"],
+            "implementation_ready":spec["status"]=="runnable",
+            "evidence_type":spec["evidence_type"],
+            "setup_steps":setup_steps,
+            "next_action_kind":next_action_kind,
+            "run_ready_now":mode in MATH,
+            "exact_selection_required":mode in {"historical","market"},
             "detail":detail,"next_action":action,
             "warning":"Preflight does not claim external certification or successful numerical convergence.",
         }
@@ -145,6 +246,8 @@ def overview(dataset_id: str | None = None) -> dict:
     return {
         "dataset_id":dataset_id,"dataset_label":dataset_label,
         "total_models":len(values),
+        "implemented_models":sum(x["implementation_ready"] for x in values),
+        "implemented_not_market_validated":True,
         "math_ready":sum(x["status"]=="math_ready" for x in values),
         "historical_source_ready":sum(x["status"]=="source_available" and
                                       x["mode"]=="historical" for x in values),
