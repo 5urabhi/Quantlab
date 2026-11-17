@@ -1,15 +1,15 @@
-import {useCallback,useEffect,useMemo,useRef,useState} from 'react'
+import {lazy,Suspense,useCallback,useEffect,useMemo,useRef,useState} from 'react'
 import {Archive,ArrowDownToLine,ArrowLeft,ArrowRight,BarChart3,BookOpen,Check,
   CheckCircle2,Copy,Database,Download,FileText,Folder,Heart,
   History,Layers3,LoaderCircle,Plus,RefreshCw,RotateCcw,Save,Search,
   Settings2,ShieldCheck,SlidersHorizontal,Trash2,Undo2,Upload,Workflow,X} from 'lucide-react'
 import ResearchPlot,{type ResearchPlotData} from './ResearchPlots'
 import {formatMetric} from './metricDisplay'
-import ResearchAdvanced from './ResearchAdvanced'
-import ResearchGuided from './ResearchGuided'
-import NSESourceAssistant from './NSESourceAssistant'
-import ResearchCompletion from './ResearchCompletion'
-import ResearchScholar from './ResearchScholar'
+const ResearchAdvanced=lazy(()=>import('./ResearchAdvanced'))
+const ResearchGuided=lazy(()=>import('./ResearchGuided'))
+const NSESourceAssistant=lazy(()=>import('./NSESourceAssistant'))
+const ResearchCompletion=lazy(()=>import('./ResearchCompletion'))
+const ResearchScholar=lazy(()=>import('./ResearchScholar'))
 import './research-workspace.css'
 
 type Raw = Record<string,unknown>
@@ -264,6 +264,9 @@ export default function ResearchWorkspace({datasets,selectedDataset,onSelectData
         onClick={()=>setPage(item.id)}>{item.label}<small>{item.sub}</small></button>)}
     </div>{notice}
     {loading?<div className="rw-working"><LoaderCircle className="ql-spinning"/> Loading research library…</div>:null}
+    <Suspense fallback={<div className="rw-working" role="status">
+      <LoaderCircle className="ql-spinning"/> Loading research workspace tool…
+    </div>}>
     {page==='home'&&<div className="rw-stack"><div className="rw-two">
       <Box title="Resume research">
         <div className="rw-button-group">
@@ -335,6 +338,7 @@ export default function ResearchWorkspace({datasets,selectedDataset,onSelectData
       records={library} onOpenDhan={onOpenDhan} onStartJob={start}
       onChanged={()=>void reload()}/>}
     {page==='jobs'&&<JobsPanel jobs={jobs} busy={busy} perform={perform} onPage={setPage}/>}
+    </Suspense>
     {searchOpen&&<div className="rw-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setSearchOpen(false)}}>
       <div className="rw-search-dialog" role="dialog" aria-modal="true" aria-label="Search QuantLab research library">
         <div><Search size={20}/><input autoFocus value={query} onChange={e=>setQuery(e.target.value)}
