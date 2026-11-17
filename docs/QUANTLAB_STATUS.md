@@ -5,6 +5,22 @@ Last software review: **November 14, 2026**.
 Run `bash run.sh check` for current React build, Python regression, mathematics and a read-only original-source readiness doctor. `bash run.sh evaluate` additionally generates clearly labeled synthetic experiment and chart artifacts. Both keep unavailable authenticated/licensed input distinct from a code failure. The previous `scripts/local_acceptance.py` legacy-Streamlit default is retired; archived Streamlit checks require explicit `--legacy-streamlit`. This is the authoritative status
 register; older archived Streamlit/branch-specific status documents are not.
 
+## November 17: Zerodha as second historical provider and source acceptance
+
+QuantLab now offers optional Kite Connect historical equity candles after Dhan cache
+and authorized original Dhan requests. It requires an official login, a current
+Kite NSE/BSE instrument master, exact exchange-token and trading-symbol match,
+explicit fallback consent and consistent overlapping Dhan closes. Session and
+master status are available in-app; neither credentials nor historical archive
+rights are inferred from source metadata. The new real-data acceptance action
+combines PIT, TRI, corporate-action, chronological holdout and numerical model
+checks into a saved report, but never issues an exchange certification.
+
+**Not yet independently verified:** actual broker credentials, provider
+entitlement, full delisted-security coverage, genuine full TRI/corporate-action
+history, and a finalized untouched holdout study. See the Research Completion
+Guide for the local acceptance path. No order placement is involved.
+
 ## November 17: automatic historical index source initialization
 
 On a new checkout, the Data Library's NIFTY 50/BANK NIFTY historical

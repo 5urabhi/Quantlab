@@ -22,13 +22,13 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, PlainTextResponse, Response, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -389,7 +389,7 @@ class DataAcquisitionRequest(BaseModel):
     params: dict[str, float | int | str] = Field(default_factory=dict)
     preview_token: str = Field(pattern=r"^[0-9a-f]{64}$")
     confirm_download: bool = False
-    confirm_upstox_fallback: bool = False
+    confirm_zerodha_fallback: bool = False
 
 
 @app.post("/api/data-manager/acquisition/start")
@@ -398,12 +398,12 @@ def data_manager_acquisition_start(body: DataAcquisitionRequest):
         current = data_acquisition.check_confirmation(
             body.model_id, body.dataset_id, body.params,
             body.preview_token, body.confirm_download)
-        if body.confirm_upstox_fallback and not current["upstox_fallback_eligible"]:
-            raise ValueError("Upstox fallback needs a local token and verified "
-                             "ISIN mapping for every selected security")
+        if body.confirm_zerodha_fallback and not current["zerodha_fallback_eligible"]:
+            raise ValueError("Zerodha fallback needs a local token and verified "
+                             "exchange-token and trading-symbol mapping for every selected security")
         return {**_spawn("lab_shared_data_extension", data_acquisition.execute,
                          body.model_id, body.dataset_id, current["params"],
-                         allow_upstox=body.confirm_upstox_fallback),
+                         allow_zerodha=body.confirm_zerodha_fallback),
                 "planned": current,
                 "destination_dataset_id": shared_market_data.SHARED_ID}
     except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
@@ -582,6 +582,85 @@ async def data_manager_depth_import(
         bad(exc)
 
 
+
+@app.get("/api/data-manager/zerodha/status")
+def data_manager_zerodha_status():
+    try:
+        return zerodha_fallback.status()
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class KiteAppCredentialsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: str = Field(min_length=5, max_length=128)
+    api_secret: str = Field(min_length=8, max_length=256)
+    confirm_local_storage: bool = False
+
+
+@app.post("/api/data-manager/zerodha/configure")
+def data_manager_zerodha_configure(body: KiteAppCredentialsRequest):
+    try:
+        return zerodha_fallback.configure_app(
+            body.api_key, body.api_secret,
+            confirm_local_storage=body.confirm_local_storage)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/data-manager/zerodha/auth/start")
+def data_manager_zerodha_auth_start():
+    try:
+        return zerodha_fallback.start_login()
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/zerodha/auth/callback")
+def data_manager_zerodha_auth_callback(
+        request_token: str = "", quantlab_state: str = "", status: str = ""):
+    # Single-use state restricts token exchange to user-started Kite sign-ins.
+    # No broker token/account ID is ever shown to the browser.
+    try:
+        if status and status != "success":
+            raise ValueError("Zerodha did not approve the sign-in")
+        zerodha_fallback.finish_login(request_token, quantlab_state)
+        # Redirect immediately so the one-time request_token is not left
+        # visible in a callback address bar or the saved browser history.
+        return RedirectResponse("http://127.0.0.1:5173/#zerodha-connected",
+                                status_code=303,
+                                headers={"Cache-Control":"no-store",
+                                         "Referrer-Policy":"no-referrer"})
+    except (ValueError, OSError):
+        html = ("<!doctype html><html><head><meta charset='utf-8'></head>"
+                "<body><h2>Zerodha connection not completed</h2>"
+                "<p><a href='http://127.0.0.1:5173/'>Return to QuantLab</a>, "
+                "start a new login and check the registered callback.</p></body></html>")
+        return HTMLResponse(html, status_code=400,
+                            headers={"Cache-Control":"no-store",
+                                     "Referrer-Policy":"no-referrer"})
+
+
+@app.post("/api/data-manager/zerodha/verify")
+def data_manager_zerodha_verify():
+    try:
+        if not zerodha_fallback.configured():
+            raise ValueError("Log in to Zerodha from the Data Manager")
+        return _spawn("kite_read_only_profile_check", zerodha_fallback.verify_session)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/data-manager/zerodha/refresh-master")
+def data_manager_zerodha_refresh_master():
+    try:
+        if not zerodha_fallback.configured():
+            raise ValueError("Zerodha session missing; complete official login first")
+        return _spawn("kite_original_equity_master", zerodha_fallback.refresh_master)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/data-manager/fallback/registry")
 def data_manager_fallback_registry():
     return compatible_sources.registry()
@@ -646,6 +725,50 @@ def data_manager_research_evidence_audit(
         bad(exc)
 
 
+
+@app.get("/api/data-manager/research/acceptance/reports")
+def data_manager_real_acceptance_reports(limit: int = 20):
+    try:
+        return real_data_acceptance.recent(limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/research/acceptance/report/{report_id}")
+def data_manager_real_acceptance_report(report_id: str):
+    try:
+        return real_data_acceptance.report(report_id)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class RealDataAcceptanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dataset_id: str = Field(min_length=1, max_length=120)
+    validation_start: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    final_test_start: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    run_models: bool = True
+    confirm_real_data_audit: bool = False
+
+
+@app.post("/api/data-manager/research/acceptance/run")
+def data_manager_real_acceptance_run(body: RealDataAcceptanceRequest):
+    if not body.confirm_real_data_audit:
+        raise HTTPException(400, "Confirm original source and numerical acceptance")
+    try:
+        service.dataset_path(body.dataset_id)
+        from datetime import date
+        beginning = date.fromisoformat(body.validation_start)
+        test = date.fromisoformat(body.final_test_start)
+        if beginning >= test:
+            raise ValueError("Final holdout must start after the validation period")
+        return _spawn("real_data_acceptance", real_data_acceptance.execute,
+                      body.dataset_id, body.validation_start, body.final_test_start,
+                      run_models=body.run_models)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/data-manager/research/audits")
 def data_manager_research_audits(limit: int = 15):
     try:
@@ -681,7 +804,7 @@ class ResearchResolveRequest(BaseModel):
     params: dict[str,float|int|str] = Field(default_factory=dict)
     preview_token: str = Field(default="",max_length=64)
     confirm_download: bool = False
-    confirm_upstox_fallback: bool = False
+    confirm_zerodha_fallback: bool = False
     prepare_buffer: bool = True
 
 
@@ -692,14 +815,14 @@ def data_manager_research_resolve_run(body: ResearchResolveRequest):
         model_registry.validate_parameters(body.model_id,body.params)
         if body.dataset_id:
             service.dataset_path(body.dataset_id)
-        if body.confirm_upstox_fallback and not body.confirm_download:
+        if body.confirm_zerodha_fallback and not body.confirm_download:
             raise ValueError("Secondary provider requires explicit original-data authorization")
         return _spawn(
             "research_resolve_run",research_workflow.execute,
             body.model_id,body.dataset_id,body.params,
             preview_token=body.preview_token,
             confirm_download=body.confirm_download,
-            allow_upstox=body.confirm_upstox_fallback,
+            allow_zerodha=body.confirm_zerodha_fallback,
             prepare_buffer=body.prepare_buffer)
     except (ValueError,OSError,KeyError) as exc:
         bad(exc)

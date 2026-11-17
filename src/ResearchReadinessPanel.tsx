@@ -26,6 +26,12 @@ type EvidenceAudit={dataset_id:string;status:string;structural_run_ready:boolean
   warning:string}
 type Audit={id:string;dataset_id:string|null;attempted_models:number;software_pass:number;
   software_fail:number;source_blocked:number;checked_utc:string}
+type Acceptance={id:string;dataset_id:string;created_utc:string;status:string;
+  structural_ready?:boolean;independently_certified:boolean;
+  source_checks_passed:number;source_checks_blocked:number;source_checks_review?:number;
+  model_software_pass:number;model_software_fail:number;
+  blockers?:{component:string;state:string;detail:string;next_action:string}[];
+  warning?:string}
 type Job={id:string;status:string;percent?:number;stage?:string;error?:string;
   result?:Audit|Record<string,unknown>}
 const json=async<T,>(path:string,init?:RequestInit):Promise<T>=>{
@@ -44,6 +50,10 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
   const [info,setInfo]=useState<Readiness|null>(null)
   const [recent,setRecent]=useState<Audit[]>([])
   const [evidenceAudit,setEvidenceAudit]=useState<EvidenceAudit|null>(null)
+  const [validationStart,setValidationStart]=useState('')
+  const [finalTestStart,setFinalTestStart]=useState('')
+  const [acceptance,setAcceptance]=useState<Acceptance|null>(null)
+  const [acceptanceReports,setAcceptanceReports]=useState<Acceptance[]>([])
   const [job,setJob]=useState<Job|null>(null)
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
@@ -51,14 +61,15 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
   const [onlyBlocked,setOnlyBlocked]=useState(false)
   const [revision,setRevision]=useState(0)
   const reload=useCallback(async()=>{
-    const [summary,audits,evidence]=await Promise.all([
+    const [summary,audits,evidence,reports]=await Promise.all([
       json<Readiness>('/api/data-manager/research/overview?'+new URLSearchParams({
         dataset_id:dataset}).toString()),
       json<{audits:Audit[]}>('/api/data-manager/research/audits'),
       dataset?json<EvidenceAudit>('/api/data-manager/research/evidence-audit?'+
-        new URLSearchParams({dataset_id:dataset})):Promise.resolve(null)
+        new URLSearchParams({dataset_id:dataset})):Promise.resolve(null),
+      json<{reports:Acceptance[]}>('/api/data-manager/research/acceptance/reports')
     ])
-    setInfo(summary);setRecent(audits.audits);setEvidenceAudit(evidence)
+    setInfo(summary);setRecent(audits.audits);setEvidenceAudit(evidence);setAcceptanceReports(reports.reports)
   },[dataset])
   useEffect(()=>{
     let live=true
@@ -74,7 +85,12 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
         if(!live)return
         setJob(next)
         if(next.status==='complete'){
-          setNotice('Operation completed. Review the updated evidence and model results.')
+          if(next.result&&'blockers' in next.result){
+            setAcceptance(next.result as Acceptance)
+            setNotice('Real-data acceptance saved. Review the original-source blockers below.')
+          }else{
+            setNotice('Operation completed. Review the updated evidence and model results.')
+          }
           setRevision(x=>x+1)
         }else if(next.status==='error'||next.status==='cancelled'){
           setError(next.error||'Check could not complete; source evidence was preserved.')
@@ -96,6 +112,30 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
       setJob({id:r.job_id,status:r.status})
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
+  }
+  const runAcceptance=async()=>{
+    if(!dataset||!validationStart||!finalTestStart||busy||
+      (job&&['queued','running'].includes(job.status)))return
+    setBusy(true);setError('');setNotice('');setAcceptance(null);setJob(null)
+    try{
+      const created=await json<{job_id:string;status:string}>(
+        '/api/data-manager/research/acceptance/run',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({dataset_id:dataset,
+            validation_start:validationStart,final_test_start:finalTestStart,
+            run_models:true,confirm_real_data_audit:true})
+        })
+      setJob({id:created.job_id,status:created.status})
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setBusy(false)}
+  }
+  const openAcceptance=async(id:string)=>{
+    setError('')
+    try{
+      const report=await json<Acceptance>(
+        '/api/data-manager/research/acceptance/report/'+encodeURIComponent(id))
+      setAcceptance(report)
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
   }
   const active=busy||Boolean(job&&['queued','running'].includes(job.status))
   const shown=info?.models.filter(m=>!onlyBlocked||
@@ -168,6 +208,65 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
       </div>)}
       <p className="qm-caption">{evidenceAudit.warning}</p>
     </details>}
+    <div className="qm-readiness-evidence qm-real-acceptance" aria-label="Real data acceptance">
+      <div className="qm-panel-title"><h3>End-to-end real-data acceptance</h3>
+        <span>Original evidence → chronological holdout → numerical models</span></div>
+      <p className="qm-caption">Select your actual historical dataset and dates.
+        QuantLab checks source hashes, point-in-time constituents, TRI, corporate
+        actions, eligible forward returns and an untouched final-test period,
+        then runs every eligible model's software check. A local structural pass
+        never claims independent exchange or source certification.</p>
+      <div className="qm-readiness-controls">
+        <label>Validation begins
+          <input type="date" aria-label="Acceptance validation start" value={validationStart}
+            onChange={e=>setValidationStart(e.target.value)}/></label>
+        <label>Untouched final-test begins
+          <input type="date" aria-label="Acceptance final test start" value={finalTestStart}
+            onChange={e=>setFinalTestStart(e.target.value)}/></label>
+        <button type="button" className="ws-button primary"
+          disabled={active||!dataset||!validationStart||!finalTestStart||
+            !(validationStart<finalTestStart)}
+          onClick={()=>void runAcceptance()}>
+          <ShieldCheck size={15}/> Run complete original-data acceptance</button>
+      </div>
+      <p className="qm-caption">The strict research protocol needs at least 44
+        observed training months, a separate validation interval and 12
+        genuinely untouched final-test months. Failed checks identify the
+        exact original files or observations still required.</p>
+      {acceptance&&<div role="status" className="qm-acceptance-report">
+        <div className="qm-acquire-metrics">
+          <div><small>Historical structural checks</small>
+            <strong>{acceptance.source_checks_passed} passed</strong></div>
+          <div><small>Source checks blocked</small>
+            <strong>{acceptance.source_checks_blocked}</strong></div>
+          <div><small>Models passed software QA</small>
+            <strong>{acceptance.model_software_pass}</strong></div>
+          <div><small>Independent certification</small>
+            <strong className="qm-small-stat">Not granted</strong></div>
+        </div>
+        <strong>Status: {acceptance.status.replaceAll('_',' ')}</strong>
+        <div className="qm-readiness-evidence">
+          {acceptance.blockers?.map((x,i)=><div className="qm-readiness-row"
+            key={x.component+'-'+i}>
+            <span className="qm-badge warn">{x.state}</span>
+            <div><strong>{x.component}</strong><small>{x.detail}</small>
+              <small><b>Next:</b> {x.next_action}</small></div></div>)}
+        </div>
+        <a className="ws-button secondary" download={acceptance.id+'.json'}
+          href={'/api/data-manager/research/acceptance/report/'+encodeURIComponent(acceptance.id)}>
+          Save acceptance evidence JSON</a>
+        <p className="qm-caption">{acceptance.warning}</p>
+      </div>}
+      {acceptanceReports.length>0&&<details className="qm-details">
+        <summary>Previous genuine-source acceptance reports ({acceptanceReports.length})</summary>
+        {acceptanceReports.slice(0,15).map(x=><div className="qm-file" key={x.id}>
+          <span>{x.dataset_id} · {x.created_utc.slice(0,16)}</span>
+          <small>{x.status.replaceAll('_',' ')} · {x.source_checks_blocked} source blockers</small>
+          <button className="ws-button secondary" type="button"
+            onClick={()=>void openAcceptance(x.id)}>Review original evidence</button>
+        </div>)}
+      </details>}
+    </div>
     <div className="qm-readiness-model-list">
       <div className="qm-panel-title"><h3>Every model and its next step</h3>
         <label className="qm-check"><input type="checkbox" checked={onlyBlocked}

@@ -16,7 +16,7 @@ SINGLE=frozenset({"gbm_fit","ou_fit","merton_fit","heston_proxy"})
 def execute(model_id: str, dataset_id: str | None, params: dict | None = None,
             *, preview_token: str = "",
             confirm_download: bool = False,
-            allow_upstox: bool = False,
+            allow_zerodha: bool = False,
             prepare_buffer: bool = True,
             progress=None) -> dict:
     if model_id not in model_registry.CATALOG:
@@ -82,8 +82,8 @@ def execute(model_id: str, dataset_id: str | None, params: dict | None = None,
             raise ValueError("Missing original-data plan receipt")
         checked=data_acquisition.check_confirmation(
             model_id,dataset_id,acquisition_params,preview_token,True)
-        if allow_upstox and not checked["upstox_fallback_eligible"]:
-            raise ValueError("Secondary historical provider requires token, exact ISIN "
+        if allow_zerodha and not checked["zerodha_fallback_eligible"]:
+            raise ValueError("Secondary historical provider requires token, exact Kite exchange-token/trading-symbol "
                              "mapping and explicit user authorization")
         if progress:
             progress(12,"Reusing cached original candles and authorized missing windows")
@@ -92,7 +92,7 @@ def execute(model_id: str, dataset_id: str | None, params: dict | None = None,
                 progress(12+70*percent/100,message)
         acquisition=data_acquisition.execute(
             model_id,dataset_id,acquisition_params,
-            allow_upstox=allow_upstox,progress=stage)
+            allow_zerodha=allow_zerodha,progress=stage)
         dataset_id=acquisition.get("dataset_id") or dataset_id
         if model_id in SINGLE and acquisition.get("selected_ticker"):
             settings={**settings,"ticker":acquisition["selected_ticker"]}

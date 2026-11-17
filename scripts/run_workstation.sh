@@ -32,7 +32,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 info "Starting local Python research API at http://127.0.0.1:8765"
-.venv/bin/uvicorn workstation_api.app:app --host 127.0.0.1 --port 8765 &
+# Disable raw HTTP access logs: Kite's one-use request_token appears in a
+# local OAuth callback query string; that value must never reach console logs.
+.venv/bin/uvicorn workstation_api.app:app --host 127.0.0.1 --port 8765 --no-access-log &
 API_PID=$!
 # Check that Python's import and startup succeeded before opening the UI.
 for i in $(seq 1 40); do

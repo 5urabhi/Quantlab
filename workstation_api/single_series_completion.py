@@ -180,7 +180,7 @@ def inspect(model_id: str, dataset_id: str | None,
 
 
 def execute(model_id: str, dataset_id: str, params: dict, *, allow_secondary_provider: bool = False, progress=None) -> dict:
-    from . import model_data_manager, dhan_auth, upstox_fallback
+    from . import model_data_manager, dhan_auth, zerodha_fallback
     plan = model_data_manager.inspect(model_id, dataset_id, params)
     if not plan.get("can_download") or model_id not in SINGLE:
         raise ValueError(plan.get("download_explanation") or
@@ -218,13 +218,13 @@ def execute(model_id: str, dataset_id: str, params: dict, *, allow_secondary_pro
     primary_available = True
     if windows:
         # No browser token; secondary source must be specifically authorized
-        # and verified against this exact Dhan identity's ISIN.
+        # and verified against the exact exchange token and trading symbol.
         state = dhan_auth.check_profile()
         primary_available = bool(state["ok"])
         if not primary_available:
-            if not allow_secondary_provider or not upstox_fallback.eligibility(row)["eligible"]:
+            if not allow_secondary_provider or not zerodha_fallback.eligibility(row)["eligible"]:
                 raise ValueError(state["message"] +
-                    "; optional Upstox fallback is not enabled or source mapping is missing")
+                    "; optional Zerodha fallback is not enabled or source mapping is missing")
     stage(15, f"{len(windows)} uncovered date windows for {selected}")
     for i,(first,last) in enumerate(windows):
         if primary_available:
@@ -239,11 +239,11 @@ def execute(model_id: str, dataset_id: str, params: dict, *, allow_secondary_pro
                     "token","unauthorized","access","provider","service unavailable"))
                 if not allow_secondary_provider or not transient:
                     raise
-                alternate = upstox_fallback.retrieve(
+                alternate = zerodha_fallback.retrieve(
                     row, first, last, confirm_authorized=True)
                 events.setdefault("secondary_provider_receipts", []).append(alternate)
         else:
-            alternate = upstox_fallback.retrieve(
+            alternate = zerodha_fallback.retrieve(
                 row, first, last, confirm_authorized=True)
             events.setdefault("secondary_provider_receipts", []).append(alternate)
         events["windows_downloaded"] += 1

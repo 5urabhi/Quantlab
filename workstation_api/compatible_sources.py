@@ -36,7 +36,8 @@ MIN_MATCHED = 3
 PROVIDERS = {
     "dhan_export": "Dhan original downloaded CSV",
     "licensed_vendor_csv": "Other authorized original daily-close provider",
-    "upstox_v3": "Authorized read-only Upstox historical candles",
+    "upstox_v3": "Legacy authorized Upstox historical source (receipts only)",
+    "zerodha_kite": "Zerodha Kite Connect authorized original daily candles",
 }
 SOURCE_ID = re.compile(r"^[0-9a-f]{20}$")
 
@@ -250,8 +251,8 @@ def registry() -> dict:
         {"id": "dhan_original", "label": "Dhan historical API + verified candle cache",
          "mode": "automatic_cached_then_authorized_read_only",
          "compatible": True},
-        {"id": "upstox_v3", "label": PROVIDERS["upstox_v3"],
-         "mode": "automatic_only_after_explicit_consent_and_identity_overlap",
+        {"id": "zerodha_kite", "label": PROVIDERS["zerodha_kite"],
+         "mode": "read_only_after_explicit_consent_token_mapping_and_price_overlap",
          "compatible": True},
         {"id": "dhan_export", "label": PROVIDERS["dhan_export"],
          "mode": "in_app_csv_import_with_overlap_check", "compatible": True},

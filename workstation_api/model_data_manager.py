@@ -8,7 +8,7 @@ import pandas as pd
 from index_research.data import read_matrix
 from . import (dhan_workspace, gbm_calibration, stochastic_calibration, option_market,
                model_registry, service, shared_market_data, single_series_completion,
-               upstox_fallback)
+               zerodha_fallback)
 
 EXTRA_FRACTION = 0.20
 MAX_AUTO_ASSETS = 18
@@ -282,12 +282,12 @@ def execute(model_id: str, dataset_id: str, params: dict | None = None,
         if not primary_available:
             if not allow_secondary_provider:
                 raise ValueError(state["message"])
-            if not upstox_fallback.configured():
-                raise ValueError(state["message"] + "; Upstox fallback token is not configured")
+            if not zerodha_fallback.configured():
+                raise ValueError(state["message"] + "; Zerodha fallback token is not configured")
             ineligible = [row["id"] for row in rows
-                          if not upstox_fallback.eligibility(row)["eligible"]]
+                          if not zerodha_fallback.eligibility(row)["eligible"]]
             if ineligible:
-                raise ValueError("No verified Upstox ISIN mapping for: " +
+                raise ValueError("No verified Kite exchange-token / trading-symbol mapping for: " +
                                  ", ".join(ineligible[:6]))
     total_windows = sum(len(windows) for windows in uncovered.values())
     finished_windows = 0
@@ -316,11 +316,11 @@ def execute(model_id: str, dataset_id: str, params: dict | None = None,
                         "no candles returned", "service unavailable"))
                     if not allow_secondary_provider or not transient:
                         raise
-                    fallback = upstox_fallback.retrieve(
+                    fallback = zerodha_fallback.retrieve(
                         row, first, last, confirm_authorized=True)
                     event.setdefault("secondary_providers", []).append(fallback)
             else:
-                fallback = upstox_fallback.retrieve(
+                fallback = zerodha_fallback.retrieve(
                     row, first, last, confirm_authorized=True)
                 event.setdefault("secondary_providers", []).append(fallback)
             finished_windows += 1
