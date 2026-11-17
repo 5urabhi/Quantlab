@@ -24,12 +24,12 @@ import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, Response, HTMLResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -2114,6 +2114,139 @@ class DhanBatchCreate(BaseModel):
     acknowledged_bulk: bool = False
     acknowledged_gaps: bool = False
     include_index_spot: bool = True
+
+
+
+class DhanLocalConnect(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    access_token: SecretStr
+    confirm_local_storage: bool = False
+
+
+@app.post("/api/market-data/providers/dhan/connect")
+def market_data_connect_dhan(body: DhanLocalConnect):
+    """Explicit local-only, no-token-in-response Dhan account preflight."""
+    try:
+        return market_data_workflow.store_verified_dhan_access_token(
+            body.access_token.get_secret_value(), confirm_local_storage=body.confirm_local_storage)
+    except Exception as exc:
+        bad(exc)
+
+
+class MarketDataStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    selection: Literal["nifty50_pit", "banknifty_pit", "watchlist", "all_nse", "all_bse"]
+    from_date: str
+    to_date: str  # exclusive; browser converts displayed inclusive date
+    interval: Literal[1, 5, 15, 25, 60] | None = None
+    tickers: list[str] = Field(default_factory=list, max_length=6000)
+    model_id: str = ""
+    preview_token: str
+    confirm_readonly: bool = False
+    confirm_incomplete: bool = False
+    confirm_bulk: bool = False
+    include_index_spot: bool = False
+
+
+class MarketSourcePrepare(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    selection: Literal["nifty50_pit", "banknifty_pit", "watchlist", "all_nse", "all_bse"]
+    to_date: str
+    confirm_public_sources: bool = False
+    force_catalog_refresh: bool = False
+
+
+@app.get("/api/market-data/plan")
+def market_data_plan(
+        selection: Literal["nifty50_pit", "banknifty_pit", "watchlist", "all_nse", "all_bse"],
+        from_date: str, to_date: str, interval: Literal[1, 5, 15, 25, 60] | None = None,
+        tickers: str = "", model_id: str = ""):
+    """Read-only inspection only; no vendor, NSE or master downloads."""
+    if len(tickers) > 120000:
+        raise HTTPException(400, "Too many symbols")
+    symbols = [v for v in __import__("re").split(r"[,;\s]+", tickers.strip()) if v]
+    try:
+        return market_data_workflow.plan(
+            selection, from_date, to_date, interval, symbols, model_id)
+    except Exception as exc:
+        bad(exc)
+
+
+def _prepare_market_sources(selection: str, to_date: str,
+                            force_catalog: bool = False, progress=None):
+    """User-approved public source synchronization, never brokerage candles."""
+    import datetime as _dt
+    result = {"updated": [], "preserved_original_candles": True}
+    if selection in pit_index.MODES:
+        snapshot = pit_index.status()
+        covered = snapshot.get("covered_through", "") if snapshot.get("available") else ""
+        needs_update = (not covered or
+                        _dt.date.fromisoformat(to_date) >
+                        _dt.date.fromisoformat(covered) + _dt.timedelta(days=1))
+        if needs_update:
+            if progress:
+                progress(10, "Syncing source-dated index membership")
+            pit_index.sync()
+            result["updated"].append("historical_index_membership")
+    health = dhan_workspace.catalog_health()
+    if force_catalog or not health.get("ready"):
+        if progress:
+            progress(55, "Refreshing official Dhan public instrument catalog")
+        _download_master()
+        result["updated"].append("dhan_instrument_catalog")
+    if progress:
+        progress(95, "Rechecking source availability")
+    result["membership"] = pit_index.status() if selection in pit_index.MODES else {"available": False}
+    result["catalog"] = dhan_workspace.catalog_health()
+    return result
+
+
+@app.post("/api/market-data/sources/prepare")
+def market_prepare_sources(body: MarketSourcePrepare):
+    if not body.confirm_public_sources:
+        raise HTTPException(400, "Approve the public-source refresh before continuing.")
+    try:
+        # Reuse the single local worker; repeated clicks cannot create
+        # concurrent instrument-master or PIT source writers.
+        with JOBS_LOCK:
+            if any(j["status"] in {"running", "queued"} for j in JOBS.values()):
+                raise HTTPException(409, "A data or research job is already running.")
+        market_data_workflow._dates("2000-01-01", body.to_date, None)
+        return _spawn("market_source_setup", _prepare_market_sources,
+                      body.selection, body.to_date, body.force_catalog_refresh)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        bad(exc)
+
+
+@app.post("/api/market-data/start")
+def market_data_start(body: MarketDataStart):
+    """Run one revalidated plan using the existing Dhan batch and converter."""
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Approve the read-only provider request.")
+    try:
+        approved = market_data_workflow.approve(
+            body.preview_token, body.selection, body.from_date, body.to_date,
+            body.interval, body.tickers, body.model_id,
+            allow_incomplete=body.confirm_incomplete,
+            confirm_bulk=body.confirm_bulk)
+    except Exception as exc:
+        bad(exc)
+    # An existing token's presence is NOT verification. Check the live
+    # historical-data entitlement on every explicit new vendor batch.
+    credential = dhan_auth.check_profile()
+    if not credential.get("ok"):
+        raise HTTPException(400, credential.get("message") or
+                            "Dhan historical Data API preflight failed.")
+    request = DhanBatchCreate(
+        selection=body.selection, ids=[], tickers=approved["tickers"],
+        from_date=approved["from_date"], to_date=approved["to_date"],
+        interval=body.interval, acknowledged_bulk=body.confirm_bulk,
+        acknowledged_gaps=body.confirm_incomplete,
+        include_index_spot=body.include_index_spot)
+    return create_dhan_batch(request)
+
 
 
 BATCH_CANCEL_EVENTS: dict[str, Event] = {}

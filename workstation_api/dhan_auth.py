@@ -15,8 +15,9 @@ from urllib.request import Request, urlopen
 LOG = logging.getLogger("quantlab.dhan.auth")
 
 
-def check_profile(opener=urlopen) -> dict:
-    token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
+def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
+    """Verify existing or explicitly supplied one-time token; never return it."""
+    token = (token_override if token_override is not None else os.getenv("DHAN_ACCESS_TOKEN", "")).strip()
     if not token:
         LOG.warning("Dhan profile preflight: token is missing from environment")
         return {"ok": False, "token_present": False, "token_valid": False,

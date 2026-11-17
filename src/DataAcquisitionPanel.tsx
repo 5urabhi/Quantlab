@@ -34,13 +34,15 @@ const api=async<T,>(path:string,init?:RequestInit):Promise<T>=>{
   }
   return res.json() as Promise<T>
 }
-export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,onOpenModels}:{
+export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,onOpenModels,
+  initialModelId='',initialDatasetId=''}:{
   datasets:Dataset[];onCompleted:(datasetId:string,ticker?:string)=>void;
-  onOpenDhan?:()=>void;onOpenModels?:()=>void
+  onOpenDhan?:()=>void;onOpenModels?:()=>void;
+  initialModelId?:string;initialDatasetId?:string
 }){
   const [models,setModels]=useState<Model[]>([])
-  const [modelId,setModelId]=useState('min_variance')
-  const [datasetId,setDatasetId]=useState('')
+  const [modelId,setModelId]=useState(initialModelId||'min_variance')
+  const [datasetId,setDatasetId]=useState(initialDatasetId)
   const [assets,setAssets]=useState(8)
   const [ticker,setTicker]=useState('')
   const [target,setTarget]=useState<'stock'|'benchmark_tri'>('stock')
@@ -52,6 +54,8 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
   const [revision,setRevision]=useState(0)
   const [allowZerodha,setAllowZerodha]=useState(false)
   const [runAfter,setRunAfter]=useState(true)
+  useEffect(()=>{if(initialModelId)setModelId(initialModelId)},[initialModelId])
+  useEffect(()=>{if(initialDatasetId)setDatasetId(initialDatasetId)},[initialDatasetId])
   const selected=useMemo(()=>models.find(m=>m.id===modelId),[models,modelId])
   const isSingle=['gbm_fit','ou_fit','merton_fit','heston_proxy'].includes(modelId)
   const isMarket=selected?.mode==='market'

@@ -111,7 +111,8 @@ try {
     assert.equal(await directNse.getByRole('button',{name:'Check NSE source'}).isEnabled(),true)
     await screenshot('01-nse-sources-visible-in-data-library')
     await dataTabs.getByRole('button',{name:'Data manager',exact:true}).click()
-    await page.getByRole('button',{name:/NSE Sources.*official MCP/}).click()
+    await page.locator('.mdw-root').getByRole('tab',{name:'My Datasets'}).waitFor()
+    await dataTabs.getByRole('button',{name:'NSE Sources',exact:true}).click()
     await directNse.waitFor()
     await nav('Compare & Visualize').click()
     await page.locator('.rw-top h2').waitFor()
@@ -247,98 +248,65 @@ try {
     assert.equal(gapAudit.summary.publication_certified,false)
     await screenshot('02-historical-source-readiness')
   })
-  await step('Dhan download uses an accessible four-step guided flow',async()=>{
-    // A fresh clone has no ignored membership CSV or Dhan instrument master.
-    // Mock the official-source jobs: verify user selection starts both
-    // downloads automatically, without manual disclosure clicks or API secrets.
-    let membershipSynced=false, masterReady=false
-    let membershipSyncCount=0, masterRefreshCount=0
-    const fulfill=async(route,payload)=>route.fulfill({
-      status:200,contentType:'application/json',body:JSON.stringify(payload)})
-    await page.route('**/api/indices/status',route=>fulfill(route,
-      membershipSynced?{available:true,first_date:'2014-01-01',covered_through:'2026-10-13',
-        source_commit:'0000000000000000000000000000000000000000',source:'ci-mock',synced_utc:new Date().toISOString()}:
-      {available:false,message:'Historical index membership has not been synced'}))
-    await page.route('**/api/dhan/catalog/health',route=>fulfill(route,
-      masterReady?{ready:true,code:'ready',nse_equities:2000,
-        verified_nse_tickers:1950,message:'Compact catalog ready'}:
-      {ready:false,code:'missing',nse_equities:0,verified_nse_tickers:0,
-        message:'Current Dhan instrument catalog missing'}))
-    await page.route('**/api/indices/sync',route=>{
-      membershipSyncCount++
-      membershipSynced=true
-      return fulfill(route,{job_id:'ci_membership_bootstrap'})
-    })
-    await page.route('**/api/dhan/instruments/refresh',route=>{
-      masterRefreshCount++
-      masterReady=true
-      return fulfill(route,{job_id:'ci_master_bootstrap'})
-    })
-    await page.route('**/api/jobs/ci_membership_bootstrap',route=>
-      fulfill(route,{id:'ci_membership_bootstrap',status:'complete'}))
-    await page.route('**/api/jobs/ci_master_bootstrap',route=>
-      fulfill(route,{id:'ci_master_bootstrap',status:'complete'}))
-    await page.route('**/api/indices/preview?*',route=>{
-      const u=new URL(route.request().url())
-      const end=u.searchParams.get('to_date')||'2026-10-14'
-      const start=u.searchParams.get('from_date')||'2021-01-01'
-      return fulfill(route,{
-        index_id:u.searchParams.get('index_id'),index_name:'Nifty Bank',
-        from_date:start,to_date:end,asof_date:start,
-        asof_members:['HDFCBANK','ICICIBANK'],start_members:['HDFCBANK','ICICIBANK'],
-        end_members:['HDFCBANK','ICICIBANK'],union_members:['HDFCBANK','ICICIBANK'],
-        start_count:2,end_count:2,union_count:2,changes:[],change_count:0,
-        resolved_count:2,unresolved_count:0,unresolved:[],covered_through:'2026-10-13',
-        first_date:'2014-01-01',source_url:'https://example.com/test-only',
-        source_commit:'0000000000000000000000000000000000000000',warnings:[],
-        official_corrections:[]})
-    })
+  await step('Unified Market Data wizard: source planning, approval and no broker side-effects',async()=>{
     await nav('Data Library').click()
-    await page.locator('.ws-context-tabs').getByRole('button',{
-      name:'Download market data'
-    }).click()
-    await page.getByRole('heading',{name:'Download data for your research'}).waitFor()
-    await page.getByRole('heading',{name:'1. What data do you want?'}).waitFor()
-    await page.getByRole('heading',{name:'2. Choose dates and data type'}).waitFor()
-    await page.getByRole('heading',{name:'3. Download'}).waitFor()
-    await page.getByRole('heading',{name:'Download progress & prepare data'}).waitFor()
-    const steps=await page.locator('.dh-simple-track span').allTextContents()
-    assert.deepEqual(steps,['1 · Choose data','2 · Dates','3 · Download','4 · Prepare'])
-    const indexOption=page.getByRole('button',{name:/NIFTY 50 · Historical/})
-    assert.equal(await indexOption.getAttribute('aria-pressed'),'true')
-    const frequency=page.getByRole('combobox',{name:'Download frequency'})
-    assert.equal(await frequency.inputValue(),'daily')
-    assert.equal(await page.locator('.dh-membership-details').evaluate(el=>el.open),true,
-      'When historical inputs are missing, source details must be visible automatically')
-    await page.getByText(/Source coverage through:/).first().waitFor()
-    assert.equal(membershipSyncCount,1,
-      'Freshly selected historical index should trigger one automatic membership sync')
-    assert.equal(masterRefreshCount,1,
-      'Missing Dhan Security-ID catalog should refresh automatically once')
-    assert.equal(await page.locator('.dh-advanced-data').evaluate(el=>el.open),false)
-    const download=page.getByRole('button',{name:/Start download/})
-    assert.equal(await download.isDisabled(),true,'No Dhan token in isolated CI')
-    await page.getByText(/Dhan token not found/).waitFor()
-    await page.locator('.dh-advanced-data summary').click()
-    await page.getByText(/NOT dividend-reinvested TRI/).waitFor()
-    await page.locator('.dh-advanced-data summary').click()
-    await page.getByRole('button',{name:/BANK NIFTY · Historical/}).click()
-    assert.equal(await page.getByRole('button',{name:/BANK NIFTY · Historical/})
+    await page.locator('.ws-context-tabs').getByRole('button',{name:'Download market data'}).click()
+    const workspace=page.locator('.mdw-root')
+    await workspace.getByRole('heading',{
+      name:'Get the data. QuantLab handles the preparation.'}).waitFor()
+    for(const tab of ['Get Data','My Datasets','Downloads & Jobs'])
+      await workspace.getByRole('tab',{name:tab}).waitFor()
+    await workspace.getByRole('heading',{name:'Choose your research data'}).waitFor()
+    assert.equal(await workspace.getByRole('heading',{name:'What history do you need?'}).count(),0,
+      'Only the current setup stage should be displayed')
+    const nifty=workspace.getByRole('button',{name:/NIFTY 50.*Historical constituents/})
+    assert.equal(await nifty.getAttribute('aria-pressed'),'true')
+    await workspace.getByRole('button',{name:/Continue to history & source checks/}).click()
+    await workspace.getByRole('heading',{name:'What history do you need?'}).waitFor()
+    assert.equal(await workspace.getByRole('heading',{name:'Choose your research data'}).count(),0)
+    assert.equal(await workspace.getByRole('combobox',{name:'Candle frequency'}).inputValue(),'daily')
+    await workspace.getByText(/Connect Dhan historical Data API/).first().waitFor()
+    await page.route('**/api/market-data/sources/prepare',route=>route.fulfill({
+      status:200,contentType:'application/json',
+      body:JSON.stringify({job_id:'ci_source_setup',status:'queued'})
+    }))
+    await page.route('**/api/jobs/ci_source_setup',route=>route.fulfill({
+      status:200,contentType:'application/json',
+      body:JSON.stringify({id:'ci_source_setup',status:'complete',
+        percent:100,stage:'Source files inspected'})
+    }))
+    await workspace.getByRole('button',{name:/Prepare missing sources/}).click()
+    await workspace.getByText('Source setup completed. Rechecking the requested period.').waitFor()
+    await page.unroute('**/api/market-data/sources/prepare')
+    await page.unroute('**/api/jobs/ci_source_setup')
+    await workspace.getByRole('combobox',{name:'Optional research model'}).selectOption('garch')
+    await workspace.getByText('72 returns').waitFor()
+    await workspace.getByRole('button',{name:/Continue to provider & download/}).click()
+    await workspace.getByRole('heading',{name:'Get data and prepare automatically'}).waitFor()
+    assert.equal(await workspace.getByRole('heading',{name:'What history do you need?'}).count(),0)
+    await workspace.getByRole('button',{name:'Connect Dhan',exact:true}).click()
+    await workspace.getByLabel('Dhan access token').waitFor()
+    assert.equal(await workspace.getByRole('button',{name:'Verify & save locally'}).isDisabled(),true,
+      'A connection must not save a token without user consent')
+    await workspace.getByRole('button',{name:'Connect Dhan',exact:true}).click()
+    assert.equal(await workspace.getByRole('button',{name:/Get & prepare data/}).isDisabled(),true,
+      'No unapproved broker requests with missing token and index coverage')
+    await workspace.getByRole('button',{name:/Back to history & source plan/}).click()
+    await workspace.getByLabel('Through date').fill('2026-10-15')
+    await workspace.getByRole('button',{name:/Back to data selection/}).click()
+    await workspace.getByRole('button',{name:/BANK NIFTY/}).click()
+    assert.equal(await workspace.getByRole('button',{name:/BANK NIFTY/})
       .getAttribute('aria-pressed'),'true')
-    await page.getByLabel('End date (not included)').fill('2026-10-16')
-    await page.getByText(/latest available date/i).first().waitFor()
-    assert.equal(await page.getByRole('button',{name:/Use latest available date/}).count(),1)
-    assert.equal(membershipSyncCount,1,
-      'Switching between NIFTY historical modes should reuse the existing source')
-    await page.getByRole('button',{name:/NIFTY 50 · Historical/}).click()
-    await screenshot('02-dhan-four-step-download')
-    await page.unroute('**/api/indices/status')
-    await page.unroute('**/api/dhan/catalog/health')
-    await page.unroute('**/api/indices/sync')
-    await page.unroute('**/api/dhan/instruments/refresh')
-    await page.unroute('**/api/jobs/ci_membership_bootstrap')
-    await page.unroute('**/api/jobs/ci_master_bootstrap')
-    await page.unroute('**/api/indices/preview?*')
+    await workspace.getByRole('button',{name:/My stocks/}).click()
+    await workspace.getByLabel('Stock ticker list').fill('RELIANCE\nTCS\n')
+    await workspace.getByText('2 unique tickers').waitFor()
+    await screenshot('02-unified-market-data-source-plan')
+    await workspace.getByRole('tab',{name:'My Datasets'}).click()
+    await workspace.getByRole('heading',{name:"Everything you've collected"}).waitFor()
+    await workspace.getByRole('tab',{name:'Downloads & Jobs'}).click()
+    await workspace.getByRole('heading',{name:"See exactly what's happening"}).waitFor()
+  })
+  await step('Compare Workspace remains navigable after source review',async()=>{
     await nav('Compare & Visualize').click()
     await page.locator('.rw-top h2').waitFor()
   })
@@ -346,6 +314,10 @@ try {
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Get model data'}).click()
     const acquisition=page.getByRole('region',{name:'Automatic model data acquisition'})
     await acquisition.waitFor()
@@ -368,6 +340,10 @@ try {
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Fast analytics'}).click()
     const columnar=page.getByRole('region',{name:'Columnar analytical cache'})
     await columnar.waitFor()
@@ -391,6 +367,10 @@ try {
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Research readiness'}).click()
     const center=page.getByRole('region',{name:'Research models readiness'})
     await center.waitFor()
@@ -422,6 +402,10 @@ try {
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Sources & provenance'}).click()
     const kite=page.getByRole('region',{name:'Zerodha second market data provider'})
     await kite.waitFor()
@@ -455,6 +439,10 @@ try {
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Activity & recovery'}).click()
     await manager.getByRole('heading',{name:'Whole-workstation health'}).waitFor()
     await manager.getByRole('button',{name:'Run integrity checks'}).waitFor()
@@ -472,12 +460,8 @@ try {
   await step('Data Manager exposes source completion and recoverable dataset management',async()=>{
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
-    await page.getByRole('heading',{name:'Your datasets'}).waitFor()
-    await page.getByRole('heading',{name:'Your datasets'}).scrollIntoViewIfNeeded()
-    await page.locator('.ws-dataset-advanced summary').waitFor()
-    assert.equal(await page.locator('.ws-dataset-advanced').first().evaluate(el=>el.open),false,
-      'Raw metadata must be tucked under an advanced disclosure')
-    const imported=page.getByRole('button',{name:/Delete dataset/})
+    await page.getByRole('heading',{name:"Everything you've collected"}).waitFor()
+    const imported=page.locator('.mdw-dataset').getByRole('button',{name:'Delete',exact:true})
     assert.ok(await imported.count()>0,'User-owned datasets need a visible delete action')
     await imported.first().click()
     const deletion=page.getByRole('dialog',{name:/Delete dataset/})
@@ -489,6 +473,18 @@ try {
     await screenshot('02-dataset-dependencies-preview')
     await deletion.getByRole('button',{name:'No, keep everything'}).click()
     assert.equal(await deletion.count(),0,'Preview must not delete any data when cancelled')
+    await page.locator('.mdw-dataset').first().getByRole('button',{
+      name:'Extend / complete'
+    }).click()
+    await page.getByRole('heading',{name:'Complete your existing model dataset'}).waitFor()
+    await page.getByRole('region',{name:'Automatic model data acquisition'}).waitFor()
+    assert.equal(await page.getByRole('button',{name:/Get & prepare data/}).count(),0,
+      'Existing dataset extension must not show an unrelated general-universe batch CTA')
+    await page.locator('.mdw-root').getByRole('tab',{name:'My Datasets'}).click()
+    await page.locator('details.ws-tri-advanced.ws-data-advanced').first().locator('summary').first().click()
+    await page.locator('.ws-dataset-advanced summary').waitFor()
+    assert.equal(await page.locator('.ws-dataset-advanced').first().evaluate(el=>el.open),false,
+      'Raw metadata must remain behind a disclosure')
     await page.locator('.ws-dataset-archive summary').waitFor()
     assert.match(await page.locator('.ws-dataset-archive summary').innerText(),/Archived datasets/)
     await page.locator('.ws-dataset-trash summary').waitFor()
@@ -563,10 +559,7 @@ try {
     await nav('Compare & Visualize').click()
     await page.locator('.rw-top h2').waitFor()
   })
-  await step('Dhan error is visible, safe and the batch arrow opens failed stock details',async()=>{
-    // A simulated Dhan refusal only: no token, no real vendor request, no raw
-    // response body. The browser must surface the failing symbol/status
-    // independently from pagination and make the batch arrow functional.
+  await step('Download failures show actionable recovery with optional source diagnostics',async()=>{
     const fakeId='batch_baaaaaaaaaaaaaaa'
     const summary={
       id:fakeId,status:'paused',selection:'banknifty_pit',interval:1,
@@ -576,56 +569,38 @@ try {
       failure_examples:[{
         symbol:'AUBANK',code:'HTTP 401',
         diagnostic:'Dhan HTTP 401 (vendor response body hidden)',
-        explanation:'Dhan rejected this historical candle request. Verify your token and Data API subscription; the exact cause is not yet confirmed.',
+        explanation:'Dhan rejected this historical request. Check authentication and subscription.',
       }],
     }
     const batchRoutes=/\/api\/dhan\/batches(?:\/[^?]*)?(?:\?.*)?$/
-    await page.route(batchRoutes,async route=>{
-      const request=route.request()
-      if(request.method()!=='GET')return route.continue()
-      const url=new URL(request.url())
-      if(url.pathname.endsWith('/batches')){
-        return route.fulfill({status:200,contentType:'application/json',
-          body:JSON.stringify({batches:[summary]})})
-      }
-      if(url.pathname.endsWith('/'+fakeId)){
-        const failed={
-          id:'NSE_EQ:999',symbol:'AUBANK',display_name:'AU Small Finance Bank',
-          security_id:'999',exchange_segment:'NSE_EQ',instrument:'EQUITY',
-          series:'EQ',isin:'',regular_eq:true,status:'failed',rows:0,rows_added:0,
-          error:'Dhan HTTP 401 (vendor response body hidden)',
-        }
-        const filter=url.searchParams.get('status')||'all'
-        const items=filter==='all'||filter==='failed'?[failed]:[]
-        return route.fulfill({status:200,contentType:'application/json',
-          body:JSON.stringify({...summary,items,page:1,per_page:40,filtered_total:items.length})})
-      }
-      return route.continue()
+    await page.route(batchRoutes,route=>{
+      if(route.request().method()!=='GET')return route.continue()
+      const url=new URL(route.request().url())
+      const body=url.pathname.endsWith('/batches')?{batches:[summary]}:
+        url.pathname.endsWith('/'+fakeId)?
+          {...summary,items:[],page:1,per_page:40,filtered_total:0}:null
+      return body?route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify(body)}):route.continue()
     })
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{
-      name:'Download market data',
+      name:'Download market data'
     }).click()
-    const errorCard=page.getByRole('alert',{name:'Download error details'})
-    await errorCard.getByText('AUBANK',{exact:true}).waitFor()
-    await errorCard.getByText('HTTP 401',{exact:true}).waitFor()
-    await errorCard.getByText(/Dhan HTTP 401/).waitFor()
-    await errorCard.getByRole('button',{name:'Copy error details'}).waitFor()
-    await errorCard.getByRole('button',{name:'Verify token and Data API subscription'}).waitFor()
-    assert.ok(!(await errorCard.innerText()).includes('SECRET_API_TOKEN'))
-    // Past downloads is intentionally an optional disclosure in the guided
-    // UI. Open it before testing the batch-row View errors action.
-    const past=page.locator('.dh-previous-downloads')
-    if(!(await past.evaluate(el=>el.open)))await past.locator('summary').click()
-    const row=page.getByRole('button',{
-      name:'View BANK NIFTY · Historical members download details and errors',
-    })
-    await row.click()
-    await page.waitForFunction(()=>document.querySelector('#dh-batch-diagnostics')?.open===true)
-    const selected=page.getByRole('combobox',{name:'Filter download result status'})
-    assert.equal(await selected.inputValue(),'failed')
-    await page.getByRole('cell',{name:'AUBANK'}).waitFor()
-    await screenshot('02b-dhan-visible-error-and-batch-arrow')
+    const workspace=page.locator('.mdw-root')
+    await workspace.getByRole('tab',{name:'Downloads & Jobs'}).click()
+    const detail=workspace.locator('.mdw-batch-detail')
+    await detail.getByText('Dhan access needs attention').waitFor()
+    await detail.getByText('Last attempted AUBANK').waitFor()
+    assert.equal(await detail.locator('.mdw-inline-status .mdw-spin').count(),0,
+      'Paused jobs must not display an active-working spinner')
+    await detail.getByText(/Verify your token and historical Data API entitlement/).waitFor()
+    await detail.getByRole('button',{name:/View technical details/}).click()
+    const originalFailure=detail.locator('.mdw-diagnostics')
+    await originalFailure.getByText('AUBANK · HTTP 401',{exact:true}).waitFor()
+    await originalFailure.getByText(/Dhan HTTP 401/).waitFor()
+    assert.ok(!(await detail.innerText()).includes('SECRET_API_TOKEN'))
+    assert.equal(await detail.getByRole('button',{name:/Resume/}).isDisabled(),false)
+    await screenshot('02b-actionable-market-source-error')
     await page.unroute(batchRoutes)
     await nav('Compare & Visualize').click()
     await page.locator('.rw-top h2').waitFor()

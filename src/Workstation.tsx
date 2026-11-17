@@ -7,8 +7,7 @@ import {
   ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X
 } from 'lucide-react'
 import './workstation.css'
-const DhanDataManager = lazy(() => import('./DhanDataManager'))
-const DataManager = lazy(() => import('./DataManager'))
+const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const ModelLaboratory = lazy(() => import('./ModelLaboratory'))
 const ResearchGuide = lazy(() => import('./ResearchGuide'))
 const ResearchWorkspace = lazy(() => import('./ResearchWorkspace'))
@@ -506,9 +505,12 @@ function App(){
           <div className="ws-grid halves"><Card title="Research datasets" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{datasets.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{datasets.length===0&&<p className="ws-caption">No datasets found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
         </>}
         {tab==='data'&&<>
-          <DataManager onSelectDataset={setSelectedDataset} onChanged={refresh}
-            onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>
-          <details open className="ws-tri-advanced ws-data-advanced"><summary>Existing dataset controls · Download, import, delete and restore</summary>
+          <MarketDataWorkspace key="library" initialPage="datasets" datasets={datasets}
+            onDataChanged={refresh} onSelectDataset={setSelectedDataset}
+            onOpenModels={()=>begin('mathematics')}
+            onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
+              if(d)inspectDatasetDeletion(d)}}/>
+          <details className="ws-tri-advanced ws-data-advanced"><summary>Advanced datasets · TRI import, ZIPs, archived items and source audits</summary>
           <Card title="Your datasets" className="ws-data-library-card">
             <p className="ws-caption">Choose a dataset to use, or delete an old one.
               If saved work depends on it, the confirmation shows everything that will
@@ -626,7 +628,11 @@ function App(){
           </details>
 
         </details></>}
-        {tab==='dhan'&&<DhanDataManager onDataChanged={refresh}/>}
+        {tab==='dhan'&&<MarketDataWorkspace key="download" initialPage="get" datasets={datasets}
+          onDataChanged={refresh} onSelectDataset={setSelectedDataset}
+          onOpenModels={()=>begin('mathematics')}
+          onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
+            if(d)inspectDatasetDeletion(d)}}/>}
         {tab==='nse'&&<NSESourceAssistant datasetId={selectedDataset}
           onOpenDhan={()=>begin('dhan')} onOpenData={()=>begin('data')}/>}
         {(tab==='workspace'||tab==='projects')&&<ResearchWorkspace key={tab}
