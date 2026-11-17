@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -502,6 +502,82 @@ def data_manager_intraday_series(identity: str, start: str = "",
                                  end: str = "", limit: int = 500):
     try:
         return intraday_parquet.series(identity, start, end, limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/depth/catalog")
+def data_manager_depth_catalog(limit: int = 50):
+    try:
+        return {**market_depth.catalog(limit),
+                "dhan_live_credential_present":bool(
+                    os.getenv("DHAN_ACCESS_TOKEN","").strip() and
+                    os.getenv("DHAN_CLIENT_ID","").strip())}
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/depth/analyze")
+def data_manager_depth_analyze(session_id: str, limit: int = 1500):
+    try:
+        return market_depth.analyze(session_id, limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class DepthCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: str = Field(min_length=8, max_length=30)
+    depth: Literal[20,200] = 20
+    duration_seconds: int = Field(default=120, ge=10, le=1800)
+    confirm_live_data: bool = False
+
+
+@app.post("/api/data-manager/depth/start")
+def data_manager_depth_start(body: DepthCaptureRequest):
+    if not body.confirm_live_data:
+        raise HTTPException(400, "Confirm authorized read-only Dhan market-depth recording")
+    if not market_depth.DEPTH_ID.fullmatch(body.identity):
+        raise HTTPException(400, "Use exact NSE_EQ/NSE_FNO Security ID")
+    if not os.getenv("DHAN_ACCESS_TOKEN") or not os.getenv("DHAN_CLIENT_ID"):
+        raise HTTPException(400, "Configure DHAN_ACCESS_TOKEN and DHAN_CLIENT_ID in local ignored .env")
+    ident = market_depth._id()
+    return {**_spawn("dhan_depth_capture", market_depth.start_live,
+                    body.identity, body.depth, body.duration_seconds,
+                    session_id=ident),
+            "session_id":ident,
+            "warning":"Live recordings start now and do not supply past market depth."}
+
+
+class DepthStopRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: str = Field(min_length=22, max_length=22)
+
+
+@app.post("/api/data-manager/depth/stop")
+def data_manager_depth_stop(body: DepthStopRequest):
+    try:
+        return market_depth.stop_live(body.session_id)
+    except ValueError as exc:
+        bad(exc)
+
+
+@app.post("/api/data-manager/depth/import")
+async def data_manager_depth_import(
+        file: UploadFile = File(...), identity: str = Form(...),
+        provider: str = Form(...), depth: Literal[20,200] = Form(20),
+        confirm_authorized: bool = Form(False)):
+    if not confirm_authorized:
+        raise HTTPException(400, "Confirm rights to use historical order-book snapshots")
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(400, "Select an original historical depth CSV")
+    try:
+        raw = await file.read(market_depth.MAX_ORIGINAL_BYTES+1)
+        if not raw or len(raw)>market_depth.MAX_ORIGINAL_BYTES:
+            raise ValueError("Depth import size must be 1 byte to 30 MB")
+        return _spawn("depth_import", market_depth.import_csv,
+                     raw, identity, provider, depth,
+                     confirm_authorized=True)
     except (ValueError, OSError) as exc:
         bad(exc)
 
