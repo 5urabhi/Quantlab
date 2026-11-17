@@ -5,7 +5,7 @@
  * warning threshold. Every lazy route must stay below 500 kB minified.
  * Read-only: it never changes dist, sources, or user data.
  */
-import {readdirSync,readFileSync,statSync} from 'node:fs'
+import {readdirSync,readFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {gzipSync} from 'node:zlib'
