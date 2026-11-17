@@ -410,6 +410,13 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
         {stepLabels.map((title,i)=><div key={title} className={i===0?'active':''}>
           <span>{i+1}</span>{title}</div>)}
       </div>
+      {selected&&<div className="mdw-active-extension" role="status">
+        <div><strong>Extending: {selected.label}</strong>
+          <p>The existing dataset is selected. Choose a model to calculate exact missing
+            observations and reuse the existing original source files.</p></div>
+        <button className="mdw-button secondary" type="button"
+          onClick={()=>setModelDataset('')}>Start a new dataset instead</button>
+      </div>}
       <section className="mdw-card">
         <div className="mdw-section-top"><div><span className="mdw-kicker">STEP 1 · WHAT TO COLLECT</span>
           <h3>Choose your research data</h3><p>Start from a universe, not an API or file format.</p>
@@ -634,12 +641,17 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
             {availableDatasets.filter(d=>d.has_prices).map(d=><option value={d.id} key={d.id}>{d.label}</option>)}
           </select>
         </div>}
-        {modelId&&selected&&<Suspense fallback={<p>Loading model-specific acquisition…</p>}>
-          <DataAcquisitionPanel datasets={availableDatasets}
-            initialModelId={modelId} initialDatasetId={selected.id}
-            onCompleted={id=>{onSelectDataset(id);onDataChanged();setPage('datasets')}}
-            onOpenDhan={()=>setPage('get')} onOpenModels={onOpenModels}/>
-        </Suspense>}
+        {modelId&&selected&&<div id="mdw-model-extension" className="mdw-extension">
+          <h4>Complete the selected dataset for {models.find(m=>m.id===modelId)?.title||'this model'}</h4>
+          <p>QuantLab calculates exact model readiness, reuses existing verified candles,
+            and only proposes additional provider requests when compatible.</p>
+          <Suspense fallback={<p>Loading model-specific acquisition…</p>}>
+            <DataAcquisitionPanel datasets={availableDatasets}
+              initialModelId={modelId} initialDatasetId={selected.id}
+              onCompleted={id=>{onSelectDataset(id);onDataChanged();setPage('datasets')}}
+              onOpenDhan={()=>setPage('get')} onOpenModels={onOpenModels}/>
+          </Suspense>
+        </div>}
       </section>
     </div>}
     {page==='datasets'&&<section className="mdw-card">
@@ -669,7 +681,13 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           <span className={'mdw-badge '+(d.ready?'good':'warn')}>{d.ready?'Files ready':'Needs inputs'}</span>
           <button type="button" onClick={()=>{onSelectDataset(d.id);onOpenModels()}}>
             Use in models <ArrowRight size={15}/></button>
-          <button type="button" onClick={()=>{setModelDataset(d.id);setPage('get')}}>Extend / complete</button>
+          <button type="button" onClick={()=>{
+            setModelDataset(d.id)
+            setModelId(v=>v||'min_variance')
+            setPage('get')
+            window.setTimeout(()=>document.getElementById('mdw-model-extension')
+              ?.scrollIntoView({behavior:'smooth',block:'start'}),180)
+          }}>Extend / complete</button>
           <button type="button" className="mdw-delete"
             onClick={()=>onRequestDelete(d.id)}><Trash2 size={15}/> Delete</button>
         </div>
