@@ -17,6 +17,24 @@ Open **http://127.0.0.1:5173** in the same Ubuntu machine. The local API normall
 
 This guide describes the verified `main` release. Feature-branch reviewers should check out their own branch and run the same launcher before merge. The launcher may need to install Python/npm dependencies on a fresh checkout.
 
+**Node/npm compatibility (local Ubuntu):** The launcher checks the **Node.js +
+npm pair**, not Node.js alone. For example, npm 12.2.0 does not support
+Node 22.22.1 (it requires Node 22.22.2 or later). When the globally installed
+pair is incompatible, QuantLab automatically downloads the official
+**Node 22.23.5 LTS + bundled npm 10.9.9** into its ignored
+`.local-tools/` folder, verifies the official SHA-256 checksum, and uses that
+pair for **both setup and the running Vite server**. It never installs a global
+Node/npm upgrade, requires no `sudo npm`, and does not rewrite your terminal's
+normal PATH. The first run needs HTTPS access to `nodejs.org`; subsequent
+runs reuse the checked local copy.
+
+npm 12 also blocks unknown dependency install scripts by default. QuantLab
+explicitly approves **only `esbuild`** in `package.json` and verifies its
+native compiler before building. Do **not** use
+`--dangerously-allow-all-scripts`. If you invoke `npm run build` manually
+outside `bash run.sh`, your global Node/npm pair is still your responsibility;
+`bash run.sh` is the supported zero-config launcher.
+
 ## Bank NIFTY historical download on a fresh clone
 
 Open **Data Library → Download market data → BANK NIFTY · Historical**.
