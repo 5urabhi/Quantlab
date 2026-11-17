@@ -235,7 +235,8 @@ def execute(model_id: str, dataset_id: str, params: dict | None = None,
     """
     if model_id in single_series_completion.SINGLE:
         return single_series_completion.execute(
-            model_id, dataset_id, params or {}, progress=progress)
+            model_id, dataset_id, params or {},
+            allow_secondary_provider=allow_secondary_provider, progress=progress)
     if progress:
         progress(2, "Checking verified mappings and existing Dhan market history")
     plan = inspect(model_id, dataset_id, params)
