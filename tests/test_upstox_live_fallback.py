@@ -105,7 +105,7 @@ class UpstoxCompatibilityTests(unittest.TestCase):
         with patch.dict(os.environ,{"UPSTOX_ACCESS_TOKEN":""}):
             self.assertFalse(upstox_fallback.eligibility(self.row)["eligible"])
 
-    def test_data_plan_never_contacts_upstox_on_read(self):
+    def test_legacy_upstox_is_not_the_automated_second_provider(self):
         with patch.object(data_acquisition.model_data_manager,"inspect",
                           return_value={
                             "mode":"historical","status":"insufficient",
@@ -116,11 +116,15 @@ class UpstoxCompatibilityTests(unittest.TestCase):
                           }),patch.object(data_acquisition.model_data_manager,
                                          "_mapping",return_value=([self.row],None)),\
              patch.object(upstox_fallback,"_download_url",
-                          side_effect=AssertionError("No GET provider call")):
+                          side_effect=AssertionError("No Upstox calls")),\
+             patch.object(data_acquisition.zerodha_fallback,"eligibility",
+                          return_value={"eligible":False,"configured":False}):
             plan=data_acquisition.plan("min_variance","dhan_shared",
                                        {"assets":8},with_sources=False)
-        self.assertTrue(plan["upstox_fallback_eligible"])
-        self.assertTrue(any(item["id"]=="upstox_v3" for item in plan["source_chain"]))
+        self.assertFalse(plan["zerodha_fallback_eligible"])
+        self.assertTrue(any(item["id"]=="zerodha_kite" for item in plan["source_chain"]))
+        self.assertFalse(any(item["id"]=="upstox_v3" for item in plan["source_chain"]))
+
 
 if __name__=="__main__":
     unittest.main()
