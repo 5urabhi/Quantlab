@@ -195,7 +195,8 @@ export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPr
     <div className="dh-pit-source">
       <div><div className="dh-pit-source-icon"><FileClock size={20}/></div><div>
         <strong>{name} — Historical constituents</strong>
-        <small>{status?.available?'Point-in-time intervals synced from independently reconstructed NSE announcements':
+        <small>{syncId?'Loading historical index membership automatically…':
+          status?.available?'Point-in-time intervals synced from independently reconstructed NSE announcements':
           'Historical index database not yet synced'}</small></div></div>
       <button type="button" className="dh-small-btn" disabled={!!syncId} onClick={()=>void sync()}>
         {syncId?<LoaderCircle size={14} className="dh-spin"/>:<RefreshCw size={14}/>}
@@ -219,19 +220,23 @@ export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPr
           Explicitly use documented end date ({supportedEnd})
         </button></div></div>}
     {!status?.available&&<div className="dh-pit-intro"><Database size={25}/>
-      <strong>One-time historical membership sync</strong><p>This downloads a public CC0 point-in-time constituent history reconstructed from NSE notices. Dhan supplies market prices separately.</p>
+      <strong>{syncId?'Preparing historical membership automatically':'Historical membership needs attention'}</strong>
+       <p>{syncId?'QuantLab is fetching and validating historical index constituents automatically.':
+         'QuantLab automatically tries a public CC0 reconstruction of NSE notices. If the source fails, review the error and retry here. Dhan supplies the prices separately.'}</p>
       <button className="dh-primary" disabled={!!syncId} onClick={()=>void sync()}>
         <ArrowDownToLine size={15}/> {syncId?'Syncing records…':'Load NIFTY constituent history'}
       </button></div>}
     {catalogHealth&&!catalogHealth.ready&&<div className="dh-pit-alert">
-      <AlertTriangle size={18}/><div><strong>The local Dhan instrument catalog is not usable for NIFTY matching</strong>
-        <p>{catalogHealth.message} This is a catalog issue, not evidence that historical NIFTY constituents are delisted. Current NSE equities found: {catalogHealth.nse_equities}; verified trading symbols: {catalogHealth.verified_nse_tickers}.</p>
+      <AlertTriangle size={18}/><div><strong>{catalogJobId?'Loading Dhan stock IDs automatically…':'Dhan instrument catalog needs attention'}</strong>
+        <p>{catalogHealth.message} QuantLab automatically attempts to download the official current Dhan instrument list. This is not evidence that historical constituents are delisted. Current NSE equities: {catalogHealth.nse_equities}; verified symbols: {catalogHealth.verified_nse_tickers}.</p>
         <button type="button" className="dh-small-btn" disabled={!!catalogJobId}
           onClick={()=>void refreshCatalog()}>{catalogJobId?'Refreshing Dhan master…':'Refresh Dhan catalog and rematch constituents'}</button>
       </div>
     </div>}
     {catalogHealth?.ready&&<div className="dh-pit-coverage"><span><Check size={13}/> Verified current Dhan NSE ticker catalog ({catalogHealth.verified_nse_tickers} symbols)</span></div>}
-    {issue&&<div className="dh-pit-alert"><AlertTriangle size={17}/><p>{issue}</p></div>}
+    {syncProblem&&<div className="dh-pit-alert" role="alert"><AlertTriangle size={17}/><p>Historical-membership download failed: {syncProblem}</p></div>}
+    {catalogProblem&&<div className="dh-pit-alert" role="alert"><AlertTriangle size={17}/><p>Dhan catalog download failed: {catalogProblem}</p></div>}
+    {issue&&<div className="dh-pit-alert" role="alert"><AlertTriangle size={17}/><p>{issue}</p></div>}
     {loading&&<div className="dh-pit-loading"><LoaderCircle size={17} className="dh-spin"/> Reconstructing membership across the selected dates…</div>}
     {plan&&<>
       {endOutsideCoverage&&<p className="dh-hint">PREVIEW ONLY · Historical index membership through {plan.to_date} (exclusive). Missing remainder is not included in this selection.</p>}
