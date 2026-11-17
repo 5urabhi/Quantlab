@@ -22,7 +22,7 @@ type BatchSummary = {
   id:string;status:string;created_utc:string;updated_utc?:string;selection:SelectionMode;
   interval:number|null;from_date:string;to_date:string;total:number;processed:number;
   counts:Record<string,number>;current_symbol:string|null;current_window?:string|null;prepared_dataset_id?:string|null;has_price_benchmark?:boolean;
-  errors:number;warning:string;failure_examples?:FailureExample[];rejected_provider_bars?:number
+  errors:number;warning:string;failure_examples?:FailureExample[];rejected_provider_bars?:number;recovered_checkpoints?:number
   historical_index_name?:string|null;historical_union_count?:number
   historical_unresolved?:Array<{symbol:string;reason:string}>
   index_spot?:{status:string;rows?:number;file?:string;error?:string;warning?:string;identity_source?:string;reference?:string}
@@ -711,6 +711,12 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
           ['Downloaded',details.counts.complete||0],['Cached',details.counts.cached||0],
           ['No data',details.counts.no_data||0],['Failed',details.counts.failed||0],
         ].map(([name,value])=><div key={name}><strong>{fmt(Number(value))}</strong><span>{name}</span></div>)}</div>
+        {(details.recovered_checkpoints||0)>0&&<div className="dh-simple-help" role="status">
+          <CheckCircle2 size={15}/> Recovered {details.recovered_checkpoints}
+          {' '}interrupted original candle checkpoint{details.recovered_checkpoints===1?'':'s'}
+          {' '}using exact local CSV checksums. No missing market candles were generated or
+          re-downloaded during this recovery.
+        </div>}
         <div className="dh-queue-actions">
           {currentActive?<button className="dh-small-btn" onClick={cancel}><Pause size={15}/> Pause after current request</button>:
             couldResume&&<button className="dh-small-btn" disabled={working||Boolean(task)} onClick={resume}><Play size={15}/> Resume / retry remaining</button>}
