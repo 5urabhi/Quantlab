@@ -115,11 +115,28 @@ export default function ZerodhaProviderPanel({onSourceChange}:{onSourceChange?:(
         {status?.master_current?'Current':status?.master_available?'Stale':'Missing'}</strong></div>
       <div><small>Mapped equity candidates</small><strong>{status?.master_instruments??0}</strong></div>
     </div>
-    <p className="qm-caption">One-time setup: place <code>KITE_API_KEY</code> and <code>KITE_API_SECRET</code>
-      in the local ignored <code>.env</code>, and register <code>{status?.callback_url||
+    <p className="qm-caption">One-time setup: create a Kite developer app and
+      register <code>{status?.callback_url||
       'http://127.0.0.1:8765/api/data-manager/zerodha/auth/callback'}</code>
-      as the Kite app redirect URL. Do not paste your access token or secret into
-      QuantLab's browser forms. Official login/2FA is required each trading day.</p>
+      as its redirect URL. Enter your app key and secret below once. QuantLab
+      stores them in a restricted local file and never displays them again.
+      You can alternatively use <code>KITE_API_KEY</code> and <code>KITE_API_SECRET</code>
+      in the ignored local <code>.env</code>. Official login/2FA remains daily.</p>
+    <div className="qm-fallback-grid">
+      <label>Kite app API key
+        <input aria-label="Kite app API key" type="text" value={apiKey}
+          autoComplete="off" onChange={e=>setApiKey(e.target.value)}
+          placeholder="From Kite developer console"/></label>
+      <label>Kite app API secret (local only)
+        <input aria-label="Kite app API secret" type="password" value={apiSecret}
+          autoComplete="new-password" onChange={e=>setApiSecret(e.target.value)}
+          placeholder="Stored on this machine with restricted permissions"/></label>
+    </div>
+    <div className="qm-readiness-action-row">
+      <button type="button" className="ws-button secondary"
+        disabled={running||!apiKey||!apiSecret} onClick={()=>void configure()}>
+        <KeyRound size={15}/> Save private local Kite app settings</button>
+    </div>
     <div className="qm-readiness-action-row">
       <button type="button" className="ws-button primary" disabled={running||
         !status?.api_key_configured||!status?.api_secret_configured} onClick={()=>void login()}>
