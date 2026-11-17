@@ -14,7 +14,6 @@ from __future__ import annotations
 from hashlib import sha256
 from pathlib import Path
 import json
-import os
 import re
 import shutil
 import sqlite3
@@ -142,7 +141,10 @@ def repair(*, automatic: bool = False) -> dict:
                         " derived-view reconstruction limit."}}
         folder = shared_market_data.shared_folder()
         try:
-            free = shutil.disk_usage(folder if folder.exists() else folder.parent).free
+            anchor = folder
+            while not anchor.exists() and anchor != anchor.parent:
+                anchor = anchor.parent
+            free = shutil.disk_usage(anchor).free
         except OSError:
             free = 0
         if free < MIN_REPAIR_FREE_BYTES:
