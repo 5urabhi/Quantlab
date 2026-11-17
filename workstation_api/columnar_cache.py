@@ -319,6 +319,55 @@ def series(identity: str, start: str = "", end: str = "",
     }
 
 
+def model_matrix(view: str = "daily_prices.csv"):
+    """Rebuild the exact canonical wide price panel from source-locked Parquet.
+
+    Unlike a display-series endpoint, this includes every original security
+    and trading date, with genuinely missing security-days still NaN. The
+    monthly view takes the final *observed union session* of each calendar
+    month; it never forward-fills a security missing on that session.
+    """
+    import pandas as pd
+    import numpy as np
+    if view not in ("daily_prices.csv", "prices.csv"):
+        raise ValueError("Unsupported authoritative shared model-price view")
+    state = status()
+    if not state["ready"] or not state["engine_available"]:
+        raise ValueError("Verified columnar cache is " + state["state"])
+    manifest = _manifest()
+    if manifest is None:
+        raise ValueError("Canonical Parquet source receipt unavailable")
+    parts = _parts(manifest)
+    duckdb = _engine()
+    with duckdb.connect(database=":memory:") as conn:
+        conn.execute("SET threads=2")
+        conn.execute("SET memory_limit='512MB'")
+        rows = conn.execute(
+            "SELECT session_date, identity, close FROM read_parquet(?) "
+            "ORDER BY session_date, identity",
+            [[str(p) for p in parts]]
+        ).fetch_df()
+    if _signature() != manifest["source_signature"]:
+        raise ValueError("Original SQLite changed while reading the analytical cache")
+    if rows.empty or len(rows) != manifest.get("rows",0):
+        raise ValueError("Original and Parquet market row counts disagree")
+    if rows[["session_date","identity"]].duplicated().any():
+        raise ValueError("Duplicate canonical security session in analytical mirror")
+    rows["date"] = pd.to_datetime(rows["session_date"], errors="raise")
+    if rows["date"].isna().any() or not rows["date"].is_monotonic_increasing:
+        raise ValueError("Invalid date ordering in analytical mirror")
+    rows["symbol"] = rows["identity"].str.replace(":", "_", regex=False)
+    matrix = rows.pivot(index="date", columns="symbol", values="close")
+    matrix = matrix.sort_index().sort_index(axis=1)
+    if view == "prices.csv":
+        matrix = matrix.groupby(matrix.index.to_period("M")).tail(1)
+    if (len(matrix) < 2 or matrix.empty or
+            (matrix.le(0) & matrix.notna()).any().any() or
+            np.isinf(matrix.to_numpy(dtype=float)).any()):
+        raise ValueError("Analytical model matrix violates original-price constraints")
+    return matrix.astype(float)
+
+
 def refresh_if_enabled(*, progress=None) -> dict:
     """Keep a previously enabled cache fresh after verified source ingestion.
 
