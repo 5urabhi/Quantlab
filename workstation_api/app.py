@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -619,6 +619,73 @@ async def data_manager_fallback_import(
             confirm_authorized=confirm_authorized,
             confirm_unadjusted=confirm_unadjusted)
     except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/research/overview")
+def data_manager_research_overview(dataset_id: str = ""):
+    try:
+        return research_acceptance.overview(dataset_id or None)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/research/audits")
+def data_manager_research_audits(limit: int = 15):
+    try:
+        return research_acceptance.audit_list(limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class ModelVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dataset_id: str | None = Field(default=None, max_length=120)
+    include_historical: bool = True
+    confirm_software_check: bool = False
+
+
+@app.post("/api/data-manager/research/verify")
+def data_manager_research_verify(body: ModelVerificationRequest):
+    if not body.confirm_software_check:
+        raise HTTPException(400,"Confirm bounded model software verification")
+    if body.dataset_id:
+        try:
+            service.dataset_path(body.dataset_id)
+        except (ValueError, OSError) as exc:
+            bad(exc)
+    return _spawn("model_software_verification",research_acceptance.verify,
+                  body.dataset_id,include_historical=body.include_historical)
+
+
+class ResearchResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_id: str = Field(pattern=r"^[a-z_]+$",min_length=2,max_length=45)
+    dataset_id: str | None = Field(default=None,max_length=120)
+    params: dict[str,float|int|str] = Field(default_factory=dict)
+    preview_token: str = Field(default="",max_length=64)
+    confirm_download: bool = False
+    confirm_upstox_fallback: bool = False
+    prepare_buffer: bool = True
+
+
+@app.post("/api/data-manager/research/resolve-run")
+def data_manager_research_resolve_run(body: ResearchResolveRequest):
+    try:
+        # Validate all known source/parameter constraints BEFORE enqueueing.
+        model_registry.validate_parameters(body.model_id,body.params)
+        if body.dataset_id:
+            service.dataset_path(body.dataset_id)
+        if body.confirm_upstox_fallback and not body.confirm_download:
+            raise ValueError("Secondary provider requires explicit original-data authorization")
+        return _spawn(
+            "research_resolve_run",research_workflow.execute,
+            body.model_id,body.dataset_id,body.params,
+            preview_token=body.preview_token,
+            confirm_download=body.confirm_download,
+            allow_upstox=body.confirm_upstox_fallback,
+            prepare_buffer=body.prepare_buffer)
+    except (ValueError,OSError,KeyError) as exc:
         bad(exc)
 
 
