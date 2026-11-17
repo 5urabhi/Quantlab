@@ -147,6 +147,10 @@ def _access_token() -> str:
                 return str(saved.get("access_token") or "").strip()
         except ValueError:
             pass
+    # A newly configured local Kite app must never silently reuse an access
+    # token supplied for another API key through an older .env.
+    if _app_credentials():
+        return ""
     return (os.getenv("KITE_ACCESS_TOKEN") or
             os.getenv("ZERODHA_ACCESS_TOKEN") or "").strip()
 
