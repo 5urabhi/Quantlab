@@ -1714,8 +1714,29 @@ def dhan_batch(batch_id: str, page: int = 1, per_page: int = 60,
 
 
 def _run_bulk(batch_id: str, cancel: Event):
+    """Finish approved Dhan download and publish a derived dataset when complete."""
     try:
-        return dhan_workspace.run_batch(batch_id, cancel_event=cancel)
+        outcome = dhan_workspace.run_batch(batch_id, cancel_event=cancel)
+        counts = outcome.get("counts") or {}
+        successful = counts.get("complete", 0) + counts.get("cached", 0)
+        if (outcome.get("status") == "completed"
+                and successful == outcome.get("total") and successful > 0
+                and not outcome.get("prepared_dataset_id")
+                and not cancel.is_set()):
+            # Run the existing source-preserving converter only after every
+            # instrument has authenticated, validated OHLCV. Missing benchmark,
+            # corporate actions and PIT evidence remain explicitly incomplete.
+            try:
+                prepared = dhan_workspace.prepare_batch(batch_id)
+                outcome["automatic_preparation"] = prepared
+                data_orchestrator.event("batch_preparation", "complete",
+                                        "Prepared validated Dhan batch " + batch_id)
+            except (ValueError, OSError, RuntimeError) as exc:
+                # Original candle cache is safe; staged view is rolled back.
+                outcome["preparation_error"] = str(exc)[:180]
+                data_orchestrator.event("batch_preparation", "blocked",
+                                        "Dhan batch needs preparation review: " + batch_id)
+        return outcome
     finally:
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
 
