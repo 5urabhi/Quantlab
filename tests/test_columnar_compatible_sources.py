@@ -124,6 +124,26 @@ class CompatibleMarketSourcesAndParquetTests(unittest.TestCase):
         before=compatible_sources.list_receipts()["sources"]
         self.assertEqual(before[0]["id"],result["id"])
 
+    def test_timezone_aware_dhan_daily_export_preserves_ist_sessions(self):
+        rows=[
+            ("2026-09-02T15:30:00+0530",101.5),
+            ("2026-09-03T15:30:00+0530",103.0),
+            ("2026-09-04T15:30:00+0530",104.0),
+            ("2026-09-08T15:30:00+0530",107.5),
+        ]
+        payload=("datetime,close\\n"+"\\n".join(
+            f"{d},{p}" for d,p in rows)+"\\n").encode("utf-8")
+        output=compatible_sources.import_original(
+            payload=payload,identity=self.source_id,provider="dhan_export",
+            confirm_authorized=True,confirm_unadjusted=True)
+        self.assertEqual(output["status"],"imported",output)
+        self.assertEqual(output["rows_added"],1)
+        with sqlite3.connect(shared_market_data.database_path()) as conn:
+            saved=conn.execute(
+                "SELECT close FROM daily_closes WHERE identity=? AND session_date=?",
+                (self.source_id,"2026-09-08")).fetchone()
+        self.assertEqual(saved[0],107.5)
+
     def test_conflicting_external_close_is_never_promoted(self):
         rows=list(zip(self.sessions[-4:],self.values[-4:]))
         rows[1]=(rows[1][0], 999.99)
