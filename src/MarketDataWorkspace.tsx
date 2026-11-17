@@ -43,6 +43,10 @@ type Batch = {id:string;selection:string;status:string;from_date:string;to_date:
   preparation_error?:string}
 type Job = {id:string;status:string;stage?:string;percent?:number;error?:string;
   result?:Record<string,unknown>}
+type SecondaryPlan = {batch_id:string;status:string;preview_token:string;
+  can_recover:boolean;candidate_count:number;eligible_count:number;
+  blockers:string[];note:string;items:{instrument_id:string;symbol:string;
+    original_status:string;eligible:boolean;reason:string}[]}
 type Connection = {token_configured:boolean;instrument_master_available:boolean}
 type DhanCheck = {ok:boolean;code:string;message:string;token_valid:boolean|null;
   data_plan_active:boolean|null}
@@ -172,6 +176,10 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
   const [confirmBulk,setConfirmBulk]=useState(false)
   const [confirmLarge,setConfirmLarge]=useState(false)
   const [runModelAfter,setRunModelAfter]=useState(true)
+  const [allowAutoFallback,setAllowAutoFallback]=useState(false)
+  const [secondaryPlan,setSecondaryPlan]=useState<SecondaryPlan|null>(null)
+  const [secondaryBusy,setSecondaryBusy]=useState(false)
+  const [secondaryConsent,setSecondaryConsent]=useState(false)
   const [indexSpot,setIndexSpot]=useState(false)
   const [showDiagnostics,setShowDiagnostics]=useState(false)
   const [message,setMessage]=useState('')
@@ -181,6 +189,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
   const tickers=useMemo(()=>symbolList(tickerText),[tickerText])
   const completion=useMemo(()=>batches.find(b=>b.id===selectedBatch)||detail,[batches,selectedBatch,detail])
   const selected=useMemo(()=>datasets.find(d=>d.id===modelDataset),[datasets,modelDataset])
+  const currentBatchState=completion?.status
 
   const refresh=useCallback(async()=>{
     const results=await Promise.allSettled([
@@ -288,6 +297,16 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
     },1450)
     return()=>{active=false;window.clearTimeout(timer)}
   },[sourceJob,refresh])
+  useEffect(()=>{
+    if(page!=='downloads'||!selectedBatch){setSecondaryPlan(null);return}
+    let active=true
+    void api<SecondaryPlan>('/market-data/secondary/plan?'+
+      new URLSearchParams({batch_id:selectedBatch}).toString())
+      .then(value=>{if(active)setSecondaryPlan(value)})
+      .catch(()=>{if(active)setSecondaryPlan(null)})
+    return()=>{active=false}
+  },[page,selectedBatch,currentBatchState,revision])
+
   const runAction=async<T,>(action:()=>Promise<T>,success:(result:T)=>void)=>{
     setActionBusy(true);setError('');setMessage('')
     try{success(await action())}
@@ -339,6 +358,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
         confirm_incomplete:allowPartial,confirm_bulk:confirmBulk,
         confirm_large_history:confirmLarge,
         run_model_after_prepare:Boolean(modelId&&plan.model_followup.eligible&&runModelAfter),
+        confirm_secondary_fallback:Boolean(allowAutoFallback&&interval==='daily'&&kite?.token_present),
         include_index_spot:indexSpot
       }),result=>{
         setJob({id:result.job_id,status:result.status})
@@ -359,6 +379,20 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           'Preparing a source-limited dataset from the downloaded instruments.')
       void refresh()
     })
+  }
+  const recoverSecondary=async()=>{
+    if(!secondaryPlan?.can_recover||!secondaryConsent||secondaryBusy)return
+    setSecondaryBusy(true);setError('');setMessage('')
+    try{
+      const response=await post<{job_id:string;status:string}>(
+        '/market-data/secondary/recover',{
+          batch_id:secondaryPlan.batch_id,preview_token:secondaryPlan.preview_token,
+          confirm_secondary:true})
+      setJob({id:response.job_id,status:response.status})
+      setSecondaryConsent(false)
+      setMessage('Authorized Zerodha close recovery started. Original Dhan OHLCV and batch statuses stay unchanged.')
+    }catch(e){setError(errorText(e))}
+    finally{setSecondaryBusy(false)}
   }
   const trashBatch=(batch:Batch)=>{
     if(!window.confirm('Move this download queue to Trash? Its original cached candles and prepared datasets are preserved.'))return
@@ -647,6 +681,14 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           <button type="button" className="mdw-button secondary"
             onClick={()=>setAdvanced(advanced==='providers'?null:'providers')}>Manage providers</button>
         </div>
+        {interval==='daily'&&kite?.token_present&&
+          <label className="mdw-consent">
+            <input type="checkbox" aria-label="Approve automatic Zerodha recovery"
+              checked={allowAutoFallback} onChange={e=>setAllowAutoFallback(e.target.checked)}/>
+            If Dhan fails, automatically attempt compatible verified Zerodha daily-close recovery
+            in the separate shared store. Requires exact Kite mapping and three agreeing
+            original Dhan sessions; original Dhan OHLCV will remain incomplete.
+          </label>}
         <details className="mdw-options">
           <summary>Optional index spot price & source policy <ChevronDown size={15}/></summary>
           <label className="mdw-consent"><input type="checkbox"
@@ -766,6 +808,19 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
       {job&&['queued','running'].includes(job.status)&&<div className="mdw-job" role="status">
         <LoaderCircle size={22} className="mdw-spin"/><div><strong>{job.stage||'Original market data job'}</strong>
           <small>{Math.round(job.percent||0)}% · Job {job.id}</small></div></div>}
+      {job?.status==='complete'&&job.result?.secondary_recovery&&
+        <div className="mdw-callout warn" role="status">
+          <ShieldCheck size={17}/>
+          <div><strong>Secondary source: {(
+            job.result.secondary_recovery as {status?:string}).status||'review needed'}</strong>
+            <p>{(job.result.secondary_recovery as {message?:string}).message||
+              'Only eligible, exact-source-matched secondary records were retained.'}</p>
+          </div>
+        </div>}
+      {job?.status==='complete'&&job.result?.original_dhan_batch_changed===false&&
+        <div className="mdw-callout success">
+          Original Dhan batch unchanged. Review validated secondary receipts in Advanced Data Tools.
+        </div>}
       {job?.status==='complete'&&job.result?.model_research&&
         <div className={'mdw-callout '+(
           (job.result.model_research as {status?:string}).status==='complete'?
@@ -829,6 +884,39 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           </div>}
           {batch.preparation_error&&<div className="mdw-callout warn">
             <AlertCircle size={17}/> Preparation needs attention: {batch.preparation_error}</div>}
+          {batch.interval===null&&secondaryPlan&&secondaryPlan.candidate_count>0&&
+            <div className="mdw-secondary">
+              <div className="mdw-secondary-title"><ShieldCheck size={17}/>
+                <strong>Secondary-source recovery · daily closes only</strong></div>
+              <p>{secondaryPlan.eligible_count} of {secondaryPlan.candidate_count}
+                {' '}unresolved securities have a currently eligible exact Zerodha mapping.</p>
+              <p className="mdw-footnote">{secondaryPlan.note}</p>
+              {secondaryPlan.blockers.map((m,i)=><p className="mdw-warning" key={i}>{m}</p>)}
+              <details className="mdw-details">
+                <summary>Review instrument eligibility</summary>
+                {secondaryPlan.items.map(item=><div className="mdw-diagnostic" key={item.instrument_id}>
+                  <strong>{item.symbol}</strong>
+                  <span>{item.eligible?'Eligible mapping':'Blocked'} · {item.reason}</span>
+                </div>)}
+              </details>
+              {secondaryPlan.can_recover&&<>
+                <label className="mdw-consent"><input type="checkbox"
+                  aria-label="Approve secondary recovered closes"
+                  checked={secondaryConsent}
+                  onChange={e=>setSecondaryConsent(e.target.checked)}/>
+                  Authorize read-only Zerodha history for these exact daily securities.
+                  I understand that original Dhan batch status will NOT be changed.
+                </label>
+                <button type="button" className="mdw-button" disabled={!secondaryConsent||
+                  secondaryBusy||Boolean(job&&['queued','running'].includes(job.status))}
+                  onClick={()=>void recoverSecondary()}>
+                  {secondaryBusy?<LoaderCircle size={16} className="mdw-spin"/>:<RotateCcw size={16}/>}
+                  Recover eligible daily closes via Zerodha
+                </button>
+              </>}
+              {!secondaryPlan.can_recover&&<button type="button" className="mdw-button secondary"
+                onClick={()=>setAdvanced('providers')}>Manage secondary provider</button>}
+            </div>}
           <div className="mdw-batch-actions">
             {active?<button className="mdw-button" disabled={actionBusy}
               onClick={()=>batchAction(batch,'cancel')}><Pause size={15}/> Pause safely</button>:
