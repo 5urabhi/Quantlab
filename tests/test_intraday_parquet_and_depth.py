@@ -107,7 +107,7 @@ class OriginalMicrostructureTests(unittest.TestCase):
             instrument=self.identity,depth=20,original_digest=sha256(b"test").hexdigest())
         self.assertEqual(receipt["full_depth_snapshots"],1)
         report=market_depth.analyze(session)
-        self.assertAlmostEqual(report["metrics"][0]["spread_bps"],100*.1/100.05)
+        self.assertAlmostEqual(report["metrics"][0]["spread_bps"],10000*.1/100.05)
         self.assertEqual(report["summary"]["average_imbalance"],0)
 
     def test_historical_orderbook_csv_import_never_invents_levels(self):
