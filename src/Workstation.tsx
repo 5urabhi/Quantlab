@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useState} from 'react'
+import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {
   Activity, ArrowDownToLine, ArrowRight, BarChart3, Beaker, BookOpen, Check,
   CheckCircle2, ChevronRight, CircleAlert, Clock3, Database, FileArchive,
@@ -7,15 +7,15 @@ import {
   ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X
 } from 'lucide-react'
 import './workstation.css'
-import DhanDataManager from './DhanDataManager'
-import DataManager from './DataManager'
-import ModelLaboratory from './ModelLaboratory'
-import ResearchGuide from './ResearchGuide'
-import ResearchWorkspace from './ResearchWorkspace'
-import NSESourceAssistant from './NSESourceAssistant'
-import ResultsStudio from './ResultsStudio'
-import ResearchJourney from './ResearchJourney'
-import HistoricalValidationPanel from './HistoricalValidationPanel'
+const DhanDataManager = lazy(() => import('./DhanDataManager'))
+const DataManager = lazy(() => import('./DataManager'))
+const ModelLaboratory = lazy(() => import('./ModelLaboratory'))
+const ResearchGuide = lazy(() => import('./ResearchGuide'))
+const ResearchWorkspace = lazy(() => import('./ResearchWorkspace'))
+const NSESourceAssistant = lazy(() => import('./NSESourceAssistant'))
+const ResultsStudio = lazy(() => import('./ResultsStudio'))
+const ResearchJourney = lazy(() => import('./ResearchJourney'))
+const HistoricalValidationPanel = lazy(() => import('./HistoricalValidationPanel'))
 
 type Dict = Record<string, unknown>
 type Dataset = {id:string; label:string; kind:string; ready:boolean; monthly_price_observations?:number; missing:string[]; files:string[]; has_prices:boolean; has_daily_prices?:boolean; has_daily_ohlcv?:boolean; source_interval_minutes?:number|null; daily_session_count?:number; benchmark_kind?:string; benchmark_is_total_return?:boolean; independently_verified?:boolean; has_fundamentals:boolean; has_sectors:boolean; basis:string}
@@ -490,6 +490,9 @@ function App(){
           </section>
         </div>}
         {notice&&<div role="status" className={'ws-notice '+(notice.error?'error':'')}><span>{notice.error?<CircleAlert size={17}/>:<CheckCircle2 size={17}/>}</span>{notice.text}<button onClick={()=>setNotice(null)} aria-label="Dismiss"><X size={16}/></button></div>}
+        <Suspense fallback={<div className="ws-empty" role="status" aria-live="polite">
+          <LoaderCircle size={18}/> Loading {titles[tab]}…
+        </div>}>
         {tab==='journey'&&<ResearchJourney datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
           onDataChanged={refresh} onOpenData={()=>begin('data')}
@@ -675,6 +678,7 @@ function App(){
         {tab==='guide'&&<ResearchGuide onNavigate={route=>begin(route as Tab)}/>}
         {tab==='reports'&&<>{withRun(<Card title="Generate reproducible research report"><p className="ws-caption">Generate an offline HTML report and PDF draft from selected saved Python run artifacts. Synthetic demonstrations are explicitly labeled.</p><div className="ws-actions"><button className="ws-button primary" disabled={!selectedRun||busy} onClick={downloadReport}><FileText size={15}/> Build HTML + PDF</button></div><div className="ws-artifact-list">{(detail?.artifacts||[]).map(name=><a key={name} href={'/api/runs/'+encodeURIComponent(selectedRun)+'/files/'+encodeURIComponent(name)} download><FileArchive size={16}/><span>{name}</span><ArrowDownToLine size={14}/></a>)}</div></Card>)}</>}
         {tab==='settings'&&<div className="ws-grid halves"><Card title="Backend and privacy"><div className="ws-data-audit"><div><span>API address</span><strong>127.0.0.1:8765</strong></div><div><span>Frontend address</span><strong>127.0.0.1:5173</strong></div><div><span>Data directory</span><strong>data/ (Git-ignored)</strong></div><div><span>Run artifacts</span><strong>results/workstation_runs/</strong></div><div><span>Authentication</span><strong>Loopback-only; not for public exposure</strong></div><div><span>Broker trading</span><strong>DISABLED</strong></div><div><span>Dhan token</span><strong>{health?.dhan_token_configured?'CONFIGURED (HIDDEN)':'MISSING'}</strong></div></div></Card><Card title="Integrity controls"><div className="ws-rule"><ShieldCheck size={18}/> Local data import, explicit dataset status, safe path allowlists, no broker order operations, no credential output, and no historical-performance fabrication.</div><p className="ws-caption">This is a local research environment, not an authenticated public server. Do not expose port 8765 on a network or deploy it as-is.</p><button className="ws-button secondary" onClick={()=>void refresh()}><RefreshCw size={16}/> Refresh engine status</button></Card></div>}
+        </Suspense>
         <footer className="ws-footer"><span>QUANTLAB / RESEARCH WORKSTATION</span><span>LOCAL ENGINE · HISTORICAL CLAIMS REQUIRE EXTERNAL VALIDATION</span><span>© PERSONAL RESEARCH</span></footer>
       </main>
     </div>
