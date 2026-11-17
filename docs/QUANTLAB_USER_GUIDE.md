@@ -23,6 +23,21 @@ bash run.sh
 
 The checkout might not be nested if you cloned directly under `~/Desktop/codes`; use the directory that contains `run.sh`. The startup script installs/uses local dependencies. The terminal must stay running while you use the workstation.
 
+## Resuming an interrupted Dhan window safely
+
+When a previously authorized Dhan download is interrupted, QuantLab can
+automatically finish a **fully saved, checksum-matching** candle-window commit.
+It never downloads that same original window twice just to repair the receipt.
+The progress view displays how many checkpoints were recovered without
+calling the broker again. A window whose CSV has not been saved remains
+incomplete and is requested again on an authorized retry.
+
+If a persisted CSV disagrees with its stored SHA-256, the app stops for
+source review instead of overwriting it or silently marking it complete.
+A source checksum proves byte consistency, **not** independent NSE/Dhan
+total-return accuracy. All existing rate limits and explicit consent for
+starting a new download remain in force.
+
 ## Updated reliability and research-analysis controls
 
 The Data Library's **Database Manager → Activity & recovery** checks local
