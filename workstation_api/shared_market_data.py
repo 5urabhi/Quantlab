@@ -1,4 +1,4 @@
-"""One canonical, append-only Dhan equity-price store for QuantLab.
+"""One canonical, append-only, Dhan-identity-based equity-close store for QuantLab.
 
 SQLite is the instrument/session source of truth; shared daily/monthly CSVs are
 derived model views. Per-batch PIT membership and benchmark files remain separate
@@ -149,9 +149,14 @@ def publish_views() -> dict:
             "daily_sha256": hashlib.sha256((folder / "daily_prices.csv").read_bytes()).hexdigest(),
             "monthly_sha256": hashlib.sha256((folder / "prices.csv").read_bytes()).hexdigest(),
             "no_forward_fill": True,
-            "warning": "Unadjusted Dhan closes are not verified total returns. "
-                       "Missing sessions, delistings and historical membership are not manufactured. "
-                       "PIT membership remains attached to its source index dataset.",
+            "warning": (
+                "Unadjusted Dhan and user-authorized, original-close fallback sources "
+                "are not verified total returns. Source overlaps only establish "
+                "consistency, not independent vendor or price-adjustment certification. "
+                if any(source.startswith("fallback_") for source in origins) else
+                "Unadjusted Dhan closes are not verified total returns. "
+            ) + "Missing sessions, delistings and historical membership are not manufactured. "
+                "PIT membership remains attached to its source index dataset.",
         }
         _atomic_json(metadata, folder / "SHARED_MARKET_PROVENANCE.json")
         return {"dataset_id": SHARED_ID, "securities": len(mappings),

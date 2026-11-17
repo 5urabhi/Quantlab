@@ -13,7 +13,7 @@ from hashlib import sha256
 import json
 import sqlite3
 
-from . import data_orchestrator, model_data_manager, model_registry, service
+from . import data_orchestrator, model_data_manager, model_registry, service, columnar_cache
 
 PARAMETERS = frozenset({"assets", "train_window", "target", "ticker", "quote"})
 SINGLE = frozenset({"gbm_fit", "ou_fit", "merton_fit", "heston_proxy"})
@@ -189,4 +189,10 @@ def execute(model_id: str, dataset_id: str, params: dict | None = None,
     _record_event(
         "complete" if result.get("status") in {"ready", "minimum_ready"} else "warning",
         model_id)
+    # Once enabled, a small local columnar mirror updates after new verified
+    # Dhan observations. Failure of this optional mirror never fails acquisition.
+    try:
+        result["analytics_cache"] = columnar_cache.refresh_if_enabled()
+    except (ValueError, OSError, sqlite3.Error):
+        result["analytics_cache"] = {"state": "manual_refresh_needed"}
     return result
