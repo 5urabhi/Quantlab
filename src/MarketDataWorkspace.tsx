@@ -134,6 +134,7 @@ const fault=(batch:Batch)=>{
 export default function MarketDataWorkspace({initialPage='get',datasets,onDataChanged,
   onSelectDataset,onOpenModels,onRequestDelete}:Props){
   const [page,setPage]=useState<Page>(initialPage)
+  const [stage,setStage]=useState<0|1|2>(0)
   const [advanced,setAdvanced]=useState<Advanced>(null)
   const [selection,setSelection]=useState<Selection>('nifty50_pit')
   const [fromDate,setFromDate]=useState(()=>yearsAgo(3))
@@ -406,10 +407,13 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
       <span>{message}</span><button type="button" aria-label="Dismiss message"
         onClick={()=>setMessage('')}><X size={15}/></button></div>}
     {page==='get'&&<div className="mdw-flow">
-      <div className="mdw-steps">
-        {stepLabels.map((title,i)=><div key={title} className={i===0?'active':''}>
-          <span>{i+1}</span>{title}</div>)}
-      </div>
+      <nav className="mdw-steps" aria-label="Market data setup steps">
+        {stepLabels.map((title,i)=><button type="button" key={title}
+          className={stage===i?'active':''}
+          aria-current={stage===i?'step':undefined}
+          onClick={()=>setStage(i as 0|1|2)}>
+          <span>{i+1}</span>{title}</button>)}
+      </nav>
       {selected&&<div className="mdw-active-extension" role="status">
         <div><strong>Extending: {selected.label}</strong>
           <p>The existing dataset is selected. Choose a model to calculate exact missing
@@ -417,7 +421,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
         <button className="mdw-button secondary" type="button"
           onClick={()=>setModelDataset('')}>Start a new dataset instead</button>
       </div>}
-      <section className="mdw-card">
+      {stage===0&&<section className="mdw-card">
         <div className="mdw-section-top"><div><span className="mdw-kicker">STEP 1 · WHAT TO COLLECT</span>
           <h3>Choose your research data</h3><p>Start from a universe, not an API or file format.</p>
         </div></div>
@@ -461,8 +465,13 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
             </button>)}
           </div>
         </details>
-      </section>
-      <section className="mdw-card">
+        <div className="mdw-step-actions">
+          <button type="button" className="mdw-button next" onClick={()=>setStage(1)}>
+            Continue to history & source checks <ArrowRight size={16}/>
+          </button>
+        </div>
+      </section>}
+      {stage===1&&<section className="mdw-card">
         <div className="mdw-section-top"><div><span className="mdw-kicker">STEP 2 · HISTORY & READINESS</span>
           <h3>What history do you need?</h3>
           <p>Daily candles are recommended for equity-factor research. For a model,
@@ -559,8 +568,16 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
             <div className="mdw-inline-status" role="status"><LoaderCircle className="mdw-spin" size={16}/>
               {sourceJob.stage||'Syncing public source'} · {Math.round(sourceJob.percent||0)}%</div>}
         </div>
-      </section>
-      <section className="mdw-card mdw-commit">
+        <div className="mdw-step-actions">
+          <button type="button" className="mdw-button secondary" onClick={()=>setStage(0)}>
+            Back to data selection
+          </button>
+          <button type="button" className="mdw-button next" onClick={()=>setStage(2)}>
+            Continue to provider & download <ArrowRight size={16}/>
+          </button>
+        </div>
+      </section>}
+      {stage===2&&<section className="mdw-card mdw-commit">
         <div className="mdw-section-top"><div><span className="mdw-kicker">STEP 3 · AUTHORIZE</span>
           <h3>Get data and prepare automatically</h3>
           <p>We check your local Dhan credentials and Data API access before creating a
@@ -652,7 +669,12 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
               onOpenDhan={()=>setPage('get')} onOpenModels={onOpenModels}/>
           </Suspense>
         </div>}
-      </section>
+        <div className="mdw-step-actions">
+          <button type="button" className="mdw-button secondary" onClick={()=>setStage(1)}>
+            Back to history & source plan
+          </button>
+        </div>
+      </section>}
     </div>}
     {page==='datasets'&&<section className="mdw-card">
       <div className="mdw-section-top"><div><span className="mdw-kicker">MY DATASETS</span>
@@ -685,6 +707,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
             setModelDataset(d.id)
             setModelId(v=>v||'min_variance')
             setPage('get')
+            setStage(2)
             window.setTimeout(()=>document.getElementById('mdw-model-extension')
               ?.scrollIntoView({behavior:'smooth',block:'start'}),180)
           }}>Extend / complete</button>
