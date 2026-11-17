@@ -22,6 +22,8 @@ SINGLE = frozenset({"gbm_fit", "ou_fit", "merton_fit", "heston_proxy"})
 def _settings(model_id: str, params: dict | None) -> dict:
     if model_id not in model_registry.CATALOG:
         raise ValueError("Unknown registered model")
+    if params is None:
+        params = {}
     if not isinstance(params, dict):
         raise ValueError("Model parameters must be an object")
     unknown = set(params) - PARAMETERS
