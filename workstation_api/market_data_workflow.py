@@ -22,6 +22,8 @@ MAX_STOCKS = 6000
 
 
 def _names(tickers: list[str] | None) -> list[str]:
+    if tickers is None:
+        tickers = []
     if not isinstance(tickers, list) or len(tickers) > MAX_STOCKS:
         raise ValueError("Choose at most 6000 stock symbols.")
     names = list(dict.fromkeys(str(t).strip().upper() for t in tickers))
