@@ -298,11 +298,12 @@ def series(identity: str, start: str = "", end: str = "",
         conn.execute("SET threads=2")
         conn.execute("SET memory_limit='512MB'")
         paths = [str(p) for p in parts]
-        result = conn.read_parquet(paths).filter(
-            "identity = ? AND session_date >= ? AND session_date <= ?",
-            params=[identity, first, last],
-        ).order("session_date").limit(limit + 1).project(
-            "session_date,close,source_sha256").fetchall()
+        result = conn.execute(
+            "SELECT session_date,close,source_sha256 FROM read_parquet(?) "
+            "WHERE identity=? AND session_date>=? AND session_date<=? "
+            "ORDER BY session_date LIMIT ?",
+            [paths, identity, first.isoformat(), last.isoformat(), limit + 1],
+        ).fetchall()
     # A write concurrent with the query invalidates this result.
     if _signature() != manifest["source_signature"]:
         raise ValueError("Original market data changed during query; refresh the cache")
@@ -314,3 +315,26 @@ def series(identity: str, start: str = "", end: str = "",
         "basis": "unadjusted_close", "source_unchanged": True,
         "note": "Columnar results are original unadjusted closes, not dividend-inclusive TRI.",
     }
+
+
+def refresh_if_enabled(*, progress=None) -> dict:
+    """Keep a previously enabled cache fresh after verified source ingestion.
+
+    Never generate a cache for users who have not opted in. Avoid a surprise
+    multi-gigabyte rebuild on a small Ubuntu machine; keep the explicit Build
+    button available for large sources. Original ingest success is never
+    invalidated if optional analytical caching fails.
+    """
+    state = status()
+    if not state["built"]:
+        return {"state": "not_enabled"}
+    if state["ready"]:
+        return {"state": "already_current"}
+    if not state["engine_available"]:
+        return {"state": "engine_missing"}
+    if state["source_database_bytes"] > 750 * 1024 * 1024:
+        return {"state": "manual_refresh_needed", "reason": "Source is larger than 750 MB"}
+    try:
+        return {"state": "refreshed", "cache": build(progress=progress)}
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        return {"state": "manual_refresh_needed", "reason": str(exc)[:180]}
