@@ -832,7 +832,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
                 </button>
               </div>}
             {selected.mode==='synthetic'&&<div className="ql-seed-explain" role="note">
-              <strong>SIMULATED EXAMPLE — NOT LIVE OR HISTORICAL MARKET DATA</strong>
+              <strong>WORKING SEEDED SIMULATION — NOT OBSERVED MARKET DATA</strong>
               <p><b>Seeded simulation</b> means the model generates artificial scenarios
                 using a fixed random seed. Use the same seed to reproduce the same paths.
                 These curves are for learning and testing, <b>not</b> predictions or
@@ -1141,11 +1141,12 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
               onChange={e=>setParams({...params,[spec.key]:e.target.value})}>
               {spec.options?.map(opt=><option key={opt} value={opt}>{opt}</option>)}
             </select>:spec.type==='quote'?<select
+              aria-label="Select an original option quote contract"
               value={String(params[spec.key]??spec.default)}
               onChange={e=>setParams({...params,[spec.key]:e.target.value})}>
               <option value="">Select saved original option quote / contract</option>
               {shownQuoteRefs.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}
-              aria-label="Select an original option quote contract"></select>:spec.type==='symbol'&&singleSeries&&params.target==='stock'&&
+            </select>:spec.type==='symbol'&&singleSeries&&params.target==='stock'&&
               (sourceChoices?.candidate_count??0)>0?<select
                 aria-label="Select a stock to run or complete"
                 value={String(params[spec.key]??spec.default)}
@@ -1166,7 +1167,8 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
               placeholder="Choose ticker from dataset" maxLength={32}
               disabled={singleSeries&&params.target!=='stock'}
               onChange={e=>setParams({...params,[spec.key]:e.target.value})}/>:
-            <input type="number" value={params[spec.key]??spec.default}
+            <input type="number" aria-label={'Model parameter: '+spec.key}
+              value={params[spec.key]??spec.default}
               min={spec.min} max={spec.max} step={spec.step}
               onChange={e=>setParams({...params,[spec.key]:e.target.value===''?NaN:Number(e.target.value)})}/>}
             {spec.description&&<small>{spec.description}</small>}
@@ -1228,7 +1230,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
             </div>}
           {result&&result.model_id===selected.id&&result.mode==='synthetic'&&
             <div className="ql-alert warning" role="note">
-              <CircleAlert size={16}/> <strong>SEEDED SIMULATION · DEMO RESULTS</strong>
+              <CircleAlert size={16}/> <strong>COMPUTED SEEDED SIMULATION · HYPOTHETICAL RESULTS</strong>
               <span> The graph shows reproducible computer-generated paths, not observed stock
                 prices, forecasts, or verified backtest returns.</span>
             </div>}
@@ -1286,6 +1288,8 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
             <h4>Limits and responsible reporting</h4>
             <p>Prepared Dhan index spot benchmarks are price-index series, not dividend-reinvested total returns. Splits, delistings, data-vintage issues and actual execution costs need independent review before performance claims.</p>
             {result?.limitations.map((message,i)=><div className="ql-alert warning" key={i}>{message}</div>)}
+            <h4>Steps to execute this model</h4>
+            <ol>{selected.setup_steps.map((step,i)=><li key={i}>{step}</li>)}</ol>
             <button type="button" className="ql-guide-button" onClick={onOpenGuide}><BookOpen size={14}/> Open complete user guide</button>
           </div>
         </section>}
