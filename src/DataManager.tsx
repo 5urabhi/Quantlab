@@ -6,6 +6,8 @@ import DataAcquisitionPanel from './DataAcquisitionPanel'
 import ManagedDatabaseBrowser from './ManagedDatabaseBrowser'
 import ColumnarAnalyticsPanel from './ColumnarAnalyticsPanel'
 import SourceFallbackPanel from './SourceFallbackPanel'
+import ResearchReadinessPanel from './ResearchReadinessPanel'
+import MarketMicrostructurePanel from './MarketMicrostructurePanel'
 
 type Dataset = {id:string;label:string;kind:string;ready:boolean;missing:string[];basis:string}
 type Event = {id:number;occurred_utc:string;category:string;status:string;summary:string}
@@ -30,7 +32,7 @@ type Table = {columns:string[];selected_columns:string[];rows:Array<Record<strin
 type Quality = {file:string;sampled_rows:number;sample_limit_reached:boolean;
   first_date_in_sample:string|null;last_date_in_sample:string|null;
   checks:Record<string,number>;status:string;caveat:string}
-type Section = 'datasets'|'acquire'|'explorer'|'database'|'analytics'|'sources'|'activity'
+type Section = 'datasets'|'research'|'acquire'|'explorer'|'database'|'analytics'|'microstructure'|'sources'|'activity'
 const fmt = (n:number)=>n.toLocaleString()
 const humanBytes = (bytes:number)=>bytes<1024?bytes+' B':bytes<1024*1024?(bytes/1024).toFixed(1)+' KB':
   (bytes/(1024*1024)).toFixed(1)+' MB'
@@ -126,9 +128,9 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
       <div><HardDrive size={18}/><span>Catalog databases</span><strong>{overview?humanBytes(overview.statistics.catalog_database_bytes):'…'}</strong></div>
     </div>
     <nav aria-label="Database Manager sections" className="qm-tabs">
-      {(['datasets','acquire','explorer','database','analytics','sources','activity'] as Section[]).map(key=>
+      {(['datasets','research','acquire','explorer','database','analytics','microstructure','sources','activity'] as Section[]).map(key=>
         <button key={key} className={section===key?'active':''} onClick={()=>setSection(key)}>
-          {{datasets:'Datasets',acquire:'Get model data',explorer:'Data Explorer',database:'Database tables',analytics:'Fast analytics',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
+          {{datasets:'Datasets',research:'Research readiness',acquire:'Get model data',explorer:'Data Explorer',database:'Database tables',analytics:'Fast analytics',microstructure:'Minute & order book',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
         </button>)}
     </nav>
     {section==='datasets'&&<div className="qm-panel">
@@ -142,6 +144,9 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
       </button>)}</div>}
       <p className="qm-caption">Files ready means required files are present, not that financial data is independently verified.</p>
     </div>}
+    {section==='research'&&<ResearchReadinessPanel datasets={items}
+      onAcquire={()=>setSection('acquire')} onModel={onOpenModels||(()=>setSection('acquire'))}/>}
+    {section==='microstructure'&&<MarketMicrostructurePanel/>}
     {section==='acquire'&&<DataAcquisitionPanel datasets={items} onCompleted={onAcquisitionComplete}
       onOpenDhan={onOpenDhan} onOpenModels={onOpenModels}/>}
     {section==='database'&&<ManagedDatabaseBrowser/>}

@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -389,6 +389,7 @@ class DataAcquisitionRequest(BaseModel):
     params: dict[str, float | int | str] = Field(default_factory=dict)
     preview_token: str = Field(pattern=r"^[0-9a-f]{64}$")
     confirm_download: bool = False
+    confirm_upstox_fallback: bool = False
 
 
 @app.post("/api/data-manager/acquisition/start")
@@ -397,8 +398,12 @@ def data_manager_acquisition_start(body: DataAcquisitionRequest):
         current = data_acquisition.check_confirmation(
             body.model_id, body.dataset_id, body.params,
             body.preview_token, body.confirm_download)
+        if body.confirm_upstox_fallback and not current["upstox_fallback_eligible"]:
+            raise ValueError("Upstox fallback needs a local token and verified "
+                             "ISIN mapping for every selected security")
         return {**_spawn("lab_shared_data_extension", data_acquisition.execute,
-                         body.model_id, body.dataset_id, current["params"]),
+                         body.model_id, body.dataset_id, current["params"],
+                         allow_upstox=body.confirm_upstox_fallback),
                 "planned": current,
                 "destination_dataset_id": shared_market_data.SHARED_ID}
     except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
@@ -460,6 +465,123 @@ def data_manager_columnar_series(identity: str, start: str = "",
         bad(exc)
 
 
+@app.get("/api/data-manager/intraday/catalog")
+def data_manager_intraday_catalog(limit: int = 100):
+    try:
+        return intraday_parquet.catalog(limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/intraday/status")
+def data_manager_intraday_status(identity: str):
+    try:
+        return intraday_parquet.status(identity)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class IntradayBuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: str = Field(min_length=8, max_length=30)
+
+
+@app.post("/api/data-manager/intraday/build")
+def data_manager_intraday_build(body: IntradayBuildRequest):
+    try:
+        check = intraday_parquet.status(body.identity)
+        if not check["source_available"]:
+            raise ValueError("Download original Dhan one-minute candles before building")
+        return _spawn("intraday_parquet_build", intraday_parquet.build, body.identity)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/intraday/series")
+def data_manager_intraday_series(identity: str, start: str = "",
+                                 end: str = "", limit: int = 500):
+    try:
+        return intraday_parquet.series(identity, start, end, limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/depth/catalog")
+def data_manager_depth_catalog(limit: int = 50):
+    try:
+        return {**market_depth.catalog(limit),
+                "dhan_live_credential_present":bool(
+                    os.getenv("DHAN_ACCESS_TOKEN","").strip() and
+                    os.getenv("DHAN_CLIENT_ID","").strip())}
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/depth/analyze")
+def data_manager_depth_analyze(session_id: str, limit: int = 1500):
+    try:
+        return market_depth.analyze(session_id, limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class DepthCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: str = Field(min_length=8, max_length=30)
+    depth: Literal[20,200] = 20
+    duration_seconds: int = Field(default=120, ge=10, le=1800)
+    confirm_live_data: bool = False
+
+
+@app.post("/api/data-manager/depth/start")
+def data_manager_depth_start(body: DepthCaptureRequest):
+    if not body.confirm_live_data:
+        raise HTTPException(400, "Confirm authorized read-only Dhan market-depth recording")
+    if not market_depth.DEPTH_ID.fullmatch(body.identity):
+        raise HTTPException(400, "Use exact NSE_EQ/NSE_FNO Security ID")
+    if not os.getenv("DHAN_ACCESS_TOKEN") or not os.getenv("DHAN_CLIENT_ID"):
+        raise HTTPException(400, "Configure DHAN_ACCESS_TOKEN and DHAN_CLIENT_ID in local ignored .env")
+    ident = market_depth._id()
+    return {**_spawn("dhan_depth_capture", market_depth.start_live,
+                    body.identity, body.depth, body.duration_seconds,
+                    session_id=ident),
+            "session_id":ident,
+            "warning":"Live recordings start now and do not supply past market depth."}
+
+
+class DepthStopRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: str = Field(min_length=22, max_length=22)
+
+
+@app.post("/api/data-manager/depth/stop")
+def data_manager_depth_stop(body: DepthStopRequest):
+    try:
+        return market_depth.stop_live(body.session_id)
+    except ValueError as exc:
+        bad(exc)
+
+
+@app.post("/api/data-manager/depth/import")
+async def data_manager_depth_import(
+        file: UploadFile = File(...), identity: str = Form(...),
+        provider: str = Form(...), depth: Literal[20,200] = Form(20),
+        confirm_authorized: bool = Form(False)):
+    if not confirm_authorized:
+        raise HTTPException(400, "Confirm rights to use historical order-book snapshots")
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(400, "Select an original historical depth CSV")
+    try:
+        raw = await file.read(market_depth.MAX_ORIGINAL_BYTES+1)
+        if not raw or len(raw)>market_depth.MAX_ORIGINAL_BYTES:
+            raise ValueError("Depth import size must be 1 byte to 30 MB")
+        return _spawn("depth_import", market_depth.import_csv,
+                     raw, identity, provider, depth,
+                     confirm_authorized=True)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/data-manager/fallback/registry")
 def data_manager_fallback_registry():
     return compatible_sources.registry()
@@ -497,6 +619,89 @@ async def data_manager_fallback_import(
             confirm_authorized=confirm_authorized,
             confirm_unadjusted=confirm_unadjusted)
     except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/research/overview")
+def data_manager_research_overview(dataset_id: str = ""):
+    try:
+        return research_acceptance.overview(dataset_id or None)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/research/evidence-audit")
+def data_manager_research_evidence_audit(
+        dataset_id: str,
+        validation_start: str = "", final_test_start: str = ""):
+    """Existing strict PIT/benchmark/total-return audit as an in-app drill-down."""
+    try:
+        if not 1 <= len(dataset_id) <= 120:
+            raise ValueError("Select a valid original dataset")
+        return historical_readiness.inspect(
+            dataset_id,
+            validation_start=validation_start or None,
+            final_test_start=final_test_start or None)
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/research/audits")
+def data_manager_research_audits(limit: int = 15):
+    try:
+        return research_acceptance.audit_list(limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class ModelVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dataset_id: str | None = Field(default=None, max_length=120)
+    include_historical: bool = True
+    confirm_software_check: bool = False
+
+
+@app.post("/api/data-manager/research/verify")
+def data_manager_research_verify(body: ModelVerificationRequest):
+    if not body.confirm_software_check:
+        raise HTTPException(400,"Confirm bounded model software verification")
+    if body.dataset_id:
+        try:
+            service.dataset_path(body.dataset_id)
+        except (ValueError, OSError) as exc:
+            bad(exc)
+    return _spawn("model_software_verification",research_acceptance.verify,
+                  body.dataset_id,include_historical=body.include_historical)
+
+
+class ResearchResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_id: str = Field(pattern=r"^[a-z_]+$",min_length=2,max_length=45)
+    dataset_id: str | None = Field(default=None,max_length=120)
+    params: dict[str,float|int|str] = Field(default_factory=dict)
+    preview_token: str = Field(default="",max_length=64)
+    confirm_download: bool = False
+    confirm_upstox_fallback: bool = False
+    prepare_buffer: bool = True
+
+
+@app.post("/api/data-manager/research/resolve-run")
+def data_manager_research_resolve_run(body: ResearchResolveRequest):
+    try:
+        # Validate all known source/parameter constraints BEFORE enqueueing.
+        model_registry.validate_parameters(body.model_id,body.params)
+        if body.dataset_id:
+            service.dataset_path(body.dataset_id)
+        if body.confirm_upstox_fallback and not body.confirm_download:
+            raise ValueError("Secondary provider requires explicit original-data authorization")
+        return _spawn(
+            "research_resolve_run",research_workflow.execute,
+            body.model_id,body.dataset_id,body.params,
+            preview_token=body.preview_token,
+            confirm_download=body.confirm_download,
+            allow_upstox=body.confirm_upstox_fallback,
+            prepare_buffer=body.prepare_buffer)
+    except (ValueError,OSError,KeyError) as exc:
         bad(exc)
 
 
@@ -1885,6 +2090,20 @@ def _run_bulk(batch_id: str, cancel: Event):
                 outcome["preparation_error"] = str(exc)[:180]
                 data_orchestrator.event("batch_preparation", "blocked",
                                         "Dhan batch needs preparation review: " + batch_id)
+        # If the user previously enabled a small 1-minute cache, refresh
+        # it after a successful original Dhan batch. Larger data remains a
+        # visible manual action rather than an unexpected CPU/disk spike.
+        if outcome.get("status") == "completed" and not cancel.is_set():
+            try:
+                batch = dhan_workspace._load_batch(batch_id)
+                if batch.get("interval") == 1:
+                    summaries = []
+                    for row in batch.get("items", [])[:8]:
+                        if shared_market_data.SAFE_IDENTITY.fullmatch(str(row.get("id",""))):
+                            summaries.append(intraday_parquet.refresh_enabled(row["id"]))
+                    outcome["minute_cache_refresh"] = summaries
+            except (ValueError, OSError):
+                outcome["minute_cache_refresh"] = [{"status":"manual_refresh_needed"}]
         return outcome
     finally:
         BATCH_CANCEL_EVENTS.pop(batch_id, None)

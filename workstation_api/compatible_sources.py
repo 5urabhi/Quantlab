@@ -36,6 +36,7 @@ MIN_MATCHED = 3
 PROVIDERS = {
     "dhan_export": "Dhan original downloaded CSV",
     "licensed_vendor_csv": "Other authorized original daily-close provider",
+    "upstox_v3": "Authorized read-only Upstox historical candles",
 }
 SOURCE_ID = re.compile(r"^[0-9a-f]{20}$")
 
@@ -248,6 +249,9 @@ def registry() -> dict:
     return {"providers": [
         {"id": "dhan_original", "label": "Dhan historical API + verified candle cache",
          "mode": "automatic_cached_then_authorized_read_only",
+         "compatible": True},
+        {"id": "upstox_v3", "label": PROVIDERS["upstox_v3"],
+         "mode": "automatic_only_after_explicit_consent_and_identity_overlap",
          "compatible": True},
         {"id": "dhan_export", "label": PROVIDERS["dhan_export"],
          "mode": "in_app_csv_import_with_overlap_check", "compatible": True},

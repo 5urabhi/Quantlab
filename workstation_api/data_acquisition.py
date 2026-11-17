@@ -13,7 +13,7 @@ from hashlib import sha256
 import json
 import sqlite3
 
-from . import data_orchestrator, model_data_manager, model_registry, service, columnar_cache
+from . import data_orchestrator, model_data_manager, model_registry, service, columnar_cache, upstox_fallback
 
 PARAMETERS = frozenset({"assets", "train_window", "target", "ticker", "quote"})
 SINGLE = frozenset({"gbm_fit", "ou_fit", "merton_fit", "heston_proxy"})
@@ -72,7 +72,7 @@ def _sources() -> list[dict]:
 
 
 def _receipt(model_id: str, dataset_id: str | None, params: dict,
-             result: dict) -> str:
+             result: dict, upstox_available: bool = False) -> str:
     # A stale preview must not authorize a changed source, instrument or
     # download window. The actual executor additionally re-checks mappings.
     locked = {
@@ -89,6 +89,7 @@ def _receipt(model_id: str, dataset_id: str | None, params: dict,
         "cached_days": result.get("cached_instrument_calendar_days"),
         "missing_windows": result.get("missing_uncovered_windows"),
         "vendor_requests": result.get("estimated_vendor_daily_requests"),
+        "upstox_authorized_ready": upstox_available,
     }
     payload = json.dumps(locked, sort_keys=True, separators=(",", ":"),
                          ensure_ascii=False, allow_nan=False)
@@ -120,6 +121,17 @@ def plan(model_id: str, dataset_id: str | None = None,
         phase = "minimum_ready"
     else:
         phase = "blocked"
+    upstox_assets = []
+    if can_acquire and selected_id:
+        try:
+            rows, reason = model_data_manager._mapping(
+                selected_id, measured.get("selected_assets", []))
+            if not reason:
+                upstox_assets = [upstox_fallback.eligibility(row) for row in rows]
+        except (ValueError, OSError):
+            upstox_assets = []
+    provider_available = (
+        bool(upstox_assets) and all(x.get("eligible") for x in upstox_assets))
     chain = [
         {"id": "selected_dataset", "label": "Selected original data",
          "state": "available" if selected_id else "choose_source",
@@ -131,6 +143,11 @@ def plan(model_id: str, dataset_id: str | None = None,
          "state": ("requires_confirmation" if can_acquire and raw_requests else
                    "unneeded" if can_acquire else "incompatible_or_unavailable"),
          "detail": "Request only uncovered daily windows; provider credentials stay local."},
+        {"id": "upstox_v3", "label": "Upstox V3 historical daily candles (optional)",
+         "state": ("requires_explicit_authorization" if provider_available else
+                   "not_configured_or_unmapped"),
+         "detail": "Only if Dhan is unavailable; requires local Upstox token, exact "
+                   "ISIN mapping and at least three agreeing original Dhan sessions."},
         {"id": "nse_mcp", "label": "NSE informational MCP",
          "state": "not_a_research_fallback",
          "detail": "Informational lookups are not a licensed historical/TRI replacement."},
@@ -143,8 +160,13 @@ def plan(model_id: str, dataset_id: str | None = None,
         "candidate_datasets": available, "source_chain": chain,
         "can_acquire": can_acquire,
         "confirmation_required": can_acquire and raw_requests != 0,
+        "upstox_fallback_eligible": provider_available,
+        "upstox_fallback_note": ("Available only with explicit opt-in; no secondary orders"
+                                 if provider_available else
+                                 "Requires UPSTOX_ACCESS_TOKEN and original ISIN mapping"),
         "estimated_new_dhan_requests": raw_requests or 0,
-        "preview_token": _receipt(model_id, selected_id, settings, measured),
+        "preview_token": _receipt(
+            model_id, selected_id, settings, measured, provider_available),
         "evidence_note": "Source completeness and +20% sample length are not "
                          "independent verification of historical investability.",
     }
@@ -177,11 +199,12 @@ def _record_event(status: str, model_id: str) -> None:
 
 
 def execute(model_id: str, dataset_id: str, params: dict | None = None,
-            *, progress=None) -> dict:
+            *, allow_upstox: bool = False, progress=None) -> dict:
     """Existing model engine remains the only downloader/validator."""
     try:
         result = model_data_manager.execute(
-            model_id, dataset_id, params or {}, progress=progress)
+            model_id, dataset_id, params or {},
+            allow_secondary_provider=allow_upstox, progress=progress)
     except (ValueError, OSError, RuntimeError):
         # No raw exception/vendor response is stored in the activity ledger.
         _record_event("blocked", model_id)
