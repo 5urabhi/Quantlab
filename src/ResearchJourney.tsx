@@ -52,6 +52,10 @@ export default function ResearchJourney({datasets,selectedDataset,onSelectDatase
   const dataset=datasets.find(d=>d.id===selectedDataset)
   const choice=catalog.find(m=>m.id===state.modelId)
   useEffect(()=>{
+    if(!selectedDataset&&datasets.some(d=>d.id==='dhan_shared'&&d.has_prices))
+      onSelectDataset('dhan_shared')
+  },[selectedDataset,datasets,onSelectDataset])
+  useEffect(()=>{
     try{window.localStorage.setItem('ql-research-journey-v1',JSON.stringify(state))}catch{}
   },[state])
   useEffect(()=>{
