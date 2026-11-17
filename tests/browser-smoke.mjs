@@ -465,7 +465,7 @@ try {
     assert.ok(health.databases.every(x=>x.state!=='integrity_error'),
       'Test fixtures must not contain a corrupted operational SQLite database')
     assert.ok(health.storage.total_bytes===null||health.storage.total_bytes>0)
-    await manager.getByRole('heading',{name:'Managed database integrity'}).waitFor()
+    await manager.getByText('Managed database integrity',{exact:true}).waitFor()
     await manager.getByRole('heading',{name:'Jobs and recovery'}).waitFor()
     await screenshot('02f-operational-source-health')
   })
