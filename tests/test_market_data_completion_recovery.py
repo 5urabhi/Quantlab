@@ -264,6 +264,20 @@ class ExactZerodhaRecoveryTests(unittest.TestCase):
             self.assertEqual(worker.call_args.args[0],"market_secondary_recovery")
 
 
+class LowDiskCheckpointTests(unittest.TestCase):
+    def test_no_original_source_replacement_if_disk_fails_preflight(self):
+        with tempfile.TemporaryDirectory(prefix="quantlab_low_disk_") as temp:
+            raw=Path(temp)/"1333_daily.csv"
+            original=b"date,close\\n2026-01-02,100\\n"
+            raw.write_bytes(original)
+            free_space=type("Capacity",(),{"free":24*1024*1024})()
+            with patch.object(dhan_workspace.shutil,"disk_usage",return_value=free_space):
+                with self.assertRaisesRegex(OSError,"Insufficient disk space"):
+                    dhan_workspace._ensure_checkpoint_space(raw)
+            self.assertEqual(raw.read_bytes(),original)
+            self.assertFalse(raw.with_suffix(".pending.json").exists())
+
+
 class CachedDataScaleTests(unittest.TestCase):
     def test_many_90day_windows_parse_once_per_interval(self):
         mapping={"exchange_segment":"NSE_EQ","security_id":"1333",
