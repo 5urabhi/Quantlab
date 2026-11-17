@@ -22,7 +22,7 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, Response, HTMLResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from index_research.dhan_data import (
@@ -625,13 +625,12 @@ def data_manager_zerodha_auth_callback(
         if status and status != "success":
             raise ValueError("Zerodha did not approve the sign-in")
         zerodha_fallback.finish_login(request_token, quantlab_state)
-        html = ("<!doctype html><html><head><meta charset='utf-8'></head>"
-                "<body><h2>Zerodha connected to local QuantLab</h2>"
-                "<p><a href='http://127.0.0.1:5173/'>Return to QuantLab</a> "
-                "and refresh the source dashboard.</p>"
-                "</body></html>")
-        return HTMLResponse(html, headers={"Cache-Control":"no-store",
-                                           "Referrer-Policy":"no-referrer"})
+        # Redirect immediately so the one-time request_token is not left
+        # visible in a callback address bar or the saved browser history.
+        return RedirectResponse("http://127.0.0.1:5173/#zerodha-connected",
+                                status_code=303,
+                                headers={"Cache-Control":"no-store",
+                                         "Referrer-Policy":"no-referrer"})
     except (ValueError, OSError):
         html = ("<!doctype html><html><head><meta charset='utf-8'></head>"
                 "<body><h2>Zerodha connection not completed</h2>"
