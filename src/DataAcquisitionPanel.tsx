@@ -51,6 +51,7 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
   const [error,setError]=useState('')
   const [revision,setRevision]=useState(0)
   const [allowUpstox,setAllowUpstox]=useState(false)
+  const [runAfter,setRunAfter]=useState(true)
   const selected=useMemo(()=>models.find(m=>m.id===modelId),[models,modelId])
   const isSingle=['gbm_fit','ou_fit','merton_fit','heston_proxy'].includes(modelId)
   const isMarket=selected?.mode==='market'
@@ -118,23 +119,27 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
     return poll(working.id)
   },[working?.id,working?.status,poll])
   const start=async()=>{
-    if(!plan?.can_acquire||!plan.dataset_id||busy)return
+    if(!plan||(!plan.can_acquire&&!plan.requirements.runnable)||!plan.dataset_id||busy)return
     setError('');setBusy(true);setWorking(null)
     try{
       // This button is the user's explicit authorization. The backend
       // rechecks the source-locked preview before requesting a vendor.
-      const data=await api<{job_id:string;status:string}>('/api/data-manager/acquisition/start',{
+      const data=await api<{job_id:string;status:string}>(
+        runAfter?'/api/data-manager/research/resolve-run':
+        '/api/data-manager/acquisition/start',{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model_id:plan.model_id,dataset_id:plan.dataset_id,
           params:plan.params,preview_token:plan.preview_token,confirm_download:true,
-          confirm_upstox_fallback:allowUpstox&&plan.upstox_fallback_eligible})
+          confirm_upstox_fallback:allowUpstox&&plan.upstox_fallback_eligible,
+          prepare_buffer:true})
       })
       setWorking({id:data.job_id,status:data.status})
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
   const loading=!plan&&!error
-  const canStart=!!plan?.can_acquire&&!busy&&!(working&&['queued','running'].includes(working.status))
+  const canStart=Boolean(plan?.can_acquire||plan?.requirements.runnable)&&
+    !busy&&!(working&&['queued','running'].includes(working.status))
   const showData=plan?.requirements
   return <section className="qm-panel qm-acquire" aria-label="Automatic model data acquisition">
     <div className="qm-panel-title"><h3><Download size={18}/> Get data for a model</h3>
@@ -189,7 +194,7 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
             {source.state.replaceAll('_',' ')}</span>
         </div>)}
       </div>}
-      {plan?.can_acquire?<div className="qm-acquire-cta">
+      {(plan?.can_acquire||showData.runnable)&&<div className="qm-acquire-cta">
         <p><ShieldCheck size={15}/> SHA-verified cached Dhan observations are reused first.
           Estimated new provider requests: <strong>{plan.estimated_new_dhan_requests}</strong>.
           No TRI, corporate action or historical index evidence is fabricated.</p>
@@ -200,12 +205,21 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
             If Dhan fails, use my locally configured Upstox V3 entitlement
             (read-only; exact ISIN and price-overlap checks still required).</label>:
           <p className="qm-caption">{plan.upstox_fallback_note}</p>}
+        <label className="qm-acquire-provider-consent"><input type="checkbox"
+          aria-label="Run and save model after data completion" checked={runAfter}
+          onChange={e=>setRunAfter(e.target.checked)}/>
+          Automatically run the selected model and save source-bound research
+          when genuine input requirements are met.</label>
         <button type="button" className="ws-button primary" disabled={!canStart} onClick={()=>void start()}>
           {canStart?<Download size={16}/>:<LoaderCircle size={16}/>}
-          {canStart?(plan.confirmation_required?'Confirm & get missing Dhan data (+20%)':
-            'Reuse saved history and recheck model'): 'Acquisition in progress'}
+          {!canStart?'Research operation in progress':
+            runAfter?(plan.can_acquire?'Resolve inputs → Run model → Save':
+              'Run model and save verified inputs'):
+            plan.confirmation_required?'Confirm & get missing Dhan data (+20%)':
+            'Reuse saved history and recheck model'}
         </button>
-      </div>:<div className="qm-acquire-cta">
+      </div>}
+      {!plan?.can_acquire&&!showData.runnable&&<div className="qm-acquire-cta">
         <p>{showData.download_explanation||plan?.next_action.detail||'Use an eligible observed dataset.'}</p>
         {onOpenDhan&&<button type="button" className="ws-button secondary" onClick={onOpenDhan}>
           Open market data downloads <ArrowRight size={15}/></button>}
@@ -214,7 +228,9 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
       </div>}
     </div>}
     {working&&<div className="qm-acquire-status" role="status"><RefreshCw size={16}/>
-      <div><strong>{working.status==='complete'?'Acquisition completed':working.stage||'Preparing and validating observations...'}</strong>
+      <div><strong>{working.status==='complete'?
+          (runAfter?'Model research workflow finished':'Acquisition completed'):
+          working.stage||'Preparing and validating observations...'}</strong>
         <small>{Math.round(working.percent??0)}% · {working.id}</small>
         {working.result?.message&&<p>{working.result.message}</p>}
         {working.result?.warning&&<p className="qm-caption">{working.result.warning}</p>}
