@@ -72,7 +72,7 @@ def _sources() -> list[dict]:
 
 
 def _receipt(model_id: str, dataset_id: str | None, params: dict,
-             result: dict) -> str:
+             result: dict, upstox_available: bool = False) -> str:
     # A stale preview must not authorize a changed source, instrument or
     # download window. The actual executor additionally re-checks mappings.
     locked = {
@@ -89,6 +89,7 @@ def _receipt(model_id: str, dataset_id: str | None, params: dict,
         "cached_days": result.get("cached_instrument_calendar_days"),
         "missing_windows": result.get("missing_uncovered_windows"),
         "vendor_requests": result.get("estimated_vendor_daily_requests"),
+        "upstox_authorized_ready": upstox_available,
     }
     payload = json.dumps(locked, sort_keys=True, separators=(",", ":"),
                          ensure_ascii=False, allow_nan=False)
@@ -164,7 +165,8 @@ def plan(model_id: str, dataset_id: str | None = None,
                                  if provider_available else
                                  "Requires UPSTOX_ACCESS_TOKEN and original ISIN mapping"),
         "estimated_new_dhan_requests": raw_requests or 0,
-        "preview_token": _receipt(model_id, selected_id, settings, measured),
+        "preview_token": _receipt(
+            model_id, selected_id, settings, measured, provider_available),
         "evidence_note": "Source completeness and +20% sample length are not "
                          "independent verification of historical investability.",
     }
