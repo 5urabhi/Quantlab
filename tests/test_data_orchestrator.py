@@ -9,10 +9,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from threading import Event
 
 from fastapi.testclient import TestClient
 
-from workstation_api import data_orchestrator as manager, service
+from workstation_api import data_orchestrator as manager, service, dhan_workspace
+from workstation_api import app as api
 from workstation_api.app import app
 
 
@@ -93,6 +95,56 @@ class DataManagerTests(unittest.TestCase):
         self.assertTrue(manager.claim_automatic_retry("0123456789abcdef"))
         self.assertFalse(manager.claim_automatic_retry("0123456789abcdef"))
         manager.record_automatic_retry("0123456789abcdef", "queued")
+
+
+    def test_failed_atomic_preparation_never_leaves_half_written_dataset(self):
+        batch_id = "batch_aaaaaaaaaaaaaaaa"
+        batch_dir = service.DATA / "dhan" / "batches" / batch_id
+        batch_dir.mkdir(parents=True)
+        (batch_dir / "manifest.json").write_text(__import__("json").dumps({
+            "id": batch_id, "selection": "selected", "status": "completed",
+            "created_utc": "2026-04-01T00:00:00Z",
+            "from_date": "2026-01-01", "to_date": "2026-05-01",
+            "interval": None, "items": [{
+                "id": "NSE_EQ:1", "symbol": "AAA", "security_id": "1",
+                "exchange_segment": "NSE_EQ", "status": "complete",
+                "rows": 90, "rows_added": 90
+            }]
+        }), encoding="utf-8")
+        # Remove the prepared folder created by setUp; the test must never
+        # touch it in normal operation, only inspect the isolated target.
+        prepared = self.folder
+        for child in list(prepared.iterdir()):
+            child.unlink()
+        prepared.rmdir()
+        with patch.object(dhan_workspace, "_batch_daily_ohlcv",
+                          side_effect=ValueError("source not valid")):
+            with self.assertRaisesRegex(ValueError, "source not valid"):
+                dhan_workspace.prepare_batch(batch_id)
+        self.assertFalse(prepared.exists())
+        self.assertEqual(list(prepared.parent.glob("." + batch_id + ".*.tmp")), [])
+
+    def test_completed_download_prepares_automatically_and_logs_action(self):
+        batch_id = "batch_aaaaaaaaaaaaaaaa"
+        summary = {"id":batch_id, "status":"completed", "total":1,
+                   "counts":{"complete":1,"cached":0,"failed":0}}
+        with patch.object(dhan_workspace, "run_batch", return_value=summary), \
+             patch.object(dhan_workspace, "prepare_batch",
+                          return_value={"dataset_id":"dhan_"+batch_id}) as prepare:
+            result = api._run_bulk(batch_id, Event())
+        prepare.assert_called_once_with(batch_id)
+        self.assertEqual(result["automatic_preparation"]["dataset_id"],"dhan_"+batch_id)
+        self.assertEqual(manager.activity(1)[0]["category"], "batch_preparation")
+
+    def test_failed_download_does_not_publish_incomplete_derived_data(self):
+        batch_id="batch_aaaaaaaaaaaaaaaa"
+        summary={"id":batch_id,"status":"completed","total":2,
+                 "counts":{"complete":1,"cached":0,"failed":1}}
+        with patch.object(dhan_workspace, "run_batch", return_value=summary), \
+             patch.object(dhan_workspace, "prepare_batch") as prepare:
+            result=api._run_bulk(batch_id,Event())
+        prepare.assert_not_called()
+        self.assertNotIn("automatic_preparation",result)
 
 
 if __name__ == "__main__":
