@@ -279,7 +279,9 @@ def reuse_cached(row: dict) -> dict:
     """
     from . import dhan_workspace
     by_interval: dict[int | None, tuple[date,date]] = {}
+    span_count = 0
     for interval, first, last in cached_spans(row):
+        span_count += 1
         if interval not in by_interval:
             by_interval[interval] = (first,last)
         else:
@@ -301,5 +303,4 @@ def reuse_cached(row: dict) -> dict:
     result=ingest(entries,origin="cached_"+row["exchange_segment"]+"_"+
                   row["security_id"])
     return {**result,"cache_intervals_read":len(entries),
-            "source_windows_collapsed":sum(
-                1 for _ in cached_spans(row))}
+            "source_windows_collapsed":span_count}
