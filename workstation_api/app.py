@@ -2477,6 +2477,23 @@ def _run_bulk(batch_id: str, cancel: Event):
                 outcome["preparation_error"] = str(exc)[:180]
                 data_orchestrator.event("batch_preparation", "blocked",
                                         "Dhan batch needs preparation review: " + batch_id)
+        # There is ONE canonical customer-facing market library. Prepared
+        # per-batch artifacts are provenance snapshots, not databases users
+        # should have to manage. Append source-verified daily closes into
+        # the exchange/Security ID store idempotently; keep PIT/benchmark
+        # evidence with the original batch, not in a falsified pooled index.
+        prepared_id = ((outcome.get("automatic_preparation") or {}).get("dataset_id")
+                       or outcome.get("prepared_dataset_id"))
+        if (outcome.get("status")=="completed" and prepared_id and not cancel.is_set()):
+            try:
+                outcome["market_library"] = shared_market_data.ingest_prepared(prepared_id)
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                outcome["market_library"] = {
+                    "status":"needs_review",
+                    "message":"The prepared original source was preserved, but indexing "
+                              "it in the shared market library needs review: "+
+                              job_safety.scrub(exc)[:140],
+                    "next_action":"Database Manager → Market Library → Index original batches"}
         # If the user previously enabled a small 1-minute cache, refresh
         # it after a successful original Dhan batch. Larger data remains a
         # visible manual action rather than an unexpected CPU/disk spike.
