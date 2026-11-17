@@ -579,9 +579,13 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
       </section>}
       {stage===2&&<section className="mdw-card mdw-commit">
         <div className="mdw-section-top"><div><span className="mdw-kicker">STEP 3 · AUTHORIZE</span>
-          <h3>Get data and prepare automatically</h3>
-          <p>We check your local Dhan credentials and Data API access before creating a
-            download. Only missing windows are requested; verified source files remain intact.</p>
+          <h3>{modelId&&selected?'Complete your existing model dataset':
+            'Get data and prepare automatically'}</h3>
+          {modelId&&selected?
+            <p>Reuse this dataset’s verified original observations, then acquire only
+              compatible missing history for the selected model.</p>:
+            <p>We check your local Dhan credentials and Data API access before creating a
+              download. Only missing windows are requested; verified source files remain intact.</p>}
         </div></div>
         <div className="mdw-provider-line">
           <div><span className={'mdw-led '+(connection?.token_configured?'ok':'')}/>
@@ -637,6 +641,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
             Include observed index spot candles (price-only, not dividend-reinvested TRI).</label>
           <p className="mdw-help">{plan?.provider_policy}</p>
         </details>
+        {!(modelId&&selected)&&<>
         <button type="button" className="mdw-primary" disabled={!plan?.can_start||
           (plan.unresolved_count>0&&!allowPartial)||
           (plan.instrument_count>100&&!confirmBulk)||
@@ -650,6 +655,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           configured provider for the displayed scope. Successful complete batches
           automatically prepare their dataset. Provider access and observed coverage
           cannot be guaranteed in advance.</p>
+        </>}
         {modelId&&<div className="mdw-model-link"><BookOpen size={17}/>
           Already have a dataset for this model?
           <select aria-label="Existing dataset for model acquisition" value={modelDataset}
