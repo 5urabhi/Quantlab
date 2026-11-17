@@ -62,6 +62,18 @@ class ResearchCompletionTests(unittest.TestCase):
         self.assertEqual(result["action"],"choose_dataset")
         run.assert_not_called()
 
+    def test_synthetic_fixture_cannot_be_saved_as_empirical_by_direct_api(self):
+        with patch.object(service,"dataset_path",
+                          return_value=(Path("/tmp"),{"kind":"synthetic"})), \
+             patch.object(model_lab,"run_model") as run, \
+             patch.object(model_lab,"save_result") as save:
+            response=research_workflow.execute(
+                "min_variance","demo_fixture",{"assets":8})
+        self.assertEqual(response["status"],"blocked")
+        self.assertEqual(response["action"],"choose_original_dataset")
+        run.assert_not_called()
+        save.assert_not_called()
+
     def test_empirical_model_with_no_original_history_never_claims_ready(self):
         with patch.object(model_lab,"run_model") as run:
             r=self.client.get("/api/data-manager/research/overview")
