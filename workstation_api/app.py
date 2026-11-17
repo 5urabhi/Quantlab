@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -351,6 +351,77 @@ def data_manager_model_requirements(model_id: str, dataset_id: str = ""):
         bad(exc)
 
 
+@app.get("/api/data-manager/model-catalog")
+def data_manager_model_catalog():
+    return {"models": [
+        {"id": model["id"], "title": model["title"], "group": model["group"],
+         "mode": model["mode"], "min_observations": model["min_observations"]}
+        for model in model_registry.MODELS
+    ]}
+
+
+@app.get("/api/data-manager/acquisition-plan")
+def data_manager_acquisition_plan(
+        model_id: str, dataset_id: str = "", assets: int = 8,
+        train_window: int = 60, target: str = "", ticker: str = ""):
+    try:
+        model = model_registry.CATALOG.get(model_id)
+        if model is None:
+            raise ValueError("Unknown registered model")
+        names = {p["key"] for p in model["parameters"]}
+        params = {}
+        if "assets" in names:
+            params["assets"] = assets
+        if "train_window" in names:
+            params["train_window"] = train_window
+        if model_id in data_acquisition.SINGLE:
+            params["target"] = target or ("benchmark_tri" if model_id == "gbm_fit" else "stock")
+            params["ticker"] = ticker
+        return data_acquisition.plan(model_id, dataset_id or None, params)
+    except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
+        bad(exc)
+
+
+class DataAcquisitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_id: str = Field(pattern=r"^[a-z_]+$", min_length=2, max_length=45)
+    dataset_id: str = Field(min_length=1, max_length=120)
+    params: dict[str, float | int | str] = Field(default_factory=dict)
+    preview_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirm_download: bool = False
+
+
+@app.post("/api/data-manager/acquisition/start")
+def data_manager_acquisition_start(body: DataAcquisitionRequest):
+    try:
+        current = data_acquisition.check_confirmation(
+            body.model_id, body.dataset_id, body.params,
+            body.preview_token, body.confirm_download)
+        return {**_spawn("lab_shared_data_extension", data_acquisition.execute,
+                         body.model_id, body.dataset_id, current["params"]),
+                "planned": current,
+                "destination_dataset_id": shared_market_data.SHARED_ID}
+    except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/database-catalog")
+def data_manager_database_catalog():
+    return database_inspector.catalog()
+
+
+@app.get("/api/data-manager/database-table")
+def data_manager_database_table(database_id: str, table: str, page: int = 1,
+                                per_page: int = 50, filter_column: str = "",
+                                filter_value: str = ""):
+    try:
+        return database_inspector.page(
+            database_id, table, page=page, per_page=per_page,
+            filter_column=filter_column, filter_value=filter_value)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(ValueError(str(exc)))
+
+
 @app.post("/api/data-manager/maintenance")
 def data_manager_maintenance():
     # Local original candles and evidence are immutable. Only missing
@@ -651,7 +722,7 @@ def extend_research_lab_data(body: LabDataRequest):
         plan = model_data_manager.inspect(body.model_id, body.dataset_id, body.params)
         if not plan.get("can_download"):
             raise ValueError(plan.get("download_explanation") or "No download needed or unavailable")
-        return {**_spawn("lab_shared_data_extension", model_data_manager.execute,
+        return {**_spawn("lab_shared_data_extension", data_acquisition.execute,
                          body.model_id, body.dataset_id, body.params),
                 "planned": plan, "destination_dataset_id": shared_market_data.SHARED_ID}
     except Exception as exc:
