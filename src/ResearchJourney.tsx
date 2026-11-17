@@ -1,8 +1,8 @@
-import {useEffect,useState} from 'react'
+import {lazy,Suspense,useEffect,useState} from 'react'
 import {ArrowRight,BookOpen,CheckCircle2,Database,Download,FlaskConical,
   LoaderCircle,Save,ShieldAlert,ShieldCheck} from 'lucide-react'
-import ModelLaboratory from './ModelLaboratory'
-import ResultsStudio from './ResultsStudio'
+const ModelLaboratory=lazy(()=>import('./ModelLaboratory'))
+const ResultsStudio=lazy(()=>import('./ResultsStudio'))
 import './research-journey.css'
 
 type Datum={id:string;label:string;has_prices:boolean;ready:boolean;kind?:string;
@@ -190,6 +190,9 @@ export default function ResearchJourney({datasets,selectedDataset,onSelectDatase
         Back to data</button><button className="rj-primary" type="button" disabled={!choice}
         onClick={()=>goto(2)}>Configure and run {choice?.title||'model'} <ArrowRight size={14}/></button></div>
     </section>}
+    <Suspense fallback={<p role="status" className="rj-panel">
+      <LoaderCircle size={16}/> Loading this research stage…
+    </p>}>
     {state.stage===2&&<section className="rj-model-stage" aria-label="Research step 3: Run model">
       <div className="rj-panel"><h3>3 · Run the actual Python model</h3>
         <p>Below is the canonical Model Laboratory. It checks exact instrument availability,
@@ -221,6 +224,7 @@ export default function ResearchJourney({datasets,selectedDataset,onSelectDatase
         onSelectIndexRun={()=>{}} onModels={onOpenModels} onExperiments={onOpenExperiments}
         onWorkspace={onOpenWorkspace} onData={onOpenData} onReports={onOpenWorkspace}/>
     </section>}
+    </Suspense>
     {state.stage===4&&state.runId&&<section className="rj-panel" aria-label="Research step 5: Save evidence">
       <span className="rs-kicker"><ShieldCheck size={15}/> ARCHIVED PYTHON CALCULATION</span>
       <h3>5 · Save an interpretation and reproducible evidence</h3>
