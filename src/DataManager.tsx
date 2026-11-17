@@ -11,7 +11,7 @@ import MarketMicrostructurePanel from './MarketMicrostructurePanel'
 
 type Dataset = {id:string;label:string;kind:string;ready:boolean;missing:string[];basis:string}
 type Event = {id:number;occurred_utc:string;category:string;status:string;summary:string}
-type Batch = {id:string;status:string;selection:string;processed:number;total:number;errors:number}
+type Batch = {id:string;status:string;selection:string;processed:number;total:number;errors:number;recovered_checkpoints?:number}
 type Job = {id:string;kind:string;status:string;error?:string}
 type Overview = {
   datasets:Dataset[]
@@ -279,7 +279,10 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
           <small>{j.status}{j.error?' · '+j.error:''}</small></div>)}
         {!overview?.jobs.length&&<p>No recent jobs.</p>}</div><div><strong>Dhan download batches</strong>
         {(overview?.batches||[]).map(b=><div className="qm-job" key={b.id}><span>{b.selection} · {b.status}</span>
-          <small>{b.processed}/{b.total} instruments · {b.errors} failed</small></div>)}
+          <small>{b.processed}/{b.total} instruments · {b.errors} failed
+            {(b.recovered_checkpoints||0)>0&&<> · {b.recovered_checkpoints}
+              {' '}source-verified checkpoint{b.recovered_checkpoints===1?'':'s'} recovered</>}
+          </small></div>)}
         {!overview?.batches.length&&<p>No saved download batches.</p>}</div></div>
       <h4><History size={16}/> Automatic maintenance history</h4>
       {(overview?.events||[]).map(e=><div className="qm-event" key={e.id}>
