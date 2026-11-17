@@ -389,7 +389,7 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
   const downloadBlocker=!connection?'Checking the local Dhan connection…':
     !connection.token_configured?'Dhan token not found. Add DHAN_ACCESS_TOKEN to your local .env file.':
     !connection.instrument_master_available?'Dhan stock list is missing. Open Connection settings and refresh the catalog.':
-    pitSyncBusy?'Updating the historical stock list…':
+    pitSyncBusy?'Preparing historical constituents and Dhan stock IDs automatically…':
     invalidDates?'Choose an end date later than the start date.':
     pitMode&&!pitPlan?'Historical stock list not ready. Open Membership details to load it or adjust dates.':
     downloadCount===0?'Choose the stocks you want to download.':
@@ -442,23 +442,25 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
               `${fmt(pitPlan.resolved_count)} mapped historical stocks across your selected dates`:
               pitPreview?
                 `${fmt(pitPreview.resolved_count)} stocks in the available historical period`:
-                'Checking historical membership and stock IDs…'}</p>
+                pitSyncBusy?'Preparing historical membership and stock IDs…':'Checking saved index sources…'}</p>
             {pitPlan?.unresolved_count?
               <small>{pitPlan.unresolved_count} historical stock ID(s) need review.</small>:
               <small>Uses all companies that belonged to the index during the period, not only today's stocks.</small>}
           </div>
         </div>
-        {!pitPlan&&<div className="dh-simple-warning" role="status">
-          Historical membership is not ready for these dates.
+        {!pitPlan&&<div className={pitSyncBusy?'dh-simple-summary':'dh-simple-warning'} role="status">
+          {pitSyncBusy?'Preparing the historical index sources automatically…':
+            'Historical index data is not ready for the complete date range.'}
           {pitPreview&&pitPreview.to_date<toDate?<>
             <p>The available historical index list ends before your selected date.</p>
             <button className="dh-small-btn" type="button"
               onClick={()=>setToDate(pitPreview.to_date)}>
               Use latest available date ({pitPreview.to_date}) <ArrowRight size={14}/>
             </button>
-          </>:<p>Open membership details below to sync the list or check source availability.</p>}
+          </>:pitSyncBusy?<p>Downloading and verifying source data. No manual sync needed.</p>:
+            <p>See the expanded source details below for the exact missing input or retry action.</p>}
         </div>}
-        <details className="dh-simple-details dh-membership-details">
+        <details className="dh-simple-details dh-membership-details" open={!pitPlan}>
           <summary>Historical membership details / sync missing history</summary>
           <PITIndexPanel mode={mode as PITMode} fromDate={fromDate} toDate={toDate}
             onToDate={setToDate} onPlan={setPitPlan} onPreview={setPitPreview}
@@ -525,8 +527,15 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
       </div>
       {invalidDates&&<p className="dh-simple-warning" role="alert">
         The end date must come after the start date.</p>}
-      {!daily&&<p className="dh-simple-warning">
-        Intraday data uses more Dhan requests and storage. Choose Daily above unless you specifically need minute-level data.</p>}
+      {!daily&&<div className="dh-simple-warning">
+        Intraday data uses more Dhan requests and storage. Choose Daily unless you specifically need minute-level history.
+        {pitMode&&dateDays>365&&<p>
+          A multi-year index download can require many requests per historical constituent.
+          <button type="button" className="dh-small-btn" onClick={()=>setInterval('daily')}>
+            Switch to recommended daily candles
+          </button>
+        </p>}
+      </div>
       <details className="dh-simple-details dh-advanced-data">
         <summary>Advanced options: API calls and index spot prices</summary>
         <div className="dh-estimate"><div><span>Estimated minimum requests</span>
