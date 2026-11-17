@@ -177,6 +177,42 @@ class UnifiedMarketDataTests(unittest.TestCase):
                         allow_incomplete=True, confirm_bulk=True)
         self.assertEqual(approved["instrument_count"], 2)
 
+    def test_dhan_in_app_token_requires_read_only_verification_and_private_storage(self):
+        import os
+        import stat
+        secret = "LOCAL_OFFLINE_DHAN_TEST_TOKEN_1234567"
+        target = self.root / ".env"
+        with patch.object(service, "ROOT", self.root):
+            with patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": ""}):
+                payload = {"access_token": secret,
+                           "confirm_local_storage": True}
+                with patch.object(market.dhan_auth, "check_profile",
+                                  return_value={"ok": False,
+                                                "message": "Dhan Data API not active"}):
+                    denied = self.client.post(
+                        "/api/market-data/providers/dhan/connect", json=payload)
+                self.assertEqual(denied.status_code, 400)
+                self.assertNotIn(secret, denied.text)
+                self.assertFalse(target.exists())
+                with patch.object(market.dhan_auth, "check_profile",
+                                  return_value={"ok": True,
+                                                "data_plan_active": True}) as verify:
+                    response = self.client.post(
+                        "/api/market-data/providers/dhan/connect", json=payload)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertNotIn(secret, response.text)
+                self.assertEqual(verify.call_args.kwargs["token_override"], secret)
+                self.assertTrue(target.is_file())
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+                self.assertIn('DHAN_ACCESS_TOKEN=', target.read_text())
+                self.assertEqual(os.getenv("DHAN_ACCESS_TOKEN"), secret)
+                initial = target.read_bytes()
+                bad = self.client.post("/api/market-data/providers/dhan/connect",
+                                       json={"access_token": "INJECTED\nVALUE",
+                                             "confirm_local_storage": True})
+                self.assertEqual(bad.status_code, 400)
+                self.assertEqual(target.read_bytes(), initial)
+
     def test_public_sources_require_explicit_confirmation(self):
         response = self.client.post("/api/market-data/sources/prepare",
                                     json={"selection": "nifty50_pit",
