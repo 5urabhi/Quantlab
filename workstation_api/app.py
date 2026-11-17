@@ -2096,7 +2096,7 @@ def _run_bulk(batch_id: str, cancel: Event):
         if outcome.get("status") == "completed" and not cancel.is_set():
             try:
                 batch = dhan_workspace._load_batch(batch_id)
-                if batch.get("interval_minutes") == 1:
+                if batch.get("interval") == 1:
                     summaries = []
                     for row in batch.get("items", [])[:8]:
                         if shared_market_data.SAFE_IDENTITY.fullmatch(str(row.get("id",""))):
