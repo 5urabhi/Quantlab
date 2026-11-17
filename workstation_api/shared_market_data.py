@@ -139,6 +139,8 @@ def publish_views() -> dict:
             "identity_rule": "exchange_segment + Dhan Security ID; no alias-based deduplication",
             "daily_sessions": len(wide),
             "monthly_marks": len(marks),
+            "close_rows": len(rows),
+            "last_session": str(observed["date"].max().date()),
             "securities": len(mappings),
             "source_origins": origins,
             "columns": [

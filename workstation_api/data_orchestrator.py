@@ -18,7 +18,7 @@ import json
 import re
 import sqlite3
 
-from . import dhan_workspace, model_data_manager, research_library, service, shared_market_data
+from . import dhan_workspace, materialized_view_recovery, model_data_manager, research_library, service, shared_market_data
 
 LOCK = RLock()
 MAX_TABLE_SCAN = 100_000
@@ -335,29 +335,30 @@ def requirements(model_id: str, dataset_id: str = "") -> dict:
 
 
 def safe_maintenance() -> dict:
-    """Only reconstruct absent materialized views from intact canonical SQLite."""
-    changed = []
+    """Verify and rebuild only bounded, provably derived views.
+
+    Never rewrites original broker observations, historical memberships,
+    benchmark TRI, or research reports. Corrupt authoritative SQLite fails
+    closed with a visible, actionable blocked maintenance receipt.
+    """
+    repaired = []
     blocked = []
-    db = shared_market_data.database_path()
-    if db.is_file() and not db.is_symlink():
-        with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as conn:
-            check = conn.execute("PRAGMA quick_check").fetchone()
-        if not check or check[0] != "ok":
-            blocked.append("Shared market database integrity check failed; original data preserved.")
-        else:
-            folder = shared_market_data.shared_folder()
-            if not (folder / "daily_prices.csv").is_file() or not (folder / "prices.csv").is_file():
-                with LOCK:
-                    shared_market_data.publish_views()
-                changed.append("Rebuilt absent daily/monthly derived views from intact shared SQLite.")
-    if changed:
-        for item in changed:
-            event("materialized_views", "complete", item)
-    if blocked:
-        for item in blocked:
-            event("database_integrity", "blocked", item)
-    if not changed and not blocked:
-        event("maintenance", "complete", "Source-safe health check finished; no repairs needed.")
-    return {"repaired": changed, "blocked": blocked,
+    result = materialized_view_recovery.repair()
+    if result["state"] == "repaired":
+        message = ("Rebuilt missing or inconsistent generated daily/monthly "
+                   "shared price views from intact canonical SQLite.")
+        repaired.append(message)
+        event("materialized_views", "complete", message)
+    elif result["state"] == "blocked" and result["health"]["state"] != "not_initialized":
+        reason = result["health"]["reason"]
+        blocked.append(reason)
+        event("materialized_views", "blocked",
+              "Derived shared price recovery blocked: " + reason[:160])
+    else:
+        event("maintenance", "complete",
+              "Source-safe health check finished; no repairs needed.")
+    return {"repaired": repaired, "blocked": blocked,
+            "derived_views": result,
             "original_observations_changed": False,
-            "note": "Automatic maintenance never rewrites raw candles, TRI, memberships, or research evidence."}
+            "note": "Maintenance never rewrites broker candles, original SQL rows, "
+                    "TRI, PIT membership, or archived research evidence."}

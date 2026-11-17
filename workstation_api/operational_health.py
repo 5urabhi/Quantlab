@@ -12,7 +12,7 @@ import shutil
 import sqlite3
 
 from . import (columnar_cache, database_inspector, dhan_workspace,
-               research_library, service, zerodha_fallback)
+               materialized_view_recovery, research_library, service, zerodha_fallback)
 
 MIN_FREE_BYTES = 500 * 1024 * 1024
 
@@ -84,6 +84,26 @@ def status() -> dict:
         cache={"state":"unavailable","ready":False}
         warnings.append({"kind":"columnar_cache",
                          "message":"Columnar acceleration status could not be inspected."})
+    try:
+        views = materialized_view_recovery.inspect()
+        if views["state"] == "needs_rebuild":
+            warnings.append({
+                "kind": "shared_price_views",
+                "message": "Shared research price views need repair: " + views["reason"]
+                           + " Use Check & repair safely in Database Manager."})
+        elif views["state"] == "blocked":
+            blockers.append({
+                "component": "shared_price_views", "kind": "unsafe_original_or_view",
+                "action": views["reason"] + " Review original source before repair."})
+        elif views["state"] == "verification_deferred":
+            warnings.append({
+                "kind": "shared_price_views",
+                "message": "Large shared price views require a full checksum check "
+                           "through Database Manager maintenance."})
+    except (ValueError, OSError, sqlite3.Error):
+        views = {"state": "unavailable", "verified_content": False}
+        warnings.append({"kind": "shared_price_views",
+                         "message": "Cannot inspect derived shared research price views."})
     # Auth flags are local presence checks, NOT requests to Kite/Dhan.
     try:
         kite = zerodha_fallback.status()
@@ -105,7 +125,7 @@ def status() -> dict:
         "job_failures_or_interrupted":failures,
         "dhan_interrupted_batches":interrupted,
         "dhan_paused_batches":paused,
-        "columnar":cache,"kite":kite_info,
+        "columnar":cache,"kite":kite_info,"derived_views":views,
         "blockers":blockers,"warnings":warnings,
         "note":"A green operational check does not validate historical market data, "
                "broker entitlement, index research methodology or profitability.",

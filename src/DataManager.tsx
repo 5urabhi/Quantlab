@@ -37,6 +37,7 @@ type OperationalHealth = {
   read_only:boolean;market_data_certified:boolean;
   databases:{id:string;label:string;state:string;size_bytes?:number}[];
   storage:{free_bytes:number|null;total_bytes:number|null;low_space:boolean|null};
+  derived_views?:{state:string;source_rows?:number;reason?:string;verified_content?:boolean};
   job_failures_or_interrupted:number|null;dhan_interrupted_batches:number|null;
   dhan_paused_batches:number|null;columnar:{state:string;ready?:boolean};
   kite:{app_configured:boolean;local_session_present:boolean;master_current:boolean};
@@ -256,6 +257,12 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
                 {x.size_bytes!==undefined?' · '+humanBytes(x.size_bytes):''}</small>
             </div>)}</div>
           <div><strong>Recovery readiness</strong>
+            <div className="qm-job"><span>Shared model price views</span>
+              <small>{systemHealth.derived_views?
+                systemHealth.derived_views.state.replaceAll('_',' '):'Not inspected'}
+                {systemHealth.derived_views?.source_rows!==undefined?
+                  ' · '+fmt(systemHealth.derived_views.source_rows)+' source rows':''}
+              </small></div>
             <div className="qm-job"><span>Dhan interrupted batches</span>
               <small>{systemHealth.dhan_interrupted_batches??'Unavailable'} ·
                 {' '}{systemHealth.dhan_paused_batches??'Unavailable'} paused</small></div>
