@@ -35,3 +35,28 @@
 .qm-panel h4{display:flex;align-items:center;gap:8px}.qm-event{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(121,149,182,.13);font-size:12px}.qm-event svg{color:#76d6a5;flex-shrink:0}.qm-event strong,.qm-event small{display:block}.qm-event strong{font-weight:500}
 @media(max-width:850px){.qm-stat-grid,.qm-info{grid-template-columns:repeat(2,minmax(0,1fr))}.qm-hero{flex-direction:column;align-items:flex-start}.qm-job-grid{grid-template-columns:1fr}}
 @media(max-width:520px){.qm-root{gap:12px}.qm-stat-grid,.qm-info{gap:7px}.qm-hero{padding:19px}.qm-hero h2{font-size:24px}.qm-panel{padding:12px}.qm-stat-grid strong{font-size:19px}.qm-toolbar form{width:100%}.qm-toolbar form input{min-width:0;width:100%}.qm-pager{flex-direction:column;align-items:flex-start}.qm-source p{display:grid}}
+
+/* Data acquisition and managed read-only database explorer */
+.qm-acquire-controls,.qm-db-toolbar{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:17px 0}
+.qm-acquire-controls label,.qm-db-toolbar label,.qm-db-filter label{display:grid;gap:7px;font-size:12px;font-weight:650;color:#a8bdd2}
+.qm-acquire-controls select,.qm-db-toolbar select,.qm-db-filter select,.qm-db-filter input{width:100%;background:#10233c;color:#e9f1fa;border:1px solid rgba(123,161,205,.36);border-radius:8px;padding:10px 12px}
+.qm-acquire-result{border:1px solid rgba(113,156,197,.25);background:rgba(13,28,46,.45);border-radius:12px;padding:16px;margin-top:16px}
+.qm-acquire-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:15px}
+.qm-acquire-metrics>div{padding:14px 11px;background:rgba(24,53,85,.6);border-radius:9px;min-width:0}
+.qm-acquire-metrics small,.qm-acquire-metrics strong{display:block}.qm-acquire-metrics small{font-size:11px;color:#a3b9ce;line-height:1.5}
+.qm-acquire-metrics strong{font-size:20px;margin-top:8px;font-variant-numeric:tabular-nums}
+.qm-acquire-result>.qm-notice,.qm-acquire-result>.qm-caption{display:flex;align-items:flex-start;gap:8px;margin:10px 0 15px}
+.qm-source-chain{display:grid;gap:5px}.qm-source-chain>div{display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(121,149,182,.13);padding:10px 2px}
+.qm-source-mark{padding:8px;border-radius:8px;background:rgba(60,112,187,.19);color:#9fd0ff}
+.qm-source-chain>div>span:nth-child(2){flex:1;min-width:0}.qm-source-chain strong,.qm-source-chain small{display:block;overflow-wrap:anywhere}
+.qm-source-chain strong{font-size:12px;font-weight:650}.qm-source-chain small{font-size:11px;color:#a8bace;margin-top:4px}
+.qm-acquire-cta{padding:17px 0 0}.qm-acquire-cta p{display:flex;align-items:flex-start;gap:8px;color:#adc0d5;font-size:12px;line-height:1.65}
+.qm-acquire-cta button{margin:5px 8px 5px 0;min-height:38px}
+.qm-acquire-status{display:flex;gap:10px;margin-top:15px;padding:12px;border:1px solid rgba(90,170,122,.3);background:rgba(20,96,64,.15);border-radius:8px}
+.qm-acquire-status svg{color:#91d8ae}.qm-acquire-status small,.qm-acquire-status strong{display:block}.qm-acquire-status small{color:#a8bfd0;margin:4px 0}
+.qm-acquire-status p{font-size:12px;line-height:1.5;margin:6px 0}
+.qm-managed-dbs>.qm-caption{display:flex;align-items:center;gap:7px;line-height:1.5}
+.qm-db-filter{display:flex;align-items:end;gap:10px;margin:12px 0 18px;flex-wrap:wrap}.qm-db-filter label{min-width:170px;flex:1}
+.qm-db-filter button{display:flex;gap:6px;align-items:center;min-height:40px}
+@media(max-width:800px){.qm-acquire-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.qm-source-chain .qm-badge{max-width:125px;white-space:normal;text-align:center}}
+@media(max-width:520px){.qm-acquire-controls,.qm-db-toolbar{grid-template-columns:1fr}.qm-source-chain>div{align-items:flex-start}.qm-db-filter{display:grid}.qm-acquire-metrics strong{font-size:17px}}
