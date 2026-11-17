@@ -8,7 +8,7 @@ import pandas as pd
 from index_research.data import read_matrix
 from . import (dhan_workspace, gbm_calibration, stochastic_calibration, option_market,
                model_registry, service, shared_market_data, single_series_completion,
-               zerodha_fallback)
+               zerodha_fallback, model_matrix)
 
 EXTRA_FRACTION = 0.20
 MAX_AUTO_ASSETS = 18
@@ -76,13 +76,14 @@ def _observed(dataset_id: str, assets: int, required: int) -> dict:
     if not record.get("has_prices"):
         return {"has_prices": False, "common_returns": 0,
                 "frequency": None, "assets_found": 0, "selected_assets": []}
-    prices = read_matrix(folder / source, positive=True)
+    prices, matrix_engine = model_matrix.load(dataset_id, folder, source)
     returns = prices.pct_change(fill_method=None).replace([float("inf"), float("-inf")], float("nan"))
     ordered = sorted(returns.columns, key=lambda x: (-int(returns[x].notna().sum()), x))
     # Select the requested number, without silently dropping illiquid members.
     selection = ordered[:assets]
     common = returns[selection].dropna() if selection else returns.iloc[0:0]
     return {"has_prices": True, "frequency": "daily" if source == "daily_prices.csv" else "monthly",
+            "price_matrix_engine": matrix_engine,
             "price_dates": len(prices), "assets_found": len(ordered),
             "assets_with_required_history": int((returns.notna().sum() >= required).sum()),
             "selected_assets": selection, "common_returns": len(common),
