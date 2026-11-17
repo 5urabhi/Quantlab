@@ -1,13 +1,13 @@
-import {useCallback, useEffect, useState} from 'react'
+import {lazy,Suspense,useCallback, useEffect, useState} from 'react'
 import {Activity, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft, ChevronRight,
   Database, FileSpreadsheet, HardDrive, History, RefreshCw, Search, ShieldCheck, Wrench} from 'lucide-react'
 import './data-manager.css'
-import DataAcquisitionPanel from './DataAcquisitionPanel'
-import ManagedDatabaseBrowser from './ManagedDatabaseBrowser'
-import ColumnarAnalyticsPanel from './ColumnarAnalyticsPanel'
-import SourceFallbackPanel from './SourceFallbackPanel'
-import ResearchReadinessPanel from './ResearchReadinessPanel'
-import MarketMicrostructurePanel from './MarketMicrostructurePanel'
+const DataAcquisitionPanel=lazy(()=>import('./DataAcquisitionPanel'))
+const ManagedDatabaseBrowser=lazy(()=>import('./ManagedDatabaseBrowser'))
+const ColumnarAnalyticsPanel=lazy(()=>import('./ColumnarAnalyticsPanel'))
+const SourceFallbackPanel=lazy(()=>import('./SourceFallbackPanel'))
+const ResearchReadinessPanel=lazy(()=>import('./ResearchReadinessPanel'))
+const MarketMicrostructurePanel=lazy(()=>import('./MarketMicrostructurePanel'))
 
 type Dataset = {id:string;label:string;kind:string;ready:boolean;missing:string[];basis:string}
 type Event = {id:number;occurred_utc:string;category:string;status:string;summary:string}
@@ -157,6 +157,9 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
           {{datasets:'Datasets',research:'Research readiness',acquire:'Get model data',explorer:'Data Explorer',database:'Database tables',analytics:'Fast analytics',microstructure:'Minute & order book',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
         </button>)}
     </nav>
+    <Suspense fallback={<div className="qm-panel" role="status">
+      Loading data tools for {section.replaceAll('_',' ')}…
+    </div>}>
     {section==='datasets'&&<div className="qm-panel">
       <div className="qm-panel-title"><h3>Dataset inventory</h3><span>Original market history is protected</span></div>
       {items.length===0?<p>No datasets available yet. Use Download Market Data to acquire data.</p>:
@@ -297,5 +300,6 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
         <div><strong>{e.summary}</strong><small>{e.category.replaceAll('_',' ')} · {e.occurred_utc}</small></div></div>)}
       {!overview?.events.length&&<p>No automatic repair events recorded yet.</p>}
     </div>}
+    </Suspense>
   </div>
 }
