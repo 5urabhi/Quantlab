@@ -7,7 +7,7 @@
  * CLI: node scripts/node_runtime_compat.mjs v22.22.1 12.2.0
  * Exit 0 for supported pairs, 1 otherwise. No logging or network calls.
  */
-import {fileURLToPath} from 'node:url'
+import {basename} from 'node:path'
 
 function version(value) {
   const match=/^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(value||'').trim())
@@ -32,6 +32,6 @@ export function compatibleRuntime(nodeVersion,npmVersion) {
   if(p[0]===11) return n[0]!==20||atLeast(n,20,17)
   return p[0]>=9&&p[0]<=10
 }
-if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]) {
+if(process.argv[1]&&basename(process.argv[1])==='node_runtime_compat.mjs') {
   process.exit(compatibleRuntime(process.argv[2],process.argv[3])?0:1)
 }
