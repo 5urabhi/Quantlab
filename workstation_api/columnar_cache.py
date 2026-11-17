@@ -99,6 +99,41 @@ def _parts(manifest: dict) -> list[Path]:
     return files
 
 
+def _digest_part(path: Path) -> str:
+    """Stream a generated Parquet partition without loading it into memory."""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Analytical partition is not a regular, original-derived file")
+    h = sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _part_receipts(manifest: dict, files: list[Path]) -> bool:
+    """Conservative cheap manifest validation; no costly hash on page loads."""
+    receipts = manifest.get("partition_sha256")
+    if not isinstance(receipts, dict) or len(receipts) != len(files):
+        return False
+    expected = {str(f.relative_to(_root() / "generations" / manifest["generation"]))
+                for f in files}
+    return set(receipts) == expected and all(
+        isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v)
+        for v in receipts.values())
+
+
+def _verify_parts(manifest: dict, files: list[Path]) -> None:
+    """Before numerical reads, check each cache partition's complete bytes."""
+    if not files or not _part_receipts(manifest, files):
+        raise ValueError("Analytical Parquet partition receipt missing or incomplete")
+    root = _root() / "generations" / manifest["generation"]
+    for file in files:
+        name = str(file.relative_to(root))
+        if _digest_part(file) != manifest["partition_sha256"][name]:
+            raise ValueError("Analytical Parquet partition checksum changed: " + name +
+                             "; rebuild the optional mirror. Original SQL is unchanged.")
+
+
 def status() -> dict:
     original = _signature()
     exists = bool(original)
@@ -106,7 +141,9 @@ def status() -> dict:
     installed = importlib.util.find_spec("duckdb") is not None
     files = _parts(manifest) if manifest else []
     same = bool(manifest and manifest.get("source_signature") == original)
-    ready = exists and same and bool(files) and len(files) == len(manifest.get("years", []))
+    ready = bool(exists and same and files and
+                 len(files) == len(manifest.get("years", [])) and
+                 _part_receipts(manifest, files))
     return {
         "state": ("source_missing" if not exists else
                   "engine_missing" if not installed else
@@ -232,10 +269,17 @@ def build(*, progress=None) -> dict:
                 raise ValueError("Original SQLite database changed; retry from a fresh snapshot")
             if progress:
                 progress(93, "Atomically publishing validated Parquet generations")
+            # Pin every generated partition's exact bytes before activation.
+            # Subsequent numerical reads recheck these digests, preventing a
+            # valid-looking but silently edited analytical mirror.
+            partition_sha256 = {
+                str(p.relative_to(staging)): _digest_part(p) for p in parts
+            }
             staging.rename(dest)
             manifest = {
                 "generation": generation, "created_utc": datetime.now(timezone.utc).isoformat(),
                 "source_signature": initial, "rows": total, "years": years,
+                "partition_sha256": partition_sha256,
                 "source_logical_sha256": h.hexdigest(), "schema": CSV_TYPES,
                 "compression": "zstd", "source": "canonical_sqlite_daily_closes",
                 "original_data_mutated": False, "version": 1,
@@ -293,6 +337,7 @@ def series(identity: str, start: str = "", end: str = "",
         raise ValueError("Columnar cache is " + state["state"] + "; refresh the analytical mirror")
     manifest = _manifest()
     parts = _parts(manifest)
+    _verify_parts(manifest, parts)
     duckdb = _engine()
     with duckdb.connect(database=":memory:") as conn:
         conn.execute("SET threads=2")
@@ -338,6 +383,7 @@ def model_matrix(view: str = "daily_prices.csv"):
     if manifest is None:
         raise ValueError("Canonical Parquet source receipt unavailable")
     parts = _parts(manifest)
+    _verify_parts(manifest, parts)
     duckdb = _engine()
     with duckdb.connect(database=":memory:") as conn:
         conn.execute("SET threads=2")
