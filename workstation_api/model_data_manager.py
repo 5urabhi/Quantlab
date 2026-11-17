@@ -7,7 +7,8 @@ import pandas as pd
 
 from index_research.data import read_matrix
 from . import (dhan_workspace, gbm_calibration, stochastic_calibration, option_market,
-               model_registry, service, shared_market_data, single_series_completion)
+               model_registry, service, shared_market_data, single_series_completion,
+               upstox_fallback)
 
 EXTRA_FRACTION = 0.20
 MAX_AUTO_ASSETS = 18
@@ -225,7 +226,7 @@ def inspect(model_id: str, dataset_id: str | None, params: dict | None = None) -
 
 
 def execute(model_id: str, dataset_id: str, params: dict | None = None,
-            *, progress=None) -> dict:
+            *, allow_secondary_provider: bool = False, progress=None) -> dict:
     """Run only after a distinct UI-confirmed POST; append to existing master.
 
     Cached OHLCV is imported even if no network call is necessary. Dhan's
@@ -273,10 +274,20 @@ def execute(model_id: str, dataset_id: str, params: dict | None = None,
     for row in rows:
         spans = [(a.isoformat(), b.isoformat()) for _, a, b in shared_market_data.cached_spans(row)]
         uncovered[row["id"]] = dhan_workspace._uncovered(start, stop, spans)
+    primary_available = True
     if any(uncovered.values()):
         state = dhan_auth.check_profile()
-        if not state["ok"]:
-            raise ValueError(state["message"])
+        primary_available = bool(state["ok"])
+        if not primary_available:
+            if not allow_secondary_provider:
+                raise ValueError(state["message"])
+            if not upstox_fallback.configured():
+                raise ValueError(state["message"] + "; Upstox fallback token is not configured")
+            ineligible = [row["id"] for row in rows
+                          if not upstox_fallback.eligibility(row)["eligible"]]
+            if ineligible:
+                raise ValueError("No verified Upstox ISIN mapping for: " +
+                                 ", ".join(ineligible[:6]))
     total_windows = sum(len(windows) for windows in uncovered.values())
     finished_windows = 0
     for row, event in zip(rows, events):
@@ -289,9 +300,28 @@ def execute(model_id: str, dataset_id: str, params: dict | None = None,
             if progress:
                 progress(30 + 58 * finished_windows / max(1, total_windows),
                          "Requesting missing Dhan window " + str(finished_windows + 1) + "/" + str(total_windows))
-            downloaded = dhan_workspace._fetch_history(
-                row, first.isoformat(), last.isoformat(), None)
-            event["rows_added"] += downloaded["rows_added"]
+            if primary_available:
+                try:
+                    downloaded = dhan_workspace._fetch_history(
+                        row, first.isoformat(), last.isoformat(), None)
+                    event["rows_added"] += downloaded["rows_added"]
+                except (ValueError, OSError, TimeoutError) as exc:
+                    text = str(exc).lower()
+                    # Corrupted cached evidence, conflicting raw prices, and
+                    # invalid mappings are never reasons to switch vendors.
+                    transient = any(word in text for word in (
+                        "http 429", "http 5", "timeout", "connection",
+                        "token", "unauthorized", "access", "provider",
+                        "no candles returned", "service unavailable"))
+                    if not allow_secondary_provider or not transient:
+                        raise
+                    fallback = upstox_fallback.retrieve(
+                        row, first, last, confirm_authorized=True)
+                    event.setdefault("secondary_providers", []).append(fallback)
+            else:
+                fallback = upstox_fallback.retrieve(
+                    row, first, last, confirm_authorized=True)
+                event.setdefault("secondary_providers", []).append(fallback)
             finished_windows += 1
         if progress:
             progress(30 + 58 * finished_windows / max(1, total_windows),
