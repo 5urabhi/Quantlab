@@ -136,6 +136,55 @@ class CompatibleMarketSourcesAndParquetTests(unittest.TestCase):
         result = columnar_cache.series(self.source_id, limit=1)
         self.assertEqual(result["rows"][0]["close"],106.0)
 
+    def test_parquet_partition_tampering_refuses_model_and_chart_reads(self):
+        columnar_cache.build()
+        manifest = columnar_cache._manifest()
+        self.assertIsNotNone(manifest)
+        parts = columnar_cache._parts(manifest)
+        self.assertEqual(len(parts), 1)
+        file = parts[0]
+        # A small in-place overwrite does not change file size or source
+        # SQLite metadata. Without a per-partition digest, the cache could
+        # appear ready while feeding altered prices to the model.
+        original = file.read_bytes()
+        with file.open("r+b") as handle:
+            handle.seek(len(original) // 2)
+            b = handle.read(1)
+            handle.seek(len(original) // 2)
+            handle.write(bytes([b[0] ^ 1]))
+        self.assertEqual(file.stat().st_size, len(original))
+        self.assertTrue(columnar_cache.status()["ready"])
+        with self.assertRaisesRegex(ValueError, "partition checksum changed"):
+            columnar_cache.model_matrix("daily_prices.csv")
+        with self.assertRaisesRegex(ValueError, "partition checksum changed"):
+            columnar_cache.series(self.source_id)
+        # Original broker SQLite and generated canonical price CSV are not
+        # touched by refusing the tampered optional accelerator.
+        with sqlite3.connect(shared_market_data.database_path()) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM daily_closes").fetchone()[0], 6)
+        # An explicit rebuild constructs new, source-verified partitions.
+        columnar_cache.build()
+        fixed, engine = model_matrix.load(
+            "dhan_shared", shared_market_data.shared_folder(), "daily_prices.csv")
+        self.assertEqual(engine, "source_locked_duckdb_parquet")
+        self.assertEqual(fixed.iloc[-1, 0], self.values[-1])
+
+    def test_legacy_unpinned_parquet_mirror_is_stale_not_trusted(self):
+        columnar_cache.build()
+        path = columnar_cache._root() / "active.json"
+        manifest = json.loads(path.read_text())
+        del manifest["partition_sha256"]
+        path.write_text(json.dumps(manifest))
+        self.assertEqual(columnar_cache.status()["state"], "stale")
+        with self.assertRaisesRegex(ValueError, "source receipt"):
+            columnar_cache._verify_parts(manifest, columnar_cache._parts(manifest))
+        # Models safely fall back to the canonical CSV, without silently
+        # promoting legacy mirror bytes as verified market history.
+        values, engine = model_matrix.load(
+            "dhan_shared", shared_market_data.shared_folder(), "daily_prices.csv")
+        self.assertIn("cache_stale", engine)
+        self.assertEqual(values.iloc[-1, 0], self.values[-1])
+
     def test_missing_database_cannot_materialize_synthetic_data(self):
         clean=patch.object(shared_market_data,"database_path",
                            return_value=service.DATA/"missing.sqlite3")
