@@ -90,6 +90,27 @@ class ResearchCompletionTests(unittest.TestCase):
         receipts=research_acceptance.audit_list()["audits"]
         self.assertEqual(receipts[0]["id"],audit["id"])
 
+    def test_detailed_historical_audit_is_available_without_issuer_certification(self):
+        audit={
+            "dataset_id":"upload_local","status":"incomplete_source_or_timing",
+            "structural_run_ready":False,"independent_source_certified":False,
+            "publication_certified":False,
+            "checks":[{"name":"Total-return benchmark provenance",
+                       "status":"blocked","detail":"Original TRI missing",
+                       "next_action":"Import actual original TRI"}],
+            "warning":"Software hashes cannot certify issuer source."
+        }
+        with patch("workstation_api.historical_readiness.inspect",
+                   return_value=audit) as check:
+            response=self.client.get(
+                "/api/data-manager/research/evidence-audit",
+                params={"dataset_id":"upload_local"})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertFalse(response.json()["publication_certified"])
+        self.assertEqual(response.json()["checks"][0]["status"],"blocked")
+        check.assert_called_once_with(
+            "upload_local",validation_start=None,final_test_start=None)
+
     def test_research_launch_requires_registered_model(self):
         r=self.client.post("/api/data-manager/research/resolve-run",json={
             "model_id":"made_up","params":{}})
