@@ -7,21 +7,21 @@
 1. Start QuantLab with `bash run.sh` (existing Ubuntu launcher).
 2. Open **Data Library → Data Manager → Research readiness**.
 3. Select the intended **original** dataset. Every registered model receives a status, minimum input length, preferred **+20%** buffer, next action, and disclosure of mathematical vs empirical inputs.
-4. If needed, select **Get missing model inputs**. Choose the exact model and named instrument. QuantLab first reuses existing validated Dhan observations, then asks permission for uncovered Dhan date windows. An optional **Upstox V3 fallback** can be approved separately.
+4. If needed, select **Get missing model inputs**. Choose the exact model and named instrument. QuantLab first reuses existing validated Dhan observations, then asks permission for uncovered Dhan date windows. An optional **Zerodha Kite Connect fallback** can be approved separately.
 5. Leave **Run and save model after data completion** checked to perform **Select data → Resolve → Run → Save** in one source-bound background job. If genuine inputs are still missing, QuantLab returns an explicit blocker and does not substitute synthetic history.
 6. Explore experiments, figures and reports in **Model Laboratory** and **Results Studio**. Saved model runs preserve the normal source/engine evidence.
 
 Model mathematics (Black–Scholes, simulated stochastic processes, etc.) can run without live price data, but output remains visibly hypothetical. Historical quantitative research requires original observed inputs. Option-chain research requires original, time-stamped provider quotes. Some models can run with a minimum sample even when the preferred extra 20% cannot be obtained; that is an explicit limitation, not a successful extra backfill.
 
-### Dhan → Upstox historical fallback
+### Dhan → Zerodha Kite Connect historical fallback
 
-The primary authorized daily price provider remains Dhan. An **optional** secondary provider uses Upstox V3 **daily** historical candle API only when a Dhan request is unavailable or fails for a recognized connectivity, entitlement or vendor reason.
+The primary authorized daily price provider remains Dhan. An **optional** secondary provider uses Zerodha Kite Connect **daily** historical candle API only when a Dhan request is unavailable or fails for a recognized connectivity, entitlement or vendor reason.
 
-- Configure `UPSTOX_ACCESS_TOKEN` **locally in ignored `.env`**. Do not paste it into the browser or GitHub.
+- Configure `KITE_API_KEY` and `KITE_API_SECRET` **locally in ignored `.env`**. Register `http://127.0.0.1:8765/api/data-manager/zerodha/auth/callback` in your Kite developer app; sign in from the **Sources & provenance** tab. Do not paste secrets into browser forms or GitHub. The access token expires at 6 AM IST the next day; daily official login/2FA cannot be automated away.
 - The alternative instrument must be determined by an original Dhan security's **ISIN** in the official instrument master. The instrument/exchange identity remains unchanged; ticker resemblance or fuzzy matching is never accepted.
-- Check the distinct **Allow Upstox fallback** checkbox before authorizing. The preview includes provider availability. No background credential escalation or live order submission occurs.
+- Check the distinct **Allow Zerodha fallback** checkbox before authorizing. The preview includes provider availability. No background credential escalation or live order submission occurs.
 - A retrieved secondary daily-price history is admitted only after the same original-close validator finds **three or more matching observed Dhan sessions** for that security, with no contradictory overlapping observations. Original records are append-only. Unsupported adjustment conventions, security mismatches, missing original overlap or source licensing uncertainty remain blockers; the source receipt is preserved for review.
-- Tokens expire and provider plans/rate limits vary. A configured alternative cannot guarantee download success. Dhan and Upstox historical intraday entitlement and maximum lookback are separate from daily candles. The API does not make historical delisted constituents or genuine dividend-reinvested TRI available.
+- Tokens expire and provider plans/rate limits vary. A configured alternative cannot guarantee download success. Dhan and Zerodha historical intraday entitlement and maximum lookback are separate from daily candles. The API does not make historical delisted constituents or genuine dividend-reinvested TRI available.
 
 ## Point-in-time NIFTY/BANKNIFTY and total returns
 
@@ -61,7 +61,7 @@ Dhan offers a **live WebSocket full-depth feed**. It does **not** supply an arbi
 
 Use **Research readiness → Run model software checks** to run a bounded set of eligible algorithms on observed inputs (if selected), or theory/simulation math without a dataset. Results are saved as **software audit receipts**, distinct from trading, benchmark or source validation. If a model is input-blocked, QuantLab names the missing source and next in-app action rather than inventing proof.
 
-CI exercises strict TypeScript, Python regression tests, source-aware API endpoints, and Chromium UI navigation using isolated fixtures and mocked providers. **Live Upstox/Dhan entitlements and download success cannot be certified by CI** because the token lives on the researcher's machine. Do not describe synthetic fixtures as real-market data.
+CI exercises strict TypeScript, Python regression tests, source-aware API endpoints, and Chromium UI navigation using isolated fixtures and mocked providers. **Live Zerodha/Dhan entitlements and download success cannot be certified by CI** because the token lives on the researcher's machine. Do not describe synthetic fixtures as real-market data.
 
 The remaining evidence-dependent work, which cannot be completed by repository changes alone, is obtaining authorized historical delisted identities, a complete official TRI/corporate action ledger, real historical order-book archives if required, and a local live provider acceptance run. Their absence does not invalidate tested software behavior but prevents a defensible claim of complete historical research readiness.
 
@@ -70,7 +70,7 @@ The remaining evidence-dependent work, which cannot be completed by repository c
 Core modules:
 - `workstation_api/data_acquisition.py`: source plan, readiness +20%, explicit approval, single pipeline.
 - `workstation_api/model_data_manager.py` and `single_series_completion.py`: cache-first original Dhan acquisition, guarded alternative provider.
-- `workstation_api/upstox_fallback.py`: optional authenticated read-only V3 daily API with fixed host, exact ISIN and overlap.
+- `workstation_api/upstox_fallback.py`: optional authenticated read-only V3 daily API with fixed host, exact exchange token and trading symbol and overlap.
 - `workstation_api/compatible_sources.py`: append-only original-price evidence gate.
 - `workstation_api/research_workflow.py`: resolve original source, run mathematical algorithm and save output.
 - `workstation_api/research_acceptance.py`: all registered model statuses and source/software audit receipts.
@@ -81,5 +81,11 @@ Core modules:
 Read the existing `docs/QUANTLAB_USER_GUIDE.md` for general project navigation and `docs/DATA_MANAGER_MODEL_ACQUISITION.md` for database-level detail.
 
 Official API references:
-- Upstox V3 historical daily candles: https://upstox.com/developer/api-documentation/v3/get-historical-candle-data/
+- Zerodha Kite Connect historical daily candles: https://upstox.com/developer/api-documentation/v3/get-historical-candle-data/
 - Dhan HQ full market depth WebSocket: https://dhanhq.co/docs/v2/full-market-depth/
+
+### Real-source acceptance on your machine
+
+Open **Research readiness → End-to-end real-data acceptance**. Choose a real dataset, the validation start and later untouched final-test start, then run. The saved report audits missing month/return cells, point-in-time constituents, original TRI, corporate actions, minimum 44 training months and 12 final-test months, plus eligible numerical algorithms. A structural pass does **not** set `independently_certified=true`; actual issuer source and licensing review remain external.
+
+Kite session verification is a separate read-only in-app action. It checks login, **not** historical entitlement; the paid historical API must be exercised using your local account. The paid Kite Connect plan currently includes historical candles (Zerodha lists ₹500/month per app), while the free personal plan does not. See https://kite.trade/docs/connect/v3/historical/ and https://kite.trade/docs/connect/v3/user/.
