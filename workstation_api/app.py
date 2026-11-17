@@ -2752,6 +2752,23 @@ def register_research_hypothesis(body:ResearchHypothesisRequest):
         bad(exc)
 
 
+# Missing or interrupted SHARED DERIVED VIEW publications are repaired at startup
+# only for a bounded, integrity-checked original SQLite source. No broker calls.
+@app.on_event("startup")
+def reconcile_small_materialized_views():
+    try:
+        from . import materialized_view_recovery
+        outcome = materialized_view_recovery.recover_small_views_on_startup()
+        if outcome.get("changed"):
+            data_orchestrator.event(
+                "materialized_views", "complete",
+                "Automatically recovered interrupted shared price-view publication.")
+        elif outcome.get("state") == "blocked":
+            LOG.warning("Shared derived view recovery blocked; originals preserved.")
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        LOG.warning("Shared derived view recovery skipped: %s", type(exc).__name__)
+
+
 # Startup reconciliation is intentionally restricted to operations that were
 # previously authorized, persisted, and safe to replay from identical inputs.
 # Do not silently rerun frozen studies, reports, trading operations, or NSE MCP.
