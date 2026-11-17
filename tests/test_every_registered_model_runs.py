@@ -69,7 +69,9 @@ class EveryModelDispatchTests(unittest.TestCase):
             if name in {"gbm_fit","ou_fit","merton_fit","heston_proxy"}:
                 params={"target":"stock","ticker":"TEST00","paths":40,"steps":25}
             if spec["mode"]=="synthetic":
-                params={"steps":25,"paths":40}
+                allowed={x["key"] for x in spec["parameters"]}
+                params={key:value for key,value in {"steps":25,"paths":40}.items()
+                        if key in allowed}
             if spec["mode"]=="theoretical" and "steps" in {
                     x["key"] for x in spec["parameters"]}:
                 params={"steps":40}
