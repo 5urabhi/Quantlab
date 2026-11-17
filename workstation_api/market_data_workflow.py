@@ -19,6 +19,54 @@ SELECTIONS = frozenset({"nifty50_pit", "banknifty_pit", "watchlist", "all_nse", 
 INTERVALS = frozenset({None, 1, 5, 15, 25, 60})
 SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9._-]{0,29}$")
 MAX_STOCKS = 6000
+LARGE_HISTORY_BYTES = 1024 * 1024 * 1024
+MAX_HISTORY_BYTES = 40 * LARGE_HISTORY_BYTES
+
+
+def _model_followup(model_id: str, count: int, interval: int | None) -> dict:
+    """Model run is offered only when exact, selected stock inputs can be verified.
+
+    Single-series and TRI models require explicit ticker/benchmark selection
+    after the dataset exists; never choose a stock or convert spot into TRI.
+    """
+    if not model_id:
+        return {"eligible": False, "params": {}, "note": "No model selected."}
+    spec = model_registry.CATALOG[model_id]
+    if spec["mode"] != "historical":
+        return {"eligible": False, "params": {}, "note":
+                "This model uses another input type; use Model Laboratory."}
+    if model_id in {"gbm_fit", "ou_fit", "merton_fit", "heston_proxy"}:
+        return {"eligible": False, "params": {}, "note":
+                "Select an exact stock (or original TRI, if applicable) in Model Laboratory after download."}
+    if interval is not None:
+        return {"eligible": False, "params": {}, "note":
+                "This research model requires daily observed inputs; intraday bars are aggregated but must be reviewed."}
+    names = {p["key"] for p in spec["parameters"]}
+    params = {}
+    if "assets" in names:
+        if count < 2:
+            return {"eligible": False, "params": {}, "note":
+                    "This model needs at least two distinct mapped stocks; one cannot be silently substituted."}
+        params["assets"] = min(8, count)
+    return {"eligible": count > 0, "params": params,
+            "note": "Run only after the saved dataset has enough actual aligned returns; "
+                    "the preferred +20% sample is not inferred from calendar dates."}
+
+
+def _size_estimate(start: date, stop: date, instruments: int,
+                   interval: int | None) -> dict:
+    """Conservative rough budgeting, NOT a provider quote or measured disk."""
+    weekdays = max(0, math.ceil((stop - start).days * 5 / 7))
+    per_day = 1 if interval is None else math.ceil(375 / interval)
+    rows = int(instruments * weekdays * per_day)
+    bytes_ = rows * (96 if interval is not None else 90)
+    return {"rows_upper_estimate": rows, "bytes_upper_estimate": bytes_,
+            "large": bytes_ >= LARGE_HISTORY_BYTES,
+            "over_limit": bytes_ > MAX_HISTORY_BYTES,
+            "note": "Uncached upper-bound approximation across all matched securities, "
+                    "without subtracting holidays or verified local windows. "
+                    "Actual disk size, request limits and provider availability differ."}
+
 
 
 def _names(tickers: list[str] | None) -> list[str]:
@@ -155,6 +203,15 @@ def plan(selection: str, from_date: str, to_date: str,
         if first > recommended:
             warnings.append("Your dates may provide fewer than the model's preferred " +
                             str(requirements["preferred"]) + " observed returns (+20%).")
+    followup = _model_followup(model_id, resolved, interval)
+    capacity = _size_estimate(first, last, resolved, interval)
+    if capacity["large"]:
+        warnings.append("Large historical request: approximately " +
+                        str(round(capacity["bytes_upper_estimate"] / 2**30, 1)) +
+                        " GiB before cache reuse. Review disk capacity before approving.")
+    if capacity["over_limit"]:
+        blockers.append("Estimated source size exceeds the bounded 40 GiB per-job "
+                        "safety limit. Shorten the dates or download fewer instruments.")
     # This intentionally does not claim a precise number of uncached vendor requests.
     # Actual Dhan checkpoint manifests decide which exact ranges are fetched.
     estimate = resolved * math.ceil((last - first).days / (365 if interval is None else 90))
@@ -162,7 +219,9 @@ def plan(selection: str, from_date: str, to_date: str,
         "selection": selection, "from_date": from_date, "to_date": to_date,
         "interval": interval, "tickers": names, "model_id": model_id,
         "master_stamp": source_stamp, "membership_revision": membership_revision,
-        "resolved": resolved, "unresolved": unresolved, "day": date.today().isoformat(),
+        "resolved": resolved, "unresolved": unresolved,
+        "model_followup": followup, "capacity": capacity,
+        "day": date.today().isoformat(),
     }
     receipt = sha256(json.dumps(locked, sort_keys=True, separators=(",", ":"),
                                ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -174,6 +233,7 @@ def plan(selection: str, from_date: str, to_date: str,
             "warnings": warnings, "blockers": blockers, "next_actions": actions,
             "can_start": not blockers, "preview_token": receipt,
             "estimated_request_upper_bound": estimate,
+            "model_followup": followup, "capacity": capacity,
             "estimate_note": "Conservative total request upper bound before cache reuse; "
                              "not a vendor quote. Existing verified candles are reused.",
             "dhan": {"token_present": token_present,
@@ -189,7 +249,9 @@ def plan(selection: str, from_date: str, to_date: str,
 
 def approve(expected_token: str, selection: str, from_date: str, to_date: str,
             interval: int | None, tickers: list[str] | None,
-            model_id: str, *, allow_incomplete: bool, confirm_bulk: bool) -> dict:
+            model_id: str, *, allow_incomplete: bool, confirm_bulk: bool,
+            confirm_large_history: bool = False,
+            run_model_after_prepare: bool = False) -> dict:
     current = plan(selection, from_date, to_date, interval, tickers, model_id)
     if not isinstance(expected_token, str) or expected_token != current["preview_token"]:
         raise ValueError("The source plan changed. Review it again before downloading.")
@@ -199,6 +261,10 @@ def approve(expected_token: str, selection: str, from_date: str, to_date: str,
         raise ValueError("Confirm that historical instrument gaps make this dataset incomplete.")
     if current["instrument_count"] > 100 and not confirm_bulk:
         raise ValueError("Confirm the scope of this large download.")
+    if current["capacity"]["large"] and not confirm_large_history:
+        raise ValueError("Confirm the estimated large historical storage requirement.")
+    if run_model_after_prepare and not current["model_followup"]["eligible"]:
+        raise ValueError(current["model_followup"]["note"])
     return current
 
 
