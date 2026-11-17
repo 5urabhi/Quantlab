@@ -5,6 +5,30 @@ Last software review: **November 17, 2026**.
 Run `bash run.sh check` for current React build, Python regression, mathematics and a read-only original-source readiness doctor. `bash run.sh evaluate` additionally generates clearly labeled synthetic experiment and chart artifacts. Both keep unavailable authenticated/licensed input distinct from a code failure. The previous `scripts/local_acceptance.py` legacy-Streamlit default is retired; archived Streamlit checks require explicit `--legacy-streamlit`. This is the authoritative status
 register; older archived Streamlit/branch-specific status documents are not.
 
+## November 17: source-safe candle window crash recovery
+
+Dhan now writes each validated original candle CSV and its checksum/coverage
+receipt using an explicit pending-manifest journal. A Python process crash
+between writing the original candle file and publishing its receipt no longer
+automatically turns that checkpoint into an unrecoverable SHA mismatch.
+During the next authorized resume, QuantLab verifies the **exact original
+CSV SHA-256 and Dhan exchange/security/interval identity** before finishing
+the pending manifest publication without another broker request.
+
+If the crash happened before replacing the CSV, the previous complete
+checksum pair remains authoritative; QuantLab discards only the incomplete
+metadata journal and downloads the still-missing date window using the
+existing legal/provider-aware retry rules. If saved bytes, metadata or source
+identity disagree, it **fails closed** rather than guessing or modifying
+original market observations. Recoveries are counted in Dhan download details
+and the Database Manager activity view.
+
+Offline regression tests explicitly inject interruptions at both rename
+boundaries, tamper a saved candidate, and verify that no original price
+history is synthesized or silently replaced. This is process-interruption
+recovery; it does not promise recovery from physical drive failure or
+uncertified vendor source history.
+
 ## November 17: repository-side reliability, research and operational hardening
 
 The Data Manager **Activity & recovery** panel now exposes read-only source
