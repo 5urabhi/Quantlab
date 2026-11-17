@@ -85,6 +85,12 @@ class MarketDataCompletionTests(unittest.TestCase):
         self.assertFalse(sized["over_limit"])
         self.assertGreater(sized["rows_upper_estimate"],10_000_000)
 
+    def test_budget_never_undercounts_four_consecutive_weekdays(self):
+        # A naive ceil(days*5/7) incorrectly counts Mon-Thu as 3.
+        cap=market._size_estimate(date(2026,11,16),date(2026,11,20),1,None)
+        self.assertEqual(cap["rows_upper_estimate"],4)
+        self.assertGreaterEqual(cap["bytes_upper_estimate"],4*128)
+
     def test_model_start_does_not_call_primary_without_live_preflight(self):
         plan=self._plan()
         payload={"selection":"watchlist","from_date":self.start,
