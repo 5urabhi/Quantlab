@@ -305,8 +305,11 @@ try {
   await step('Data Manager model-aware acquisition and protected SQLite browsing',async()=>{
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
-    await page.getByRole('button',{name:'Database Manager',exact:true}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Get model data'}).click()
     const acquisition=page.getByRole('region',{name:'Automatic model data acquisition'})
     await acquisition.waitFor()
@@ -328,8 +331,11 @@ try {
   await step('source-safe alternate providers and accelerated Parquet controls',async()=>{
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
-    await page.getByRole('button',{name:'Database Manager',exact:true}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Fast analytics'}).click()
     const columnar=page.getByRole('region',{name:'Columnar analytical cache'})
     await columnar.waitFor()
@@ -352,8 +358,11 @@ try {
   await step('every-model readiness and genuine minute/depth source states',async()=>{
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
-    await page.getByRole('button',{name:'Database Manager',exact:true}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Research readiness'}).click()
     const center=page.getByRole('region',{name:'Research models readiness'})
     await center.waitFor()
@@ -384,8 +393,11 @@ try {
   await step('Zerodha second provider and original-market acceptance',async()=>{
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
-    await page.getByRole('button',{name:'Database Manager',exact:true}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Sources & provenance'}).click()
     const kite=page.getByRole('region',{name:'Zerodha second market data provider'})
     await kite.waitFor()
@@ -418,8 +430,11 @@ try {
   await step('whole-workstation health and research source reliability',async()=>{
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{name:'Data manager'}).click()
-    await page.getByRole('button',{name:'Database Manager',exact:true}).click()
     const manager=page.locator('.qm-root')
+    if(!(await manager.isVisible())) {
+      await page.getByRole('button',{name:'Database Manager',exact:true}).click()
+      await manager.waitFor()
+    }
     await manager.getByRole('button',{name:'Activity & recovery'}).click()
     await manager.getByRole('heading',{name:'Whole-workstation health'}).waitFor()
     await manager.getByRole('button',{name:'Run integrity checks'}).waitFor()
