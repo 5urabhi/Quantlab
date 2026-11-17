@@ -50,6 +50,10 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
   datasets:Dataset[];onAcquire:()=>void;onModel:()=>void
 }){
   const [dataset,setDataset]=useState('')
+  useEffect(()=>{
+    if(!dataset&&datasets.some(x=>x.id==='dhan_shared'&&x.kind==='dhan'))
+      setDataset('dhan_shared')
+  },[dataset,datasets])
   const [info,setInfo]=useState<Readiness|null>(null)
   const [recent,setRecent]=useState<Audit[]>([])
   const [evidenceAudit,setEvidenceAudit]=useState<EvidenceAudit|null>(null)
