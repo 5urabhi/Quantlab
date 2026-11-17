@@ -161,6 +161,27 @@ class KiteSecondaryProviderTests(unittest.TestCase):
             zerodha_fallback._request("https://attacker.example/x")
         self.assertEqual(self._count(),4)
 
+    def test_user_can_configure_local_kite_app_without_echoing_secrets(self):
+        with patch.dict(os.environ,{"KITE_API_KEY":"","KITE_API_SECRET":"",
+                                 "ZERODHA_API_KEY":"","ZERODHA_API_SECRET":""}):
+            response=self.client.post("/api/data-manager/zerodha/configure",json={
+                "api_key":"my_test_kite_app","api_secret":"private_test_secret",
+                "confirm_local_storage":True})
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertTrue(response.json()["configured"])
+            self.assertNotIn("private_test_secret",response.text)
+            saved=zerodha_fallback._base()/"app_credentials.json"
+            self.assertEqual(os.stat(saved).st_mode & 0o777,0o600)
+            self.assertEqual(zerodha_fallback._api_key(),"my_test_kite_app")
+            status=self.client.get("/api/data-manager/zerodha/status")
+            self.assertEqual(status.status_code,200)
+            self.assertNotIn("private_test_secret",status.text)
+            self.assertTrue(status.json()["api_secret_configured"])
+            invalid=self.client.post("/api/data-manager/zerodha/configure",json={
+                "api_key":"my_test_kite_app","api_secret":"private_test_secret",
+                "confirm_local_storage":False})
+            self.assertEqual(invalid.status_code,400)
+
     def test_official_login_nonce_and_session_are_not_exposed(self):
         login=zerodha_fallback.start_login()
         url=urlparse(login["login_url"])
