@@ -528,10 +528,7 @@ try {
     await nav('Compare & Visualize').click()
     await page.locator('.rw-top h2').waitFor()
   })
-  await step('Dhan error is visible, safe and the batch arrow opens failed stock details',async()=>{
-    // A simulated Dhan refusal only: no token, no real vendor request, no raw
-    // response body. The browser must surface the failing symbol/status
-    // independently from pagination and make the batch arrow functional.
+  await step('Download failures show actionable recovery with optional source diagnostics',async()=>{
     const fakeId='batch_baaaaaaaaaaaaaaa'
     const summary={
       id:fakeId,status:'paused',selection:'banknifty_pit',interval:1,
@@ -541,56 +538,35 @@ try {
       failure_examples:[{
         symbol:'AUBANK',code:'HTTP 401',
         diagnostic:'Dhan HTTP 401 (vendor response body hidden)',
-        explanation:'Dhan rejected this historical candle request. Verify your token and Data API subscription; the exact cause is not yet confirmed.',
+        explanation:'Dhan rejected this historical request. Check authentication and subscription.',
       }],
     }
     const batchRoutes=/\/api\/dhan\/batches(?:\/[^?]*)?(?:\?.*)?$/
-    await page.route(batchRoutes,async route=>{
-      const request=route.request()
-      if(request.method()!=='GET')return route.continue()
-      const url=new URL(request.url())
-      if(url.pathname.endsWith('/batches')){
-        return route.fulfill({status:200,contentType:'application/json',
-          body:JSON.stringify({batches:[summary]})})
-      }
-      if(url.pathname.endsWith('/'+fakeId)){
-        const failed={
-          id:'NSE_EQ:999',symbol:'AUBANK',display_name:'AU Small Finance Bank',
-          security_id:'999',exchange_segment:'NSE_EQ',instrument:'EQUITY',
-          series:'EQ',isin:'',regular_eq:true,status:'failed',rows:0,rows_added:0,
-          error:'Dhan HTTP 401 (vendor response body hidden)',
-        }
-        const filter=url.searchParams.get('status')||'all'
-        const items=filter==='all'||filter==='failed'?[failed]:[]
-        return route.fulfill({status:200,contentType:'application/json',
-          body:JSON.stringify({...summary,items,page:1,per_page:40,filtered_total:items.length})})
-      }
-      return route.continue()
+    await page.route(batchRoutes,route=>{
+      if(route.request().method()!=='GET')return route.continue()
+      const url=new URL(route.request().url())
+      const body=url.pathname.endsWith('/batches')?{batches:[summary]}:
+        url.pathname.endsWith('/'+fakeId)?
+          {...summary,items:[],page:1,per_page:40,filtered_total:0}:null
+      return body?route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify(body)}):route.continue()
     })
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{
-      name:'Download market data',
+      name:'Download market data'
     }).click()
-    const errorCard=page.getByRole('alert',{name:'Download error details'})
-    await errorCard.getByText('AUBANK',{exact:true}).waitFor()
-    await errorCard.getByText('HTTP 401',{exact:true}).waitFor()
-    await errorCard.getByText(/Dhan HTTP 401/).waitFor()
-    await errorCard.getByRole('button',{name:'Copy error details'}).waitFor()
-    await errorCard.getByRole('button',{name:'Verify token and Data API subscription'}).waitFor()
-    assert.ok(!(await errorCard.innerText()).includes('SECRET_API_TOKEN'))
-    // Past downloads is intentionally an optional disclosure in the guided
-    // UI. Open it before testing the batch-row View errors action.
-    const past=page.locator('.dh-previous-downloads')
-    if(!(await past.evaluate(el=>el.open)))await past.locator('summary').click()
-    const row=page.getByRole('button',{
-      name:'View BANK NIFTY · Historical members download details and errors',
-    })
-    await row.click()
-    await page.waitForFunction(()=>document.querySelector('#dh-batch-diagnostics')?.open===true)
-    const selected=page.getByRole('combobox',{name:'Filter download result status'})
-    assert.equal(await selected.inputValue(),'failed')
-    await page.getByRole('cell',{name:'AUBANK'}).waitFor()
-    await screenshot('02b-dhan-visible-error-and-batch-arrow')
+    const workspace=page.locator('.mdw-root')
+    await workspace.getByRole('tab',{name:'Downloads & Jobs'}).click()
+    const detail=workspace.locator('.mdw-batch-detail')
+    await detail.getByText('Dhan access needs attention').waitFor()
+    await detail.getByText(/Verify your token and historical Data API entitlement/).waitFor()
+    await detail.getByRole('button',{name:/View technical details/}).click()
+    await detail.getByText('AUBANK').waitFor()
+    await detail.getByText('HTTP 401').waitFor()
+    await detail.getByText(/Dhan HTTP 401/).waitFor()
+    assert.ok(!(await detail.innerText()).includes('SECRET_API_TOKEN'))
+    assert.equal(await detail.getByRole('button',{name:/Resume/}).isDisabled(),false)
+    await screenshot('02b-actionable-market-source-error')
     await page.unroute(batchRoutes)
     await nav('Compare & Visualize').click()
     await page.locator('.rw-top h2').waitFor()
