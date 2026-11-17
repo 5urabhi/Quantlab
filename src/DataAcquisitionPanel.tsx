@@ -16,7 +16,7 @@ type Plan = {
   model_id:string;model_title:string;dataset_id:string|null;mode:string;phase:string;
   params:Record<string,number|string>;requirements:Coverage;
   candidate_datasets:{dataset_id:string;label:string;daily_prices:boolean;files_ready:boolean}[];
-  source_chain:Source[];can_acquire:boolean;confirmation_required:boolean;
+  source_chain:Source[];next_action:{kind:string;label:string;detail:string};can_acquire:boolean;confirmation_required:boolean;
   estimated_new_dhan_requests:number;preview_token:string;evidence_note:string
 }
 type Job = {id:string;status:string;stage?:string;percent?:number;error?:string;
