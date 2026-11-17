@@ -16,6 +16,7 @@ _SECRET_KEY = re.compile(
     r"(?i)\b(access[_-]?token|api[_-]?key|api[_-]?secret|request[_-]?token|"
     r"client[_-]?secret|password|authorization|bearer|secret)\b"
     r"(\s*[:=]\s*|\s+)(?:\"|')?[^\s,;&\"']+")
+_BEARER = re.compile(r"(?i)\bbearer\s+[^\s,;&\"']+")
 _QUERY = re.compile(
     r"(?i)([?&](?:token|access_token|request_token|api_key|api_secret|"
     r"client_secret|authorization|password)=)[^&#\s]+")
@@ -49,6 +50,7 @@ def scrub(message: Any, *, limit: int = MAX_ERROR) -> str:
     # Removing absolute URLs also removes unknown vendor query parameter names
     # that might carry credentials, cookies or signed URLs.
     raw = _URL.sub("[URL REDACTED]", raw)
+    raw = _BEARER.sub("Bearer [REDACTED]", raw)
     raw = _QUERY.sub(r"\1[REDACTED]", raw)
     raw = _SECRET_KEY.sub(lambda m: m.group(1) + "=[REDACTED]", raw)
     for token in _known_secrets():
