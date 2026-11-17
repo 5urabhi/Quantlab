@@ -25,12 +25,14 @@
 .mdw-flow{display:grid;gap:14px}
 .mdw-steps{display:flex;gap:0;align-items:center;margin:0 0 2px;padding:10px;
   border:1px solid #244558;border-radius:10px;background:#101f2b}
-.mdw-steps>div{flex:1;display:flex;align-items:center;justify-content:center;
+.mdw-steps>button{flex:1;display:flex;align-items:center;justify-content:center;
   gap:9px;min-height:35px;color:#97b1c0;font-size:11px;font-weight:700;position:relative}
-.mdw-steps>div:not(:last-child):after{content:'';position:absolute;right:0;top:5px;
+.mdw-steps>button:not(:last-child):after{content:'';position:absolute;right:0;top:5px;
   height:25px;border-right:1px solid #355364}
 .mdw-steps span{width:24px;height:24px;display:grid;place-items:center;
   background:#24404d;border-radius:50%;font-weight:800}
+.mdw-steps button{border:0;background:transparent;cursor:pointer}
+.mdw-steps button:hover{color:#dcfff3;background:#17323b;border-radius:8px}
 .mdw-steps .active{color:#baffdf}.mdw-steps .active span{background:#63e2b9;color:#072e25}
 .mdw-card{background:linear-gradient(145deg,#111f2c,#101b29);
   border:1px solid #2a4656;border-radius:13px;padding:23px 25px;margin-bottom:14px;
@@ -245,7 +247,7 @@
   .mdw-batch-list{max-height:250px}
   .mdw-dataset{flex-wrap:wrap}
   .mdw-dataset-actions{width:100%;flex-direction:row;justify-content:flex-start;flex-wrap:wrap}
-  .mdw-steps>div{font-size:10px;line-height:1.25;padding:4px}
+  .mdw-steps>button{font-size:10px;line-height:1.25;padding:4px}
   .mdw-card{padding:16px}
   .mdw-hero{padding:20px}
 }
@@ -286,3 +288,16 @@
 .mdw-extension h4{font:650 14px 'Space Grotesk',sans-serif;margin:0 0 8px;color:#b3f3da}
 .mdw-extension>p{font-size:11px;color:#a6c6c9;line-height:1.6;margin:0 0 14px}
 .mdw-extension .qm-panel{margin:0}
+
+/* A step is one focused page; the other stages are not rendered. */
+.mdw-step-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:21px;
+  padding-top:15px;border-top:1px solid #2e4d59;flex-wrap:wrap}
+.mdw-step-actions .mdw-button.next{background:#6be1b9;border-color:#93f2d4;
+  color:#062f26;font-size:12px;padding:12px 17px}
+.mdw-step-actions .mdw-button.next:hover{background:#b6ffe5}
+.mdw-flow>.mdw-card{min-height:335px}
+@media(max-width:760px){
+  .mdw-step-actions{justify-content:stretch;flex-direction:column}
+  .mdw-step-actions .mdw-button{width:100%}
+  .mdw-flow>.mdw-card{min-height:0}
+}
