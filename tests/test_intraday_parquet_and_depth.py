@@ -129,11 +129,11 @@ class OriginalMicrostructureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"row count"):
             market_depth.packet_stream(
                 struct.pack("<hBBiI",12+3*16,41,1,1333,201)+
-                b"\\x00"*(3*16),200)
+                b"0"*(3*16),200)
         with self.assertRaisesRegex(ValueError,"packet size"):
             market_depth.packet_stream(
                 struct.pack("<hBBiI",12+3*16,41,1,1333,3)+
-                b"\\x00"*(2*16),200)
+                b"0"*(2*16),200)
 
     def test_historical_orderbook_csv_import_never_invents_levels(self):
         stamp="2026-09-01T09:15:00+05:30"
