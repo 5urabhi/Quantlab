@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {AlertTriangle, ArrowDownToLine, CalendarDays,
   Check, ChevronDown, Clock3, Database, FileClock, Info, LoaderCircle,
   RefreshCw, ShieldCheck} from 'lucide-react'
@@ -73,6 +73,10 @@ export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPr
   const [showAll,setShowAll]=useState(false)
   const [showUnion,setShowUnion]=useState(false)
   const [showMissing,setShowMissing]=useState(true)
+  const attemptedAutomaticSync=useRef(false)
+  const attemptedAutomaticCatalog=useRef(false)
+  const [syncProblem,setSyncProblem]=useState('')
+  const [catalogProblem,setCatalogProblem]=useState('')
   const refresh=useCallback(async()=>{
     const next=await get<MembershipStatus>('/indices/status')
     setStatus(next)
@@ -123,49 +127,68 @@ export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPr
   },[mode,fromDate,toDate,asOf,status?.available,status?.covered_through,status?.source_commit,onPlan,onPreview,supportedEnd,catalogEpoch])
   useEffect(()=>{
     if(!syncId)return
-    onSyncBusy(true)
     let active=true
     const timer=window.setInterval(()=>{
       void get<JobStatus>('/jobs/'+syncId).then(async j=>{
         if(!active||!['complete','error'].includes(j.status))return
-        window.clearInterval(timer);setSyncId('');onSyncBusy(false)
-        if(j.status==='error'){setIssue(j.error||'Historical membership sync failed');return}
-        try{await refresh()}catch(e){setIssue(e instanceof Error?e.message:String(e))}
-      }).catch(e=>{if(active){window.clearInterval(timer);setSyncId('');onSyncBusy(false);setIssue(e instanceof Error?e.message:String(e))}})
+        window.clearInterval(timer);setSyncId('')
+        if(j.status==='error'){setSyncProblem(j.error||'Historical membership sync failed');return}
+        try{await refresh()}catch(e){setSyncProblem(e instanceof Error?e.message:String(e))}
+      }).catch(e=>{if(active){window.clearInterval(timer);setSyncId('');setSyncProblem(e instanceof Error?e.message:String(e))}})
     },1500)
     return()=>{active=false;window.clearInterval(timer)}
   },[syncId,refresh,onSyncBusy])
   useEffect(()=>{
     if(!catalogJobId)return
-    onSyncBusy(true)
     let live=true
     const timer=window.setInterval(()=>{
       void get<JobStatus>('/jobs/'+catalogJobId).then(async j=>{
         if(!live||!['complete','error'].includes(j.status))return
-        window.clearInterval(timer);setCatalogJobId('');onSyncBusy(false)
-        if(j.status==='error'){setIssue(j.error||'Dhan catalog refresh failed');return}
+        window.clearInterval(timer);setCatalogJobId('')
+        if(j.status==='error'){setCatalogProblem(j.error||'Dhan catalog refresh failed');return}
         setCatalogEpoch(n=>n+1)
       }).catch(e=>{
-        if(live){window.clearInterval(timer);setCatalogJobId('');onSyncBusy(false)
-          setIssue(e instanceof Error?e.message:String(e))}
+        if(live){window.clearInterval(timer);setCatalogJobId('')
+          setCatalogProblem(e instanceof Error?e.message:String(e))}
       })
     },1500)
     return()=>{live=false;window.clearInterval(timer)}
   },[catalogJobId,onSyncBusy])
   const refreshCatalog=async()=>{
-    setIssue('')
+    setCatalogProblem('')
     try{
       const response=await get<{job_id:string}>('/dhan/instruments/refresh',{method:'POST'})
-      setCatalogJobId(response.job_id);onSyncBusy(true)
-    }catch(e){setIssue(e instanceof Error?e.message:String(e))}
+      setCatalogJobId(response.job_id)
+    }catch(e){setCatalogProblem(e instanceof Error?e.message:String(e))}
   }
   const sync=async()=>{
-    setIssue('')
+    setSyncProblem('')
     try{
       const response=await get<{job_id:string}>('/indices/sync',{method:'POST'})
-      setSyncId(response.job_id);onSyncBusy(true)
-    }catch(e){setIssue(e instanceof Error?e.message:String(e))}
+      setSyncId(response.job_id)
+    }catch(e){setSyncProblem(e instanceof Error?e.message:String(e))}
   }
+  // A new clone has no ignored local PIT source or instrument catalog.
+  // Selecting a historical index authorizes its public source checks; perform
+  // each one automatically once and preserve the current user-selected dates.
+  useEffect(()=>{
+    if(!status||attemptedAutomaticSync.current||syncId)return
+    const coveredEnd=status.covered_through?following(status.covered_through):''
+    if(status.available&&(!coveredEnd||toDate<=coveredEnd))return
+    attemptedAutomaticSync.current=true
+    void sync()
+  },[status?.available,status?.covered_through,toDate,syncId])
+  useEffect(()=>{
+    if(!catalogHealth||catalogHealth.ready||attemptedAutomaticCatalog.current||
+       catalogJobId)return
+    attemptedAutomaticCatalog.current=true
+    void refreshCatalog()
+  },[catalogHealth?.ready,catalogHealth?.code,catalogJobId])
+  // Membership and catalog refresh can run concurrently; keep download
+  // controls disabled until BOTH jobs are complete.
+  useEffect(()=>{onSyncBusy(Boolean(syncId||catalogJobId))},
+    [syncId,catalogJobId,onSyncBusy])
+
   const name=mode==='nifty50_pit'?'NIFTY 50':'BANK NIFTY'
   const memberList=plan?.asof_members||[]
   return <div className="dh-pit-panel">
