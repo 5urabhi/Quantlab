@@ -561,6 +561,7 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
     covered = list(previous.get("coverage", []))
     added = 0
     attempted = 0
+    rejected_bars = int(previous.get("rejected_provider_bars", 0))
 
     def normalize(frame: pd.DataFrame) -> pd.DataFrame:
         copy = frame.copy()
@@ -587,6 +588,13 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
             if on_progress:
                 on_progress(attempted, total, len(existing) if existing is not None else 0)
             continue
+        discarded=int(frame.attrs.get("rejected_provider_bars",0))
+        rejected_bars+=discarded
+        if discarded:
+            LOG.warning("Dhan window contained rejected provider OHLCV rows: "
+                        "security_id=%s first=%s last=%s rejected=%d accepted=%d",
+                        row["security_id"],first.isoformat(),last.isoformat(),
+                        discarded,len(frame))
         incoming = normalize(frame)
         incoming = incoming.sort_values("datetime")
         if incoming["datetime"].duplicated().any():
@@ -609,6 +617,8 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
             "instrument_id": row["id"], "display_symbol": row["symbol"],
             "interval_minutes": interval, "coverage": covered,
             "rows": int(len(combined)), "sha256": digest,
+            "rejected_provider_bars": rejected_bars,
+            "quality": "partial_source_anomalies" if rejected_bars else "all_returned_bars_valid",
             "updated_utc": _now(), "source": "DhanHQ historical OHLCV",
             "window_size_days": window_days,
             "warning": "Dhan historical OHLCV is not verified dividend-adjusted total returns.",
