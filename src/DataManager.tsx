@@ -2,6 +2,8 @@ import {useCallback, useEffect, useState} from 'react'
 import {Activity, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft, ChevronRight,
   Database, FileSpreadsheet, HardDrive, History, RefreshCw, Search, ShieldCheck, Wrench} from 'lucide-react'
 import './data-manager.css'
+import DataAcquisitionPanel from './DataAcquisitionPanel'
+import ManagedDatabaseBrowser from './ManagedDatabaseBrowser'
 
 type Dataset = {id:string;label:string;kind:string;ready:boolean;missing:string[];basis:string}
 type Event = {id:number;occurred_utc:string;category:string;status:string;summary:string}
@@ -26,7 +28,7 @@ type Table = {columns:string[];selected_columns:string[];rows:Array<Record<strin
 type Quality = {file:string;sampled_rows:number;sample_limit_reached:boolean;
   first_date_in_sample:string|null;last_date_in_sample:string|null;
   checks:Record<string,number>;status:string;caveat:string}
-type Section = 'datasets'|'explorer'|'sources'|'activity'
+type Section = 'datasets'|'acquire'|'explorer'|'database'|'sources'|'activity'
 const fmt = (n:number)=>n.toLocaleString()
 const humanBytes = (bytes:number)=>bytes<1024?bytes+' B':bytes<1024*1024?(bytes/1024).toFixed(1)+' KB':
   (bytes/(1024*1024)).toFixed(1)+' MB'
@@ -39,8 +41,9 @@ async function get<T>(path:string,options?:RequestInit):Promise<T>{
   }
   return r.json() as Promise<T>
 }
-export default function DataManager({onSelectDataset,onChanged}:{
-  onSelectDataset:(id:string)=>void;onChanged:()=>void
+export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpenModels}:{
+  onSelectDataset:(id:string)=>void;onChanged:()=>void;
+  onOpenDhan?:()=>void;onOpenModels?:()=>void
 }){
   const [section,setSection]=useState<Section>('datasets')
   const [overview,setOverview]=useState<Overview|null>(null)
@@ -94,6 +97,12 @@ export default function DataManager({onSelectDataset,onChanged}:{
   }
   const select=(id:string)=>{setSelected(id);setPage(1);setQuery('');setInput('');setSection('explorer')}
   const items=overview?.datasets||[]
+  const onAcquisitionComplete=useCallback((datasetId:string)=>{
+    onSelectDataset(datasetId)
+    setSelected(datasetId)
+    void refresh()
+    onChanged()
+  },[onSelectDataset,onChanged,refresh])
   return <div className="qm-root">
     <div className="qm-hero">
       <div><div className="qm-eyebrow"><Database size={15}/> QUANTLAB · DATA CONTROL CENTER</div>
@@ -115,9 +124,9 @@ export default function DataManager({onSelectDataset,onChanged}:{
       <div><HardDrive size={18}/><span>Catalog databases</span><strong>{overview?humanBytes(overview.statistics.catalog_database_bytes):'…'}</strong></div>
     </div>
     <nav aria-label="Database Manager sections" className="qm-tabs">
-      {(['datasets','explorer','sources','activity'] as Section[]).map(key=>
+      {(['datasets','acquire','explorer','database','sources','activity'] as Section[]).map(key=>
         <button key={key} className={section===key?'active':''} onClick={()=>setSection(key)}>
-          {{datasets:'Datasets',explorer:'Data Explorer',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
+          {{datasets:'Datasets',acquire:'Get model data',explorer:'Data Explorer',database:'Database tables',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
         </button>)}
     </nav>
     {section==='datasets'&&<div className="qm-panel">
@@ -131,6 +140,9 @@ export default function DataManager({onSelectDataset,onChanged}:{
       </button>)}</div>}
       <p className="qm-caption">Files ready means required files are present, not that financial data is independently verified.</p>
     </div>}
+    {section==='acquire'&&<DataAcquisitionPanel datasets={items} onCompleted={onAcquisitionComplete}
+      onOpenDhan={onOpenDhan} onOpenModels={onOpenModels}/>}
+    {section==='database'&&<ManagedDatabaseBrowser/>}
     {section==='explorer'&&<div className="qm-panel">
       <div className="qm-panel-title"><h3>Data Explorer</h3>
         <select aria-label="Inspect dataset" value={selected} onChange={e=>select(e.target.value)}>
