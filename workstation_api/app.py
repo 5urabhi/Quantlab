@@ -17,6 +17,7 @@ import logging
 import inspect
 import uuid
 import tempfile
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -28,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -73,7 +74,12 @@ class JobCancelled(RuntimeError):
 
 def _persist_job(snapshot: dict):
     try:
-        research_library.store_job(snapshot)
+        safe_snapshot = dict(snapshot)
+        if safe_snapshot.get("error"):
+            safe_snapshot["error"] = job_safety.scrub(safe_snapshot["error"])
+        safe_snapshot["stage"] = job_safety.stage(
+            safe_snapshot.get("stage") or "")
+        research_library.store_job(safe_snapshot)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         LOG.warning("Job summary persistence failed for %s: %s", snapshot.get("id"),
                     type(exc).__name__)
@@ -144,6 +150,7 @@ def _spawn(kind: str, action, *args, **kwargs):
 
     def work():
         LOG.info("QuantLab background job started: kind=%s job_id=%s", kind, task_id)
+        last_progress_save = [time.monotonic()]
         with JOBS_LOCK:
             JOBS[task_id]["status"] = "running"
             JOBS[task_id]["stage"] = "Preparing research inputs"
@@ -157,8 +164,17 @@ def _spawn(kind: str, action, *args, **kwargs):
             if not isinstance(percent,(int,float)) or not 0<=percent<=100:
                 raise ValueError("Invalid computational progress")
             with JOBS_LOCK:
-                JOBS[task_id]["percent"] = round(float(percent),1)
-                JOBS[task_id]["stage"] = str(stage)[:140]
+                JOBS[task_id]["percent"] = round(float(percent), 1)
+                JOBS[task_id]["stage"] = job_safety.stage(stage)
+                if time.monotonic() - last_progress_save[0] >= 2.0:
+                    checkpoint = dict(JOBS[task_id])
+                    last_progress_save[0] = time.monotonic()
+                else:
+                    checkpoint = None
+            # Durable stage checkpoints do not store licensed prices,
+            # model payloads, or user credentials. Small jobs remain cheap.
+            if checkpoint:
+                _persist_job(checkpoint)
 
         try:
             options=dict(kwargs)
@@ -172,10 +188,7 @@ def _spawn(kind: str, action, *args, **kwargs):
             _persist_job(stopped)
         except Exception as exc:
             # Do not expose vendor responses or secrets in browser logs.
-            message = str(exc)
-            token = os.getenv("DHAN_ACCESS_TOKEN", "")
-            if token:
-                message = message.replace(token, "[REDACTED]")
+            message = job_safety.scrub(exc)
             LOG.error("QuantLab background job failed: kind=%s job_id=%s message=%s",
                       kind, task_id, message[:350])
             with JOBS_LOCK:
@@ -924,9 +937,22 @@ def experiment(body: RunRequest):
 def job(job_id: str):
     with JOBS_LOCK:
         status = JOBS.get(job_id)
-        if status is None:
-            raise HTTPException(404, "Unknown job ID")
-        return dict(status)
+        if status is not None:
+            return dict(status)
+    # After Python restart, return the last source-safe SQLite receipt rather
+    # than an unexpected 404. No final result is fabricated for an interrupted
+    # task. The Job Center offers source-locked retry when eligible.
+    if not job_recovery.ID.fullmatch(job_id):
+        raise HTTPException(404, "Unknown job ID")
+    history = next((x for x in research_library.list_job_history(200)
+                    if x["id"] == job_id), None)
+    if history is None:
+        raise HTTPException(404, "Unknown job ID")
+    history["retryable"] = (history["status"] in
+                            {"error", "interrupted", "cancelled"} and
+                            job_recovery.available(job_id))
+    history["next_action"] = _job_next_action(history)
+    return history
 
 
 @app.get("/api/runs")
@@ -1490,7 +1516,7 @@ def _job_next_action(job: dict) -> str:
     if status == "interrupted":
         if job.get("retryable"):
             return ("Python restarted. Click Retry to recheck original file hashes and "
-                    "explicitly rerun the same calculation; never auto-resume.")
+                    "run the same calculation if safe restart recovery was not scheduled.")
         return "Python restarted. Reopen your saved configuration and explicitly rerun; no completion is implied."
     if status != "error":
         return "Inspect the job details and associated local research evidence."
