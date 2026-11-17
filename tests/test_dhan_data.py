@@ -30,12 +30,18 @@ class DhanOfflineTests(unittest.TestCase):
         self.assertEqual(ranges[-1][1].isoformat(),"2024-08-01")
         self.assertTrue(all((stop-start).days<=90 for start,stop in ranges))
 
-    def test_bad_ohlc_is_blocked(self):
+    def test_bad_ohlc_is_quarantined_without_changing_valid_prices(self):
         instrument=Instrument("A","1333")
         invalid=response(2)
         invalid["high"]=[98,120]
-        with self.assertRaises(ValueError):
-            candles_to_frame(invalid,instrument)
+        frame=candles_to_frame(invalid,instrument)
+        self.assertEqual(len(frame),1)
+        self.assertEqual(int(frame.iloc[0]["high"]),120)
+        self.assertEqual(frame.attrs["rejected_provider_bars"],1)
+        rejected=frame.attrs["rejected_provider_rows"]
+        self.assertEqual(len(rejected),1)
+        self.assertIn("impossible_high",rejected.iloc[0]["reason"])
+        self.assertEqual(int(rejected.iloc[0]["high"]),98)
 
     def test_mixed_bad_provider_bars_are_quarantined_without_synthetic_prices(self):
         inst=Instrument("BANDHANBNK","2263")
