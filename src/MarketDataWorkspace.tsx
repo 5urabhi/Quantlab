@@ -47,7 +47,7 @@ type KiteStatus = {api_key_configured:boolean;api_secret_configured:boolean;
   token_present:boolean;master_current:boolean;note?:string}
 type Props = {initialPage?:Page;datasets:Datum[];onDataChanged:()=>void;
   onSelectDataset:(id:string)=>void;onOpenModels:()=>void;
-  onRequestDelete:(dataset:Datum)=>void}
+  onRequestDelete:(datasetId:string)=>void}
 
 const modeNames:Record<Selection,string>={
   nifty50_pit:'NIFTY 50',banknifty_pit:'BANK NIFTY',watchlist:'My stocks',
@@ -171,7 +171,6 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
   const tickers=useMemo(()=>symbolList(tickerText),[tickerText])
   const completion=useMemo(()=>batches.find(b=>b.id===selectedBatch)||detail,[batches,selectedBatch,detail])
   const selected=useMemo(()=>datasets.find(d=>d.id===modelDataset),[datasets,modelDataset])
-  const estimatedPages=plan?.instrument_count||0
 
   const refresh=useCallback(async()=>{
     const results=await Promise.allSettled([
@@ -618,7 +617,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
             Use in models <ArrowRight size={15}/></button>
           <button type="button" onClick={()=>{setModelDataset(d.id);setPage('get')}}>Extend / complete</button>
           <button type="button" className="mdw-delete"
-            onClick={()=>onRequestDelete(d)}><Trash2 size={15}/> Delete</button>
+            onClick={()=>onRequestDelete(d.id)}><Trash2 size={15}/> Delete</button>
         </div>
       </article>)}</div>
     </section>}
