@@ -630,6 +630,22 @@ def data_manager_research_overview(dataset_id: str = ""):
         bad(exc)
 
 
+@app.get("/api/data-manager/research/evidence-audit")
+def data_manager_research_evidence_audit(
+        dataset_id: str,
+        validation_start: str = "", final_test_start: str = ""):
+    """Existing strict PIT/benchmark/total-return audit as an in-app drill-down."""
+    try:
+        if not 1 <= len(dataset_id) <= 120:
+            raise ValueError("Select a valid original dataset")
+        return historical_readiness.inspect(
+            dataset_id,
+            validation_start=validation_start or None,
+            final_test_start=final_test_start or None)
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        bad(exc)
+
+
 @app.get("/api/data-manager/research/audits")
 def data_manager_research_audits(limit: int = 15):
     try:
