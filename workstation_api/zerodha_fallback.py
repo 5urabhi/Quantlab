@@ -111,7 +111,7 @@ def _request(path: str, *, method: str = "GET",
     if method not in ("GET", "POST"):
         raise ValueError("Kite fallback is read-only; unsupported HTTP method")
     if method == "POST" and path != "/session/token":
-        raise ValueError("Only the Kite login token exchange may POST")
+        raise ValueError("Kite data provider is read-only; only login token exchange may POST")
     key = _api_key()
     token = _access_token()
     if not KEY.fullmatch(key) or (need_auth and not TOKEN.fullmatch(token)):
