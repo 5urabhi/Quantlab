@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -2255,6 +2255,40 @@ def market_data_start(body: MarketDataStart):
             model_params=approved["model_followup"]["params"])
     return create_dhan_batch(request)
 
+
+
+class SecondaryBatchRecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    batch_id: str = Field(pattern=r"^batch_[0-9a-f]{16}$")
+    preview_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirm_secondary: bool = False
+
+
+@app.get("/api/market-data/secondary/plan")
+def market_secondary_plan(batch_id: str):
+    try:
+        return batch_secondary_recovery.preview(batch_id)
+    except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
+        bad(exc)
+
+
+@app.post("/api/market-data/secondary/recover")
+def market_secondary_recover(body: SecondaryBatchRecoveryRequest):
+    try:
+        batch_secondary_recovery.approve(
+            body.batch_id, body.preview_token,
+            confirm_secondary=body.confirm_secondary)
+        with JOBS_LOCK:
+            if any(job["status"] in {"queued","running"} for job in JOBS.values()):
+                raise HTTPException(409, "Complete the active data job before requesting "
+                                    "secondary-provider recovery.")
+        return _spawn("market_secondary_recovery",
+                      batch_secondary_recovery.execute,
+                      body.batch_id, body.preview_token)
+    except HTTPException:
+        raise
+    except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
+        bad(exc)
 
 
 BATCH_CANCEL_EVENTS: dict[str, Event] = {}
