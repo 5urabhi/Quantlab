@@ -301,16 +301,18 @@ def series(identity: str, start: str = "", end: str = "",
         result = conn.execute(
             "SELECT session_date,close,source_sha256 FROM read_parquet(?) "
             "WHERE identity=? AND session_date>=? AND session_date<=? "
-            "ORDER BY session_date LIMIT ?",
+            "ORDER BY session_date DESC LIMIT ?",
             [paths, identity, first.isoformat(), last.isoformat(), limit + 1],
         ).fetchall()
     # A write concurrent with the query invalidates this result.
     if _signature() != manifest["source_signature"]:
         raise ValueError("Original market data changed during query; refresh the cache")
+    # Fetch most recent requested observations, then display them oldest→newest.
+    selected = list(reversed(result[:limit]))
     return {
         "identity": identity,
         "rows": [{"date": day.isoformat(), "close": close,
-                  "source_sha256": checksum} for day, close, checksum in result[:limit]],
+                  "source_sha256": checksum} for day, close, checksum in selected],
         "has_more": len(result) > limit, "limit": limit, "source": "original_Dhan_closes",
         "basis": "unadjusted_close", "source_unchanged": True,
         "note": "Columnar results are original unadjusted closes, not dividend-inclusive TRI.",
