@@ -22,13 +22,13 @@ type BatchSummary = {
   id:string;status:string;created_utc:string;updated_utc?:string;selection:SelectionMode;
   interval:number|null;from_date:string;to_date:string;total:number;processed:number;
   counts:Record<string,number>;current_symbol:string|null;current_window?:string|null;prepared_dataset_id?:string|null;has_price_benchmark?:boolean;
-  errors:number;warning:string;failure_examples?:FailureExample[]
+  errors:number;warning:string;failure_examples?:FailureExample[];rejected_provider_bars?:number
   historical_index_name?:string|null;historical_union_count?:number
   historical_unresolved?:Array<{symbol:string;reason:string}>
   index_spot?:{status:string;rows?:number;file?:string;error?:string;warning?:string;identity_source?:string;reference?:string}
 }
 type BatchDetails = BatchSummary & {
-  items:Array<CatalogItem & {status:string;rows:number;rows_added:number;windows_completed?:number;windows_total?:number;error?:string|null}>
+  items:Array<CatalogItem & {status:string;rows:number;rows_added:number;windows_completed?:number;windows_total?:number;error?:string|null;rejected_provider_bars?:number}>
   page:number;per_page:number;filtered_total:number
 }
 type Job = {job_id:string;batch?:BatchSummary}
@@ -650,6 +650,11 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
         <div className="dh-batch-title"><div><strong>Batch {details.id.slice(-8)}</strong><span> · {interpretMode(details.selection)} · {fmt(details.total)} instruments</span></div>
           <Pill tone={details.status==='completed'?'good':currentActive?'blue':'warning'}>{statusText(details.status)}</Pill></div>
         <div className="dh-meter"><span style={{width:progress+'%'}}/></div>
+        {(details.rejected_provider_bars||0)>0&&<div className="dh-simple-warning" role="status">
+          <strong>Provider candle quality: {fmt(details.rejected_provider_bars||0)} invalid OHLCV bars excluded.</strong>
+          {' '}Their original values are recorded separately in the local Dhan source-quality audit files.
+          No missing prices were filled in. Data from affected sessions may be incomplete.
+        </div>}
         {details.errors>0&&<section className="dh-visible-errors" role="alert"
           aria-label="Download error details">
           <div className="dh-visible-errors-head"><CircleAlert size={23}/><div>
@@ -736,7 +741,8 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
         <div className="dh-result-table"><table><thead><tr><th>Symbol</th><th>Security ID</th><th>Status</th><th>Rows</th><th>Details</th></tr></thead><tbody>
           {details.items.map(item=><tr key={item.id}><td><strong>{item.symbol}</strong><small>{item.exchange_segment}</small></td><td>{item.security_id}</td>
             <td><Pill tone={['complete','cached'].includes(item.status)?'good':item.status==='failed'?'warning':'muted'}>{statusText(item.status)}</Pill></td>
-            <td>{fmt(item.rows||0)}{item.windows_total? <small>{item.windows_completed||0}/{item.windows_total} date windows</small>:null}</td><td>{item.error?<span className="dh-error-note" title={item.error}>{item.error}</span>:
+            <td>{fmt(item.rows||0)}{item.windows_total? <small>{item.windows_completed||0}/{item.windows_total} date windows</small>:null}
+               {(item.rejected_provider_bars||0)>0&&<small>⚠ {fmt(item.rejected_provider_bars||0)} source bars rejected</small>}</td><td>{item.error?<span className="dh-error-note" title={item.error}>{item.error}</span>:
               ['complete','cached'].includes(item.status)?<button className="dh-view" onClick={()=>previewRow(item)}>Preview candles</button>:'—'}</td></tr>)}
         </tbody></table></div>
         <div className="dh-pages"><button disabled={detailPage<=1} onClick={()=>setDetailPage(v=>v-1)}><ChevronLeft size={15}/> Previous</button>
