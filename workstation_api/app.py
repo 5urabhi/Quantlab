@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -296,6 +296,65 @@ def health():
 @app.get("/api/datasets")
 def datasets():
     return {"datasets": service.datasets()}
+
+
+@app.get("/api/data-manager/overview")
+def data_manager_overview():
+    return data_orchestrator.overview()
+
+
+@app.get("/api/data-manager/sources")
+def data_manager_sources():
+    return data_orchestrator.sources()
+
+
+@app.get("/api/data-manager/activity")
+def data_manager_activity(limit: int = 40):
+    try:
+        return {"events": data_orchestrator.activity(limit)}
+    except ValueError as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/datasets/{dataset_id}")
+def data_manager_dataset(dataset_id: str):
+    try:
+        return data_orchestrator.detail(dataset_id)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/datasets/{dataset_id}/table")
+def data_manager_table(dataset_id: str, file: str = "prices.csv", page: int = 1,
+                       per_page: int = 50, columns: str = "", query: str = ""):
+    try:
+        return data_orchestrator.table(dataset_id, file, page=page,
+                                       per_page=per_page, columns=columns, query=query)
+    except (ValueError, OSError, UnicodeError, __import__("csv").Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/datasets/{dataset_id}/quality")
+def data_manager_quality(dataset_id: str, file: str = "prices.csv"):
+    try:
+        return data_orchestrator.profile(dataset_id, file)
+    except (ValueError, OSError, UnicodeError, __import__("csv").Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/model-requirements/{model_id}")
+def data_manager_model_requirements(model_id: str, dataset_id: str = ""):
+    try:
+        return data_orchestrator.requirements(model_id, dataset_id)
+    except (ValueError, OSError, KeyError) as exc:
+        bad(exc)
+
+
+@app.post("/api/data-manager/maintenance")
+def data_manager_maintenance():
+    # Local original candles and evidence are immutable. Only missing
+    # derived views are eligible for source-safe automatic reconstruction.
+    return _spawn("data_manager_maintenance", data_orchestrator.safe_maintenance)
 
 
 @app.post("/api/datasets/synthetic")
