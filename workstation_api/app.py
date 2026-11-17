@@ -8,6 +8,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from threading import Event, Lock
+import sqlite3
 from typing import Literal
 from urllib.request import Request as UrlRequest, urlopen
 import os
@@ -2173,3 +2174,70 @@ def register_research_hypothesis(body:ResearchHypothesisRequest):
             body.planned_dataset_id,body.primary_metric,body.success_criterion,body.design)
     except Exception as exc:
         bad(exc)
+
+
+# Startup reconciliation is intentionally restricted to operations that were
+# previously authorized, persisted, and safe to replay from identical inputs.
+# Do not silently rerun frozen studies, reports, trading operations, or NSE MCP.
+@app.on_event("startup")
+def reconcile_interrupted_research():
+    try:
+        records = research_library.list_job_history(100)
+    except (OSError, sqlite3.Error, ValueError):
+        LOG.warning("Automatic recovery catalog unavailable; other endpoints stay online")
+        return
+    restarted = 0
+    for record in records:
+        if restarted >= 2:
+            break
+        job_id = record["id"]
+        if record["status"] != "interrupted" or record["kind"] not in {
+                "workspace_parameter_sweep", "workspace_grid_sweep",
+                "workspace_validation"}:
+            continue
+        if not job_recovery.available(job_id):
+            continue
+        # Changed source files/code or a missing dataset block automatic replay.
+        try:
+            kind, args, kwargs = job_recovery.restore(job_id)
+        except (ValueError, OSError, TypeError):
+            continue
+        if not data_orchestrator.claim_automatic_retry(job_id):
+            continue
+        try:
+            result = _spawn(kind, RECOVERABLE_ACTIONS[kind], *args, **kwargs)
+            data_orchestrator.record_automatic_retry(job_id, "queued")
+            data_orchestrator.event(
+                "job_recovery", "complete",
+                "Resumed source-locked research job as " + result["job_id"])
+            restarted += 1
+        except Exception:
+            data_orchestrator.record_automatic_retry(job_id, "failed")
+            data_orchestrator.event("job_recovery", "blocked",
+                                    "Research retry could not be scheduled; source was preserved.")
+
+    # Resume at most one previously authorized read-only Dhan batch.
+    # A paused/cancelled/failed batch is never restarted without the user.
+    if os.getenv("DHAN_ACCESS_TOKEN"):
+        try:
+            for batch in dhan_workspace.list_batches():
+                if batch["status"] != "interrupted":
+                    continue
+                original_id = batch["id"]
+                with JOBS_LOCK:
+                    if len([row for row in JOBS.values()
+                            if row["status"] in {"queued", "running"}]) >= MAX_ACTIVE_LOCAL_JOBS:
+                        break
+                cancel = Event()
+                BATCH_CANCEL_EVENTS[original_id] = cancel
+                try:
+                    _spawn("dhan_bulk", _run_bulk, original_id, cancel)
+                    data_orchestrator.event("batch_recovery", "complete",
+                                            "Resumed interrupted Dhan batch " + original_id)
+                except Exception:
+                    BATCH_CANCEL_EVENTS.pop(original_id, None)
+                    data_orchestrator.event("batch_recovery", "blocked",
+                                            "Could not resume interrupted batch " + original_id)
+                break
+        except (OSError, ValueError):
+            LOG.warning("Read-only Dhan batch recovery inventory unavailable")
