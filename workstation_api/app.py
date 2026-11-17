@@ -2145,6 +2145,8 @@ class MarketDataStart(BaseModel):
     confirm_readonly: bool = False
     confirm_incomplete: bool = False
     confirm_bulk: bool = False
+    confirm_large_history: bool = False
+    run_model_after_prepare: bool = False
     include_index_spot: bool = False
 
 
@@ -2230,7 +2232,9 @@ def market_data_start(body: MarketDataStart):
             body.preview_token, body.selection, body.from_date, body.to_date,
             body.interval, body.tickers, body.model_id,
             allow_incomplete=body.confirm_incomplete,
-            confirm_bulk=body.confirm_bulk)
+            confirm_bulk=body.confirm_bulk,
+            confirm_large_history=body.confirm_large_history,
+            run_model_after_prepare=body.run_model_after_prepare)
     except Exception as exc:
         bad(exc)
     # An existing token's presence is NOT verification. Check the live
@@ -2245,6 +2249,10 @@ def market_data_start(body: MarketDataStart):
         interval=body.interval, acknowledged_bulk=body.confirm_bulk,
         acknowledged_gaps=body.confirm_incomplete,
         include_index_spot=body.include_index_spot)
+    if body.run_model_after_prepare:
+        return _queue_dhan_batch(
+            request, model_id=body.model_id,
+            model_params=approved["model_followup"]["params"])
     return create_dhan_batch(request)
 
 
@@ -2401,11 +2409,60 @@ def _run_bulk(batch_id: str, cancel: Event):
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
 
 
-@app.post("/api/dhan/batches")
-def create_dhan_batch(body: DhanBatchCreate):
+def _run_bulk_with_model(batch_id: str, cancel: Event, model_id: str,
+                         params: dict, progress=None) -> dict:
+    """Continue approved Dhan acquisition after verifying actual model inputs.
+
+    No extra provider calls beyond the approved window, no imaginary candles,
+    and no saved empirical run without sufficient source-backed observations.
+    """
+    if progress:
+        progress(2, "Downloading and preparing original Dhan data")
+    outcome = _run_bulk(batch_id, cancel)
+    saved_id = ((outcome.get("automatic_preparation") or {}).get("dataset_id")
+                or outcome.get("prepared_dataset_id"))
+    if not saved_id or cancel.is_set():
+        outcome["model_research"] = {
+            "status": "incomplete", "model_id": model_id,
+            "message": "Model execution was not attempted: the Dhan batch was "
+                       "interrupted, incomplete or could not be prepared.",
+            "next_action": "Review missing instruments in Downloads & Jobs."}
+        return outcome
+    if progress:
+        progress(87, "Checking actual model returns and the preferred +20% buffer")
+    try:
+        measured = model_data_manager.inspect(model_id, saved_id, params)
+        if not measured.get("runnable") or (measured.get("missing_to_target") or 0) > 0:
+            outcome["model_research"] = {
+                "status": "incomplete", "model_id": model_id,
+                "dataset_id": saved_id,
+                "observed_returns": measured.get("common_returns", 0),
+                "minimum_returns": measured.get("min_returns"),
+                "preferred_returns": measured.get("target_returns"),
+                "missing_to_target": measured.get("missing_to_target"),
+                "message": "Prepared data is genuine but has fewer aligned observations "
+                           "than the model's preferred +20% target. Approve another "
+                           "extension or use the available data in Model Laboratory.",
+                "next_action": "Open My Datasets → Extend / complete."}
+            return outcome
+        if progress:
+            progress(91, "Running and saving source-bound research")
+        outcome["model_research"] = research_workflow.execute(
+            model_id, saved_id, params,
+            confirm_download=False, prepare_buffer=False)
+    except (ValueError, OSError, KeyError) as exc:
+        outcome["model_research"] = {
+            "status": "blocked", "model_id": model_id, "dataset_id": saved_id,
+            "message": job_safety.scrub(exc)[:240],
+            "next_action": "Review exact inputs in Model Laboratory."}
+    return outcome
+
+
+def _queue_dhan_batch(body: DhanBatchCreate, *,
+                      model_id: str = "", model_params: dict | None = None):
+    """One authoritative Dhan batch writer for advanced and guided flows."""
     if not os.getenv("DHAN_ACCESS_TOKEN"):
-        raise HTTPException(400, "Set DHAN_ACCESS_TOKEN in the project .env and restart")
-    # Refuse a simultaneous second batch before creating its manifest.
+        raise HTTPException(400, "Connect Dhan Data API before downloading")
     with JOBS_LOCK:
         if any(task["status"] in {"queued", "running"} for task in JOBS.values()):
             raise HTTPException(409, "A research or data job is already running")
@@ -2418,13 +2475,22 @@ def create_dhan_batch(body: DhanBatchCreate):
     BATCH_CANCEL_EVENTS[batch_id] = cancel
     dhan_workspace.schedule_batch(batch_id)
     try:
-        job = _spawn("dhan_bulk", _run_bulk, batch_id, cancel)
+        if model_id:
+            job = _spawn("dhan_bulk", _run_bulk_with_model, batch_id, cancel,
+                         model_id, model_params or {})
+        else:
+            job = _spawn("dhan_bulk", _run_bulk, batch_id, cancel)
     except Exception:
         dhan_workspace.unschedule_batch(batch_id)
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
         raise
-    return {**job, "batch": dhan_workspace.batch_details(batch_id)}
+    return {**job, "batch": dhan_workspace.batch_details(batch_id),
+            "model_followup_requested": bool(model_id)}
 
+
+@app.post("/api/dhan/batches")
+def create_dhan_batch(body: DhanBatchCreate):
+    return _queue_dhan_batch(body)
 
 @app.post("/api/dhan/batches/{batch_id}/resume")
 def resume_dhan_batch(batch_id: str):
