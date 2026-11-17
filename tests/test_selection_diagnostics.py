@@ -192,7 +192,7 @@ class SourceBoundSelectionEndpointTests(unittest.TestCase):
         self.assertEqual(body["evidence_class"],"synthetic_demo")
         self.assertEqual(body["training_months_initial"],36)
         self.assertFalse(body["certifies_real_market_performance"])
-        self.assertIn("full-sample",body["warning"])
+        self.assertIn("re-fit each archived strategy",body["warning"])
         self.assertGreaterEqual(body["fold_count"],2)
         # Refuse an unsupported embargo without silently dropping it.
         bad=self.client.post("/api/workspace/results/chronological-selection",json={
