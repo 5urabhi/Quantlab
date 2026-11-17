@@ -164,7 +164,8 @@ def browse(*, view: str = "all", as_of: str = "", sector: str = "",
     try:
         con.row_factory=sqlite3.Row
         sectors=[]
-        if _sector_available(con):
+        has_sector=_sector_available(con)
+        if has_sector:
             sectors=[r[0] for r in con.execute(
                 "SELECT DISTINCT sector FROM sector_history WHERE effective_date<=? "
                 "ORDER BY sector LIMIT 100",(day,)).fetchall()]
