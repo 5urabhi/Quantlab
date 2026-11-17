@@ -13,7 +13,9 @@ type Parameter={
 type ModelSpec={
   id:string;group:string;title:string;mode:'synthetic'|'theoretical'|'historical'|'market';
   min_observations:number;description:string;formula:string;status:string;
-  parameters:Parameter[];chart:string
+  implementation_status:'implemented'|string;
+  evidence_type:'simulation'|'theory'|'observed_history'|'observed_quote';
+  setup_steps:string[];parameters:Parameter[];chart:string
 }
 type Datum={id:string;label:string;has_prices:boolean;ready:boolean;source_interval_minutes?:number|null}
 type LabResult={
@@ -33,11 +35,14 @@ type Readiness={dataset_id:string;frequency?:string;observed_dates?:number;
   eligible_assets_60?:number;eligible_assets_180?:number;has_prices:boolean;
   sample_start?:string;sample_end?:string;benchmark_kind?:string;warning?:string;
   available_symbols?:string[]}
+type ModelSetupStep={title:string;state:'ready'|'action_required';detail:string;action_kind:string}
 type ModelReadinessMatrix={
-  total_models:number;math_ready:number;historical_source_ready:number;
+  total_models:number;implemented_models:number;math_ready:number;historical_source_ready:number;
   option_source_ready:number;input_blocked:number;dataset_label:string;
-  data_problem:string;
+  dataset_id?:string|null;data_problem:string;
   models:{id:string;group:string;title:string;mode:string;status:string;
+    implementation_status:string;implementation_ready:boolean;
+    evidence_type:string;setup_steps:ModelSetupStep[];next_action_kind:string;
     source_ready:boolean;mathematics_ready:boolean;detail:string;next_action:string}[]
 }
 type ModelSourceOptions={
@@ -87,8 +92,12 @@ type ResultView='configure'|'figures'|'numbers'|'method'
 const SECTIONS=['Stochastic Processes','Volatility & Econometrics','Derivatives & Options',
   'Portfolio Optimization','Tail Risk & Inference','3D Visual Laboratory']
 const MODE_LABELS:Record<ModelSpec['mode'],string>={
-  synthetic:'SEEDED SIMULATION · DEMO',theoretical:'THEORETICAL',
-  historical:'HISTORICAL DATA MODEL',market:'OBSERVED QUOTE · MODEL VALUE'
+  synthetic:'SIMULATED SCENARIOS',theoretical:'THEORETICAL CALCULATION',
+  historical:'OBSERVED HISTORY REQUIRED',market:'ORIGINAL OPTION QUOTE REQUIRED'
+}
+const MODEL_BADGE:Record<ModelSpec['mode'],string>={
+  synthetic:'No live prices needed',theoretical:'No live prices needed',
+  historical:'Needs actual stock returns',market:'Needs an original option contract'
 }
 const MARKET_PAIRS=[
   {base:'gbm',market:'gbm_fit',label:'Fit to historical data (train / test)'},
@@ -330,6 +339,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       :['theoretical','synthetic'].includes(spec.mode)))
     &&(spec.title+' '+spec.description+' '+spec.id).toLowerCase().includes(modelSearch.trim().toLowerCase()))
   const selected=catalog.find(spec=>spec.id===modelId)
+  const selectedReadiness=matrix?.models.find(m=>m.id===selected?.id)
   const modelPair=MARKET_PAIRS.find(pair=>pair.base===selected?.id||pair.market===selected?.id)
   const matchedStocks=sourceChoices?.candidates.filter(candidate=>
     (candidate.display_name||candidate.ticker).toLowerCase().includes(stockSearch.trim().toLowerCase())
@@ -429,6 +439,13 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
     setModelId(id);setModelSearch('');setModelFilter('all');setResult(null);setError(null);setView('configure')
   }
   const observedNeeded=selected?.mode==='historical'||selected?.mode==='market'
+  // The shared source is a logical library, not another user-created dataset.
+  // Never switch an explicitly chosen source or select a ticker without consent.
+  useEffect(()=>{
+    if(selectedDataset)return
+    if(datasets.some(d=>d.id==='dhan_shared'&&d.has_prices))
+      onSelectDataset('dhan_shared')
+  },[selectedDataset,datasets,onSelectDataset])
   useEffect(()=>{
     setSourceChoices(null);setSourceChoiceError('')
     if(!singleSeries||!selectedDataset||!selected)return
@@ -561,11 +578,86 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setWorking(false)}
   }
+  const resultReady=Boolean(result&&result.model_id===selected?.id)
+  const setupStepReady=(step:ModelSetupStep):boolean=>{
+    if(step.action_kind==='select_dataset')return Boolean(selectedDataset&&readiness?.has_prices!==false)
+    if(step.action_kind==='select_stock')return Boolean(
+      singleSeries&&((params.target==='benchmark_tri'&&sourceChoices?.tri.runnable)||
+        (params.target==='stock'&&params.ticker&&sourceChoices?.candidates.some(
+          c=>c.ticker===params.ticker))))
+    if(step.action_kind==='configure_assets')return Boolean(
+      dataPlan&&dataPlan.assets_found!==undefined&&dataPlan.assets_found>=requestedAssets)
+    if(step.action_kind==='get_history')return Boolean(dataPlan?.runnable)
+    if(step.action_kind==='option_quotes')return quoteRefs.length>0
+    if(step.action_kind==='select_quote')return quoteRefs.some(q=>q.value===params.quote)
+    if(step.action_kind==='open_model')return step.title==='Run and inspect result'?
+      resultReady:step.state==='ready'
+    if(step.action_kind==='run_math'&&step.title.includes('Generate'))return resultReady
+    return step.state==='ready'
+  }
+  const setupSteps=selectedReadiness?.setup_steps||[]
+  const nextAction=(!selected||resultReady)?'review':
+    !observedNeeded?'run_math':
+    !selectedDataset?'select_dataset':
+    selected.mode==='market'&&!quoteRefs.some(q=>q.value===params.quote)?
+      (quoteRefs.length?'select_quote':'option_quotes'):
+    singleSeries&&params.target==='stock'&&!params.ticker?'select_stock':
+    singleSeries&&params.target==='benchmark_tri'&&!sourceChoices?.tri.runnable?
+      'data_library':
+    planLoading?'review':
+    dataPlan?.can_download&&!dataPlan.runnable?'get_history':
+    dataPlan?.runnable?'run':
+    (dataPlan?.next_action?.kind||selectedReadiness?.next_action_kind||'data_library')
+  const performModelStep=(kind:string)=>{
+    setView('configure')
+    const focus=(query:string)=>{
+      window.setTimeout(()=>{
+        const target=document.querySelector<HTMLElement>(query)
+        target?.scrollIntoView({behavior:'smooth',block:'center'})
+        target?.focus()
+      },60)
+    }
+    if(kind==='run_math'||kind==='run'||(kind==='open_model'&&!insufficient)){
+      if(!insufficient)void run()
+    }else if(kind==='select_stock'){
+      if(singleSeries&&params.target==='benchmark_tri')
+        setParams(prev=>({...prev,target:'stock',ticker:''}))
+      focus('[aria-label="Select a stock to run or complete"]')
+    }else if(kind==='select_quote'){
+      focus('[aria-label="Select an original option quote contract"]')
+    }else if(kind==='option_quotes'){
+      if(!selectedDataset){onOpenData?.();return}
+      focus('[aria-label="Import original provider option quotes"]')
+    }else if(kind==='select_dataset'){
+      if(!datasets.length){onOpenData?.();return}
+      focus('[aria-label="Model laboratory source dataset"]')
+    }else if(kind==='get_history'){
+      if(dataPlan?.can_download)void extendHistory()
+      else onOpenData?.()
+    }else if(kind==='data_library'||kind==='acquisition'){
+      onOpenData?.()
+    }else if(kind==='configure_assets'){
+      focus('[aria-label="Model parameter: assets"]')
+    }else{
+      focus('#ql-experiment-setup')
+    }
+  }
+  const actionText=(kind:string)=>{
+    if(kind==='run_math'||kind==='run')return 'Run model now'
+    if(kind==='select_stock')return 'Choose exact stock'
+    if(kind==='select_quote')return 'Choose saved contract'
+    if(kind==='option_quotes')return 'Get original option quotes'
+    if(kind==='select_dataset')return 'Choose market data'
+    if(kind==='get_history')return 'Complete historical data (+20%)'
+    if(kind==='data_library'||kind==='acquisition')return 'Resolve original data'
+    if(kind==='configure_assets')return 'Configure asset count'
+    return 'Open model setup'
+  }
   const workflowInstruction=result&&result.model_id===selected?.id?
     'Your run is saved. Inspect the diagnostic comparison and export any figure.':
     !selected?'Choose a mathematical model.':
     !observedNeeded?'Parameters are ready; click Run selected model to compute.':
-    !selectedDataset?'Choose one saved research dataset to continue.':
+    !selectedDataset?'No original dataset is available. Open Market Library to acquire the required stock or quote source.':
     selected.mode==='market'&&!params.quote?
       'Fetch a read-only Dhan option chain or import original option quotes, then choose a contract.':
     singleSeries&&params.target==='stock'&&!params.ticker?
@@ -580,7 +672,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
   const dataHint=useMemo(()=>{
     if(!observedNeeded)return 'Mathematical engine ready. Inputs are assumptions; any simulated paths are artificial.'
     if(selected?.mode==='market')return 'Use a saved original option bid/ask and expiry; option model outputs remain theoretical valuations.'
-    if(!selectedDataset)return 'Select a saved market dataset first.'
+    if(!selectedDataset)return 'The shared Market Data Library is empty. Acquire the required original source before running this model.'
     if(singleSeries&&params.target==='stock'&&!params.ticker)return (
       'Choose a named stock below. Dataset-wide price dates do not mean every stock '
       +'has the same number of usable returns.')
@@ -614,19 +706,27 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
         <small>{catalog.filter(m=>m.group===name).length}</small>
       </button>)}
     </nav>
+    <div className="ql-implementation-summary" role="status">
+      <CheckCircle2 size={17}/>
+      <strong>{matrix?.implemented_models??catalog.filter(m=>m.status==='runnable').length}
+        /{matrix?.total_models??catalog.length} registered mathematical implementations</strong>
+      <span>Implemented ≠ source-ready ≠ independently verified market performance.
+        Simulation and theory are working calculation modes, not unfinished demos.</span>
+    </div>
     <details className="ql-model-matrix" aria-label="All model input readiness">
       <summary><div><span className="ql-kicker">MODEL COMPLETENESS / LIVE SOURCE CHECKLIST</span>
         <h3>What can run with the selected data?</h3>
         <p>Mathematical models always compute. Historical fits and option-quote calculations
           depend on genuine local source inputs. Click to inspect every model and its next action.</p></div>
         {matrix&&<span className="ql-model-matrix-count">
-          {matrix.total_models} registered · {matrix.historical_source_ready} historical source-ready ·
+          {matrix.implemented_models} implemented · {matrix.historical_source_ready} historical source-ready ·
           {matrix.option_source_ready} quote-ready · {matrix.input_blocked} need inputs
         </span>}</summary>
       {matrixLoading&&<p className="ql-note" role="status">Checking local dataset and saved quote evidence…</p>}
       {matrixError&&<p className="ql-alert bad" role="alert">{matrixError}</p>}
       {matrix&&<><div className="ql-matrix-summary">
-        <div><strong>{matrix.math_ready}</strong><small>Math and simulations runnable (assumptions)</small></div>
+        <div><strong>{matrix.implemented_models}</strong><small>Algorithms implemented</small></div>
+        <div><strong>{matrix.math_ready}</strong><small>Theoretical / simulation inputs ready</small></div>
         <div><strong>{matrix.historical_source_ready}</strong><small>Historical data source-ready</small></div>
         <div><strong>{matrix.option_source_ready}</strong><small>Original quote source-ready</small></div>
         <div><strong>{matrix.input_blocked}</strong><small>Missing model-specific inputs</small></div>
@@ -635,16 +735,16 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       <div className="ql-matrix-models">
         {matrix.models.map(entry=><button type="button" key={entry.id}
           onClick={()=>{setGroup(entry.group);changeModel(entry.id)}}>
-          <strong>{entry.title}</strong><span className={'ql-matrix-status '+entry.status}>
+          <strong>{entry.title}</strong><span className="ql-impl-badge">
+            {entry.implementation_ready?'Implemented':'Implementation required'}</span>
+          <span className={'ql-matrix-status '+entry.status}>
             {entry.status==='math_ready'?'Math runnable':
              entry.status==='source_available'?'Source available':
              entry.status==='need_option_quote'?'Needs option quote':
              entry.status==='fixture_only'?'Synthetic test fixture':'Needs historical data'}</span>
-          <small>{entry.detail}</small><em>{entry.status==='need_historical_data'?
-          'Click to select a stock and get the missing Dhan history (+20%).':
-          entry.status==='need_option_quote'?
-          'Click to fetch current read-only Dhan option quotes.':
-          'Next: '+entry.next_action}</em>
+          <small>{entry.detail}</small>
+          <em>Next: {entry.setup_steps.find(s=>s.state==='action_required')?.detail||
+            entry.next_action}</em>
         </button>)}
       </div></>}
     </details>
@@ -665,6 +765,8 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
           type="button" key={spec.id} className={'ql-model-option '+(modelId===spec.id?'selected':'')}
           onClick={()=>changeModel(spec.id)}>
           <span className="ql-model-title">{spec.title}</span>
+          <span className="ql-impl-badge">{spec.implementation_status==='implemented'?
+            'Implemented':'Needs implementation'}</span>
           <span className={'ql-mode '+spec.mode}>{MODE_LABELS[spec.mode]}</span>
           {matrix&&['historical','market'].includes(spec.mode)&&<span
             className={'ql-model-check '+(matrix.models.find(item=>item.id===spec.id)?.source_ready?'ready':'missing')}>
@@ -686,7 +788,11 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       </section>
       <div className="ql-main-column">
         {selected?<><section className="ql-card ql-selected-header">
-          <div><span className={'ql-mode '+selected.mode}>{MODE_LABELS[selected.mode]}</span>
+          <div><div className="ql-status-pair">
+              <span className="ql-impl-badge">{selected.implementation_status==='implemented'?
+                'Implemented':'Needs implementation'}</span>
+              <span className={'ql-mode '+selected.mode}>{MODE_LABELS[selected.mode]}</span>
+            </div>
             <h3>{selected.title}</h3><p>{selected.description}</p>
             {modelPair&&
               <div className="ql-gbm-mode-choice" role="group" aria-label="Choose model research approach">
@@ -738,6 +844,39 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
           </div>
           <div className="ql-equation" aria-label="Mathematical model formula">{selected.formula}</div>
         </section>
+        <section className="ql-card ql-model-recipe" aria-label="How to run this model">
+          <div className="ql-panel-title"><ShieldCheck size={18}/><h3>How to run this model</h3>
+            <span>{MODEL_BADGE[selected.mode]}</span></div>
+          <p className="ql-note">The calculation is implemented. Each item below explains
+            the inputs or actions needed to run it with the evidence type shown above.
+            Mathematical readiness is different from real-market validation.</p>
+          <ol className="ql-recipe-steps">
+            {(setupSteps.length?setupSteps:selected.setup_steps.map((detail,i)=>({
+              title:'Step '+(i+1),detail,state:'action_required' as const,action_kind:
+                selected.mode==='market'?'option_quotes':
+                selected.mode==='historical'?'select_dataset':'run_math'}))).map((step,i)=>{
+              const ready=setupStepReady(step)
+              return <li key={i} className={ready?'ql-recipe-ready':'ql-recipe-needs'}>
+                {ready?<CheckCircle2 size={16}/>:<CircleAlert size={16}/>}
+                <div><strong>{step.title}</strong><small>{step.detail}</small></div>
+                {!ready&&<button type="button" disabled={working||planLoading}
+                  onClick={()=>performModelStep(step.action_kind)}>
+                  {actionText(step.action_kind)} <ArrowRight size={13}/></button>}
+              </li>
+            })}
+          </ol>
+          <div className="ql-recipe-footer">
+            <span>{resultReady?'Model calculation saved':
+              nextAction==='review'?'Checking exact inputs…':
+              'Next recommended action: '+actionText(nextAction)}</span>
+            {!resultReady&&nextAction!=='review'&&<button type="button"
+              disabled={working||planLoading||Boolean(extensionJob&&['queued','running'].includes(extensionJob.status))}
+              className="ql-run" onClick={()=>performModelStep(nextAction)}>
+              {actionText(nextAction)} <ArrowRight size={14}/></button>}
+            {resultReady&&<button type="button" onClick={()=>setView('numbers')}>
+              Review saved calculations <ArrowRight size={14}/></button>}
+          </div>
+        </section>
         <nav className="ql-inner-tabs" aria-label="Selected model views">
           {([['configure','Parameters',SlidersHorizontal],['figures','2D / 3D Graphs',Activity],
              ['numbers','Results & diagnostics',Database],['method','Theory & limitations',BookOpen]] as const).map(
@@ -748,11 +887,15 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
         </nav>
         {view==='configure'&&<section className="ql-card" id="ql-experiment-setup">
           <div className="ql-panel-title"><FlaskConical size={18}/><h3>Experiment setup</h3></div>
-          {observedNeeded&&<label className="ql-field"><span>1 · Choose the source dataset</span>
-            <select value={selectedDataset} onChange={e=>onSelectDataset(e.target.value)}>
+          {observedNeeded&&<label className="ql-field"><span>1 · Market data source (shared library preferred)</span>
+            <select aria-label="Model laboratory source dataset" value={selectedDataset} onChange={e=>onSelectDataset(e.target.value)}>
               <option value="">No dataset selected</option>
               {datasets.map(d=><option key={d.id} value={d.id}>{d.label}{d.ready?'':' · incomplete'}</option>)}
             </select></label>}
+          {observedNeeded&&!selectedDataset&&onOpenData&&
+            <button type="button" className="ql-source-needed-button" onClick={onOpenData}>
+              <Database size={15}/> Open Market Library and acquire original inputs <ArrowRight size={14}/>
+            </button>}
           <p className="ql-note">{dataHint}</p>
           {syntheticHistory&&<p className="ql-alert warning" role="status">
             <CircleAlert size={15}/> SYNTHETIC FIXTURE · These demo prices are generated, not
@@ -1002,7 +1145,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
               onChange={e=>setParams({...params,[spec.key]:e.target.value})}>
               <option value="">Select saved original option quote / contract</option>
               {shownQuoteRefs.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}
-            </select>:spec.type==='symbol'&&singleSeries&&params.target==='stock'&&
+              aria-label="Select an original option quote contract"></select>:spec.type==='symbol'&&singleSeries&&params.target==='stock'&&
               (sourceChoices?.candidate_count??0)>0?<select
                 aria-label="Select a stock to run or complete"
                 value={String(params[spec.key]??spec.default)}
