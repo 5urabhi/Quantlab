@@ -797,7 +797,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
             <button type="button" onClick={()=>{
               setModelDataset(d.id);setModelId(v=>v||'min_variance')
               setPage('get');setStage(2)
-            }}>Extend source</button>
+            }}>Extend / complete</button>
             <button type="button" className="mdw-delete" onClick={()=>onRequestDelete(d.id)}>
               <Trash2 size={15}/> Delete</button>
           </div>
