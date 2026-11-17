@@ -22,7 +22,7 @@ import pandas as pd
 from index_research import advanced_models, derivatives, inference, math_models
 from index_research import model_validation, portfolio_extensions, portfolio_math, tail_risk
 from index_research.data import read_matrix
-from . import gbm_calibration, stochastic_calibration, option_market, option_quotes, model_registry, service
+from . import gbm_calibration, stochastic_calibration, option_market, option_quotes, model_registry, service, model_matrix
 
 CATALOG = model_registry.CATALOG
 PER_YEAR = {"daily": 252, "monthly": 12}
@@ -93,7 +93,7 @@ def _historical_input(dataset_id: str, required: int, assets: int) -> tuple[pd.D
     selected_file="daily_prices.csv" if record.get("has_daily_prices") else "prices.csv"
     if not record.get("has_prices"):
         raise ValueError("Selected dataset has no verified local prices")
-    prices=read_matrix(folder/selected_file,positive=True)
+    prices,matrix_engine=model_matrix.load(dataset_id,folder,selected_file)
     if len(prices.columns)<2:
         raise ValueError("At least two securities are needed for portfolio analysis")
     returns=prices.pct_change(fill_method=None).replace([np.inf,-np.inf],np.nan)
@@ -124,6 +124,7 @@ def _historical_input(dataset_id: str, required: int, assets: int) -> tuple[pd.D
         "from_date":aligned.index.min().date().isoformat(),
         "to_date":aligned.index.max().date().isoformat(),
         "source_file":selected_file,
+        "price_matrix_engine":matrix_engine,
         "assets":names,
         "dataset_basis":record.get("basis",""),
         "benchmark_kind":record.get("benchmark_kind","missing"),
@@ -140,11 +141,11 @@ def readiness(dataset_id: str) -> dict:
     if not record.get("has_prices"):
         return {"dataset_id":dataset_id,"has_prices":False,"message":"Dataset lacks prices",
                 "frequency":None,"observed_dates":0,"eligible_assets":0}
-    prices=read_matrix(folder/source_file,positive=True)
+    prices,engine=model_matrix.load(dataset_id,folder,source_file)
     returns=prices.pct_change(fill_method=None)
     count=returns.notna().sum()
     return {
-        "dataset_id":dataset_id, "has_prices":True,
+        "dataset_id":dataset_id, "has_prices":True, "price_matrix_engine":engine,
         "frequency":"daily" if source_file=="daily_prices.csv" else "monthly",
         "observed_dates":len(prices),
         "eligible_assets_60":int((count>=60).sum()),
