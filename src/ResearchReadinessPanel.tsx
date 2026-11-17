@@ -20,6 +20,10 @@ type Readiness={
     membership_status:string;benchmark_and_actions:Record<string,unknown>};
   warning:string
 }
+type EvidenceAudit={dataset_id:string;status:string;structural_run_ready:boolean;
+  independent_source_certified:boolean;publication_certified:boolean;
+  checks:{name:string;status:string;detail:string;next_action:string}[];
+  warning:string}
 type Audit={id:string;dataset_id:string|null;attempted_models:number;software_pass:number;
   software_fail:number;source_blocked:number;checked_utc:string}
 type Job={id:string;status:string;percent?:number;stage?:string;error?:string;
@@ -39,6 +43,7 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
   const [dataset,setDataset]=useState('')
   const [info,setInfo]=useState<Readiness|null>(null)
   const [recent,setRecent]=useState<Audit[]>([])
+  const [evidenceAudit,setEvidenceAudit]=useState<EvidenceAudit|null>(null)
   const [job,setJob]=useState<Job|null>(null)
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
@@ -46,12 +51,14 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
   const [onlyBlocked,setOnlyBlocked]=useState(false)
   const [revision,setRevision]=useState(0)
   const reload=useCallback(async()=>{
-    const [summary,audits]=await Promise.all([
+    const [summary,audits,evidence]=await Promise.all([
       json<Readiness>('/api/data-manager/research/overview?'+new URLSearchParams({
         dataset_id:dataset}).toString()),
-      json<{audits:Audit[]}>('/api/data-manager/research/audits')
+      json<{audits:Audit[]}>('/api/data-manager/research/audits'),
+      dataset?json<EvidenceAudit>('/api/data-manager/research/evidence-audit?'+
+        new URLSearchParams({dataset_id:dataset})):Promise.resolve(null)
     ])
-    setInfo(summary);setRecent(audits.audits)
+    setInfo(summary);setRecent(audits.audits);setEvidenceAudit(evidence)
   },[dataset])
   useEffect(()=>{
     let live=true
@@ -148,6 +155,19 @@ export default function ResearchReadinessPanel({datasets,onAcquire,onModel}:{
           ' Documented coverage through '+info.sources.historical_membership.covered_through+'.'}
         Original index notices, delistings and TRI remain separate research evidence.</p>
     </div>}
+    {evidenceAudit&&<details className="qm-details qm-evidence-audit">
+      <summary>Detailed PIT, TRI, corporate-action and chronology checks ({evidenceAudit.checks.length})</summary>
+      <p className="qm-caption">Research source status: {evidenceAudit.status.replaceAll('_',' ')}.
+        Structural computation: {evidenceAudit.structural_run_ready?'locally ready':'inputs incomplete'}.
+        Original issuer certification: not granted by software.</p>
+      {evidenceAudit.checks.map(check=><div className="qm-readiness-row" key={check.name}>
+        <span className={'qm-badge '+(check.status==='pass'?'ok':'warn')}>
+          {check.status.replaceAll('_',' ')}</span>
+        <div><strong>{check.name}</strong><small>{check.detail}</small>
+          {check.next_action&&<small><b>Resolve:</b> {check.next_action}</small>}</div>
+      </div>)}
+      <p className="qm-caption">{evidenceAudit.warning}</p>
+    </details>}
     <div className="qm-readiness-model-list">
       <div className="qm-panel-title"><h3>Every model and its next step</h3>
         <label className="qm-check"><input type="checkbox" checked={onlyBlocked}
