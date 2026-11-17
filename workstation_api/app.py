@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -420,6 +420,84 @@ def data_manager_database_table(database_id: str, table: str, page: int = 1,
             filter_column=filter_column, filter_value=filter_value)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(ValueError(str(exc)))
+
+
+
+@app.get("/api/data-manager/columnar/status")
+def data_manager_columnar_status():
+    try:
+        return columnar_cache.status()
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/data-manager/columnar/build")
+def data_manager_columnar_build():
+    """User-triggered local analytical view; never modifies original candles."""
+    try:
+        state = columnar_cache.status()
+        if not state["source_available"] or not state["engine_available"]:
+            raise ValueError("Original market history and local DuckDB are required")
+        return _spawn("columnar_analytics_build", columnar_cache.build)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/columnar/instruments")
+def data_manager_columnar_instruments(query: str = "", limit: int = 80):
+    try:
+        return columnar_cache.instruments(query, limit)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/columnar/series")
+def data_manager_columnar_series(identity: str, start: str = "",
+                                 end: str = "", limit: int = 500):
+    try:
+        return columnar_cache.series(identity, start, end, limit)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/fallback/registry")
+def data_manager_fallback_registry():
+    return compatible_sources.registry()
+
+
+@app.get("/api/data-manager/fallback/receipts")
+def data_manager_fallback_receipts(limit: int = 50):
+    try:
+        return compatible_sources.list_receipts(limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/data-manager/fallback/import")
+async def data_manager_fallback_import(
+        file: UploadFile = File(...),
+        identity: str = Form(...),
+        provider: Literal["dhan_export", "licensed_vendor_csv"] = Form(...),
+        confirm_authorized: bool = Form(False),
+        confirm_unadjusted: bool = Form(False)):
+    """Read an approved local CSV only. No brokerage or NSE network requests."""
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(400, "Upload original daily-close CSV data")
+    if not confirm_authorized or not confirm_unadjusted:
+        raise HTTPException(400, "Confirm authorized access and unadjusted-close basis")
+    try:
+        raw = await file.read(compatible_sources.MAX_BYTES + 1)
+        if not raw or len(raw) > compatible_sources.MAX_BYTES:
+            raise ValueError("Source CSV must be between 1 byte and 20 MB")
+        if not shared_market_data.SAFE_IDENTITY.fullmatch(identity):
+            raise ValueError("Select a canonical Dhan instrument security ID")
+        return _spawn(
+            "compatible_source_import", compatible_sources.import_original,
+            payload=raw, identity=identity, provider=provider,
+            confirm_authorized=confirm_authorized,
+            confirm_unadjusted=confirm_unadjusted)
+    except (ValueError, OSError) as exc:
+        bad(exc)
 
 
 @app.post("/api/data-manager/maintenance")
