@@ -153,6 +153,11 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
     ])
     setCounts({NSE:nse.total,BSE:bse.total})
   },[])
+  const handleCatalogReady=useCallback(()=>{
+    void loadConnection().then(status=>{
+      if(status.instrument_master_available)void loadCounts()
+    }).catch(e=>setNotice({text:e instanceof Error?e.message:String(e),error:true}))
+  },[loadConnection,loadCounts])
   useEffect(()=>{
     let cancelled=false
     void Promise.all([loadConnection(),loadBatches(),loadDeletedBatches()]).then(([status])=>{
@@ -464,10 +469,10 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
           <summary>Historical membership details / sync missing history</summary>
           <PITIndexPanel mode={mode as PITMode} fromDate={fromDate} toDate={toDate}
             onToDate={setToDate} onPlan={setPitPlan} onPreview={setPitPreview}
-            onSyncBusy={setPitSyncBusy}/>
+            onSyncBusy={setPitSyncBusy} onCatalogReady={handleCatalogReady}/>
         </details>
       </>:mode==='selected'||mode==='watchlist'?<div className="dh-simple-pick-panel"><Section title={pitMode?'Historical index membership':mode==='watchlist'?'Your ticker list':'Find and select stocks'} aside={<Pill tone="blue">{pitMode?(pitPlan?'Union: '+fmt(selectionCount):pitPreview?'Preview: '+fmt(pitPreview.union_count):'Awaiting membership') :fmt(selectionCount)+' in selection'}</Pill>}>
-        {pitMode?<PITIndexPanel mode={mode as PITMode} fromDate={fromDate} toDate={toDate} onToDate={setToDate} onPlan={setPitPlan} onPreview={setPitPreview} onSyncBusy={setPitSyncBusy}/>:mode==='watchlist'?<div className="dh-paste">
+        {pitMode?<PITIndexPanel mode={mode as PITMode} fromDate={fromDate} toDate={toDate} onToDate={setToDate} onPlan={setPitPlan} onPreview={setPitPreview} onSyncBusy={setPitSyncBusy} onCatalogReady={handleCatalogReady}/>:mode==='watchlist'?<div className="dh-paste">
           <p>Paste exact NSE tickers, separated by commas or lines. Or upload a CSV with symbols in the first column.</p>
           <textarea rows={11} spellCheck={false} value={watchlist} onChange={e=>setWatchlist(e.target.value)}
             placeholder={'RELIANCE\nTCS\nINFY\nHDFCBANK\nICICIBANK'} aria-label="NSE ticker list"/>
