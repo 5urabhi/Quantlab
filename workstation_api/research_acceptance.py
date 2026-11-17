@@ -79,6 +79,7 @@ def sources(dataset_id: str | None=None) -> dict:
 
 def overview(dataset_id: str | None=None) -> dict:
     original=model_readiness.overview(dataset_id)
+    dataset_id=original["dataset_id"]
     rows=[]
     for existing in original["models"]:
         spec=model_registry.CATALOG[existing["id"]]
@@ -90,7 +91,11 @@ def overview(dataset_id: str | None=None) -> dict:
         if existing["status"]=="math_ready":
             action={"kind":"run","label":"Run mathematical model","automatable":True}
         elif existing["status"]=="source_available":
-            action={"kind":"run","label":"Run with original observed inputs","automatable":True}
+            action={"kind":"open_model",
+                    "label":("Select one original quote and run"
+                             if existing["mode"]=="market" else
+                             "Configure exact stocks and run"),
+                    "automatable":False}
         elif existing["status"]=="need_option_quote":
             action={"kind":"option_quotes","label":"Connect or import original quote",
                     "automatable":False}
@@ -98,8 +103,8 @@ def overview(dataset_id: str | None=None) -> dict:
             action={"kind":"select_dataset","label":"Use genuine observed market data",
                     "automatable":False}
         else:
-            action={"kind":"acquisition","label":"Inspect +20% and fetch eligible data",
-                    "automatable":bool(dataset_id)}
+            action={"kind":"open_model","label":"Inspect exact requirements and +20% completion",
+                    "automatable":False}
         rows.append({**existing,"requirement":{
             "minimum_observed_returns":needed.get("min_returns",0),
             "preferred_with_20_percent":needed.get("target_returns",0),
@@ -109,6 +114,7 @@ def overview(dataset_id: str | None=None) -> dict:
     return {
         "dataset_id":dataset_id,"dataset_label":original["dataset_label"],
         "total_models":len(rows),
+        "implemented_models":original["implemented_models"],
         "math_ready":original["math_ready"],
         "historical_source_ready":original["historical_source_ready"],
         "option_source_ready":original["option_source_ready"],
