@@ -190,6 +190,8 @@ def _decode(row: dict) -> tuple[str,str,float,float,float,float,int]:
         if not vol.is_finite() or vol < 0 or vol > 10**15 or vol != int(vol):
             raise ValueError("Invalid one-minute volume")
     except (ValueError,TypeError,InvalidOperation,OverflowError,KeyError) as exc:
+        if isinstance(exc, ValueError) and str(exc) == "Naive timestamps cannot be treated as NSE sessions":
+            raise ValueError("Naive timestamps cannot be treated as NSE sessions") from exc
         raise ValueError("Original one-minute CSV has invalid OHLCV/timestamp") from exc
     if not all(math.isfinite(x) and x > 0 for x in values):
         raise ValueError("Original one-minute prices must be positive/finite")
