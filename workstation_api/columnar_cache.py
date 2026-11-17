@@ -313,7 +313,7 @@ def series(identity: str, start: str = "", end: str = "",
         "identity": identity,
         "rows": [{"date": day.isoformat(), "close": close,
                   "source_sha256": checksum} for day, close, checksum in selected],
-        "has_more": len(result) > limit, "limit": limit, "source": "original_Dhan_closes",
+        "has_more": len(result) > limit, "limit": limit, "source": "canonical_unadjusted_original_closes",
         "basis": "unadjusted_close", "source_unchanged": True,
         "note": "Columnar results are original unadjusted closes, not dividend-inclusive TRI.",
     }
