@@ -37,6 +37,55 @@ class DhanOfflineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             candles_to_frame(invalid,instrument)
 
+    def test_mixed_bad_provider_bars_are_quarantined_without_synthetic_prices(self):
+        inst=Instrument("BANDHANBNK","2263")
+        payload=response(2)
+        payload["open"]=[0,110]
+        good=candles_to_frame(payload,inst)
+        self.assertEqual(len(good),1)
+        self.assertEqual(float(good.iloc[0]["open"]),110)
+        self.assertEqual(good.attrs["rejected_provider_bars"],1)
+        self.assertEqual(good.attrs["total_provider_bars"],2)
+        self.assertEqual(float(good.iloc[0]["volume"]),2000)
+
+    def test_all_invalid_provider_bars_still_fail_clearly(self):
+        inst=Instrument("BANKBARODA","4668")
+        payload=response(2)
+        payload["open"]=[0,0]
+        with self.assertRaisesRegex(ValueError,"no valid OHLCV bars"):
+            candles_to_frame(payload,inst)
+
+    def test_negative_volume_and_impossible_high_are_quarantined(self):
+        inst=Instrument("CANBK","10794")
+        payload=response(2)
+        payload["volume"]=[-1,2000]
+        result=candles_to_frame(payload,inst)
+        self.assertEqual(len(result),1)
+        self.assertEqual(result.attrs["rejected_provider_bars"],1)
+        payload=response(2)
+        payload["high"]=[99,120]
+        result=candles_to_frame(payload,inst)
+        self.assertEqual(len(result),1)
+        self.assertEqual(result.attrs["rejected_provider_bars"],1)
+
+    def test_zero_volume_with_valid_ohlc_is_accepted(self):
+        payload=response(2)
+        payload["volume"]=[0,2000]
+        result=candles_to_frame(payload,Instrument("FEDERALBNK","1023"))
+        self.assertEqual(len(result),2)
+        self.assertEqual(result.attrs["rejected_provider_bars"],0)
+
+    def test_chunk_download_reports_rejected_source_rows(self):
+        payload=response(2)
+        payload["open"]=[0,110]
+        def mock_post(endpoint,request,token):
+            return payload
+        result=download_candles(Instrument("BANKBARODA","4668"),
+            "2024-01-01","2024-02-01",token="TEST",post=mock_post,
+            pause_seconds=0)
+        self.assertEqual(len(result),1)
+        self.assertEqual(result.attrs["rejected_provider_bars"],1)
+
     def test_mock_download_contains_no_secrets(self):
         seen=[]
         def fake_post(endpoint,payload,token):
