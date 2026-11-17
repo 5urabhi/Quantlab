@@ -95,7 +95,7 @@ class RealSourceAcceptanceTests(unittest.TestCase):
 
     def test_previous_source_hash_report_cannot_be_called_current_after_changes(self):
         # Exercise the actual report-fetch freshness gate; no real broker data.
-        original=Path(self.temp.name)/"observed"
+        original=service.DATA.parent/"observed"
         original.mkdir(exist_ok=True)
         (original/"prices.csv").write_text("date,SECURITY_A\\n2021-01-31,100\\n")
         with patch.object(real_data_acceptance.historical_readiness,"inspect",
