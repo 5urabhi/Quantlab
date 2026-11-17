@@ -13,6 +13,48 @@
 | Tail Risk & Inference | `historical_tail`, `gaussian_tail`, `student_t_tail`, `evt`, `newey_west`, `bootstrap_sharpe` | Empirical, parametric, tail and inference estimators; documented sample and distribution assumptions. |
 | 3D Visual Laboratory | `option_surface`, `risk_surface` | Interactive computed BSM grid or correlation stress with observed marginal volatilities. |
 
+## Implementation complete vs input ready — how to run any model
+
+QuantLab has **two independent readiness dimensions**, visible on every
+registered model and in Database Manager → Research Readiness Center:
+
+| Badge / state | What it actually claims | What the user should do |
+| --- | --- | --- |
+| **Implemented** | Registered Python calculation exists and software regressions exercise its code path. | Open the model; validate its numerical assumptions and compute. |
+| **Simulated scenarios** | Fully runnable seeded stochastic simulation, no market prices required. | Set assumptions and seed → **Run model now**. Future paths remain hypothetical. |
+| **Theoretical calculation** | Fully runnable mathematical formula/solver from manually set parameters. | Enter spot, expiry, volatility, strikes, etc., then **Run model now**. |
+| **Observed history required** | Fitted or statistical model requires actual stock/benchmark returns. | Use shared Market Data Library → select exact stock(s) → inspect minimum and +20% buffer → approve missing read-only Dhan window if eligible → run. |
+| **Original option quote required** | Quote-anchored model needs a real timestamped bid/ask, expiry and exact contract. | Choose a saved source dataset → **Fetch current Dhan option chain** or import authorized original CSV → select contract → set rate/yield assumptions → run. |
+| **Source available** | Enough original data exists somewhere in the selected source; **not** confirmation that a ticker/contract has been selected. | Choose the exact input before execution. |
+| **Needs original inputs** | The algorithm is implemented, but its source prerequisites are not satisfied. | Follow the **How to run this model** checklist; unresolved source/entitlement failures remain visible. |
+
+Select **Model Laboratory → Family → Model** to see the permanently visible
+**How to run this model** checklist. Each unmet requirement has an action
+that opens the correct model control, requests explicitly approved missing
+history, or opens Market Data Library. **Only completed original data is
+reused**; QuantLab does not substitute synthetic prices, today’s index
+constituents, index spot for TRI, or arbitrary option premiums.
+
+The shared `dhan_shared` library is selected automatically if it has real
+stock prices and the user has not selected another dataset. Existing
+original source snapshots remain available for reproducible saved runs.
+A model can run once **minimum** observations are met; the recommended
+additional **20% history** is a visible research buffer, not a guarantee of
+model convergence or market validity.
+
+**Special cases:** GBM and Merton have fitted historical companions;
+OU and Heston have explicitly limited historical volatility fits. A
+historically fitted Heston *variance proxy* is **not** a unique risk-neutral
+Heston smile calibration. A genuine full Heston option-surface calibration
+requires licensed, contemporaneous multi-strike/multi-expiry option quotes
+and a separate validated optimizer that is **not** in the current registry.
+The quote-anchored option surface is a theoretical scenario grid around
+an observed option quote, not a verified historical smile.
+
+Model software readiness is **not** independent validation of a NIFTY
+research strategy, a frozen out-of-sample result, profitability, or any
+licensed exchange source. See `docs/QUANTLAB_STATUS.md` for evidence gaps.
+
 ## Theoretical and simulated models
 
 ### Geometric Brownian Motion — `gbm`

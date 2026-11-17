@@ -147,3 +147,18 @@
 .qm-model-market-source details{border-top:1px solid #365a55;padding-top:8px}
 .qm-model-market-source summary{cursor:pointer;color:#a9c9c3;font-size:10px}
 .qm-model-market-source select{margin-top:9px;width:100%}
+
+/* Model implementation and real-market source availability are different. */
+.qm-readiness-row>.qm-readiness-status-pair{flex:0 0 150px;min-width:0;
+ display:flex;flex-direction:column;gap:7px;align-items:flex-start}
+.qm-readiness-status-pair .qm-badge{max-width:150px;text-align:left}
+.qm-model-setup-details{margin:7px 0 3px;padding:9px 11px;
+ border:1px solid #395560;border-radius:7px;background:#122b36}
+.qm-model-setup-details summary{font-size:11px;font-weight:700;cursor:pointer;color:#9cdecf}
+.qm-model-setup-details ol{margin:10px 0 0;padding-left:20px}
+.qm-model-setup-details li{color:#c2d2d9;font-size:10px;
+ line-height:1.65;margin:5px 0}
+.qm-model-setup-details li strong{display:inline;font-size:10px}
+.qm-model-setup-details li span{color:#b7bda0}
+@media(max-width:730px){.qm-readiness-row>.qm-readiness-status-pair{
+ flex-basis:100%;flex-direction:row;flex-wrap:wrap}}

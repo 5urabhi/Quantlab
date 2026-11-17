@@ -302,9 +302,11 @@ export default function ResultsStudio({selectedIndexRunId,selectedModelRunId,onS
   const sourceKind=index?String(index.source.dataset_kind||'unknown'):
     (model?.source?.dataset_kind==='synthetic'||active?.dataset_id==='synthetic'?'synthetic':(active?.mode||'unknown'))
   const dataId=model?.source?.dataset_id||String(index?.source.dataset_id||active?.dataset_id||'')
-  const evidence=sourceKind==='synthetic'?'SEEDED SYNTHETIC DEMONSTRATION':
+  const evidence=sourceKind==='synthetic'?'COMPUTED SIMULATION · HYPOTHETICAL':
     sourceKind==='theoretical'?'THEORETICAL / ASSUMED INPUTS':
     sourceKind==='historical'?'OBSERVED HISTORICAL / UNVERIFIED':
+    sourceKind==='market'||sourceKind==='quoted_market_input'?
+      'OBSERVED OPTION QUOTE INPUT · THEORETICAL VALUATION':
     'SOURCE CLASSIFICATION INCOMPLETE'
   const allFigures=useMemo(()=>model?model.plots.map(plot=>({
     group:plot.kind==='surface3d'?'3D mathematical surfaces':
@@ -413,7 +415,7 @@ export default function ResultsStudio({selectedIndexRunId,selectedModelRunId,onS
               if(r.kind==='research_run')onSelectIndexRun(r.id)}}>
             <span className="rs-run-icon">{r.kind==='model_run'?<Activity size={15}/>:<BarChart3 size={15}/>}</span>
             <span className="rs-run-text"><strong>{r.title}</strong><small>{r.group}</small>
-              <small>{r.mode==='synthetic'?'SYNTHETIC DEMO':r.mode==='theoretical'?'THEORETICAL':'OBSERVED / UNVERIFIED'} · {r.id.slice(0,13)}</small></span>
+              <small>{r.mode==='synthetic'?'SIMULATED · NOT OBSERVED':r.mode==='theoretical'?'THEORETICAL':'OBSERVED / UNVERIFIED'} · {r.id.slice(0,13)}</small></span>
             <ChevronDown size={13}/></button>)}
           {!loadingList&&!runList.length&&<div className="rs-empty">No saved run matches the filter.</div>}</div>
         {(older.model||older.index)&&<button className="rs-load" disabled={paging}

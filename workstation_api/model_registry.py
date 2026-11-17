@@ -50,10 +50,52 @@ CONFIDENCE = numeric("confidence", .95, .8, .995, .005)
 def model(key: str, group: str, title: str, mode: str, observations: int,
           description: str, formula: str, parameters: list[dict],
           chart: str, status: str = "runnable") -> dict:
+    # Implementation and evidence are DIFFERENT dimensions. A mathematical
+    # simulation isn't unfinished because it has no market observations.
+    # All public entries dispatch to implemented Python algorithms; tests
+    # execute every catalog class with appropriate offline fixture evidence.
+    special = []
+    if mode == "synthetic":
+        special = ["Choose explicitly assumed parameters and random seed.",
+                   "Run the Python simulation; paths are hypothetical."]
+    elif mode == "theoretical":
+        special = ["Supply the required mathematical parameters.",
+                   "Run the analytical/numerical solver; values are model estimates."]
+    elif mode == "market":
+        special = [
+            "Choose an existing source-backed dataset for a dated option quote.",
+            "Capture an original read-only Dhan option chain or import an authorized original provider quote CSV.",
+            "Select the exact saved contract, strike, bid/ask and expiry.",
+            "Set rate/dividend assumptions, then run the quote-anchored model.",
+        ]
+    elif key in {"gbm_fit", "ou_fit", "merton_fit", "heston_proxy"}:
+        special = [
+            "Select observed stock history in the shared Market Data Library.",
+            ("Choose one named stock or original NIFTY TRI with correct return convention."
+             if key in {"gbm_fit", "merton_fit"} else
+             "Choose one exact stock; a spot index cannot substitute for its returns."),
+            f"Collect at least {observations} usable observations, ideally "
+            f"{math.ceil(observations * 1.2)} (+20%).",
+            "Approve a read-only missing-history download if the exact stock is extendable.",
+            "Run the fit, inspect holdout diagnostics and label simulated paths.",
+        ]
+    else:
+        special = [
+            "Choose observed local stock prices from the shared Market Data Library.",
+            "Set the portfolio asset count (2-18), rather than assuming a fixed eight.",
+            f"Check at least {observations} aligned observed returns, ideally "
+            f"{math.ceil(observations * 1.2)} (+20%).",
+            "Approve any missing read-only historical data request, then run the model.",
+        ]
     return dict(id=key, group=group, title=title, mode=mode,
                 min_observations=observations, description=description,
                 formula=formula, parameters=parameters,
-                chart=chart, status=status)
+                chart=chart, status=status,
+                implementation_status="implemented" if status=="runnable" else status,
+                evidence_type={"synthetic":"simulation","theoretical":"theory",
+                               "historical":"observed_history",
+                               "market":"observed_quote"}[mode],
+                setup_steps=special)
 
 
 MODELS = [

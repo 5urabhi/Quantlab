@@ -8,14 +8,14 @@ import './research-journey.css'
 type Datum={id:string;label:string;has_prices:boolean;ready:boolean;kind?:string;
   missing?:string[];basis?:string;source_interval_minutes?:number|null}
 type Catalog={id:string;group:string;title:string;mode:string;description:string;
-  min_observations:number;status:string}
+  min_observations:number;status:string;implementation_status:string;setup_steps:string[]}
 type Stage=0|1|2|3|4
 type Props={datasets:Datum[];selectedDataset:string;onSelectDataset:(id:string)=>void;
   onDataChanged:()=>void;onOpenData:()=>void;onOpenDhan:()=>void;
   onOpenWorkspace:()=>void;onOpenGuide:()=>void;onOpenExperiments:()=>void;
   onOpenModels:()=>void;onOpenResults:()=>void}
 const STAGES=[
-  {title:'Select data',caption:'Observed, theoretical, or demo'},
+  {title:'Select data',caption:'Observed history or mathematical assumptions'},
   {title:'Choose model',caption:'Registered math and evidence'},
   {title:'Run',caption:'Exact validated inputs'},
   {title:'Analyze',caption:'Saved numbers, plots, audits'},
@@ -51,6 +51,10 @@ export default function ResearchJourney({datasets,selectedDataset,onSelectDatase
   const [savedNote,setSavedNote]=useState<string|null>(null)
   const dataset=datasets.find(d=>d.id===selectedDataset)
   const choice=catalog.find(m=>m.id===state.modelId)
+  useEffect(()=>{
+    if(!selectedDataset&&datasets.some(d=>d.id==='dhan_shared'&&d.has_prices))
+      onSelectDataset('dhan_shared')
+  },[selectedDataset,datasets,onSelectDataset])
   useEffect(()=>{
     try{window.localStorage.setItem('ql-research-journey-v1',JSON.stringify(state))}catch{}
   },[state])
@@ -131,8 +135,8 @@ export default function ResearchJourney({datasets,selectedDataset,onSelectDatase
     {state.stage===0&&<section className="rj-panel" aria-label="Research step 1: Select data">
       <h3>1 · Start with a source</h3>
       <p>Use observed prices, an existing prepared dataset, or proceed with mathematical
-        models that do not require market history. A seeded demonstration will always be
-        marked as synthetic. The preferred history buffer is +20% beyond the model minimum.</p>
+        models that do not require market history. Seeded mathematical simulations are fully implemented, but their output
+        remains hypothetical; generated data never becomes real market evidence. The preferred history buffer is +20% beyond the model minimum.</p>
       <label className="rj-field">Available research dataset
         <select value={selectedDataset} onChange={e=>{onSelectDataset(e.target.value);setSavedNote(null)}}>
           <option value="">No dataset · mathematical / theoretical models only</option>
@@ -142,7 +146,7 @@ export default function ResearchJourney({datasets,selectedDataset,onSelectDatase
         </select></label>
       {dataset&&<div className="rj-source">
         <span className={dataset.kind==='synthetic'?'rj-tag demo':'rj-tag'}>
-          {dataset.kind==='synthetic'?'SYNTHETIC / DEMONSTRATION':
+          {dataset.kind==='synthetic'?'SYNTHETIC TEST FIXTURE · NOT MARKET DATA':
             dataset.ready?'PREPARED / UNVERIFIED':'INCOMPLETE SOURCE'}</span>
         <strong>{dataset.label}</strong>
         <small>{dataset.basis||'No data source notes stored'}</small>
@@ -181,9 +185,10 @@ export default function ResearchJourney({datasets,selectedDataset,onSelectDatase
       {loading&&<p role="status"><LoaderCircle size={14}/> Loading Python model catalog…</p>}
       <div className="rj-model-grid">{choices.map(m=><button type="button" key={m.id}
         className={state.modelId===m.id?'selected':''} onClick={()=>chooseModel(m.id)}>
-        <span className="rj-tag">{m.mode.toUpperCase()}</span><strong>{m.title}</strong>
+        <span className="rj-tag">{m.implementation_status==='implemented'?'IMPLEMENTED':'NOT IMPLEMENTED'} · {m.mode.toUpperCase()}</span><strong>{m.title}</strong>
         <small>{m.group} · {m.min_observations>0?m.min_observations+' minimum observations':
           'No market observations needed'}</small><p>{m.description}</p>
+        <small>How to start: {m.setup_steps?.[0]||'Open exact model requirements'}</small>
       </button>)}</div>
       {!choices.length&&!loading&&<p>No models match your search. Clear the filter to see the registered catalog.</p>}
       <div className="rj-actions"><button type="button" onClick={()=>goto(0)}>
