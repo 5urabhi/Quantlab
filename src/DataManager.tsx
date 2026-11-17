@@ -4,6 +4,8 @@ import {Activity, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft, ChevronR
 import './data-manager.css'
 import DataAcquisitionPanel from './DataAcquisitionPanel'
 import ManagedDatabaseBrowser from './ManagedDatabaseBrowser'
+import ColumnarAnalyticsPanel from './ColumnarAnalyticsPanel'
+import SourceFallbackPanel from './SourceFallbackPanel'
 
 type Dataset = {id:string;label:string;kind:string;ready:boolean;missing:string[];basis:string}
 type Event = {id:number;occurred_utc:string;category:string;status:string;summary:string}
@@ -28,7 +30,7 @@ type Table = {columns:string[];selected_columns:string[];rows:Array<Record<strin
 type Quality = {file:string;sampled_rows:number;sample_limit_reached:boolean;
   first_date_in_sample:string|null;last_date_in_sample:string|null;
   checks:Record<string,number>;status:string;caveat:string}
-type Section = 'datasets'|'acquire'|'explorer'|'database'|'sources'|'activity'
+type Section = 'datasets'|'acquire'|'explorer'|'database'|'analytics'|'sources'|'activity'
 const fmt = (n:number)=>n.toLocaleString()
 const humanBytes = (bytes:number)=>bytes<1024?bytes+' B':bytes<1024*1024?(bytes/1024).toFixed(1)+' KB':
   (bytes/(1024*1024)).toFixed(1)+' MB'
@@ -124,9 +126,9 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
       <div><HardDrive size={18}/><span>Catalog databases</span><strong>{overview?humanBytes(overview.statistics.catalog_database_bytes):'…'}</strong></div>
     </div>
     <nav aria-label="Database Manager sections" className="qm-tabs">
-      {(['datasets','acquire','explorer','database','sources','activity'] as Section[]).map(key=>
+      {(['datasets','acquire','explorer','database','analytics','sources','activity'] as Section[]).map(key=>
         <button key={key} className={section===key?'active':''} onClick={()=>setSection(key)}>
-          {{datasets:'Datasets',acquire:'Get model data',explorer:'Data Explorer',database:'Database tables',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
+          {{datasets:'Datasets',acquire:'Get model data',explorer:'Data Explorer',database:'Database tables',analytics:'Fast analytics',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
         </button>)}
     </nav>
     {section==='datasets'&&<div className="qm-panel">
@@ -143,6 +145,7 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
     {section==='acquire'&&<DataAcquisitionPanel datasets={items} onCompleted={onAcquisitionComplete}
       onOpenDhan={onOpenDhan} onOpenModels={onOpenModels}/>}
     {section==='database'&&<ManagedDatabaseBrowser/>}
+    {section==='analytics'&&<ColumnarAnalyticsPanel/>}
     {section==='explorer'&&<div className="qm-panel">
       <div className="qm-panel-title"><h3>Data Explorer</h3>
         <select aria-label="Inspect dataset" value={selected} onChange={e=>select(e.target.value)}>
@@ -189,13 +192,13 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
         </details>
       </>}
     </div>}
-    {section==='sources'&&<div className="qm-panel"><div className="qm-panel-title"><h3>Source registry</h3><span>Read-only connections</span></div>
+    {section==='sources'&&<><SourceFallbackPanel onChanged={()=>{void refresh();onChanged()}}/><div className="qm-panel"><div className="qm-panel-title"><h3>Source registry</h3><span>Read-only connections</span></div>
       {Object.entries(overview?.source_status||{}).map(([name,entry])=><div className="qm-source" key={name}>
         <strong>{name.replaceAll('_',' ').toUpperCase()}</strong>
         <div>{Object.entries(entry).map(([k,v])=><p key={k}><span>{k.replaceAll('_',' ')}</span><b>{typeof v==='boolean'?(v?'Yes':'No'):String(v)}</b></p>)}</div>
       </div>)}
       <p className="qm-caption">An informational NSE MCP lookup is not an authorized replacement for original backtest data or TRI.</p>
-    </div>}
+    </div></>}
     {section==='activity'&&<div className="qm-panel"><div className="qm-panel-title"><h3><Activity size={18}/> Jobs and recovery</h3>
         <button className="ws-button secondary" onClick={()=>void refresh()}><RefreshCw size={14}/> Refresh</button></div>
       <div className="qm-job-grid"><div><strong>Recent jobs</strong>
