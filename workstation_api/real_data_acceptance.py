@@ -122,7 +122,8 @@ def execute(dataset_id: str, validation_start: str, final_test_start: str, *,
     # A structural data pass alone does not mean model execution passed.
     # A user can deliberately skip model checks; that is a source-only report,
     # never a fully software-ready empirical study.
-    tested_models = (model_report.get("attempted_models", 0)
+    tested_models = (max(int(model_report.get("attempted_models", 0)),
+                         len(model_report.get("checks", [])))
                      if model_report is not None else 0)
     model_passed = (not run_models or (
         tested_models > 0 and model_report is not None and
