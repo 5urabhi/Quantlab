@@ -78,6 +78,60 @@ class SelectionMathTest(unittest.TestCase):
             selection_diagnostics.deflated_sharpe(np.full((72,3),.01),trials=3)
 
 
+    def test_chronological_walk_forward_selection_uses_only_past_data(self):
+        strategies, benchmark = sample(72)
+        dates = [d.date().isoformat() for d in
+                 pd.date_range("2020-01-31", periods=72, freq="ME")]
+        first = selection_diagnostics.chronological_selection(
+            strategies, benchmark, dates, ["A","B","C"],
+            train_months=36, test_months=6, embargo_months=1)
+        self.assertGreaterEqual(first["fold_count"],2)
+        self.assertEqual(first["folds"][0]["train_last"],dates[35])
+        self.assertEqual(first["folds"][0]["embargo_first"],dates[36])
+        self.assertEqual(first["folds"][0]["test_first"],dates[37])
+        self.assertEqual(first["test_months_evaluated"],len(first["selected_forward_months"]))
+        self.assertFalse(first["certifies_real_market_performance"])
+        # Changing every future observation cannot affect the first winner,
+        # proving the selection rule only inspects the past training prefix.
+        altered = strategies.copy()
+        altered[36:, :] = np.array([.20, -.03, -.05])
+        second = selection_diagnostics.chronological_selection(
+            altered, benchmark, dates, ["A","B","C"],
+            train_months=36, test_months=6, embargo_months=1)
+        self.assertEqual(first["folds"][0]["selected_run_id"],
+                         second["folds"][0]["selected_run_id"])
+
+    def test_chronological_blocks_refuse_calendar_gaps_and_flat_training(self):
+        returns, bench = sample(72)
+        dates = [d.date().isoformat() for d in
+                 pd.date_range("2020-01-31", periods=72, freq="ME")]
+        missing = dates.copy()
+        missing[42] = "2033-01-31"
+        with self.assertRaisesRegex(ValueError,"consecutive original months"):
+            selection_diagnostics.chronological_selection(
+                returns,bench,missing,["A","B","C"])
+        with self.assertRaisesRegex(ValueError,"two untouched-at-step"):
+            selection_diagnostics.chronological_selection(
+                returns[:44],bench[:44],dates[:44],["A","B","C"])
+        with self.assertRaisesRegex(ValueError,"undefined in-training"):
+            selection_diagnostics.chronological_selection(
+                np.full((72,3),.003),bench,dates,["A","B","C"])
+
+    def test_chronological_summary_is_bounded_and_consistent(self):
+        returns, bench = sample(96)
+        dates = [d.date().isoformat() for d in
+                 pd.date_range("2018-01-31", periods=96, freq="ME")]
+        result = selection_diagnostics.chronological_selection(
+            returns,bench,dates,["A","B","C"],
+            train_months=48,test_months=12,embargo_months=2)
+        self.assertTrue(np.isfinite(result["aggregate"]
+                                   ["compounded_selected_net_return_fraction"]))
+        self.assertLessEqual(result["test_months_evaluated"],96-48-2)
+        self.assertEqual(sum(x["selected_folds"] for x in
+            result["candidate_selection_counts"]),result["fold_count"])
+        self.assertTrue(all(x["test_first"]>x["train_last"] for x in result["folds"]))
+
+
 class SourceBoundSelectionEndpointTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="quantlab_selection_")
@@ -127,6 +181,23 @@ class SourceBoundSelectionEndpointTests(unittest.TestCase):
         self.assertIn("NOT an untouched",data["pbo"]["limitation"])
         self.assertTrue(data["never_certified"])
         self.assertNotIn("DHAN_ACCESS_TOKEN",response.text)
+
+    def test_chronological_selection_endpoint_preserves_source_gate(self):
+        response=self.client.post("/api/workspace/results/chronological-selection",json={
+            "run_ids":["candidate_0","candidate_1","candidate_2"],
+            "train_months":36,"test_months":6,"embargo_months":1})
+        self.assertEqual(response.status_code,200,response.text)
+        body=response.json()
+        self.assertEqual(body["dataset_id"],"synthetic")
+        self.assertEqual(body["evidence_class"],"synthetic_demo")
+        self.assertEqual(body["training_months_initial"],36)
+        self.assertFalse(body["certifies_real_market_performance"])
+        self.assertIn("full-sample",body["warning"])
+        self.assertGreaterEqual(body["fold_count"],2)
+        # Refuse an unsupported embargo without silently dropping it.
+        bad=self.client.post("/api/workspace/results/chronological-selection",json={
+            "run_ids":["candidate_0","candidate_1"],"embargo_months":0})
+        self.assertEqual(bad.status_code,422)
 
     def test_requires_consistent_saved_original_sources(self):
         folder = self.folder / "candidate_2"
