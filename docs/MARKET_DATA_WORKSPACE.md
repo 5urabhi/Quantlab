@@ -4,6 +4,49 @@ This is the main user-facing workflow for source-backed historical data.
 Open **Data Library → Download market data** in the React app. This guide
 describes the current implementation, not a planned future capability.
 
+## One Market Data Library (default)
+
+Use **Data Library → Database Manager → Market Library** or
+**Download market data → My Datasets** to browse the same canonical
+`dhan_shared` daily-close history. QuantLab stores each cash equity by
+**exchange segment + original Dhan Security ID**, so RELIANCE is not
+downloaded again merely because it appears in multiple groups.
+
+**All downloaded stocks**, **NSE**, **BSE**, **NIFTY 50**, **BANK NIFTY**,
+**NIFTY 100** and **By sector** are **views/filters, not separate copies
+of a stock's history**. NIFTY 50 and BANK NIFTY use documented, independent,
+effective-dated reconstructed membership, only within its actual coverage
+and with unresolved historical symbols disclosed. NIFTY 100 is shown as
+**source required**, not guessed from NIFTY 50 or today's NSE master.
+Sector names appear only after an original effective-dated sector source
+has been explicitly imported; no present-day sector is backfilled as fact.
+
+The **Source snapshots** / **Advanced original sources** section retains
+old Dhan batch evidence, imported files and past research inputs for
+reproducibility. These are not additional user-facing equity databases
+and should not be deleted merely to make the library appear simpler.
+
+**Model-first use:** In **Get model data**, choose a model. When
+`dhan_shared` already has observed prices, it is selected automatically
+and QuantLab measures its real input shortfall and +20% preferred sample.
+No dataset picker is needed for the normal path; choosing an older
+snapshot is an advanced override. If no canonical prices exist, choose
+the desired securities/index in **Get Data** and approve an original
+read-only download. QuantLab cannot safely guess whether a model should
+use NIFTY 50, BANK NIFTY, an individual stock, or a licensed TRI.
+
+After a complete Dhan batch has been prepared, its verified stock prices
+are indexed automatically into `dhan_shared`. The advanced **Index my
+existing prepared Dhan batches** action reuses older local sources
+without any broker calls; it never overwrites conflicting closes or
+deletes original evidence. A blocked source is reported individually.
+
+**Dated sector import** is under the Market Library's Source maintenance:
+a UTF-8 CSV with `exchange_segment,security_id,effective_date,sector`
+may be imported after rights confirmation. It must match existing
+canonical stock identities; conflicting classifications are rejected.
+Imported classifications are **user-supplied, not independently certified**.
+
 ## First-time setup (no existing dataset needed)
 
 1. In **Get Data**, select **NIFTY 50**, **BANK NIFTY**, or **My stocks**.
@@ -41,10 +84,12 @@ describes the current implementation, not a planned future capability.
    original batch engine automatically builds a derived research dataset.
    If the batch has gaps, the UI permits an explicitly acknowledged partial
    preparation; it never marks that partial research as source-certified.
-8. In **My Datasets**, open an available dataset in Model Laboratory or
-   inspect missing inputs. Delete uses the existing dependency-aware,
-   recoverable dataset confirmation; it never silently deletes original
-   broker candle caches. Queues have their own Trash and restoration controls.
+8. In **My Datasets**, browse the **one Market Data Library** by index,
+   exchange, or original effective-dated sector classification. Legacy
+   source snapshots are preserved under **Advanced**. Deleting a legacy
+   derived dataset uses the dependency-aware, recoverable confirmation;
+   it never silently deletes original broker candle caches. Queues have
+   their own Trash and restoration controls.
 
 ## Automatic model completion and safe secondary-source recovery
 
