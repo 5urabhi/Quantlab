@@ -19,7 +19,7 @@ import uuid
 
 import pandas as pd
 
-from . import service
+from . import dhan_checkpoint, service
 
 SHARED_ID = "dhan_shared"
 SAFE_COLUMN = re.compile(r"^[A-Za-z0-9&_.-]{1,80}$")
@@ -148,8 +148,8 @@ def publish_views() -> dict:
                  "security_id": sid, "display_symbol": symbol, "identity": k}
                 for k, segment, sid, symbol in mappings
             ],
-            "daily_sha256": hashlib.sha256((folder / "daily_prices.csv").read_bytes()).hexdigest(),
-            "monthly_sha256": hashlib.sha256((folder / "prices.csv").read_bytes()).hexdigest(),
+            "daily_sha256": dhan_checkpoint.digest(folder / "daily_prices.csv"),
+            "monthly_sha256": dhan_checkpoint.digest(folder / "prices.csv"),
             "no_forward_fill": True,
             "warning": (
                 "Unadjusted Dhan and user-authorized, original-close fallback sources "
@@ -258,7 +258,7 @@ def cached_spans(row: dict) -> list[tuple[int | None, date, date]]:
         data = json.loads(sidecar.read_text())
         if (data.get("instrument_id") != row["id"] or
                 data.get("interval_minutes") != interval or
-                hashlib.sha256(source.read_bytes()).hexdigest() != data.get("sha256")):
+                dhan_checkpoint.digest(source) != data.get("sha256")):
             raise ValueError("Cached candle provenance or identity mismatch: " + row["id"])
         for first, last in data.get("coverage", []):
             begin, end = date.fromisoformat(first), date.fromisoformat(last)
@@ -268,19 +268,38 @@ def cached_spans(row: dict) -> list[tuple[int | None, date, date]]:
 
 
 def reuse_cached(row: dict) -> dict:
-    """Rebuild shared prices from existing daily/intraday cache before any API call."""
+    """Rebuild shared prices once per instrument from SHA-verified caches.
+
+    Minute history is often covered by dozens of 90-day source windows. Each
+    CSV contains those windows already; parsing it for *each* coverage span
+    repeatedly multiplied IO/CPU and re-published the full shared price matrix
+    for every span. Aggregate the covered envelope once per interval instead.
+    No missing candle is forward-filled; only real CSV rows inside the
+    manifest-covered date envelope are included.
+    """
+    from . import dhan_workspace
+    by_interval: dict[int | None, tuple[date,date]] = {}
+    for interval, first, last in cached_spans(row):
+        if interval not in by_interval:
+            by_interval[interval] = (first,last)
+        else:
+            begin,end = by_interval[interval]
+            by_interval[interval] = (min(first,begin),max(last,end))
     entries = []
-    # Prefer 1m cache where present; identical overlaps are validated by ingest().
-    for interval, begin, end in cached_spans(row):
+    for interval,(begin,end) in by_interval.items():
         try:
-            from . import dhan_workspace
-            bars, mapping = dhan_workspace._batch_daily_ohlcv(row, interval, begin, end)
+            bars,mapping = dhan_workspace._batch_daily_ohlcv(row,interval,begin,end)
         except ValueError as exc:
             if str(exc).startswith("No cached candles inside"):
                 continue
             raise
-        mapping["display_symbol"] = row.get("pit_symbol", row["symbol"])
-        entries.append((mapping, bars))
+        mapping["display_symbol"] = row.get("pit_symbol",row["symbol"])
+        entries.append((mapping,bars))
     if not entries:
-        return {"dataset_id": SHARED_ID, "rows_appended": 0, "rows_reused": 0}
-    return ingest(entries, origin="cached_" + row["exchange_segment"] + "_" + row["security_id"])
+        return {"dataset_id": SHARED_ID, "rows_appended":0,
+                "rows_reused":0,"cache_intervals_read":0}
+    result=ingest(entries,origin="cached_"+row["exchange_segment"]+"_"+
+                  row["security_id"])
+    return {**result,"cache_intervals_read":len(entries),
+            "source_windows_collapsed":sum(
+                1 for _ in cached_spans(row))}
