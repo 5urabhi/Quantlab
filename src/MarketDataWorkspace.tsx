@@ -808,7 +808,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
       {job&&['queued','running'].includes(job.status)&&<div className="mdw-job" role="status">
         <LoaderCircle size={22} className="mdw-spin"/><div><strong>{job.stage||'Original market data job'}</strong>
           <small>{Math.round(job.percent||0)}% · Job {job.id}</small></div></div>}
-      {job?.status==='complete'&&job.result?.secondary_recovery&&
+      {job?.status==='complete'&&Boolean(job.result?.secondary_recovery)&&
         <div className="mdw-callout warn" role="status">
           <ShieldCheck size={17}/>
           <div><strong>Secondary source: {(
@@ -821,7 +821,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
         <div className="mdw-callout success">
           Original Dhan batch unchanged. Review validated secondary receipts in Advanced Data Tools.
         </div>}
-      {job?.status==='complete'&&job.result?.model_research&&
+      {job?.status==='complete'&&Boolean(job.result?.model_research)&&
         <div className={'mdw-callout '+(
           (job.result.model_research as {status?:string}).status==='complete'?
             'success':'warn')} role="status">
