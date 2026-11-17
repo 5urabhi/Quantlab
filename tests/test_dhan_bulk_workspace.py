@@ -300,6 +300,71 @@ class BulkDhanWorkstationTests(unittest.TestCase):
         self.assertEqual(calls[2], calls[3])
         self.assertEqual(len(json.loads(manifest.read_text())["coverage"]), 5)
 
+    def test_invalid_minute_bar_is_audited_while_valid_bars_are_cached_and_resumable(self):
+        import json
+        from index_research.dhan_data import download_candles as real_download
+        made = dw.create_batch("selected", ["NSE_EQ:1333"], [],
+                               "2024-01-01", "2024-02-01", 1, False)
+
+        raw = {
+            "timestamp": [1705289400, 1705375800],
+            "open": [0, 110], "high": [110, 120],
+            "low": [95, 105], "close": [105, 115],
+            "volume": [1000, 0],
+        }
+        def vendor(inst, start, stop, **kwargs):
+            return real_download(
+                inst, start, stop, interval=kwargs["interval"],
+                token="ISOLATED_TEST_ONLY",
+                post=lambda *_args: raw,
+                pause_seconds=0)
+
+        with patch.object(dw, "download_candles", side_effect=vendor):
+            completed = dw.run_batch(made["id"])
+        self.assertEqual(completed["counts"]["complete"], 1)
+        self.assertEqual(completed["rejected_provider_bars"], 1)
+        cached = service.DATA / "dhan" / "history" / "NSE_EQ" / "1333" / "1m.csv"
+        meta = json.loads(cached.with_suffix(".json").read_text())
+        self.assertEqual(meta["rejected_provider_bars"], 1)
+        self.assertEqual(meta["quality"], "partial_source_anomalies")
+        self.assertEqual(len(meta["rejected_windows"]), 1)
+        rejected_path = service.DATA / meta["rejected_windows"][0]["file"]
+        self.assertTrue(rejected_path.is_file())
+        self.assertEqual(len(pd.read_csv(rejected_path)), 1)
+        self.assertEqual(pd.read_csv(rejected_path).iloc[0]["open"], 0)
+        self.assertIn("nonpositive_OHLC",pd.read_csv(rejected_path).iloc[0]["reason"])
+        self.assertIn("impossible_low",pd.read_csv(rejected_path).iloc[0]["reason"])
+        self.assertEqual(len(pd.read_csv(cached)), 1)
+        self.assertEqual(pd.read_csv(cached).iloc[0]["open"], 110)
+        self.assertEqual(pd.read_csv(cached).iloc[0]["volume"], 0)
+
+        repeat = dw.create_batch("selected", ["NSE_EQ:1333"], [],
+                                 "2024-01-01", "2024-02-01", 1, False)
+        with patch.object(dw, "download_candles", side_effect=AssertionError("Must reuse cache")):
+            reused = dw.run_batch(repeat["id"])
+        self.assertEqual(reused["counts"]["cached"], 1)
+        self.assertEqual(reused["rejected_provider_bars"], 1)
+
+    def test_all_invalid_minute_bars_fail_without_false_cached_coverage(self):
+        from index_research.dhan_data import download_candles as real_download
+        made = dw.create_batch("selected", ["NSE_EQ:1333"], [],
+                               "2024-01-01", "2024-02-01", 1, False)
+        raw = {
+            "timestamp": [1705289400, 1705375800],
+            "open": [0, 0], "high": [110, 120],
+            "low": [95, 105], "close": [105, 115],
+            "volume": [1000, 2000],
+        }
+        def vendor(inst, start, stop, **kwargs):
+            return real_download(inst, start, stop, interval=kwargs["interval"],
+                                 token="ISOLATED_TEST_ONLY",
+                                 post=lambda *_args: raw,pause_seconds=0)
+        with patch.object(dw, "download_candles", side_effect=vendor):
+            failed = dw.run_batch(made["id"])
+        self.assertEqual(failed["counts"]["failed"], 1)
+        cached = service.DATA / "dhan" / "history" / "NSE_EQ" / "1333" / "1m.csv"
+        self.assertFalse(cached.exists(), "Never treat all-bad source rows as a complete interval")
+
     def test_rejects_unsafe_batch_and_instrument_paths(self):
         with self.assertRaises(ValueError):
             dw.preview_history("../../.env")

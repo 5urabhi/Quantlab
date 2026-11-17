@@ -22,13 +22,13 @@ type BatchSummary = {
   id:string;status:string;created_utc:string;updated_utc?:string;selection:SelectionMode;
   interval:number|null;from_date:string;to_date:string;total:number;processed:number;
   counts:Record<string,number>;current_symbol:string|null;current_window?:string|null;prepared_dataset_id?:string|null;has_price_benchmark?:boolean;
-  errors:number;warning:string;failure_examples?:FailureExample[]
+  errors:number;warning:string;failure_examples?:FailureExample[];rejected_provider_bars?:number
   historical_index_name?:string|null;historical_union_count?:number
   historical_unresolved?:Array<{symbol:string;reason:string}>
   index_spot?:{status:string;rows?:number;file?:string;error?:string;warning?:string;identity_source?:string;reference?:string}
 }
 type BatchDetails = BatchSummary & {
-  items:Array<CatalogItem & {status:string;rows:number;rows_added:number;windows_completed?:number;windows_total?:number;error?:string|null}>
+  items:Array<CatalogItem & {status:string;rows:number;rows_added:number;windows_completed?:number;windows_total?:number;error?:string|null;rejected_provider_bars?:number}>
   page:number;per_page:number;filtered_total:number
 }
 type Job = {job_id:string;batch?:BatchSummary}
@@ -153,6 +153,11 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
     ])
     setCounts({NSE:nse.total,BSE:bse.total})
   },[])
+  const handleCatalogReady=useCallback(()=>{
+    void loadConnection().then(status=>{
+      if(status.instrument_master_available)void loadCounts()
+    }).catch(e=>setNotice({text:e instanceof Error?e.message:String(e),error:true}))
+  },[loadConnection,loadCounts])
   useEffect(()=>{
     let cancelled=false
     void Promise.all([loadConnection(),loadBatches(),loadDeletedBatches()]).then(([status])=>{
@@ -389,7 +394,7 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
   const downloadBlocker=!connection?'Checking the local Dhan connection…':
     !connection.token_configured?'Dhan token not found. Add DHAN_ACCESS_TOKEN to your local .env file.':
     !connection.instrument_master_available?'Dhan stock list is missing. Open Connection settings and refresh the catalog.':
-    pitSyncBusy?'Updating the historical stock list…':
+    pitSyncBusy?'Preparing historical constituents and Dhan stock IDs automatically…':
     invalidDates?'Choose an end date later than the start date.':
     pitMode&&!pitPlan?'Historical stock list not ready. Open Membership details to load it or adjust dates.':
     downloadCount===0?'Choose the stocks you want to download.':
@@ -442,30 +447,32 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
               `${fmt(pitPlan.resolved_count)} mapped historical stocks across your selected dates`:
               pitPreview?
                 `${fmt(pitPreview.resolved_count)} stocks in the available historical period`:
-                'Checking historical membership and stock IDs…'}</p>
+                pitSyncBusy?'Preparing historical membership and stock IDs…':'Checking saved index sources…'}</p>
             {pitPlan?.unresolved_count?
               <small>{pitPlan.unresolved_count} historical stock ID(s) need review.</small>:
               <small>Uses all companies that belonged to the index during the period, not only today's stocks.</small>}
           </div>
         </div>
-        {!pitPlan&&<div className="dh-simple-warning" role="status">
-          Historical membership is not ready for these dates.
+        {!pitPlan&&<div className={pitSyncBusy?'dh-simple-summary':'dh-simple-warning'} role="status">
+          {pitSyncBusy?'Preparing the historical index sources automatically…':
+            'Historical index data is not ready for the complete date range.'}
           {pitPreview&&pitPreview.to_date<toDate?<>
             <p>The available historical index list ends before your selected date.</p>
             <button className="dh-small-btn" type="button"
               onClick={()=>setToDate(pitPreview.to_date)}>
               Use latest available date ({pitPreview.to_date}) <ArrowRight size={14}/>
             </button>
-          </>:<p>Open membership details below to sync the list or check source availability.</p>}
+          </>:pitSyncBusy?<p>Downloading and verifying source data. No manual sync needed.</p>:
+            <p>See the expanded source details below for the exact missing input or retry action.</p>}
         </div>}
-        <details className="dh-simple-details dh-membership-details">
+        <details className="dh-simple-details dh-membership-details" open={!pitPlan}>
           <summary>Historical membership details / sync missing history</summary>
           <PITIndexPanel mode={mode as PITMode} fromDate={fromDate} toDate={toDate}
             onToDate={setToDate} onPlan={setPitPlan} onPreview={setPitPreview}
-            onSyncBusy={setPitSyncBusy}/>
+            onSyncBusy={setPitSyncBusy} onCatalogReady={handleCatalogReady}/>
         </details>
       </>:mode==='selected'||mode==='watchlist'?<div className="dh-simple-pick-panel"><Section title={pitMode?'Historical index membership':mode==='watchlist'?'Your ticker list':'Find and select stocks'} aside={<Pill tone="blue">{pitMode?(pitPlan?'Union: '+fmt(selectionCount):pitPreview?'Preview: '+fmt(pitPreview.union_count):'Awaiting membership') :fmt(selectionCount)+' in selection'}</Pill>}>
-        {pitMode?<PITIndexPanel mode={mode as PITMode} fromDate={fromDate} toDate={toDate} onToDate={setToDate} onPlan={setPitPlan} onPreview={setPitPreview} onSyncBusy={setPitSyncBusy}/>:mode==='watchlist'?<div className="dh-paste">
+        {pitMode?<PITIndexPanel mode={mode as PITMode} fromDate={fromDate} toDate={toDate} onToDate={setToDate} onPlan={setPitPlan} onPreview={setPitPreview} onSyncBusy={setPitSyncBusy} onCatalogReady={handleCatalogReady}/>:mode==='watchlist'?<div className="dh-paste">
           <p>Paste exact NSE tickers, separated by commas or lines. Or upload a CSV with symbols in the first column.</p>
           <textarea rows={11} spellCheck={false} value={watchlist} onChange={e=>setWatchlist(e.target.value)}
             placeholder={'RELIANCE\nTCS\nINFY\nHDFCBANK\nICICIBANK'} aria-label="NSE ticker list"/>
@@ -527,6 +534,12 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
         The end date must come after the start date.</p>}
       {!daily&&<p className="dh-simple-warning">
         Intraday data uses more Dhan requests and storage. Choose Daily above unless you specifically need minute-level data.</p>}
+      {!daily&&pitMode&&dateDays>365&&<div className="dh-simple-warning">
+        Multi-year intraday index history can require many Dhan requests per constituent.
+        <button type="button" className="dh-small-btn" onClick={()=>setInterval('daily')}>
+          Switch to recommended daily candles
+        </button>
+      </div>}
       <details className="dh-simple-details dh-advanced-data">
         <summary>Advanced options: API calls and index spot prices</summary>
         <div className="dh-estimate"><div><span>Estimated minimum requests</span>
@@ -637,6 +650,11 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
         <div className="dh-batch-title"><div><strong>Batch {details.id.slice(-8)}</strong><span> · {interpretMode(details.selection)} · {fmt(details.total)} instruments</span></div>
           <Pill tone={details.status==='completed'?'good':currentActive?'blue':'warning'}>{statusText(details.status)}</Pill></div>
         <div className="dh-meter"><span style={{width:progress+'%'}}/></div>
+        {(details.rejected_provider_bars||0)>0&&<div className="dh-simple-warning" role="status">
+          <strong>Provider candle quality: {fmt(details.rejected_provider_bars||0)} invalid OHLCV bars excluded.</strong>
+          {' '}Their original values are recorded separately in the local Dhan source-quality audit files.
+          No missing prices were filled in. Data from affected sessions may be incomplete.
+        </div>}
         {details.errors>0&&<section className="dh-visible-errors" role="alert"
           aria-label="Download error details">
           <div className="dh-visible-errors-head"><CircleAlert size={23}/><div>
@@ -723,7 +741,8 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
         <div className="dh-result-table"><table><thead><tr><th>Symbol</th><th>Security ID</th><th>Status</th><th>Rows</th><th>Details</th></tr></thead><tbody>
           {details.items.map(item=><tr key={item.id}><td><strong>{item.symbol}</strong><small>{item.exchange_segment}</small></td><td>{item.security_id}</td>
             <td><Pill tone={['complete','cached'].includes(item.status)?'good':item.status==='failed'?'warning':'muted'}>{statusText(item.status)}</Pill></td>
-            <td>{fmt(item.rows||0)}{item.windows_total? <small>{item.windows_completed||0}/{item.windows_total} date windows</small>:null}</td><td>{item.error?<span className="dh-error-note" title={item.error}>{item.error}</span>:
+            <td>{fmt(item.rows||0)}{item.windows_total? <small>{item.windows_completed||0}/{item.windows_total} date windows</small>:null}
+               {(item.rejected_provider_bars||0)>0&&<small>⚠ {fmt(item.rejected_provider_bars||0)} source bars rejected</small>}</td><td>{item.error?<span className="dh-error-note" title={item.error}>{item.error}</span>:
               ['complete','cached'].includes(item.status)?<button className="dh-view" onClick={()=>previewRow(item)}>Preview candles</button>:'—'}</td></tr>)}
         </tbody></table></div>
         <div className="dh-pages"><button disabled={detailPage<=1} onClick={()=>setDetailPage(v=>v-1)}><ChevronLeft size={15}/> Previous</button>

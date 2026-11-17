@@ -325,6 +325,8 @@ def _summarize(data: dict) -> dict:
         "has_price_benchmark": bool(data.get("prepared_dataset_id") and
             (service.DATA / "dhan" / "monthly_research" / data["id"] / "benchmark.csv").is_file()),
         "errors": counts["failed"],
+        "rejected_provider_bars": sum(int(i.get("rejected_provider_bars",0))
+                                      for i in data["items"]),
         "failure_examples": [
             _safe_batch_failure(item) for item in data["items"]
             if item["status"] == "failed"
@@ -554,13 +556,16 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
         if on_progress:
             on_progress(0, 0, initial_count)
         return {"status": "cached", "rows": initial_count, "rows_added": 0,
-                "windows_completed": 0, "windows_total": 0}
+                "windows_completed": 0, "windows_total": 0,
+                "rejected_provider_bars": int(previous.get("rejected_provider_bars",0))}
     inst = Instrument(label="EQUITY_" + row["security_id"],
                       security_id=row["security_id"],
                       exchange_segment=row["exchange_segment"], instrument="EQUITY")
     covered = list(previous.get("coverage", []))
     added = 0
     attempted = 0
+    rejected_bars = int(previous.get("rejected_provider_bars", 0))
+    rejected_windows = list(previous.get("rejected_windows", []))
 
     def normalize(frame: pd.DataFrame) -> pd.DataFrame:
         copy = frame.copy()
@@ -587,6 +592,34 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
             if on_progress:
                 on_progress(attempted, total, len(existing) if existing is not None else 0)
             continue
+        discarded=int(frame.attrs.get("rejected_provider_bars",0))
+        rejected_bars+=discarded
+        if discarded:
+            raw_rejected=frame.attrs.get("rejected_provider_rows")
+            if not isinstance(raw_rejected,pd.DataFrame) or len(raw_rejected)!=discarded:
+                raise ValueError("Rejected Dhan OHLCV rows must be recorded for source audit")
+            quality_dir=target.parent/(target.stem+"_rejected")
+            quality_dir.mkdir(parents=True,exist_ok=True)
+            quality_file=quality_dir/(first.isoformat()+"_"+last.isoformat()+".csv")
+            quality_temp=quality_file.with_name(quality_file.name+"."+uuid.uuid4().hex[:8]+".tmp")
+            try:
+                raw_rejected.to_csv(quality_temp,index=False)
+                quality_digest=hashlib.sha256(quality_temp.read_bytes()).hexdigest()
+                os.replace(quality_temp,quality_file)
+            finally:
+                quality_temp.unlink(missing_ok=True)
+            rejected_windows=[x for x in rejected_windows
+                              if x.get("from")!=first.isoformat() or x.get("to")!=last.isoformat()]
+            rejected_windows.append({
+                "from":first.isoformat(),"to":last.isoformat(),
+                "count":discarded,"sha256":quality_digest,
+                "file":quality_file.relative_to(service.DATA).as_posix(),
+            })
+            LOG.warning("Dhan window contained rejected provider OHLCV rows: "
+                        "security_id=%s first=%s last=%s rejected=%d accepted=%d "
+                        "quality_file=%s",
+                        row["security_id"],first.isoformat(),last.isoformat(),
+                        discarded,len(frame),quality_file.relative_to(service.DATA))
         incoming = normalize(frame)
         incoming = incoming.sort_values("datetime")
         if incoming["datetime"].duplicated().any():
@@ -609,6 +642,9 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
             "instrument_id": row["id"], "display_symbol": row["symbol"],
             "interval_minutes": interval, "coverage": covered,
             "rows": int(len(combined)), "sha256": digest,
+            "rejected_provider_bars": rejected_bars,
+            "rejected_windows": rejected_windows,
+            "quality": "partial_source_anomalies" if rejected_bars else "all_returned_bars_valid",
             "updated_utc": _now(), "source": "DhanHQ historical OHLCV",
             "window_size_days": window_days,
             "warning": "Dhan historical OHLCV is not verified dividend-adjusted total returns.",
@@ -621,7 +657,7 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
         "status": "complete" if existing is not None else "no_data",
         "rows": int(len(existing)) if existing is not None else 0,
         "rows_added": added, "windows_completed": attempted,
-        "windows_total": total,
+        "windows_total": total, "rejected_provider_bars": rejected_bars,
     }
 
 def run_batch(batch_id: str, cancel_event: threading.Event | None = None) -> dict:
@@ -762,6 +798,8 @@ def _batch_daily_ohlcv(row: dict, interval: int | None,
         "exchange_segment": row["exchange_segment"],
         "source_sha256": digest,
         "source_interval_minutes": interval,
+        "rejected_provider_bars": int(metadata.get("rejected_provider_bars",0)),
+        "rejected_windows": metadata.get("rejected_windows",[]),
         "source_rows_in_range": len(frame),
         "daily_sessions": len(daily),
         "bar_count_min": int(daily["bars"].min()),

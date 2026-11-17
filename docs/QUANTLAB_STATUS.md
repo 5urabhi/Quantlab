@@ -5,6 +5,21 @@ Last software review: **November 14, 2026**.
 Run `bash run.sh check` for current React build, Python regression, mathematics and a read-only original-source readiness doctor. `bash run.sh evaluate` additionally generates clearly labeled synthetic experiment and chart artifacts. Both keep unavailable authenticated/licensed input distinct from a code failure. The previous `scripts/local_acceptance.py` legacy-Streamlit default is retired; archived Streamlit checks require explicit `--legacy-streamlit`. This is the authoritative status
 register; older archived Streamlit/branch-specific status documents are not.
 
+## November 17: automatic historical index source initialization
+
+On a new checkout, the Data Library's NIFTY 50/BANK NIFTY historical
+selection now automatically prepares missing public PIT constituent records
+and current Dhan Security IDs, shows distinct failed-provider errors, and
+offers explicit end-date correction when the upstream membership source has
+not documented the requested final trading sessions. Source preparation is
+read-only and separate from starting a real Dhan price download. Multi-year
+minute history has a visible recommendation to switch to Daily.
+
+Historical membership remains a third-party reconstruction, not exchange
+certification; a current Dhan master cannot resolve every old delisted or
+renamed constituent. An official total-return benchmark and audited stock
+returns remain separate inputs.
+
 ## Acceptance matrix
 
 | Capability | Software | Genuine historical NIFTY evidence |

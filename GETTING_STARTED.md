@@ -17,6 +17,31 @@ Open **http://127.0.0.1:5173** in the same Ubuntu machine. The local API normall
 
 This guide describes the verified `main` release. Feature-branch reviewers should check out their own branch and run the same launcher before merge. The launcher may need to install Python/npm dependencies on a fresh checkout.
 
+## Bank NIFTY historical download on a fresh clone
+
+Open **Data Library → Download market data → BANK NIFTY · Historical**.
+QuantLab now automatically checks and downloads two missing public source
+inputs: the **point-in-time index membership reconstruction** (historical
+inclusions/exclusions) and Dhan's **compact instrument ID master** (mapping to
+current tradable NSE symbols). You do not need terminal commands, and QuantLab
+does not download market candles until you explicitly start a Dhan batch.
+
+An updated membership source might still stop **before your selected end
+date**. QuantLab displays the source's last documented date and a **Use latest
+available date** button; it never silently invents the remaining history.
+The date field's **end date is exclusive** (for coverage through 2026-10-13,
+the supported end is 2026-10-14).
+
+The Dhan master is not an archive of delisted securities. Any old index
+member lacking an exact Dhan Security ID is flagged explicitly rather than
+substituted with a modern ticker. Choose **Daily prices** for multi-year
+factor research; 1-minute intraday candles require substantially more time,
+storage and Dhan requests. The interface offers a one-click switch to Daily.
+
+If a provider download fails, the membership details open automatically and
+show which source failed and a retry button. The Dhan token and historical
+Data API subscription are still required for downloading actual prices.
+
 ## Complete a research workflow
 
 **Start with Guided Research** — the default landing page. Follow the numbered stages: **1 Select data → 2 Choose model → 3 Run → 4 Analyze → 5 Save**. The Run stage embeds the actual Python-backed Model Laboratory; Analyze opens the exact archived result in Results Studio, and Save exports an evidence ZIP with an offline checksum verifier. The guided route does not duplicate data/model engines or hide unsupported sources.

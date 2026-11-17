@@ -8,6 +8,26 @@ funds, or automate live trading. The credentials are read from your local
 terminal; never paste tokens in GitHub issues, commits, screenshots, the
 Streamlit UI, or a Vercel environment used by a public website.
 
+## Guided historical NIFTY and BANK NIFTY data preparation
+
+In **Data Library → Download market data**, selecting **NIFTY 50 · Historical**
+or **BANK NIFTY · Historical** automatically starts missing *public*
+historical membership and Dhan instrument-master preparation. Fresh clones
+do not include those ignored local files. Source failures appear directly
+in the expanded historical-membership panel, with manual Retry.
+
+QuantLab never backfills a current index membership over earlier trading
+dates. If the requested period ends beyond the third-party source's
+documented coverage, only the covered portion is previewed, and the
+full-period download remains blocked until you explicitly shorten the date
+or obtain newer evidence. The end date is **exclusive**.
+
+The historical instrument master is a current identifier catalog,
+not a delisted constituent database. Missing historical identities
+remain unresolved. A Dhan token/entitlement is still required for candle
+downloads. Daily candles are recommended for multi-year index research;
+minute-level history is an explicitly larger download.
+
 ## 1. Create / enable your DhanHQ Data API access
 
 1. Sign in to **Dhan Web** (not the mobile app).

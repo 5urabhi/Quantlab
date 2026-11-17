@@ -248,6 +248,51 @@ try {
     await screenshot('02-historical-source-readiness')
   })
   await step('Dhan download uses an accessible four-step guided flow',async()=>{
+    // A fresh clone has no ignored membership CSV or Dhan instrument master.
+    // Mock the official-source jobs: verify user selection starts both
+    // downloads automatically, without manual disclosure clicks or API secrets.
+    let membershipSynced=false, masterReady=false
+    let membershipSyncCount=0, masterRefreshCount=0
+    const fulfill=async(route,payload)=>route.fulfill({
+      status:200,contentType:'application/json',body:JSON.stringify(payload)})
+    await page.route('**/api/indices/status',route=>fulfill(route,
+      membershipSynced?{available:true,first_date:'2014-01-01',covered_through:'2026-10-13',
+        source_commit:'0000000000000000000000000000000000000000',source:'ci-mock',synced_utc:new Date().toISOString()}:
+      {available:false,message:'Historical index membership has not been synced'}))
+    await page.route('**/api/dhan/catalog/health',route=>fulfill(route,
+      masterReady?{ready:true,code:'ready',nse_equities:2000,
+        verified_nse_tickers:1950,message:'Compact catalog ready'}:
+      {ready:false,code:'missing',nse_equities:0,verified_nse_tickers:0,
+        message:'Current Dhan instrument catalog missing'}))
+    await page.route('**/api/indices/sync',route=>{
+      membershipSyncCount++
+      membershipSynced=true
+      return fulfill(route,{job_id:'ci_membership_bootstrap'})
+    })
+    await page.route('**/api/dhan/instruments/refresh',route=>{
+      masterRefreshCount++
+      masterReady=true
+      return fulfill(route,{job_id:'ci_master_bootstrap'})
+    })
+    await page.route('**/api/jobs/ci_membership_bootstrap',route=>
+      fulfill(route,{id:'ci_membership_bootstrap',status:'complete'}))
+    await page.route('**/api/jobs/ci_master_bootstrap',route=>
+      fulfill(route,{id:'ci_master_bootstrap',status:'complete'}))
+    await page.route('**/api/indices/preview?*',route=>{
+      const u=new URL(route.request().url())
+      const end=u.searchParams.get('to_date')||'2026-10-14'
+      const start=u.searchParams.get('from_date')||'2021-01-01'
+      return fulfill(route,{
+        index_id:u.searchParams.get('index_id'),index_name:'Nifty Bank',
+        from_date:start,to_date:end,asof_date:start,
+        asof_members:['HDFCBANK','ICICIBANK'],start_members:['HDFCBANK','ICICIBANK'],
+        end_members:['HDFCBANK','ICICIBANK'],union_members:['HDFCBANK','ICICIBANK'],
+        start_count:2,end_count:2,union_count:2,changes:[],change_count:0,
+        resolved_count:2,unresolved_count:0,unresolved:[],covered_through:'2026-10-13',
+        first_date:'2014-01-01',source_url:'https://example.com/test-only',
+        source_commit:'0000000000000000000000000000000000000000',warnings:[],
+        official_corrections:[]})
+    })
     await nav('Data Library').click()
     await page.locator('.ws-context-tabs').getByRole('button',{
       name:'Download market data'
@@ -263,7 +308,13 @@ try {
     assert.equal(await indexOption.getAttribute('aria-pressed'),'true')
     const frequency=page.getByRole('combobox',{name:'Download frequency'})
     assert.equal(await frequency.inputValue(),'daily')
-    assert.equal(await page.locator('.dh-membership-details').evaluate(el=>el.open),false)
+    assert.equal(await page.locator('.dh-membership-details').evaluate(el=>el.open),true,
+      'When historical inputs are missing, source details must be visible automatically')
+    await page.getByText(/Source coverage through:/).first().waitFor()
+    assert.equal(membershipSyncCount,1,
+      'Freshly selected historical index should trigger one automatic membership sync')
+    assert.equal(masterRefreshCount,1,
+      'Missing Dhan Security-ID catalog should refresh automatically once')
     assert.equal(await page.locator('.dh-advanced-data').evaluate(el=>el.open),false)
     const download=page.getByRole('button',{name:/Start download/})
     assert.equal(await download.isDisabled(),true,'No Dhan token in isolated CI')
@@ -274,8 +325,20 @@ try {
     await page.getByRole('button',{name:/BANK NIFTY · Historical/}).click()
     assert.equal(await page.getByRole('button',{name:/BANK NIFTY · Historical/})
       .getAttribute('aria-pressed'),'true')
+    await page.getByLabel('End date (not included)').fill('2026-10-16')
+    await page.getByText(/latest available date/i).first().waitFor()
+    assert.equal(await page.getByRole('button',{name:/Use latest available date/}).count(),1)
+    assert.equal(membershipSyncCount,1,
+      'Switching between NIFTY historical modes should reuse the existing source')
     await page.getByRole('button',{name:/NIFTY 50 · Historical/}).click()
     await screenshot('02-dhan-four-step-download')
+    await page.unroute('**/api/indices/status')
+    await page.unroute('**/api/dhan/catalog/health')
+    await page.unroute('**/api/indices/sync')
+    await page.unroute('**/api/dhan/instruments/refresh')
+    await page.unroute('**/api/jobs/ci_membership_bootstrap')
+    await page.unroute('**/api/jobs/ci_master_bootstrap')
+    await page.unroute('**/api/indices/preview?*')
     await nav('Compare & Visualize').click()
     await page.locator('.rw-top h2').waitFor()
   })

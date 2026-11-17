@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {AlertTriangle, ArrowDownToLine, CalendarDays,
   Check, ChevronDown, Clock3, Database, FileClock, Info, LoaderCircle,
   RefreshCw, ShieldCheck} from 'lucide-react'
@@ -28,6 +28,7 @@ type Props = {
   onToDate:(s:string)=>void;onPlan:(plan:MembershipPlan|null)=>void
   onPreview:(plan:MembershipPlan|null)=>void
   onSyncBusy:(busy:boolean)=>void
+  onCatalogReady:()=>void
 }
 async function get<T>(path:string, init?:RequestInit):Promise<T>{
   const result=await fetch('/api'+path,init)
@@ -59,7 +60,7 @@ function exportCsv(name:string, rows:string[][]){
   window.setTimeout(()=>URL.revokeObjectURL(url),1000)
 }
 
-export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPreview,onSyncBusy}:Props){
+export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPreview,onSyncBusy,onCatalogReady}:Props){
   const [status,setStatus]=useState<MembershipStatus|null>(null)
   const [asOf,setAsOf]=useState(fromDate)
   const [plan,setPlan]=useState<MembershipPlan|null>(null)
@@ -73,6 +74,10 @@ export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPr
   const [showAll,setShowAll]=useState(false)
   const [showUnion,setShowUnion]=useState(false)
   const [showMissing,setShowMissing]=useState(true)
+  const attemptedAutomaticSync=useRef(false)
+  const attemptedAutomaticCatalog=useRef(false)
+  const [syncProblem,setSyncProblem]=useState('')
+  const [catalogProblem,setCatalogProblem]=useState('')
   const refresh=useCallback(async()=>{
     const next=await get<MembershipStatus>('/indices/status')
     setStatus(next)
@@ -123,56 +128,81 @@ export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPr
   },[mode,fromDate,toDate,asOf,status?.available,status?.covered_through,status?.source_commit,onPlan,onPreview,supportedEnd,catalogEpoch])
   useEffect(()=>{
     if(!syncId)return
-    onSyncBusy(true)
     let active=true
     const timer=window.setInterval(()=>{
       void get<JobStatus>('/jobs/'+syncId).then(async j=>{
         if(!active||!['complete','error'].includes(j.status))return
-        window.clearInterval(timer);setSyncId('');onSyncBusy(false)
-        if(j.status==='error'){setIssue(j.error||'Historical membership sync failed');return}
-        try{await refresh()}catch(e){setIssue(e instanceof Error?e.message:String(e))}
-      }).catch(e=>{if(active){window.clearInterval(timer);setSyncId('');onSyncBusy(false);setIssue(e instanceof Error?e.message:String(e))}})
+        window.clearInterval(timer);setSyncId('')
+        if(j.status==='error'){setSyncProblem(j.error||'Historical membership sync failed');return}
+        try{await refresh()}catch(e){setSyncProblem(e instanceof Error?e.message:String(e))}
+      }).catch(e=>{if(active){window.clearInterval(timer);setSyncId('');setSyncProblem(e instanceof Error?e.message:String(e))}})
     },1500)
     return()=>{active=false;window.clearInterval(timer)}
   },[syncId,refresh,onSyncBusy])
   useEffect(()=>{
     if(!catalogJobId)return
-    onSyncBusy(true)
     let live=true
     const timer=window.setInterval(()=>{
       void get<JobStatus>('/jobs/'+catalogJobId).then(async j=>{
         if(!live||!['complete','error'].includes(j.status))return
-        window.clearInterval(timer);setCatalogJobId('');onSyncBusy(false)
-        if(j.status==='error'){setIssue(j.error||'Dhan catalog refresh failed');return}
+        window.clearInterval(timer);setCatalogJobId('')
+        if(j.status==='error'){setCatalogProblem(j.error||'Dhan catalog refresh failed');return}
         setCatalogEpoch(n=>n+1)
+        onCatalogReady()
       }).catch(e=>{
-        if(live){window.clearInterval(timer);setCatalogJobId('');onSyncBusy(false)
-          setIssue(e instanceof Error?e.message:String(e))}
+        if(live){window.clearInterval(timer);setCatalogJobId('')
+          setCatalogProblem(e instanceof Error?e.message:String(e))}
       })
     },1500)
     return()=>{live=false;window.clearInterval(timer)}
-  },[catalogJobId,onSyncBusy])
+  },[catalogJobId,onSyncBusy,onCatalogReady])
   const refreshCatalog=async()=>{
-    setIssue('')
+    setCatalogProblem('')
     try{
       const response=await get<{job_id:string}>('/dhan/instruments/refresh',{method:'POST'})
-      setCatalogJobId(response.job_id);onSyncBusy(true)
-    }catch(e){setIssue(e instanceof Error?e.message:String(e))}
+      setCatalogJobId(response.job_id)
+    }catch(e){setCatalogProblem(e instanceof Error?e.message:String(e))}
   }
   const sync=async()=>{
-    setIssue('')
+    setSyncProblem('')
     try{
       const response=await get<{job_id:string}>('/indices/sync',{method:'POST'})
-      setSyncId(response.job_id);onSyncBusy(true)
-    }catch(e){setIssue(e instanceof Error?e.message:String(e))}
+      setSyncId(response.job_id)
+    }catch(e){setSyncProblem(e instanceof Error?e.message:String(e))}
   }
+  // A new clone has no ignored local PIT source or instrument catalog.
+  // Selecting a historical index authorizes its public source checks; perform
+  // each one automatically once and preserve the current user-selected dates.
+  useEffect(()=>{
+    if(!status||attemptedAutomaticSync.current||syncId)return
+    const coveredEnd=status.covered_through?following(status.covered_through):''
+    const syncedAt=Date.parse(status.synced_utc||'')
+    const recentSync=Number.isFinite(syncedAt)&&Date.now()-syncedAt<24*60*60*1000
+    // Do not repeatedly fetch an unchanged upstream source when the user
+    // switches between NIFTY 50 and BANK NIFTY or edits an unsupported end.
+    if(status.available&&(!coveredEnd||toDate<=coveredEnd||recentSync))return
+    attemptedAutomaticSync.current=true
+    void sync()
+  },[status?.available,status?.covered_through,toDate,syncId])
+  useEffect(()=>{
+    if(!catalogHealth||catalogHealth.ready||attemptedAutomaticCatalog.current||
+       catalogJobId)return
+    attemptedAutomaticCatalog.current=true
+    void refreshCatalog()
+  },[catalogHealth?.ready,catalogHealth?.code,catalogJobId])
+  // Membership and catalog refresh can run concurrently; keep download
+  // controls disabled until BOTH jobs are complete.
+  useEffect(()=>{onSyncBusy(Boolean(syncId||catalogJobId))},
+    [syncId,catalogJobId,onSyncBusy])
+
   const name=mode==='nifty50_pit'?'NIFTY 50':'BANK NIFTY'
   const memberList=plan?.asof_members||[]
   return <div className="dh-pit-panel">
     <div className="dh-pit-source">
       <div><div className="dh-pit-source-icon"><FileClock size={20}/></div><div>
         <strong>{name} — Historical constituents</strong>
-        <small>{status?.available?'Point-in-time intervals synced from independently reconstructed NSE announcements':
+        <small>{syncId?'Loading historical index membership automatically…':
+          status?.available?'Point-in-time intervals synced from independently reconstructed NSE announcements':
           'Historical index database not yet synced'}</small></div></div>
       <button type="button" className="dh-small-btn" disabled={!!syncId} onClick={()=>void sync()}>
         {syncId?<LoaderCircle size={14} className="dh-spin"/>:<RefreshCw size={14}/>}
@@ -196,19 +226,23 @@ export default function PITIndexPanel({mode,fromDate,toDate,onToDate,onPlan,onPr
           Explicitly use documented end date ({supportedEnd})
         </button></div></div>}
     {!status?.available&&<div className="dh-pit-intro"><Database size={25}/>
-      <strong>One-time historical membership sync</strong><p>This downloads a public CC0 point-in-time constituent history reconstructed from NSE notices. Dhan supplies market prices separately.</p>
+      <strong>{syncId?'Preparing historical membership automatically':'Historical membership needs attention'}</strong>
+       <p>{syncId?'QuantLab is fetching and validating historical index constituents automatically.':
+         'QuantLab automatically tries a public CC0 reconstruction of NSE notices. If the source fails, review the error and retry here. Dhan supplies the prices separately.'}</p>
       <button className="dh-primary" disabled={!!syncId} onClick={()=>void sync()}>
         <ArrowDownToLine size={15}/> {syncId?'Syncing records…':'Load NIFTY constituent history'}
       </button></div>}
     {catalogHealth&&!catalogHealth.ready&&<div className="dh-pit-alert">
-      <AlertTriangle size={18}/><div><strong>The local Dhan instrument catalog is not usable for NIFTY matching</strong>
-        <p>{catalogHealth.message} This is a catalog issue, not evidence that historical NIFTY constituents are delisted. Current NSE equities found: {catalogHealth.nse_equities}; verified trading symbols: {catalogHealth.verified_nse_tickers}.</p>
+      <AlertTriangle size={18}/><div><strong>{catalogJobId?'Loading Dhan stock IDs automatically…':'Dhan instrument catalog needs attention'}</strong>
+        <p>{catalogHealth.message} QuantLab automatically attempts to download the official current Dhan instrument list. This is not evidence that historical constituents are delisted. Current NSE equities: {catalogHealth.nse_equities}; verified symbols: {catalogHealth.verified_nse_tickers}.</p>
         <button type="button" className="dh-small-btn" disabled={!!catalogJobId}
           onClick={()=>void refreshCatalog()}>{catalogJobId?'Refreshing Dhan master…':'Refresh Dhan catalog and rematch constituents'}</button>
       </div>
     </div>}
     {catalogHealth?.ready&&<div className="dh-pit-coverage"><span><Check size={13}/> Verified current Dhan NSE ticker catalog ({catalogHealth.verified_nse_tickers} symbols)</span></div>}
-    {issue&&<div className="dh-pit-alert"><AlertTriangle size={17}/><p>{issue}</p></div>}
+    {syncProblem&&<div className="dh-pit-alert" role="alert"><AlertTriangle size={17}/><p>Historical-membership download failed: {syncProblem}</p></div>}
+    {catalogProblem&&<div className="dh-pit-alert" role="alert"><AlertTriangle size={17}/><p>Dhan catalog download failed: {catalogProblem}</p></div>}
+    {issue&&<div className="dh-pit-alert" role="alert"><AlertTriangle size={17}/><p>{issue}</p></div>}
     {loading&&<div className="dh-pit-loading"><LoaderCircle size={17} className="dh-spin"/> Reconstructing membership across the selected dates…</div>}
     {plan&&<>
       {endOutsideCoverage&&<p className="dh-hint">PREVIEW ONLY · Historical index membership through {plan.to_date} (exclusive). Missing remainder is not included in this selection.</p>}
