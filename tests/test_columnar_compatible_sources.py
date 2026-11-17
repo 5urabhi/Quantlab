@@ -176,7 +176,7 @@ class CompatibleMarketSourcesAndParquetTests(unittest.TestCase):
         del manifest["partition_sha256"]
         path.write_text(json.dumps(manifest))
         self.assertEqual(columnar_cache.status()["state"], "stale")
-        with self.assertRaisesRegex(ValueError, "source receipt"):
+        with self.assertRaisesRegex(ValueError, "partition receipt"):
             columnar_cache._verify_parts(manifest, columnar_cache._parts(manifest))
         # Models safely fall back to the canonical CSV, without silently
         # promoting legacy mirror bytes as verified market history.
