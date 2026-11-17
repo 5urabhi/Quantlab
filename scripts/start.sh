@@ -107,50 +107,23 @@ if [ "$MODE" = research ]; then
   exec .venv/bin/streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501
 fi
 
-# The public website needs no Redis or application server. Node is used
-# only to build and serve local development assets.
-node_suitable() {
-  command_exists node && command_exists npm &&
-    node -e 'const s=process.versions.node.split(".").map(Number);process.exit((s[0]>22||(s[0]===22&&s[1]>=12)||(s[0]===20&&s[1]>=19))?0:1)' 2>/dev/null
-}
-if ! node_suitable; then
-  info "Installing a verified portable Node.js runtime in .local-tools"
-  # Fixed reviewed LTS release. No curl | bash, no third-party installers.
-  NODE_VERSION="v22.16.0"
-  MACHINE="$(uname -m)"
-  case "$MACHINE" in
-    x86_64|amd64) NODE_ARCH="x64" ;;
-    aarch64|arm64) NODE_ARCH="arm64" ;;
-    *) fail "Unsupported Node architecture: $MACHINE (install a supported Node LTS manually)" ;;
-  esac
-  NODE_DIST="node-${NODE_VERSION}-linux-${NODE_ARCH}"
-  NODE_DIR="$ROOT/.local-tools/$NODE_DIST"
-  if [ ! -x "$NODE_DIR/bin/node" ]; then
-    mkdir -p "$ROOT/.local-tools"
-    TMP="$(mktemp -d)"
-    trap 'rm -rf "${TMP:-}"' EXIT
-    BASE_URL="https://nodejs.org/dist/$NODE_VERSION"
-    curl --fail --location --silent --show-error --retry 3 --connect-timeout 15       "$BASE_URL/SHASUMS256.txt" -o "$TMP/SHASUMS256.txt" ||
-      fail "Cannot reach official Node.js HTTPS distribution. Check connectivity."
-    curl --fail --location --silent --show-error --retry 3 --connect-timeout 15       "$BASE_URL/$NODE_DIST.tar.xz" -o "$TMP/$NODE_DIST.tar.xz" ||
-      fail "Unable to download official Node.js runtime."
-    (cd "$TMP" &&
-      grep "  $NODE_DIST.tar.xz$" SHASUMS256.txt > selected.sha &&
-      sha256sum -c selected.sha) || fail "Node.js checksum verification failed"
-    tar -xJf "$TMP/$NODE_DIST.tar.xz" -C "$ROOT/.local-tools"
-    rm -rf "$TMP"
-    trap - EXIT
-  fi
-  export PATH="$NODE_DIR/bin:$PATH"
+# Use one compatible Node/npm pair for local builds. Node alone is not
+# sufficient: npm 12.2 requires Node >=22.22.2, while user's 22.22.1 warns.
+# The project-local fallback contains its OWN bundled npm, not global npm 12.
+source "$ROOT/scripts/node_runtime.sh"
+if ! quantlab_activate_node_runtime "$ROOT"; then
+  fail "Unable to provision a compatible local Node/npm toolchain"
 fi
-node_suitable || fail "Node/npm unavailable or not recent enough after setup."
+if [ "$QUANTLAB_NODE_RUNTIME_CHOICE" = "portable" ]; then
+  info "Global Node/npm pair is incompatible; using verified project-local Node LTS"
+fi
 info "Using Node $(node --version) and npm $(npm --version)"
 
 mkdir -p .local-state
 PKG_HASH="$(sha256sum package.json | awk '{print $1}')"
 LOCK_HASH="none"
 if [ -f package-lock.json ]; then LOCK_HASH="$(sha256sum package-lock.json | awk '{print $1}')"; fi
-NPM_EXPECTED="$PKG_HASH:$LOCK_HASH:$(node --version)"
+NPM_EXPECTED="$PKG_HASH:$LOCK_HASH:$(node --version):$(npm --version)"
 NPM_MARKER=".local-state/npm-dependencies.sha256"
 if [ "$(cat "$NPM_MARKER" 2>/dev/null || true)" != "$NPM_EXPECTED" ] || [ ! -x node_modules/.bin/vite ] || [ ! -x node_modules/.bin/tsc ]; then
   info "Installing/updating Vite/React packages"
@@ -161,9 +134,16 @@ if [ "$(cat "$NPM_MARKER" 2>/dev/null || true)" != "$NPM_EXPECTED" ] || [ ! -x n
   fi
   LOCK_HASH="none"
   if [ -f package-lock.json ]; then LOCK_HASH="$(sha256sum package-lock.json | awk '{print $1}')"; fi
-  printf '%s\n' "$PKG_HASH:$LOCK_HASH:$(node --version)" > "$NPM_MARKER"
+  printf '%s\n' "$PKG_HASH:$LOCK_HASH:$(node --version):$(npm --version)" > "$NPM_MARKER"
 else
   info "Vite/React dependencies already available"
+fi
+
+# esbuild's optional native binary may be absent after an npm 12 install
+# that blocked its postinstall script. Validate the real compiler every time.
+# Do not bypass install-script policy globally or auto-approve other packages.
+if ! node -e "const esbuild=require('esbuild'); const s=esbuild.transformSync('const answer = 42', {loader:'js'}).code; if(!s.includes('42')) process.exit(1)" >/dev/null 2>&1; then
+  fail "esbuild native binary is unavailable. Re-run setup with the compatible toolchain; do not ignore blocked install scripts."
 fi
 
 info "Checking frontend TypeScript and production Vite build"

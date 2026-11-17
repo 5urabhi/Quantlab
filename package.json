@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build && node scripts/check_frontend_chunks.mjs",
-    "preview": "vite preview --host 127.0.0.1"
+    "build": "npm run test:runtime && tsc -b && vite build && node scripts/check_frontend_chunks.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "test:runtime": "node --test tests/test_node_runtime.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -18,5 +19,8 @@
     "@types/react-dom": "^18.3.5",
     "typescript": "~5.6.3",
     "vite": "^6.0.6"
+  },
+  "allowScripts": {
+    "esbuild": true
   }
 }
