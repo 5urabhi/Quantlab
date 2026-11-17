@@ -800,7 +800,7 @@ def _batch_daily_ohlcv(row: dict, interval: int | None,
     metadata = json.loads(sidecar.read_text())
     if metadata.get("instrument_id") != row["id"] or metadata.get("interval_minutes") != interval:
         raise ValueError("Cached instrument/interval mismatch: " + row["symbol"])
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    digest = dhan_checkpoint.digest(source)
     if digest != metadata.get("sha256"):
         raise ValueError("OHLCV SHA-256 mismatch: " + row["symbol"])
     required = ["datetime", "open", "high", "low", "close", "volume"]
