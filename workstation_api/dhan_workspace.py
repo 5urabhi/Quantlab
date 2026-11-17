@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from index_research.dhan_data import Instrument, date_windows, download_candles
-from . import index_spot, pit_index, service
+from . import index_spot, pit_index, service, dhan_checkpoint
 
 KEY = re.compile(r"^(NSE_EQ|BSE_EQ):([0-9]{1,12})$")
 BATCH_ID = re.compile(r"^batch_[a-f0-9]{16}$")
@@ -348,6 +348,8 @@ def _summarize(data: dict) -> dict:
         "errors": counts["failed"],
         "rejected_provider_bars": sum(int(i.get("rejected_provider_bars",0))
                                       for i in data["items"]),
+        "recovered_checkpoints": sum(int(i.get("recovered_checkpoints", 0))
+                                      for i in data["items"]),
         "failure_examples": [
             _safe_batch_failure(item) for item in data["items"]
             if item["status"] == "failed"
@@ -553,13 +555,20 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
     """
     target = _history_file(row, interval)
     manifest = target.with_suffix(".json")
+    # Complete only an already source-verified interrupted CSV+SHA publication.
+    # Never accept a half-written manifest as historical coverage.
+    recovered = dhan_checkpoint.recover(
+        target, manifest, identity=row["id"], interval=interval)
+    if recovered:
+        LOG.info("Recovered original candle checkpoint without broker request: security_id=%s interval=%s",
+                 row["security_id"], interval)
     previous: dict = {"coverage": []}
     existing: pd.DataFrame | None = None
     if target.is_file() or manifest.is_file():
         if not target.is_file() or not manifest.is_file() or target.is_symlink() or manifest.is_symlink():
             raise ValueError("Cached candle data/manifest mismatch; manual evidence review required")
         previous = json.loads(manifest.read_text())
-        if previous.get("sha256") != hashlib.sha256(target.read_bytes()).hexdigest():
+        if previous.get("sha256") != dhan_checkpoint.digest(target):
             raise ValueError("Cached OHLCV SHA-256 mismatch")
         if previous.get("instrument_id") != row["id"] or previous.get("interval_minutes") != interval:
             raise ValueError("Cached OHLCV instrument identity or interval mismatch")
@@ -578,6 +587,7 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
             on_progress(0, 0, initial_count)
         return {"status": "cached", "rows": initial_count, "rows_added": 0,
                 "windows_completed": 0, "windows_total": 0,
+                "recovered_checkpoints": int(recovered),
                 "rejected_provider_bars": int(previous.get("rejected_provider_bars",0))}
     inst = Instrument(label="EQUITY_" + row["security_id"],
                       security_id=row["security_id"],
@@ -654,22 +664,33 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
         temp = target.with_name(target.name + "." + uuid.uuid4().hex[:8] + ".tmp")
         try:
             combined.to_csv(temp, index=False)
-            digest = hashlib.sha256(temp.read_bytes()).hexdigest()
-            os.replace(temp, target)
+            digest = dhan_checkpoint.digest(temp)
+            next_coverage = covered + [[first.isoformat(), last.isoformat()]]
+            receipt = {
+                "instrument_id": row["id"], "display_symbol": row["symbol"],
+                "interval_minutes": interval, "coverage": next_coverage,
+                "rows": int(len(combined)), "sha256": digest,
+                "rejected_provider_bars": rejected_bars,
+                "rejected_windows": rejected_windows,
+                "quality": "partial_source_anomalies" if rejected_bars else "all_returned_bars_valid",
+                "updated_utc": _now(), "source": "DhanHQ historical OHLCV",
+                "window_size_days": window_days,
+                "warning": "Dhan historical OHLCV is not verified dividend-adjusted total returns.",
+            }
+            try:
+                dhan_checkpoint.commit(target, manifest, temp, receipt)
+            except OSError:
+                # A transient filesystem error *after* publishing the
+                # authentic CSV can leave only the manifest rename pending.
+                # Finish it immediately when the exact SHA agrees. A crash
+                # leaves the same journal for the next run to reconcile.
+                if not dhan_checkpoint.recover(
+                    target, manifest, identity=row["id"], interval=interval):
+                    raise
+                recovered = True
         finally:
             temp.unlink(missing_ok=True)
-        covered.append([first.isoformat(), last.isoformat()])
-        _atomic_json(manifest, {
-            "instrument_id": row["id"], "display_symbol": row["symbol"],
-            "interval_minutes": interval, "coverage": covered,
-            "rows": int(len(combined)), "sha256": digest,
-            "rejected_provider_bars": rejected_bars,
-            "rejected_windows": rejected_windows,
-            "quality": "partial_source_anomalies" if rejected_bars else "all_returned_bars_valid",
-            "updated_utc": _now(), "source": "DhanHQ historical OHLCV",
-            "window_size_days": window_days,
-            "warning": "Dhan historical OHLCV is not verified dividend-adjusted total returns.",
-        })
+        covered = next_coverage
         existing = combined
         added += len(incoming)
         if on_progress:
@@ -679,6 +700,7 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
         "rows": int(len(existing)) if existing is not None else 0,
         "rows_added": added, "windows_completed": attempted,
         "windows_total": total, "rejected_provider_bars": rejected_bars,
+        "recovered_checkpoints": int(recovered),
     }
 
 def run_batch(batch_id: str, cancel_event: threading.Event | None = None) -> dict:
