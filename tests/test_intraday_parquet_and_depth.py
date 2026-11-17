@@ -168,6 +168,23 @@ class OriginalMicrostructureTests(unittest.TestCase):
             market_depth.import_csv(b"irrelevant",self.identity,
                 "licensed_vendor",20,confirm_authorized=False)
 
+    def test_completed_one_minute_batch_refreshes_existing_cache(self):
+        from threading import Event
+        from workstation_api.app import _run_bulk
+        output={
+            "id":"batch_test","status":"completed","total":1,
+            "counts":{"complete":1},
+            "prepared_dataset_id":"already_published",
+        }
+        manifest={"interval":1,"items":[{"id":"NSE_EQ:1333"}]}
+        with patch.object(dhan_workspace,"run_batch",return_value=output), \
+             patch.object(dhan_workspace,"_load_batch",return_value=manifest), \
+             patch.object(intraday_parquet,"refresh_enabled",
+                          return_value={"status":"refreshed"}) as refresh:
+            result=_run_bulk("batch_test",Event())
+        self.assertEqual(result["minute_cache_refresh"],[{"status":"refreshed"}])
+        refresh.assert_called_once_with("NSE_EQ:1333")
+
     def test_live_capture_requires_local_token_but_never_makes_orders(self):
         with patch.dict("os.environ",{"DHAN_ACCESS_TOKEN":"","DHAN_CLIENT_ID":""}):
             r=self.client.post("/api/data-manager/depth/start",json={
