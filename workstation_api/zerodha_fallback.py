@@ -71,12 +71,65 @@ def _read_session() -> dict:
         return {}
 
 
+def _app_credentials() -> dict:
+    file = _base() / "app_credentials.json"
+    if file.is_symlink() or not file.is_file() or file.stat().st_size > 3000:
+        return {}
+    try:
+        body = json.loads(file.read_text(encoding="utf-8"))
+        return body if isinstance(body, dict) else {}
+    except (ValueError, OSError, UnicodeError):
+        return {}
+
+
 def _api_key() -> str:
-    return (os.getenv("KITE_API_KEY") or os.getenv("ZERODHA_API_KEY") or "").strip()
+    saved = _app_credentials()
+    return str(saved.get("api_key") or os.getenv("KITE_API_KEY")
+               or os.getenv("ZERODHA_API_KEY") or "").strip()
 
 
 def _secret() -> str:
-    return (os.getenv("KITE_API_SECRET") or os.getenv("ZERODHA_API_SECRET") or "").strip()
+    saved = _app_credentials()
+    return str(saved.get("api_secret") or os.getenv("KITE_API_SECRET")
+               or os.getenv("ZERODHA_API_SECRET") or "").strip()
+
+
+def configure_app(api_key: str, api_secret: str, *, confirm_local_storage: bool) -> dict:
+    """Explicitly store Kite app credentials ONLY in the local 0600 file.
+
+    Nothing is ever echoed back to the browser, source receipts, job logs,
+    or GitHub. The user may alternatively configure both fields via .env.
+    """
+    if not confirm_local_storage:
+        raise ValueError("Confirm private local app-credential storage")
+    if not isinstance(api_key, str) or not KEY.fullmatch(api_key):
+        raise ValueError("Enter a valid Kite developer API key")
+    if (not isinstance(api_secret, str) or
+            not re.fullmatch(r"[A-Za-z0-9_-]{8,256}", api_secret)):
+        raise ValueError("Enter the developer API secret from the official Kite app")
+    with _LOGIN_LOCK:
+        path = _base() / "app_credentials.json"
+        if path.is_symlink():
+            raise ValueError("Unsafe local credential file")
+        previous = _app_credentials()
+        temp = path.with_suffix(".tmp")
+        if temp.is_symlink():
+            raise ValueError("Unsafe temporary credential file")
+        fd = os.open(str(temp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump({"api_key": api_key, "api_secret": api_secret}, output)
+        os.chmod(temp, 0o600)
+        os.replace(temp, path)
+        if previous.get("api_key") != api_key:
+            session = _base() / "session.json"
+            if session.is_file() and not session.is_symlink():
+                session.unlink()
+        _PENDING.clear()
+    return {"configured": True, "provider": "zerodha_kite",
+            "local_private_storage": True, "secrets_returned": False,
+            "next_action": "Use the official Zerodha sign-in button in Data Manager"}
+
+
 
 
 def _access_token() -> str:
@@ -199,6 +252,7 @@ def status() -> dict:
         "primary_provider": False,
         "api_key_configured": bool(KEY.fullmatch(_api_key())),
         "api_secret_configured": bool(_secret()),
+        "app_credentials_locally_saved": bool(_app_credentials()),
         "token_present": token_present,
         "login_required": not token_present,
         "master_available": bool(record),
