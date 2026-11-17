@@ -56,10 +56,15 @@ def _model_followup(model_id: str, count: int, interval: int | None) -> dict:
 def _size_estimate(start: date, stop: date, instruments: int,
                    interval: int | None) -> dict:
     """Conservative rough budgeting, NOT a provider quote or measured disk."""
-    weekdays = max(0, math.ceil((stop - start).days * 5 / 7))
+    days = max(0, (stop - start).days)
+    whole_weeks, trailing_days = divmod(days, 7)
+    # Every complete calendar week has five potential market weekdays.
+    # A partial week can have at most min(5, remainder) trading weekdays.
+    # Unlike ceil(days*5/7), this cannot undercount a Mon-Thu window.
+    weekdays = 5 * whole_weeks + min(5, trailing_days)
     per_day = 1 if interval is None else math.ceil(375 / interval)
     rows = int(instruments * weekdays * per_day)
-    bytes_ = rows * (96 if interval is not None else 90)
+    bytes_ = rows * (160 if interval is not None else 128)
     return {"rows_upper_estimate": rows, "bytes_upper_estimate": bytes_,
             "large": bytes_ >= LARGE_HISTORY_BYTES,
             "over_limit": bytes_ > MAX_HISTORY_BYTES,
