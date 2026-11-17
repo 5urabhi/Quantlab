@@ -2147,6 +2147,7 @@ class MarketDataStart(BaseModel):
     confirm_bulk: bool = False
     confirm_large_history: bool = False
     run_model_after_prepare: bool = False
+    confirm_secondary_fallback: bool = False
     include_index_spot: bool = False
 
 
@@ -2243,6 +2244,11 @@ def market_data_start(body: MarketDataStart):
     if not credential.get("ok"):
         raise HTTPException(400, credential.get("message") or
                             "Dhan historical Data API preflight failed.")
+    if body.confirm_secondary_fallback:
+        if body.interval is not None:
+            raise HTTPException(400,"Zerodha recovery supports original daily cash equities only.")
+        if not zerodha_fallback.configured():
+            raise HTTPException(400,"Connect Zerodha Kite before authorizing secondary history.")
     request = DhanBatchCreate(
         selection=body.selection, ids=[], tickers=approved["tickers"],
         from_date=approved["from_date"], to_date=approved["to_date"],
@@ -2252,7 +2258,10 @@ def market_data_start(body: MarketDataStart):
     if body.run_model_after_prepare:
         return _queue_dhan_batch(
             request, model_id=body.model_id,
-            model_params=approved["model_followup"]["params"])
+            model_params=approved["model_followup"]["params"],
+            allow_secondary=body.confirm_secondary_fallback)
+    if body.confirm_secondary_fallback:
+        return _queue_dhan_batch(request, allow_secondary=True)
     return create_dhan_batch(request)
 
 
@@ -2443,8 +2452,41 @@ def _run_bulk(batch_id: str, cancel: Event):
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
 
 
+def _run_bulk_with_secondary(batch_id: str, cancel: Event, progress=None) -> dict:
+    """Run canonical Dhan first; use separately evidenced Kite only on failure.
+
+    The explicit consent was collected before queueing the job. This does not
+    modify Dhan manifests or pretend that secondary daily closes supply OHLCV.
+    """
+    outcome = _run_bulk(batch_id, cancel)
+    if cancel.is_set():
+        return outcome
+    try:
+        proposal = batch_secondary_recovery.preview(batch_id)
+        if proposal["can_recover"]:
+            if progress:
+                progress(82, "Dhan was incomplete; trying authorized verified secondary source")
+            outcome["secondary_recovery"] = batch_secondary_recovery.execute(
+                batch_id, proposal["preview_token"],
+                progress=(lambda amount,stage:
+                          progress(82 + 16*amount/100, stage)) if progress else None)
+        elif proposal["candidate_count"]:
+            outcome["secondary_recovery"] = {
+                "status":"blocked", "recovered":0,
+                "message":"Automatic secondary source was not eligible: " +
+                          "; ".join(proposal["blockers"])[:240],
+                "original_dhan_batch_changed":False}
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        outcome["secondary_recovery"] = {
+            "status":"blocked", "recovered":0,
+            "message":"Secondary market data was unavailable: "+job_safety.scrub(exc)[:160],
+            "original_dhan_batch_changed":False}
+    return outcome
+
+
 def _run_bulk_with_model(batch_id: str, cancel: Event, model_id: str,
-                         params: dict, progress=None) -> dict:
+                         params: dict, allow_secondary: bool = False,
+                         progress=None) -> dict:
     """Continue approved Dhan acquisition after verifying actual model inputs.
 
     No extra provider calls beyond the approved window, no imaginary candles,
@@ -2452,7 +2494,8 @@ def _run_bulk_with_model(batch_id: str, cancel: Event, model_id: str,
     """
     if progress:
         progress(2, "Downloading and preparing original Dhan data")
-    outcome = _run_bulk(batch_id, cancel)
+    outcome = (_run_bulk_with_secondary(batch_id, cancel, progress=progress)
+               if allow_secondary else _run_bulk(batch_id, cancel))
     saved_id = ((outcome.get("automatic_preparation") or {}).get("dataset_id")
                 or outcome.get("prepared_dataset_id"))
     if not saved_id or cancel.is_set():
@@ -2493,7 +2536,8 @@ def _run_bulk_with_model(batch_id: str, cancel: Event, model_id: str,
 
 
 def _queue_dhan_batch(body: DhanBatchCreate, *,
-                      model_id: str = "", model_params: dict | None = None):
+                      model_id: str = "", model_params: dict | None = None,
+                      allow_secondary: bool = False):
     """One authoritative Dhan batch writer for advanced and guided flows."""
     if not os.getenv("DHAN_ACCESS_TOKEN"):
         raise HTTPException(400, "Connect Dhan Data API before downloading")
@@ -2511,7 +2555,9 @@ def _queue_dhan_batch(body: DhanBatchCreate, *,
     try:
         if model_id:
             job = _spawn("dhan_bulk", _run_bulk_with_model, batch_id, cancel,
-                         model_id, model_params or {})
+                         model_id, model_params or {}, allow_secondary)
+        elif allow_secondary:
+            job = _spawn("dhan_bulk", _run_bulk_with_secondary, batch_id, cancel)
         else:
             job = _spawn("dhan_bulk", _run_bulk, batch_id, cancel)
     except Exception:
