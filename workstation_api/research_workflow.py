@@ -8,7 +8,7 @@ existing model_lab source and engine hashes.
 from __future__ import annotations
 
 from . import (data_acquisition, model_data_manager, model_lab, model_registry,
-               model_readiness, shared_market_data)
+               service, shared_market_data)
 
 SINGLE=frozenset({"gbm_fit","ou_fit","merton_fit","heston_proxy"})
 
@@ -44,6 +44,16 @@ def execute(model_id: str, dataset_id: str | None, params: dict | None = None,
     if not dataset_id:
         return {"status":"blocked","action":"choose_dataset",
                 "message":"Select an original observed dataset before running."}
+    folder, dataset_record = service.dataset_path(dataset_id)
+    if (dataset_record.get("kind") == "synthetic" or
+            (folder / "DO_NOT_CITE.txt").exists()):
+        return {
+            "status": "blocked", "action": "choose_original_dataset",
+            "dataset_id": dataset_id, "model_id": model_id,
+            "message": "Synthetic demonstration fixtures cannot be promoted to "
+                       "observed empirical market research. Choose an original "
+                       "provider dataset or genuine total-return history.",
+        }
     if progress:
         progress(5,"Checking exact original model inputs and data buffer")
     acquisition_params={k:v for k,v in settings.items()
