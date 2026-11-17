@@ -590,6 +590,9 @@ try {
     await workspace.getByRole('tab',{name:'Downloads & Jobs'}).click()
     const detail=workspace.locator('.mdw-batch-detail')
     await detail.getByText('Dhan access needs attention').waitFor()
+    await detail.getByText('Last attempted AUBANK').waitFor()
+    assert.equal(await detail.locator('.mdw-inline-status .mdw-spin').count(),0,
+      'Paused jobs must not display an active-working spinner')
     await detail.getByText(/Verify your token and historical Data API entitlement/).waitFor()
     await detail.getByRole('button',{name:/View technical details/}).click()
     const originalFailure=detail.locator('.mdw-diagnostics')
