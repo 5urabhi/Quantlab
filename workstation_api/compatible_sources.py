@@ -12,6 +12,7 @@ or any exchange, and not an automatic TRI/index-membership substitute.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from hashlib import sha256
 from pathlib import Path
 from threading import RLock
@@ -60,7 +61,7 @@ def _parse_csv(payload: bytes) -> tuple[list[tuple[str, float]], str]:
         if len(fieldnames) != len(set(fieldnames)):
             raise ValueError("Duplicate source CSV header names")
         date_idx = next((i for i,k in enumerate(fieldnames) if k in
-                         {"date", "session_date", "trading_date"}), None)
+                         {"date", "session_date", "trading_date", "datetime", "timestamp"}), None)
         close_idx = next((i for i,k in enumerate(fieldnames) if k in
                           {"close", "closing_price", "close_price"}), None)
         if date_idx is None or close_idx is None:
@@ -77,7 +78,16 @@ def _parse_csv(payload: bytes) -> tuple[list[tuple[str, float]], str]:
             day = str(values[date_idx] or "").strip()
             price = str(values[close_idx] or "").strip()
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
-                raise ValueError("Dates must use unambiguous YYYY-MM-DD daily sessions")
+                # Original Dhan daily CSV often contains an IST timestamp.
+                # Explicit timezone is mandatory: a naive datetime can
+                # silently shift the trading session under UTC conversion.
+                try:
+                    timestamp = datetime.fromisoformat(day.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise ValueError("Use YYYY-MM-DD or timezone-aware daily timestamps") from exc
+                if timestamp.tzinfo is None:
+                    raise ValueError("Daily timestamp is missing an explicit timezone")
+                day = timestamp.astimezone(ZoneInfo("Asia/Kolkata")).date().isoformat()
             stamp = date.fromisoformat(day)
             if stamp > date.today() or stamp.year < 1990 or day in seen:
                 raise ValueError("Future, repeated, or invalid original trading dates")
@@ -154,7 +164,7 @@ def import_original(*, payload: bytes, identity: str, provider: str,
         reasons.append("Original closes conflict on " +
                        ", ".join(policy["mismatch_dates"]) + "; data was not merged.")
     if policy["matched_sessions"] < MIN_MATCHED:
-        reasons.append(f"Require at least {MIN_MATCHED} agreeing Dhan sessions "
+        reasons.append(f"Require at least three ({MIN_MATCHED}) agreeing Dhan sessions "
                        "for exact identity and price basis before using another provider.")
     source_id = uuid.uuid4().hex[:20]
     folder = _folder() / source_id
