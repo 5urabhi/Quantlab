@@ -81,15 +81,18 @@ export default function ZerodhaProviderPanel({onSourceChange}:{onSourceChange?:(
   }
   const login=async()=>{
     if(busy)return
+    // Open synchronously on click; async popups are blocked by some browsers.
+    const popup=window.open('about:blank','_blank')
     setBusy(true);setError('');setMessage('')
     try{
       const response=await request<{login_url:string;callback_url:string}>('/auth/start',{method:'POST'})
       const url=new URL(response.login_url)
       if(url.protocol!=='https:'||url.hostname!=='kite.zerodha.com')
         throw new Error('Unexpected Kite sign-in destination')
-      window.open(response.login_url,'_blank','noopener,noreferrer')
-      setMessage('Complete the official Zerodha login. Return here and refresh connection status.')
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+      if(popup){popup.opener=null;popup.location.assign(response.login_url)}
+      else window.location.assign(response.login_url)
+      setMessage('Complete official Zerodha login. Return here and refresh connection status.')
+    }catch(e){popup?.close();setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
   const running=busy||Boolean(job&&['queued','running'].includes(job.status))
