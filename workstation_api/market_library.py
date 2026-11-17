@@ -287,6 +287,7 @@ def _sector_rows(payload: bytes) -> tuple[list[tuple[str,str,str]],str]:
 
 
 def import_sector_history(payload: bytes, *, confirm_original: bool) -> dict:
+    """Validate identities, then atomically retain source BEFORE changing metadata."""
     if not confirm_original:
         raise ValueError("Confirm original-source rights and effective dates before import")
     rows,digest=_sector_rows(payload)
@@ -299,15 +300,42 @@ def import_sector_history(payload: bytes, *, confirm_original: bool) -> dict:
             if unknown:
                 raise ValueError("Sector source includes unknown canonical instruments: "+
                                  ", ".join(sorted(unknown)[:6]))
+            # Validate the whole import before either publishing original
+            # evidence or mutating a single dated classification.
+            for identity,effective,sector in rows:
+                old=con.execute(
+                    "SELECT sector FROM sector_history "
+                    "WHERE identity=? AND effective_date=?",
+                    (identity,effective)).fetchone()
+                if old and old[0]!=sector:
+                    raise ValueError("Conflicting original sector classification for "+
+                                     identity+" on "+effective)
+            folder=service.DATA/"dhan"/"market_library"/"sector_sources"
+            if folder.is_symlink() or folder.parent.is_symlink():
+                raise ValueError("Unsafe original-sector source folder")
+            folder.mkdir(parents=True,exist_ok=True)
+            file=folder/(digest+".csv")
+            if file.is_symlink():
+                raise ValueError("Unsafe original-sector source file")
+            if file.exists() and sha256(file.read_bytes()).hexdigest()!=digest:
+                raise ValueError("Existing sector file conflicts with expected original bytes")
+            if not file.exists():
+                staging=folder/(digest+"."+os.urandom(8).hex()+".tmp")
+                try:
+                    with staging.open("xb") as output:
+                        output.write(payload)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.replace(staging,file)
+                finally:
+                    staging.unlink(missing_ok=True)
             inserted=0
             with con:
                 for identity,effective,sector in rows:
                     old=con.execute(
                         "SELECT sector FROM sector_history "
-                        "WHERE identity=? AND effective_date=?",(identity,effective)).fetchone()
-                    if old and old[0]!=sector:
-                        raise ValueError("Conflicting original sector classification for "+
-                                         identity+" on "+effective)
+                        "WHERE identity=? AND effective_date=?",
+                        (identity,effective)).fetchone()
                     if old:
                         continue
                     con.execute(
@@ -316,26 +344,6 @@ def import_sector_history(payload: bytes, *, confirm_original: bool) -> dict:
                     inserted+=1
         finally:
             con.close()
-        # Preserve source-original bytes by hash after successful DB validation.
-        folder=service.DATA/"dhan"/"market_library"/"sector_sources"
-        if folder.is_symlink():
-            raise ValueError("Unsafe original-sector source folder")
-        folder.mkdir(parents=True,exist_ok=True)
-        file=folder/(digest+".csv")
-        if file.is_symlink():
-            raise ValueError("Unsafe original sector source file")
-        if file.exists() and sha256(file.read_bytes()).hexdigest()!=digest:
-            raise ValueError("Existing sector file conflicts with expected original bytes")
-        if not file.exists():
-            staging=file.with_suffix(".tmp")
-            try:
-                with staging.open("xb") as output:
-                    output.write(payload)
-                    output.flush()
-                    os.fsync(output.fileno())
-                os.replace(staging,file)
-            finally:
-                staging.unlink(missing_ok=True)
     return {"status":"imported","rows":len(rows),"new_classifications":inserted,
             "source_sha256":digest,"dataset_id":shared_market_data.SHARED_ID,
             "source_status":"user_supplied_original_not_independently_certified",
