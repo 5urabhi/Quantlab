@@ -257,7 +257,7 @@ try {
       status:200,contentType:'application/json',body:JSON.stringify(payload)})
     await page.route('**/api/indices/status',route=>fulfill(route,
       membershipSynced?{available:true,first_date:'2014-01-01',covered_through:'2026-10-13',
-        source_commit:'0000000000000000000000000000000000000000',source:'ci-mock'}:
+        source_commit:'0000000000000000000000000000000000000000',source:'ci-mock',synced_utc:new Date().toISOString()}:
       {available:false,message:'Historical index membership has not been synced'}))
     await page.route('**/api/dhan/catalog/health',route=>fulfill(route,
       masterReady?{ready:true,code:'ready',nse_equities:2000,
@@ -310,8 +310,7 @@ try {
     assert.equal(await frequency.inputValue(),'daily')
     assert.equal(await page.locator('.dh-membership-details').evaluate(el=>el.open),true,
       'When historical inputs are missing, source details must be visible automatically')
-    await page.waitForFunction(()=>document.querySelector('.dh-pit-coverage')!==null,
-      {timeout:15000}).catch(()=>{})
+    await page.getByText(/Source coverage through:/).first().waitFor()
     assert.equal(membershipSyncCount,1,
       'Freshly selected historical index should trigger one automatic membership sync')
     assert.equal(masterRefreshCount,1,
@@ -326,7 +325,7 @@ try {
     await page.getByRole('button',{name:/BANK NIFTY · Historical/}).click()
     assert.equal(await page.getByRole('button',{name:/BANK NIFTY · Historical/})
       .getAttribute('aria-pressed'),'true')
-    await page.getByRole('textbox',{name:'End date (not included)'}).fill('2026-10-16')
+    await page.getByLabel('End date (not included)').fill('2026-10-16')
     await page.getByText(/latest available date/i).first().waitFor()
     assert.equal(await page.getByRole('button',{name:/Use latest available date/}).count(),1)
     assert.equal(membershipSyncCount,1,
