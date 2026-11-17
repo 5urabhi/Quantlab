@@ -473,6 +473,14 @@ try {
     await screenshot('02-dataset-dependencies-preview')
     await deletion.getByRole('button',{name:'No, keep everything'}).click()
     assert.equal(await deletion.count(),0,'Preview must not delete any data when cancelled')
+    await page.locator('.mdw-dataset').first().getByRole('button',{
+      name:'Extend / complete'
+    }).click()
+    await page.getByRole('heading',{name:'Complete your existing model dataset'}).waitFor()
+    await page.getByRole('region',{name:'Automatic model data acquisition'}).waitFor()
+    assert.equal(await page.getByRole('button',{name:/Get & prepare data/}).count(),0,
+      'Existing dataset extension must not show an unrelated general-universe batch CTA')
+    await page.locator('.mdw-root').getByRole('tab',{name:'My Datasets'}).click()
     await page.locator('details.ws-tri-advanced.ws-data-advanced').first().locator('summary').first().click()
     await page.locator('.ws-dataset-advanced summary').waitFor()
     assert.equal(await page.locator('.ws-dataset-advanced').first().evaluate(el=>el.open),false,
