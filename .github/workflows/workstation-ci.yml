@@ -14,6 +14,9 @@ on:
 permissions:
   contents: read
 
+# Node.js 24 is the GitHub ACTION runtime; the app's tested Node 22 remains
+# independent. These action majors require GitHub-hosted runner >= 2.327.1.
+
 # Superseded PR commits should not install Python/Chromium repeatedly.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -24,16 +27,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: 'pip'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
+          package-manager-cache: false
 
       - name: Install frontend dependencies
         run: npm install --no-audit --no-fund
@@ -63,7 +67,7 @@ jobs:
             --output-dir artifacts/legacy_static_universe_audit
           python -m unittest discover -s tests -p 'test_final_research_handoff.py' -v
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: quantlab-legacy-source-gaps-not-certified
@@ -75,7 +79,7 @@ jobs:
           mkdir -p artifacts
           python scripts/benchmark_research.py --assets 50,100,300 --periods 120 --output artifacts/scalability.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: quantlab-synthetic-software-scalability
