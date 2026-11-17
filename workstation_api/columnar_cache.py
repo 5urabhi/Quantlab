@@ -353,7 +353,11 @@ def model_matrix(view: str = "daily_prices.csv"):
         raise ValueError("Original and Parquet market row counts disagree")
     if rows[["session_date","identity"]].duplicated().any():
         raise ValueError("Duplicate canonical security session in analytical mirror")
-    rows["date"] = pd.to_datetime(rows["session_date"], errors="raise")
+    # DuckDB/Pandas may expose DATE as datetime64[us]. Original
+    # index_research.read_matrix produces datetime64[ns]; preserve exact
+    # model index dtype as well as values, timestamps and missing rows.
+    rows["date"] = pd.to_datetime(
+        rows["session_date"], errors="raise").astype("datetime64[ns]")
     if rows["date"].isna().any() or not rows["date"].is_monotonic_increasing:
         raise ValueError("Invalid date ordering in analytical mirror")
     rows["symbol"] = rows["identity"].str.replace(":", "_", regex=False)
