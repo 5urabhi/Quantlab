@@ -165,3 +165,9 @@ building or refreshing the mirror.
 The Python integration tests use isolated SQLite fixtures and never require
 broker access. Browser tests exercise these tabs without uploading fake
 claims of verified outside-source authenticity.
+
+## Zerodha second-provider connection (November 17, 2026)
+
+Dhan stays primary. **Zerodha Kite Connect** replaces Upstox as the only actively offered automated secondary source. In **Sources & provenance**, complete official Kite login, verify the profile, refresh the current NSE/BSE exchange equity instrument master, then opt into the fallback within **Get model data**. It requires exact exchange+exchange_token+trading_symbol agreement and three matching original Dhan closes. Conflicting prices and unverified adjustments are quarantined. No alternative provider is permitted to invent TRI, delisted constituent history or corporate actions. The automatic path is read-only and bounded to 3 historical calls/second or slower. Daily access requires official Zerodha authentication; no unattended 2FA bypass exists.
+
+The Data Manager's **Research readiness** also offers an end-to-end real-data acceptance report with explicit source, model and chronological holdout blockers. Use it on your original local dataset; synthetic CI fixtures cannot certify actual market-data access.
