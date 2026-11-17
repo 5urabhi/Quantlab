@@ -266,6 +266,11 @@ try {
     assert.equal(await nifty.getAttribute('aria-pressed'),'true')
     assert.equal(await workspace.getByRole('combobox',{name:'Candle frequency'}).inputValue(),'daily')
     await workspace.getByText(/Connect Dhan historical Data API/).first().waitFor()
+    await workspace.getByRole('button',{name:'Connect Dhan',exact:true}).click()
+    await workspace.getByLabel('Dhan access token').waitFor()
+    assert.equal(await workspace.getByRole('button',{name:'Verify & save locally'}).isDisabled(),true,
+      'Never persist a token without both an explicit value and local-only consent')
+    await workspace.getByRole('button',{name:'Connect Dhan',exact:true}).click()
     assert.equal(await workspace.getByRole('button',{name:/Get & prepare data/}).isDisabled(),
       true,'Never call broker without a configured live entitlement and source plan')
     // Explicit approval for the public-source setup job; no actual HTTP fetch.
