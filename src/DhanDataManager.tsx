@@ -540,7 +540,7 @@ export default function DhanDataManager({onDataChanged}:{onDataChanged:()=>void}
             Switch to recommended daily candles
           </button>
         </p>}
-      </div>
+      </div>}
       <details className="dh-simple-details dh-advanced-data">
         <summary>Advanced options: API calls and index spot prices</summary>
         <div className="dh-estimate"><div><span>Estimated minimum requests</span>
