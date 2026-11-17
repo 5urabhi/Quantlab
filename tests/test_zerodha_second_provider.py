@@ -101,10 +101,12 @@ class KiteSecondaryProviderTests(unittest.TestCase):
 
     def test_auth_and_provider_master_are_read_only_and_not_order_endpoints(self):
         with patch.object(zerodha_fallback,"_request",
-                          return_value=b'{"status":"success","data":{"user_id":"XX123"}}') as fn:
+                          return_value=b'{"status":"success","data":{"user_id":"XX123"}}') as fn, \
+             patch("workstation_api.app._spawn",
+                   return_value={"job_id":"offline_kite_probe","status":"queued"}):
             res=self.client.post("/api/data-manager/zerodha/verify")
             self.assertEqual(res.status_code,200,res.text)
-            # No test ever contacts an order or positions endpoint.
+            # The test may not dispatch a real provider job after mocks exit.
             result=zerodha_fallback.verify_session()
             self.assertTrue(result["authenticated"])
             self.assertNotIn("access_token",str(result))
