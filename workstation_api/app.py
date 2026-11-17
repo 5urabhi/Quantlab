@@ -2454,6 +2454,26 @@ class SelectionAuditRequest(BaseModel):
     benchmark_trail: Literal[3,6,12] = 6
 
 
+
+class ChronologicalSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_ids: list[str] = Field(min_length=2, max_length=8)
+    train_months: int = Field(default=36, ge=24, le=120)
+    test_months: int = Field(default=6, ge=3, le=12)
+    embargo_months: int = Field(default=1, ge=1, le=6)
+
+
+@app.post("/api/workspace/results/chronological-selection")
+def research_chronological_selection(body: ChronologicalSelectionRequest):
+    """Source-locked expanding-window selection, not a frozen final holdout."""
+    try:
+        return selection_diagnostics.chronological_audit(
+            body.run_ids, train_months=body.train_months,
+            test_months=body.test_months, embargo_months=body.embargo_months)
+    except (ValueError, OSError, FileNotFoundError, KeyError, TypeError) as exc:
+        bad(exc)
+
+
 @app.post("/api/workspace/results/selection-audit")
 def research_model_selection_audit(body: SelectionAuditRequest):
     """Conservative retrospective CSCV/PBO, deflated Sharpe and regime audit."""
