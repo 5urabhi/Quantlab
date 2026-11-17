@@ -75,6 +75,13 @@ class ModelAcquisitionAndDbExplorerTests(unittest.TestCase):
                              and s["state"] == "requires_confirmation"
                              for s in plan["source_chain"]))
 
+    def test_unselected_stock_model_gives_actionable_plan_not_http_400(self):
+        response=self.client.get("/api/data-manager/acquisition-plan",
+                                 params={"model_id":"ou_fit","target":"stock","ticker":""})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()["phase"],"choose_dataset")
+        self.assertFalse(response.json()["can_acquire"])
+
     def test_theoretical_plan_does_not_start_market_data(self):
         result = data_acquisition.plan("black_scholes")
         self.assertEqual(result["phase"], "run_without_market_data")
