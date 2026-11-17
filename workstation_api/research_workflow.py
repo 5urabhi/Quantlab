@@ -41,9 +41,13 @@ def execute(model_id: str, dataset_id: str | None, params: dict | None = None,
                 "model_id":model_id,"run":saved,
                 "data_kind":model["mode"],
                 "warning":"Synthetic/theoretical mathematics is not historical trading evidence."}
+    dataset_id=data_acquisition.primary_source(dataset_id)
     if not dataset_id:
-        return {"status":"blocked","action":"choose_dataset",
-                "message":"Select an original observed dataset before running."}
+        return {"status":"blocked","action":"get_market_data",
+                "message":"Your shared Market Data Library has no observed stock history yet. "
+                          "Select a market universe (NIFTY 50, BANK NIFTY, or named stocks) "
+                          "and approve its first read-only source download. "
+                          "QuantLab cannot choose unrequested securities or invent TRI."}
     folder, dataset_record = service.dataset_path(dataset_id)
     if (dataset_record.get("kind") == "synthetic" or
             (folder / "DO_NOT_CITE.txt").exists()):
