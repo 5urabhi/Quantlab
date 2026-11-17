@@ -358,3 +358,44 @@
 .ql-chart-viewport label{display:inline-flex;align-items:center;gap:6px;color:#a5d6d0;font-size:10px;cursor:pointer}
 .ql-chart-viewport input{accent-color:#76e6c1;flex-shrink:0}
 .ql-chart-viewport>span{color:#88b3be;font-size:10px;margin-left:auto}
+
+/* Mathematical implementation and empirical evidence are distinct axes. */
+.ql-implementation-summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  border:1px solid #347a65;border-radius:9px;padding:11px 14px;margin:0 0 15px;
+  background:#112f2b;color:#a0f5d4;font-size:11px}
+.ql-implementation-summary strong{color:#d8ffe9;font-size:12px}
+.ql-implementation-summary span{color:#b2d7d0;line-height:1.6}
+.ql-impl-badge{display:inline-flex;align-items:center;width:max-content;
+  border:1px solid #328168;border-radius:5px;background:#123a31;
+  color:#8ef1c5;font-size:9px;line-height:1.3;font-weight:800;letter-spacing:.02em;
+  padding:4px 8px}
+.ql-status-pair{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.ql-model-option .ql-impl-badge{font-size:9px}
+.ql-model-recipe{background:#101f2b;border-color:#34665e}
+.ql-model-recipe>.ql-note{line-height:1.6;margin-bottom:12px}
+.ql-recipe-steps{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.ql-recipe-steps>li{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;
+  border:1px solid #334c59;border-radius:8px;background:#122734}
+.ql-recipe-steps>li.ql-recipe-ready{border-color:#2a6259;background:#132e2e}
+.ql-recipe-steps>li.ql-recipe-ready>svg{color:#71ddb8}
+.ql-recipe-steps>li.ql-recipe-needs>svg{color:#ebc07e}
+.ql-recipe-steps>li>svg{flex:0 0 16px;margin-top:2px}
+.ql-recipe-steps>li>div{display:grid;gap:4px;min-width:0;flex:1}
+.ql-recipe-steps strong{color:#e0edf3;font-size:11px}
+.ql-recipe-steps small{color:#a4bbc7;line-height:1.55;font-size:10px}
+.ql-recipe-steps button,.ql-recipe-footer button{display:inline-flex;gap:7px;align-items:center;
+  justify-content:center;flex-shrink:0;padding:8px 10px;background:#183a44;
+  border:1px solid #44766b;border-radius:7px;color:#aaf2d7;font-size:10px;font-weight:750}
+.ql-recipe-steps button:hover,.ql-recipe-footer button:hover{background:#244e54}
+.ql-recipe-steps button:disabled,.ql-recipe-footer button:disabled{opacity:.4}
+.ql-recipe-footer{display:flex;align-items:center;gap:12px;justify-content:space-between;
+  flex-wrap:wrap;border-top:1px solid #365257;margin-top:13px;padding-top:12px}
+.ql-recipe-footer span{font-size:11px;color:#b7dbd1;line-height:1.6}
+.ql-recipe-footer button.ql-run{background:#5de0bc;color:#0d3333;border-color:#5de0bc}
+.ql-source-needed-button{display:inline-flex;gap:9px;align-items:center;
+  background:#193c43;border:1px solid #4b9281;border-radius:7px;
+  color:#bdf8df;padding:10px 12px;margin-bottom:12px;font-size:11px}
+@media(max-width:840px){
+  .ql-recipe-steps>li{flex-wrap:wrap}
+  .ql-recipe-steps>li>button{margin-left:24px}
+}
