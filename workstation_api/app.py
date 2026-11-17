@@ -591,6 +591,23 @@ def data_manager_zerodha_status():
         bad(exc)
 
 
+class KiteAppCredentialsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: str = Field(min_length=5, max_length=128)
+    api_secret: str = Field(min_length=8, max_length=256)
+    confirm_local_storage: bool = False
+
+
+@app.post("/api/data-manager/zerodha/configure")
+def data_manager_zerodha_configure(body: KiteAppCredentialsRequest):
+    try:
+        return zerodha_fallback.configure_app(
+            body.api_key, body.api_secret,
+            confirm_local_storage=body.confirm_local_storage)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
 @app.post("/api/data-manager/zerodha/auth/start")
 def data_manager_zerodha_auth_start():
     try:
