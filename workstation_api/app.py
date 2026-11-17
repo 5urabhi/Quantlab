@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -462,6 +462,47 @@ def data_manager_columnar_series(identity: str, start: str = "",
     try:
         return columnar_cache.series(identity, start, end, limit)
     except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/intraday/catalog")
+def data_manager_intraday_catalog(limit: int = 100):
+    try:
+        return intraday_parquet.catalog(limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/intraday/status")
+def data_manager_intraday_status(identity: str):
+    try:
+        return intraday_parquet.status(identity)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class IntradayBuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: str = Field(min_length=8, max_length=30)
+
+
+@app.post("/api/data-manager/intraday/build")
+def data_manager_intraday_build(body: IntradayBuildRequest):
+    try:
+        check = intraday_parquet.status(body.identity)
+        if not check["source_available"]:
+            raise ValueError("Download original Dhan one-minute candles before building")
+        return _spawn("intraday_parquet_build", intraday_parquet.build, body.identity)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/data-manager/intraday/series")
+def data_manager_intraday_series(identity: str, start: str = "",
+                                 end: str = "", limit: int = 500):
+    try:
+        return intraday_parquet.series(identity, start, end, limit)
+    except (ValueError, OSError) as exc:
         bad(exc)
 
 
@@ -1890,6 +1931,20 @@ def _run_bulk(batch_id: str, cancel: Event):
                 outcome["preparation_error"] = str(exc)[:180]
                 data_orchestrator.event("batch_preparation", "blocked",
                                         "Dhan batch needs preparation review: " + batch_id)
+        # If the user previously enabled a small 1-minute cache, refresh
+        # it after a successful original Dhan batch. Larger data remains a
+        # visible manual action rather than an unexpected CPU/disk spike.
+        if outcome.get("status") == "completed" and not cancel.is_set():
+            try:
+                batch = dhan_workspace._load_batch(batch_id)
+                if batch.get("interval_minutes") == 1:
+                    summaries = []
+                    for row in batch.get("items", [])[:8]:
+                        if shared_market_data.SAFE_IDENTITY.fullmatch(str(row.get("id",""))):
+                            summaries.append(intraday_parquet.refresh_enabled(row["id"]))
+                    outcome["minute_cache_refresh"] = summaries
+            except (ValueError, OSError):
+                outcome["minute_cache_refresh"] = [{"status":"manual_refresh_needed"}]
         return outcome
     finally:
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
