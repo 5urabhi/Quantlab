@@ -301,3 +301,14 @@
   .mdw-step-actions .mdw-button{width:100%}
   .mdw-flow>.mdw-card{min-height:0}
 }
+
+/* Approved secondary source remains clearly distinguished from Dhan OHLCV. */
+.mdw-secondary{border:1px solid #4a7080;background:#17313c;border-radius:9px;
+  padding:14px 16px;margin:17px 0}
+.mdw-secondary-title{display:flex;gap:9px;align-items:center;color:#b9edeb}
+.mdw-secondary-title strong{font-size:12px}
+.mdw-secondary>p{font-size:11px;color:#b6cdd3;line-height:1.65}
+.mdw-secondary>button{margin-top:8px}
+.mdw-model-run-consent{background:#15312e;border:1px solid #326556;
+  border-radius:8px;padding:11px 13px;margin:12px 0}
+.mdw-model-run-consent label{margin:0}

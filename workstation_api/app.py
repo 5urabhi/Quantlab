@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -2145,6 +2145,9 @@ class MarketDataStart(BaseModel):
     confirm_readonly: bool = False
     confirm_incomplete: bool = False
     confirm_bulk: bool = False
+    confirm_large_history: bool = False
+    run_model_after_prepare: bool = False
+    confirm_secondary_fallback: bool = False
     include_index_spot: bool = False
 
 
@@ -2230,7 +2233,9 @@ def market_data_start(body: MarketDataStart):
             body.preview_token, body.selection, body.from_date, body.to_date,
             body.interval, body.tickers, body.model_id,
             allow_incomplete=body.confirm_incomplete,
-            confirm_bulk=body.confirm_bulk)
+            confirm_bulk=body.confirm_bulk,
+            confirm_large_history=body.confirm_large_history,
+            run_model_after_prepare=body.run_model_after_prepare)
     except Exception as exc:
         bad(exc)
     # An existing token's presence is NOT verification. Check the live
@@ -2239,14 +2244,60 @@ def market_data_start(body: MarketDataStart):
     if not credential.get("ok"):
         raise HTTPException(400, credential.get("message") or
                             "Dhan historical Data API preflight failed.")
+    if body.confirm_secondary_fallback:
+        if body.interval is not None:
+            raise HTTPException(400,"Zerodha recovery supports original daily cash equities only.")
+        if not zerodha_fallback.configured():
+            raise HTTPException(400,"Connect Zerodha Kite before authorizing secondary history.")
     request = DhanBatchCreate(
         selection=body.selection, ids=[], tickers=approved["tickers"],
         from_date=approved["from_date"], to_date=approved["to_date"],
         interval=body.interval, acknowledged_bulk=body.confirm_bulk,
         acknowledged_gaps=body.confirm_incomplete,
         include_index_spot=body.include_index_spot)
+    if body.run_model_after_prepare:
+        return _queue_dhan_batch(
+            request, model_id=body.model_id,
+            model_params=approved["model_followup"]["params"],
+            allow_secondary=body.confirm_secondary_fallback)
+    if body.confirm_secondary_fallback:
+        return _queue_dhan_batch(request, allow_secondary=True)
     return create_dhan_batch(request)
 
+
+
+class SecondaryBatchRecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    batch_id: str = Field(pattern=r"^batch_[0-9a-f]{16}$")
+    preview_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirm_secondary: bool = False
+
+
+@app.get("/api/market-data/secondary/plan")
+def market_secondary_plan(batch_id: str):
+    try:
+        return batch_secondary_recovery.preview(batch_id)
+    except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
+        bad(exc)
+
+
+@app.post("/api/market-data/secondary/recover")
+def market_secondary_recover(body: SecondaryBatchRecoveryRequest):
+    try:
+        batch_secondary_recovery.approve(
+            body.batch_id, body.preview_token,
+            confirm_secondary=body.confirm_secondary)
+        with JOBS_LOCK:
+            if any(job["status"] in {"queued","running"} for job in JOBS.values()):
+                raise HTTPException(409, "Complete the active data job before requesting "
+                                    "secondary-provider recovery.")
+        return _spawn("market_secondary_recovery",
+                      batch_secondary_recovery.execute,
+                      body.batch_id, body.preview_token)
+    except HTTPException:
+        raise
+    except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
+        bad(exc)
 
 
 BATCH_CANCEL_EVENTS: dict[str, Event] = {}
@@ -2401,11 +2452,95 @@ def _run_bulk(batch_id: str, cancel: Event):
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
 
 
-@app.post("/api/dhan/batches")
-def create_dhan_batch(body: DhanBatchCreate):
+def _run_bulk_with_secondary(batch_id: str, cancel: Event, progress=None) -> dict:
+    """Run canonical Dhan first; use separately evidenced Kite only on failure.
+
+    The explicit consent was collected before queueing the job. This does not
+    modify Dhan manifests or pretend that secondary daily closes supply OHLCV.
+    """
+    outcome = _run_bulk(batch_id, cancel)
+    if cancel.is_set():
+        return outcome
+    try:
+        proposal = batch_secondary_recovery.preview(batch_id)
+        if proposal["can_recover"]:
+            if progress:
+                progress(82, "Dhan was incomplete; trying authorized verified secondary source")
+            outcome["secondary_recovery"] = batch_secondary_recovery.execute(
+                batch_id, proposal["preview_token"],
+                progress=(lambda amount,stage:
+                          progress(82 + 16*amount/100, stage)) if progress else None)
+        elif proposal["candidate_count"]:
+            outcome["secondary_recovery"] = {
+                "status":"blocked", "recovered":0,
+                "message":"Automatic secondary source was not eligible: " +
+                          "; ".join(proposal["blockers"])[:240],
+                "original_dhan_batch_changed":False}
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        outcome["secondary_recovery"] = {
+            "status":"blocked", "recovered":0,
+            "message":"Secondary market data was unavailable: "+job_safety.scrub(exc)[:160],
+            "original_dhan_batch_changed":False}
+    return outcome
+
+
+def _run_bulk_with_model(batch_id: str, cancel: Event, model_id: str,
+                         params: dict, allow_secondary: bool = False,
+                         progress=None) -> dict:
+    """Continue approved Dhan acquisition after verifying actual model inputs.
+
+    No extra provider calls beyond the approved window, no imaginary candles,
+    and no saved empirical run without sufficient source-backed observations.
+    """
+    if progress:
+        progress(2, "Downloading and preparing original Dhan data")
+    outcome = (_run_bulk_with_secondary(batch_id, cancel, progress=progress)
+               if allow_secondary else _run_bulk(batch_id, cancel))
+    saved_id = ((outcome.get("automatic_preparation") or {}).get("dataset_id")
+                or outcome.get("prepared_dataset_id"))
+    if not saved_id or cancel.is_set():
+        outcome["model_research"] = {
+            "status": "incomplete", "model_id": model_id,
+            "message": "Model execution was not attempted: the Dhan batch was "
+                       "interrupted, incomplete or could not be prepared.",
+            "next_action": "Review missing instruments in Downloads & Jobs."}
+        return outcome
+    if progress:
+        progress(87, "Checking actual model returns and the preferred +20% buffer")
+    try:
+        measured = model_data_manager.inspect(model_id, saved_id, params)
+        if not measured.get("runnable") or (measured.get("missing_to_target") or 0) > 0:
+            outcome["model_research"] = {
+                "status": "incomplete", "model_id": model_id,
+                "dataset_id": saved_id,
+                "observed_returns": measured.get("common_returns", 0),
+                "minimum_returns": measured.get("min_returns"),
+                "preferred_returns": measured.get("target_returns"),
+                "missing_to_target": measured.get("missing_to_target"),
+                "message": "Prepared data is genuine but has fewer aligned observations "
+                           "than the model's preferred +20% target. Approve another "
+                           "extension or use the available data in Model Laboratory.",
+                "next_action": "Open My Datasets → Extend / complete."}
+            return outcome
+        if progress:
+            progress(91, "Running and saving source-bound research")
+        outcome["model_research"] = research_workflow.execute(
+            model_id, saved_id, params,
+            confirm_download=False, prepare_buffer=False)
+    except (ValueError, OSError, KeyError) as exc:
+        outcome["model_research"] = {
+            "status": "blocked", "model_id": model_id, "dataset_id": saved_id,
+            "message": job_safety.scrub(exc)[:240],
+            "next_action": "Review exact inputs in Model Laboratory."}
+    return outcome
+
+
+def _queue_dhan_batch(body: DhanBatchCreate, *,
+                      model_id: str = "", model_params: dict | None = None,
+                      allow_secondary: bool = False):
+    """One authoritative Dhan batch writer for advanced and guided flows."""
     if not os.getenv("DHAN_ACCESS_TOKEN"):
-        raise HTTPException(400, "Set DHAN_ACCESS_TOKEN in the project .env and restart")
-    # Refuse a simultaneous second batch before creating its manifest.
+        raise HTTPException(400, "Connect Dhan Data API before downloading")
     with JOBS_LOCK:
         if any(task["status"] in {"queued", "running"} for task in JOBS.values()):
             raise HTTPException(409, "A research or data job is already running")
@@ -2418,13 +2553,24 @@ def create_dhan_batch(body: DhanBatchCreate):
     BATCH_CANCEL_EVENTS[batch_id] = cancel
     dhan_workspace.schedule_batch(batch_id)
     try:
-        job = _spawn("dhan_bulk", _run_bulk, batch_id, cancel)
+        if model_id:
+            job = _spawn("dhan_bulk", _run_bulk_with_model, batch_id, cancel,
+                         model_id, model_params or {}, allow_secondary)
+        elif allow_secondary:
+            job = _spawn("dhan_bulk", _run_bulk_with_secondary, batch_id, cancel)
+        else:
+            job = _spawn("dhan_bulk", _run_bulk, batch_id, cancel)
     except Exception:
         dhan_workspace.unschedule_batch(batch_id)
         BATCH_CANCEL_EVENTS.pop(batch_id, None)
         raise
-    return {**job, "batch": dhan_workspace.batch_details(batch_id)}
+    return {**job, "batch": dhan_workspace.batch_details(batch_id),
+            "model_followup_requested": bool(model_id)}
 
+
+@app.post("/api/dhan/batches")
+def create_dhan_batch(body: DhanBatchCreate):
+    return _queue_dhan_batch(body)
 
 @app.post("/api/dhan/batches/{batch_id}/resume")
 def resume_dhan_batch(batch_id: str):

@@ -542,6 +542,25 @@ def _uncovered(start: date, end: date, spans: list[list[str]]) -> list[tuple[dat
     return gaps
 
 
+def _ensure_checkpoint_space(target: Path, *, rows_in_window: int = 0):
+    """Fail early rather than strand a half-written multi-year CSV on disk.
+
+    Journalled Dhan publication must retain the old original CSV *and* a new
+    staged replacement until the atomic rename. This is a conservative
+    minimum, not a measured guarantee of storage. No original bytes change
+    if the filesystem reports inadequate remaining space.
+    """
+    folder=target.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    free=shutil.disk_usage(folder).free
+    previous=target.stat().st_size if target.is_file() else 0
+    needed=previous + max(128*1024*1024, rows_in_window*160+32*1024*1024)
+    if free < needed:
+        raise OSError("Insufficient disk space for a crash-safe Dhan candle checkpoint. "
+                      "Free space or shorten the approved date range; previously "
+                      "verified original windows are unchanged.")
+
+
 def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
                    on_progress=None, should_stop=None) -> dict:
     """Fetch/cache each Dhan date window independently and resumably.
@@ -589,6 +608,7 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
                 "windows_completed": 0, "windows_total": 0,
                 "recovered_checkpoints": int(recovered),
                 "rejected_provider_bars": int(previous.get("rejected_provider_bars",0))}
+    _ensure_checkpoint_space(target)
     inst = Instrument(label="EQUITY_" + row["security_id"],
                       security_id=row["security_id"],
                       exchange_segment=row["exchange_segment"], instrument="EQUITY")
@@ -655,6 +675,7 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
         incoming = incoming.sort_values("datetime")
         if incoming["datetime"].duplicated().any():
             raise ValueError("Duplicate candle timestamps within Dhan date window")
+        _ensure_checkpoint_space(target, rows_in_window=len(incoming))
         combined = (pd.concat([existing, incoming], ignore_index=True)
                     if existing is not None else incoming)
         combined = combined.sort_values("datetime").drop_duplicates("datetime", keep="last")
@@ -800,7 +821,7 @@ def _batch_daily_ohlcv(row: dict, interval: int | None,
     metadata = json.loads(sidecar.read_text())
     if metadata.get("instrument_id") != row["id"] or metadata.get("interval_minutes") != interval:
         raise ValueError("Cached instrument/interval mismatch: " + row["symbol"])
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    digest = dhan_checkpoint.digest(source)
     if digest != metadata.get("sha256"):
         raise ValueError("OHLCV SHA-256 mismatch: " + row["symbol"])
     required = ["datetime", "open", "high", "low", "close", "volume"]
