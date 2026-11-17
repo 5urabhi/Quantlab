@@ -19,8 +19,15 @@ describes the current implementation, not a planned future capability.
    missing, use **Prepare missing sources**. This authorizes *public source*
    synchronization, not Dhan candles. It can fail if the upstream publisher is
    unavailable; the exact missing dependency remains visible.
-5. Click **Verify access** or **Get & prepare data**. Both use a live, read-only
-   Dhan profile check. Dhan token presence is **not** considered verification.
+5. If Dhan is not configured, click **Connect Dhan** and paste the token
+   generated in Dhan Web. With your explicit consent, QuantLab verifies it
+   against Dhan's read-only profile endpoint and stores the verified token
+   in the ignored private local `.env` file (mode 0600 on Unix). The password
+   field is not persisted in browser storage and the token never appears in
+   job results. Renew expired Dhan tokens using **Replace token**. You can
+   alternatively use the existing ignored `.env` workflow.
+   **Verify access** and **Get & prepare data** use a live profile check.
+   A token's mere presence does **not** prove Data API entitlement.
    A failed authentication or inactive historical data entitlement stops before
    a batch manifest is created.
 6. **Get & prepare data** explicitly authorizes only the inspected scope.
@@ -46,7 +53,7 @@ describes the current implementation, not a planned future capability.
   source-quality checks; resumable batch manifests; automatic preparation
   of completely successful batches; read-only planning and model sample
   recommendation.
-- **Approval required:** public source synchronization, new broker history
+- **Approval required:** saving a verified token locally, public source synchronization, new broker history
   requests, unusually large batches, incomplete index mapping, partial
   dataset preparation, deletion, and secondary-source usage.
 - **Dhan** is the primary batch downloader. **Zerodha** is an optional
@@ -58,6 +65,9 @@ describes the current implementation, not a planned future capability.
   fundamentals, true delisted-security prices, corporate-action adjustments,
   or an official NIFTY TRI benchmark. Unadjusted daily OHLCV or index spot
   prices must not be labeled total returns.
+- If historical membership is available only through an earlier date, **Use latest
+  documented membership date** explicitly changes the requested date and
+  rechecks the plan. No historical date window is truncated silently.
 - A model's "+20%" preference is a target for **valid, aligned observed
   returns**. Requesting enough calendar days does not prove the target was met.
   Exact readiness still depends on genuine retained market observations.
@@ -85,11 +95,11 @@ The new UI does not store broker credentials in the browser or place trades.
 
 Run from the repository root:
 
-\`\`\`bash
+```bash
 npm run build
 python -m unittest discover -s tests -p 'test_market_data_workspace.py' -v
 bash run.sh
-\`\`\`
+```
 
 The full CI also runs the Python regression suite and Chromium UI acceptance.
 The browser test uses synthetic fixtures and mocked public-source setup, not
