@@ -2,7 +2,7 @@ import {useCallback, useEffect, useMemo, useState} from 'react'
 import {AlertTriangle, ArrowRight, CheckCircle2, Database, Download, LoaderCircle,
   RefreshCw, ShieldCheck} from 'lucide-react'
 
-type Dataset = {id:string;label:string;kind:string}
+type Dataset = {id:string;label:string;kind:string;has_daily_prices?:boolean;has_prices?:boolean}
 type Model = {id:string;title:string;group:string;mode:string;min_observations:number}
 type Coverage = {
   status:string;runnable:boolean;message?:string;
@@ -42,7 +42,12 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
 }){
   const [models,setModels]=useState<Model[]>([])
   const [modelId,setModelId]=useState(initialModelId||'min_variance')
-  const [datasetId,setDatasetId]=useState(initialDatasetId)
+  const sharedAvailable=datasets.some(d=>d.id==='dhan_shared'&&d.has_daily_prices)
+  const [datasetId,setDatasetId]=useState(
+    initialDatasetId || (sharedAvailable?'dhan_shared':''))
+  useEffect(()=>{
+    if(!initialDatasetId&&!datasetId&&sharedAvailable)setDatasetId('dhan_shared')
+  },[initialDatasetId,datasetId,sharedAvailable])
   const [assets,setAssets]=useState(8)
   const [ticker,setTicker]=useState('')
   const [target,setTarget]=useState<'stock'|'benchmark_tri'>('stock')
@@ -106,6 +111,9 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
           setRevision(v=>v+1)
           const output=next.result
           if(output?.dataset_id)onCompleted(output.dataset_id,output.selected_ticker)
+          if(output?.status==='blocked'||output?.status==='incomplete'){
+            setError(output.message||'Original market inputs are still incomplete; no model run was invented.')
+          }
           return
         }
         if(next.status==='error'||next.status==='cancelled'){
@@ -156,12 +164,27 @@ export default function DataAcquisitionPanel({datasets,onCompleted,onOpenDhan,on
           onChange={e=>{setModelId(e.target.value);setTicker('');setWorking(null);setAllowZerodha(false)}}>
           {models.map(m=><option key={m.id} value={m.id}>{m.title}</option>)}
         </select></label>
-      <label>Original dataset
+      {sharedAvailable?<div className="qm-model-market-source">
+        <span>Market history</span><strong><Database size={15}/>
+          {datasetId==='dhan_shared'?'Your shared Market Data Library':
+            'Original source snapshot (advanced)'}</strong>
+        <small>QuantLab selects canonical saved equity history automatically;
+          it checks actual model requirements before any provider request.</small>
+        <details><summary>Advanced: use an original source snapshot</summary>
+          <select aria-label="Data acquisition dataset" value={datasetId}
+            onChange={e=>{setDatasetId(e.target.value);setTicker('');
+              setWorking(null);setAllowZerodha(false)}}>
+            <option value="dhan_shared">One Market Data Library (recommended)</option>
+            {datasets.filter(d=>d.kind!=='synthetic'&&d.id!=='dhan_shared')
+              .map(d=><option key={d.id} value={d.id}>{d.label}</option>)}
+          </select>
+        </details></div>:<label>Market history
         <select aria-label="Data acquisition dataset" value={datasetId}
           onChange={e=>{setDatasetId(e.target.value);setTicker('');setWorking(null);setAllowZerodha(false)}}>
-          <option value="">Choose observed dataset</option>
-          {datasets.filter(d=>d.kind!=='synthetic').map(d=><option key={d.id} value={d.id}>{d.label}</option>)}
-        </select></label>
+          <option value="">No market history yet · download or index originals</option>
+          {datasets.filter(d=>d.kind!=='synthetic').map(d=>
+            <option key={d.id} value={d.id}>{d.label}</option>)}
+        </select></label>}
       {!isSingle&&<label>Assets to analyze
         <select aria-label="Assets needed" value={assets} onChange={e=>setAssets(Number(e.target.value))}>
           {[2,3,4,5,6,8,10,12,14,16,18].map(n=><option key={n} value={n}>{n} assets</option>)}
