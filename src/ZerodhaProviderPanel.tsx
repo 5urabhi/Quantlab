@@ -18,6 +18,8 @@ const request=async<T,>(suffix:string,init?:RequestInit):Promise<T>=>{
 }
 export default function ZerodhaProviderPanel({onSourceChange}:{onSourceChange?:()=>void}){
   const [status,setStatus]=useState<KiteStatus|null>(null)
+  const [apiKey,setApiKey]=useState('')
+  const [apiSecret,setApiSecret]=useState('')
   const [job,setJob]=useState<Job|null>(null)
   const [error,setError]=useState('')
   const [message,setMessage]=useState('')
@@ -59,6 +61,21 @@ export default function ZerodhaProviderPanel({onSourceChange}:{onSourceChange?:(
     try{
       const x=await request<{job_id:string;status:string}>(suffix,{method:'POST'})
       setJob({id:x.job_id,status:x.status})
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setBusy(false)}
+  }
+  const configure=async()=>{
+    if(busy||!apiKey||!apiSecret)return
+    setBusy(true);setError('');setMessage('')
+    try{
+      await request('/configure',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({api_key:apiKey.trim(),api_secret:apiSecret.trim(),
+          confirm_local_storage:true})
+      })
+      setApiKey('');setApiSecret('')
+      setMessage('Kite app settings saved privately on this machine. Complete official login next.')
+      setRevision(n=>n+1)
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
