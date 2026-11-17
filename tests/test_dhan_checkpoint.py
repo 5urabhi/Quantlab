@@ -86,6 +86,7 @@ class OriginalDhanCheckpointTests(unittest.TestCase):
             initial = dw._fetch_history(self.row, "2025-01-01", "2025-02-01", None)
         self.assertEqual(initial["status"], "complete")
         old_bytes = self.target.read_bytes()
+        old_rows = len(pd.read_csv(self.target))
         old_receipt = json.loads(self.manifest.read_text())
         with patch.object(dw, "download_candles", side_effect=self.candles):
             with self._interrupt_on(self.manifest):
@@ -101,8 +102,7 @@ class OriginalDhanCheckpointTests(unittest.TestCase):
         self.assertEqual(done["recovered_checkpoints"], 1)
         self.assertEqual(self.target.read_bytes(), new_bytes)
         self.assertEqual(len(json.loads(self.manifest.read_text())["coverage"]), 2)
-        self.assertGreater(len(pd.read_csv(self.target)), len(pd.read_csv(
-            self.target.with_name("never_created.csv"))) if False else 0)
+        self.assertGreater(len(pd.read_csv(self.target)), old_rows)
 
     def test_journal_mismatch_blocks_and_preserves_all_conflicting_source_bytes(self):
         with patch.object(dw, "download_candles", side_effect=self.candles):
