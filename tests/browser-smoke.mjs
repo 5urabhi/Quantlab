@@ -248,32 +248,24 @@ try {
     assert.equal(gapAudit.summary.publication_certified,false)
     await screenshot('02-historical-source-readiness')
   })
-  await step('Unified Market Data: first-run source planning and no unapproved broker calls',async()=>{
+  await step('Unified Market Data wizard: source planning, approval and no broker side-effects',async()=>{
     await nav('Data Library').click()
-    await page.locator('.ws-context-tabs').getByRole('button',{
-      name:'Download market data'
-    }).click()
+    await page.locator('.ws-context-tabs').getByRole('button',{name:'Download market data'}).click()
     const workspace=page.locator('.mdw-root')
     await workspace.getByRole('heading',{
-      name:'Get the data. QuantLab handles the preparation.'
-    }).waitFor()
-    await workspace.getByRole('heading',{name:'Choose your research data'}).waitFor()
-    await workspace.getByRole('heading',{name:'What history do you need?'}).waitFor()
-    await workspace.getByRole('heading',{name:'Get data and prepare automatically'}).waitFor()
+      name:'Get the data. QuantLab handles the preparation.'}).waitFor()
     for(const tab of ['Get Data','My Datasets','Downloads & Jobs'])
       await workspace.getByRole('tab',{name:tab}).waitFor()
+    await workspace.getByRole('heading',{name:'Choose your research data'}).waitFor()
+    assert.equal(await workspace.getByRole('heading',{name:'What history do you need?'}).count(),0,
+      'Only the current setup stage should be displayed')
     const nifty=workspace.getByRole('button',{name:/NIFTY 50.*Historical constituents/})
     assert.equal(await nifty.getAttribute('aria-pressed'),'true')
+    await workspace.getByRole('button',{name:/Continue to history & source checks/}).click()
+    await workspace.getByRole('heading',{name:'What history do you need?'}).waitFor()
+    assert.equal(await workspace.getByRole('heading',{name:'Choose your research data'}).count(),0)
     assert.equal(await workspace.getByRole('combobox',{name:'Candle frequency'}).inputValue(),'daily')
     await workspace.getByText(/Connect Dhan historical Data API/).first().waitFor()
-    await workspace.getByRole('button',{name:'Connect Dhan',exact:true}).click()
-    await workspace.getByLabel('Dhan access token').waitFor()
-    assert.equal(await workspace.getByRole('button',{name:'Verify & save locally'}).isDisabled(),true,
-      'Never persist a token without both an explicit value and local-only consent')
-    await workspace.getByRole('button',{name:'Connect Dhan',exact:true}).click()
-    assert.equal(await workspace.getByRole('button',{name:/Get & prepare data/}).isDisabled(),
-      true,'Never call broker without a configured live entitlement and source plan')
-    // Explicit approval for the public-source setup job; no actual HTTP fetch.
     await page.route('**/api/market-data/sources/prepare',route=>route.fulfill({
       status:200,contentType:'application/json',
       body:JSON.stringify({job_id:'ci_source_setup',status:'queued'})
@@ -287,16 +279,27 @@ try {
     await workspace.getByText('Source setup completed. Rechecking the requested period.').waitFor()
     await page.unroute('**/api/market-data/sources/prepare')
     await page.unroute('**/api/jobs/ci_source_setup')
+    await workspace.getByRole('combobox',{name:'Optional research model'}).selectOption('garch')
+    await workspace.getByText('72 returns').waitFor()
+    await workspace.getByRole('button',{name:/Continue to provider & download/}).click()
+    await workspace.getByRole('heading',{name:'Get data and prepare automatically'}).waitFor()
+    assert.equal(await workspace.getByRole('heading',{name:'What history do you need?'}).count(),0)
+    await workspace.getByRole('button',{name:'Connect Dhan',exact:true}).click()
+    await workspace.getByLabel('Dhan access token').waitFor()
+    assert.equal(await workspace.getByRole('button',{name:'Verify & save locally'}).isDisabled(),true,
+      'A connection must not save a token without user consent')
+    await workspace.getByRole('button',{name:'Connect Dhan',exact:true}).click()
+    assert.equal(await workspace.getByRole('button',{name:/Get & prepare data/}).isDisabled(),true,
+      'No unapproved broker requests with missing token and index coverage')
+    await workspace.getByRole('button',{name:/Back to history & source plan/}).click()
+    await workspace.getByLabel('Through date').fill('2026-10-15')
+    await workspace.getByRole('button',{name:/Back to data selection/}).click()
     await workspace.getByRole('button',{name:/BANK NIFTY/}).click()
     assert.equal(await workspace.getByRole('button',{name:/BANK NIFTY/})
       .getAttribute('aria-pressed'),'true')
-    await workspace.getByLabel('Through date').fill('2026-10-15')
     await workspace.getByRole('button',{name:/My stocks/}).click()
     await workspace.getByLabel('Stock ticker list').fill('RELIANCE\nTCS\n')
     await workspace.getByText('2 unique tickers').waitFor()
-    await workspace.getByRole('combobox',{name:'Optional research model'}).selectOption('garch')
-    await workspace.getByText('72 returns').waitFor()
-    await workspace.getByRole('button',{name:/NIFTY 50.*Historical constituents/}).click()
     await screenshot('02-unified-market-data-source-plan')
     await workspace.getByRole('tab',{name:'My Datasets'}).click()
     await workspace.getByRole('heading',{name:"Everything you've collected"}).waitFor()
