@@ -26,7 +26,7 @@ import uuid
 
 import pandas as pd
 
-from . import service, shared_market_data
+from . import service, shared_market_data, columnar_cache
 
 LOCK = RLock()
 MAX_BYTES = 20 * 1024 * 1024
@@ -202,6 +202,11 @@ def import_original(*, payload: bytes, identity: str, provider: str,
             result["blockers"] = [
                 "Shared market store rejected the source; original evidence preserved. "
                 + str(exc)[:160]]
+        if result["status"] == "imported":
+            try:
+                result["analytics_cache"] = columnar_cache.refresh_if_enabled()
+            except (ValueError, OSError, sqlite3.Error):
+                result["analytics_cache"] = {"state": "manual_refresh_needed"}
         _receipt(source_id, result)
         return result
 
