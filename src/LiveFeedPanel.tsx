@@ -1,0 +1,260 @@
+import {useCallback,useEffect,useMemo,useState} from 'react'
+import {Activity,BookOpen,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
+import './live-feed.css'
+
+type DepthLevel={price:number;quantity:number;orders:number}
+type Book={identity:string;received_utc:string;bid:DepthLevel[];ask:DepthLevel[];
+  best_bid:number;best_ask:number;spread_bps:number;imbalance:number;bid_levels:number;
+  ask_levels:number;full_depth:boolean;age_seconds:number;fresh:boolean;source_clock:string}
+type Quote={price:number;exchange_utc:string;received_utc:string;age_seconds:number;fresh:boolean;source:string}
+type Feed={active:boolean;session_id?:string;index_identity?:string;depth_identity?:string|null;
+  ticker_connection?:string;depth_connection?:string;auto_audit?:boolean;
+  ticks?:number;depth_snapshots?:number;saved_books?:number;revision?:number;
+  last_error?:string|null;ticker_note?:string;depth_note?:string;started_utc?:string;
+  quotes?:Record<string,Quote>;latest_book?:Book|null;client_id_configured:boolean;
+  depth_recording?:string;audit_state?:string;read_only:boolean}
+type Contract={identity:string;symbol:string;display_name:string;instrument:string;
+  expiry?:string|null;strike?:string|null;option_type?:string|null}
+type Signal={ready:boolean;reason?:string;identity:string;direction?:'UP'|'DOWN'|'NO_TRADE';
+  quote_mode:string;latest_close?:number;last_observed_utc?:string;source_age_seconds?:number;
+  rsi14?:number|null;ema9?:number|null;ema21?:number|null;
+  contiguous_session_bars?:number;rows?:{timestamp_utc:string;close:number}[];
+  source_warning?:string}
+type Replay={identity:string;observed_source_bars:number;overall:{
+  scored:number;correct:number;incorrect:number;no_trade:number;unverifiable:number;
+  directional_accuracy:number|null};horizon_minutes:number;source_warning:string;disclaimer:string}
+type SavedBooks={identity:string;sampling:string;snapshots:Book[];historical_download_supported:boolean}
+async function request<T>(path:string,body?:unknown):Promise<T>{
+  const options:RequestInit=body===undefined?{}:{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}
+  const result=await fetch('/api/trading-cockpit/live/'+path,options)
+  if(!result.ok){
+    let detail='Market-data action failed ('+result.status+')'
+    try{const body=await result.json() as {detail?:string};detail=body.detail||detail}
+    catch{/* text or empty */}
+    throw new Error(detail)
+  }
+  return result.json() as Promise<T>
+}
+const fmt=(value:number|null|undefined,decimals=2)=>value===undefined||value===null?'—':
+  value.toLocaleString('en-IN',{maximumFractionDigits:decimals})
+const timeIST=(value?:string)=>value?new Date(value).toLocaleTimeString('en-IN',
+  {timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—'
+const isExactDepth=(value:string)=>/^NSE_(?:EQ|FNO):[0-9]{1,12}$/.test(value)
+
+export default function LiveFeedPanel(){
+  const [feed,setFeed]=useState<Feed|null>(null)
+  const [connectedToLocal,setConnectedToLocal]=useState(false)
+  const [index,setIndex]=useState<'INDEX:BANKNIFTY'|'INDEX:NIFTY50'>('INDEX:BANKNIFTY')
+  const [contractSearch,setContractSearch]=useState('BANKNIFTY')
+  const [contracts,setContracts]=useState<Contract[]>([])
+  const [contractInfo,setContractInfo]=useState('')
+  const [depthIdentity,setDepthIdentity]=useState('')
+  const [autoAudit,setAutoAudit]=useState(true)
+  const [consent,setConsent]=useState(false)
+  const [busy,setBusy]=useState(false)
+  const [queryBusy,setQueryBusy]=useState(false)
+  const [error,setError]=useState('')
+  const [notice,setNotice]=useState('')
+  const [signal,setSignal]=useState<Signal|null>(null)
+  const [savedBooks,setSavedBooks]=useState<SavedBooks|null>(null)
+  const [replay,setReplay]=useState<Replay|null>(null)
+  const [replayHorizon,setReplayHorizon]=useState<'3'|'6'>('6')
+  const [now,setNow]=useState(()=>Date.now())
+
+  const refresh=useCallback(async()=>{
+    try{setFeed(await request<Feed>('status'))}
+    catch(e){setError(e instanceof Error?e.message:String(e))}
+  },[])
+  useEffect(()=>{
+    void refresh()
+    const stream=new EventSource('/api/trading-cockpit/live/events')
+    stream.onmessage=(event:MessageEvent<string>)=>{
+      try{setFeed(JSON.parse(event.data) as Feed);setConnectedToLocal(true)}
+      catch{setConnectedToLocal(false)}
+    }
+    stream.onerror=()=>setConnectedToLocal(false)
+    const clock=window.setInterval(()=>setNow(Date.now()),1000)
+    return()=>{stream.close();window.clearInterval(clock)}
+  },[refresh])
+  const watchedIndex=feed?.active?(feed.index_identity||index):index
+  useEffect(()=>{
+    const poll=async()=>{
+      try{setSignal(await request<Signal>('signal?'+new URLSearchParams({identity:watchedIndex})))}
+      catch(e){setError(e instanceof Error?e.message:String(e))}
+    }
+    void poll()
+    const interval=window.setInterval(()=>{void poll()},4000)
+    return()=>window.clearInterval(interval)
+  },[watchedIndex,feed?.active])
+  const findContracts=async()=>{
+    if(queryBusy)return
+    setQueryBusy(true);setError('');setContractInfo('')
+    try{
+      const found=await request<{contracts:Contract[];catalog_available:boolean;message:string}>(
+        'contracts?'+new URLSearchParams({query:contractSearch.trim(),limit:'35'}))
+      setContracts(found.contracts);setContractInfo(found.message)
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setQueryBusy(false)}
+  }
+  const start=async()=>{
+    if(busy||!consent)return
+    setBusy(true);setError('');setNotice('')
+    try{
+      const state=await request<Feed>('start',{
+        index_identity:index,depth_identity:depthIdentity.trim().toUpperCase(),
+        auto_audit:autoAudit,confirm_live_data:true})
+      setFeed(state);setNotice('Broker WebSockets starting. Wait for actual observed packets before interpreting a signal.')
+      setConsent(false)
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setBusy(false)}
+  }
+  const stop=async()=>{
+    if(busy)return
+    setBusy(true);setError('');setNotice('')
+    try{setFeed(await request<Feed>('stop',{}));setNotice('Live session stopped. Saved observations remain available for research.')}
+    catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setBusy(false)}
+  }
+  const record=async()=>{
+    if(busy)return
+    setBusy(true);setError('')
+    try{
+      const r=await fetch('/api/trading-cockpit/live/predictions',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({identity:watchedIndex,horizon_minutes:Number(replayHorizon)})})
+      if(!r.ok){const b=await r.json() as {detail?:string};throw new Error(b.detail||'Live prediction unavailable')}
+      setNotice('Prospective '+replayHorizon+'-minute prediction permanently recorded.')
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setBusy(false)}
+  }
+  const runReplay=async()=>{
+    if(busy)return
+    setBusy(true);setError('')
+    try{setReplay(await request<Replay>('replay?'+new URLSearchParams({
+      identity:watchedIndex,horizon_minutes:replayHorizon,limit:'1500'})))}
+    catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setBusy(false)}
+  }
+  const viewBooks=async()=>{
+    const key=feed?.depth_identity||depthIdentity.trim().toUpperCase()
+    if(!isExactDepth(key)){setError('Select an exact NSE equity or option Security ID first.');return}
+    setBusy(true);setError('')
+    try{setSavedBooks(await request<SavedBooks>('depth-history?'+
+      new URLSearchParams({identity:key,limit:'150'})))}
+    catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setBusy(false)}
+  }
+  const quote=feed?.quotes?.[watchedIndex]
+  const liveBook=feed?.latest_book
+  const quoteAge=quote?Math.max(0,(now-Date.parse(quote.received_utc))/1000):null
+  const livePrice=Boolean(feed?.active&&feed.ticker_connection==='connected'
+    &&quoteAge!==null&&quoteAge<=8&&quote?.fresh)
+  const bookAge=liveBook?Math.max(0,(now-Date.parse(liveBook.received_utc))/1000):null
+  const bookFresh=Boolean(feed?.active&&feed.depth_connection==='connected'
+    &&bookAge!==null&&bookAge<=8&&liveBook?.fresh)
+  const hasSignal=Boolean(livePrice&&signal?.ready&&signal.quote_mode==='LIVE_OBSERVED')
+  const bookRows=useMemo(()=>liveBook?Array.from({length:Math.min(20,
+    Math.max(liveBook.bid.length,liveBook.ask.length))},(_,i)=>({
+      bid:liveBook.bid[i],ask:liveBook.ask[i],position:i+1,
+    })):[],[liveBook])
+  const configuredDepth=feed?.active?feed.depth_identity:depthIdentity
+  return <section className="tc-panel lf-root" aria-label="Live BANKNIFTY and 20-level market feed">
+    <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/> Live streaming · index + 20-level depth</strong>
+      <p className="tc-muted">Dhan ticker WebSocket for BANKNIFTY / NIFTY 50 · separate order-book WebSocket for one NSE stock or option. No broker orders.</p></div>
+      <span className={'lf-badge '+(livePrice?'live':feed?.active?'connecting':'offline')}>
+        {livePrice?'LIVE · FRESH':feed?.active?'FEED STARTING / STALE':'NOT STREAMING'}</span>
+    </div>
+    <div className="lf-meta"><span>Local UI stream <b>{connectedToLocal?'Connected':'Reconnecting'}</b></span>
+      <span>Index ticker <b>{feed?.ticker_connection||'Not started'}</b></span>
+      <span>20-level feed <b>{feed?.depth_connection||'Not started'}</b></span>
+      <span>Stored in <b>dhan_shared</b></span></div>
+    {error&&<p role="alert" className="tc-error">{error}</p>}
+    {notice&&<p role="status" className="tc-confirm">{notice}</p>}
+    {!feed?.active?<div className="lf-start-form">
+      <label>Analyze index<select aria-label="Live underlying index" value={index}
+        onChange={e=>setIndex(e.target.value as typeof index)}>
+        <option value="INDEX:BANKNIFTY">BANKNIFTY · spot index</option>
+        <option value="INDEX:NIFTY50">NIFTY 50 · spot index</option>
+      </select></label>
+      <div className="lf-contract-search">
+        <label>Find a BANKNIFTY option for 20-level depth
+          <span className="lf-search-row"><input value={contractSearch}
+            onChange={e=>setContractSearch(e.target.value.toUpperCase())}
+            placeholder="BANKNIFTY"/><button type="button" onClick={()=>void findContracts()} disabled={queryBusy}>
+            <Search size={15}/>{queryBusy?'Searching':'Find contracts'}</button></span></label>
+        {!!contractInfo&&<small className="tc-muted">{contractInfo}</small>}
+        {!!contracts.length&&<select aria-label="Choose Dhan option contract" defaultValue=""
+          onChange={e=>{if(e.target.value)setDepthIdentity(e.target.value)}}>
+          <option value="">Choose a real Dhan option contract…</option>
+          {contracts.map(c=><option key={c.identity} value={c.identity}>
+            {c.display_name||c.symbol} · {c.identity} {c.expiry||''}</option>)}</select>}
+      </div>
+      <label>20-level depth instrument (optional)
+        <input aria-label="Exact depth instrument" placeholder="NSE_FNO:12345 or NSE_EQ:1333"
+          value={depthIdentity} onChange={e=>setDepthIdentity(e.target.value.toUpperCase())}/>
+        <small>Choose a real listed option or bank stock. Indices have no order book; leave blank for index price-only streaming.</small>
+      </label>
+      <label className="lf-consent"><input type="checkbox" checked={autoAudit}
+        onChange={e=>setAutoAudit(e.target.checked)}/> Automatically record and evaluate genuine 3/6-minute decisions while the local server runs</label>
+      <label className="lf-consent"><input type="checkbox" checked={consent}
+        onChange={e=>setConsent(e.target.checked)}/> Start authorized read-only Dhan streaming and locally record real observations</label>
+      <button className="lf-primary" type="button" onClick={()=>void start()}
+        disabled={busy||!consent||Boolean(depthIdentity.trim()&&!isExactDepth(depthIdentity.trim()))}>
+        <Activity size={16}/>{busy?'Connecting':'Start live feed'}
+      </button>
+    </div>:<div className="lf-live-actions"><div><strong>Running: {watchedIndex.replace('INDEX:','')}</strong>
+      <small>20-level target: {configuredDepth||'None selected · index prices only'}</small>
+      <small>Index packets {fmt(feed.ticks,0)} · depth snapshots {fmt(feed.depth_snapshots,0)} · saved samples {fmt(feed.saved_books,0)}</small></div>
+      <button type="button" onClick={()=>void stop()} disabled={busy}><Square size={15}/> Stop streams</button>
+      <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Check connection</button>
+    </div>}
+    <div className="lf-cards">
+      <div className="lf-stat"><span>Live index LTP</span><strong>{livePrice?'₹'+fmt(quote?.price):'—'}</strong>
+        <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':
+          'Waiting for fresh Dhan ticker data'}</small></div>
+      <div className="lf-stat"><span>Source age</span><strong>{quoteAge===null?'—':fmt(quoteAge,1)+' s'}</strong>
+        <small>{livePrice?'Received from authenticated Dhan feed':'Stale or unverified'}</small></div>
+      <div className="lf-stat"><span>Next 3/6m index direction</span><strong className={hasSignal?'lf-good':'lf-neutral'}>
+        {hasSignal?(signal?.direction==='UP'?'UP':signal?.direction==='DOWN'?'DOWN':'NO TRADE'):'NOT READY'}</strong>
+        <small>{signal?.contiguous_session_bars??0} consecutive completed observed one-minute bars · minimum 30</small></div>
+      <div className="lf-stat"><span>Depth best bid / ask</span><strong>{bookFresh?
+        '₹'+fmt(liveBook?.best_bid)+' / ₹'+fmt(liveBook?.best_ask):'—'}</strong>
+        <small>{bookFresh?'Original paired 20-level book':'No fresh NSE depth snapshot'}</small></div>
+    </div>
+    <div className="lf-depth-summary">
+      <div className="tc-panel-title"><strong>20-level market depth · {configuredDepth||'select a stock / option'}</strong>
+        <span>20 bids + 20 asks, original NSE equity/derivative packet pairs</span></div>
+      {liveBook&&<div className="lf-meta"><span>Bid–ask spread <b>{fmt(liveBook.spread_bps)} bps</b></span>
+        <span>Order-book imbalance <b>{fmt((liveBook.imbalance+1)*50,1)}% bid-side share</b></span>
+        <span>Book update <b>{timeIST(liveBook.received_utc)} IST</b></span>
+        <span>Status <b>{bookFresh?'Fresh':'STALE'}</b></span></div>}
+      {liveBook?<div className="tc-table-scroll"><table><thead><tr><th>Level</th><th>Bid qty</th><th>Bid orders</th><th>Bid price (₹)</th><th>Ask price (₹)</th><th>Ask orders</th><th>Ask qty</th></tr></thead>
+        <tbody>{bookRows.map(row=><tr key={row.position}><td>{row.position}</td><td>{fmt(row.bid?.quantity,0)}</td>
+          <td>{fmt(row.bid?.orders,0)}</td><td>{fmt(row.bid?.price)}</td><td>{fmt(row.ask?.price)}</td>
+          <td>{fmt(row.ask?.orders,0)}</td><td>{fmt(row.ask?.quantity,0)}</td></tr>)}</tbody></table></div>:
+        <p className="tc-missing"><Database size={17}/> No paired 20-level Dhan packets yet.
+          You may need full-market-depth entitlement and an active NSE_EQ or NSE_FNO contract.</p>}
+      <p className="tc-muted">20-level depth is NOT available on IDX_I itself. Depth is sampled for storage at up to one observed pair per second, while the live screen uses the newest observed packet. No historical book is inferred from candles.</p>
+    </div>
+    <div className="lf-replay">
+      <div className="tc-panel-title"><strong><BookOpen size={16}/> Live capture becomes historical research</strong>
+        <span>Original observations, not simulated option executions</span></div>
+      <div className="lf-replay-actions"><label>Horizon <select value={replayHorizon}
+          onChange={e=>setReplayHorizon(e.target.value as typeof replayHorizon)}>
+          <option value="3">3 minutes</option><option value="6">6 minutes</option></select></label>
+        <button type="button" onClick={()=>void record()} disabled={!hasSignal||busy}>Record live prediction</button>
+        <button type="button" onClick={()=>void runReplay()} disabled={busy}>Replay saved live minutes</button>
+        <button type="button" onClick={()=>void viewBooks()} disabled={busy}>Inspect stored 20-level books</button>
+      </div>
+      {replay&&<div className="lf-meta"><span>Recorded minute bars <b>{replay.observed_source_bars}</b></span>
+        <span>Signals scored <b>{replay.overall.scored}</b></span>
+        <span>Accuracy <b>{replay.overall.directional_accuracy===null?'Insufficient':fmt(replay.overall.directional_accuracy*100,1)+'%'}</b></span>
+        <span>Unverifiable gaps <b>{replay.overall.unverifiable}</b></span></div>}
+      {savedBooks&&<p className="tc-confirm">Stored genuine 20-level samples for {savedBooks.identity}: {savedBooks.snapshots.length}.
+        Sampling is at most one original paired snapshot per second. These samples are available on future local sessions.</p>}
+      <p className="tc-muted">The historical BANKNIFTY backtest and research model library remain available below. Live-captured index minute bars and saved 20-level books are additional source-backed views of the same library. No live option P&amp;L is inferred from index direction.</p>
+    </div>
+    <div className="tc-warning"><ShieldCheck size={14}/> Read-only research. Real-time data requires valid Dhan Data API plus live market/depth permissions. A connected socket is not proof of fresh trades. Any stale feed, absent market data or missing completed candles disables live directional claims. Closing this tab does not stop the local streaming session; clicking Stop or shutting down QuantLab does.</div>
+  </section>
+}
