@@ -88,3 +88,13 @@
 .hob-flip-note{background:#173849;border:1px solid #3f7680;border-radius:9px;
   padding:13px 15px;font-size:12px;line-height:1.7;color:#bde7ed}
 .hob-flip-note strong{color:#e6fff4}
+
+
+.hob-routing-tip{display:flex;gap:10px;align-items:flex-start;line-height:1.6;
+  border:1px solid #2e6672;border-radius:9px;background:#143547;padding:12px 14px;
+  color:#afd9e5;font-size:11px}
+.hob-routing-tip svg{flex:none;margin-top:2px;color:#78d9ca}
+.hob-routing-tip strong{color:#d8f9f2}
+.hob-route-summary{margin:0;line-height:1.5;padding:9px 12px;
+  border:1px solid #355468;border-radius:7px;background:#142c3b;
+  font-size:11px;color:#adc8d9}
