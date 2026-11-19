@@ -198,7 +198,11 @@ export default function HistoricalOptionsBacktest({
       </label>
       <label>Expiry series
         <select aria-label="Historical option expiry code" value={expiryCode}
-          onChange={e=>setExpiryCode(Number(e.target.value) as 0|1|2)}>
+          onChange={e=>{
+            const code=Number(e.target.value) as 0|1|2
+            setExpiryCode(code)
+            if(code!==0)setWings(old=>Math.min(old,3))
+          }}>
           <option value={0}>Current / near expiry</option>
           <option value={1}>Next expiry</option>
           <option value={2}>Far expiry</option>
@@ -227,7 +231,7 @@ export default function HistoricalOptionsBacktest({
       <label>ATM strike wings
         <select aria-label="Historical option strike wings" value={wings}
           onChange={e=>setWings(Number(e.target.value))}>
-          {[0,1,2,3,4,5].map(n=><option key={n} value={n}>ATM ±{n} ({2*(2*n+1)} side/strike requests per 30d)</option>)}
+          {[0,1,2,3,4,5].filter(n=>expiryCode===0||n<=3).map(n=><option key={n} value={n}>ATM ±{n} ({2*(2*n+1)} side/strike requests per 30d)</option>)}
         </select>
       </label>
       <label>Highlighted exit rule
