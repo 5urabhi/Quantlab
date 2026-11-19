@@ -127,7 +127,9 @@ def snapshot(identity: str, source_rows: list[dict], *,
     # delivery. Never score as prospective until >= 60 seconds have elapsed.
     market_bar = (time(9, 15) <= local.time().replace(tzinfo=None)
                   <= time(15, 29) and local.weekday() < 5)
-    recent = 60 <= age <= 180 and market_bar
+    # Accept only promptly observed completed bars. Otherwise an old bar
+    # would be credited with a longer forecast horizon than was available.
+    recent = 60 <= age <= 90 and market_bar
     direction = "NO_TRADE"
     if (len(contiguous) >= 30 and rsi is not None and fast[-1] is not None
             and slow[-1] is not None):
@@ -154,6 +156,7 @@ def snapshot(identity: str, source_rows: list[dict], *,
         "quote_mode": "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE" if recent else "HISTORICAL_ONLY",
         "last_observed_utc": last["timestamp_utc"],
         "source_age_seconds": max(0, round(age)),
+        "decision_delay_after_bar_close_seconds": max(0, round(age - 60)),
         "direction": direction, "confidence": None,
         "validation": "UNVALIDATED_RULE_BASELINE",
         "latest_close": last["close"], "rsi14": rsi, "atr14": atr,
