@@ -169,6 +169,92 @@ Broker fill, historical option fills, slippage and real options P&L
 are not inferred from the spot index replay. The existing 20-level depth
 selection stays read-only and requires a live Dhan F&O subscription.
 
+## Phase 2 implemented: BANKNIFTY spot signals buy historical CE/PE contracts
+
+**Open Trading Copilot → Signal Backtest → BANKNIFTY Signal → Historical CE/PE Backtest.**
+The workflow is now:
+
+1. Use the same **original Dhan BANKNIFTY index 1-minute candle** sequence
+   and causal EMA9/EMA21 + RSI signal to decide UP/DOWN/NO_TRADE.
+2. An **UP signal means search historical CALL (CE)**; a **DOWN signal
+   means search historical PUT (PE)**. NO_TRADE means stay flat.
+3. The app automatically reads prior Dhan `POST /v2/charts/rollingoption`
+   receipts from the local market-data library and fetches missing calls using
+   the local Dhan token when you press **Run ... auto-fetch missing data**.
+   Default request: `securityId:25`, `exchangeSegment:NSE_FNO`,
+   `instrument:OPTIDX`, `expiryFlag:MONTH`, `expiryCode:0`,
+   `interval:1`, `drvOptionType:CALL/PUT`, ATM±3. Each Dhan request
+   covers at most 30 calendar days; limits protect against request floods.
+   Monthly and near expiry are defaults. Optional weekly/next/far series
+   are exposed only as Dhan request selections; absence of vendor data is
+   reported, never filled. The endpoint requires the user's own Data API
+   entitlement; no credential is sent back to the browser.
+4. From the *completed index signal minute*, find a contract of the correct
+   option side with **observed historical option CLOSE** nearest ₹300 within
+   ±₹50, considering only the requested ATM-relative strikes and positive
+   recorded volume. This selects the strike with information available *before*
+   the entry. Then assume entry at the **next observed option minute OPEN**,
+   with explicit user-controlled slippage. Do not select a strike using
+   future exit performance.
+5. Convert option units from **three lots × historical assumed lot size**
+   (default **30 assumed units per lot** => 90 units). Dhan's rolling
+   endpoint does not certify historical lot sizes. Users must verify this
+   assumption for their dates. Require sufficient modeled cash to purchase
+   the chosen option contract and model brokerage separately.
+6. For an opened position, track the **same actual strike, same CE/PE side,
+   and same market session** across every minute until exit. When the ATM
+   *relative label* moves, matching is by actual `strike` values returned
+   by Dhan, NEVER by the moving ATM label. The API gives a rolling expiry
+   family rather than immutable expired contract IDs, so a cross-session
+   contract identity or exact historic expiry is not proven. Never carry
+   positions overnight or silently swap contracts. Contradictory vendor
+   duplicates and missing minute paths are excluded. An incomplete opened
+   position blocks the remainder of that day's entries.
+7. Exit on fixed 1/3/5/6/10/30/60-minute holds, an opposite completed
+   BANKNIFTY signal, a reversal/time-cap hybrid, an **option-close-triggered
+   +5% / −2.5%** target/stop, or a combination. A signal or option-close
+   trigger at minute `t` can only exit at minute `t+1` OPEN. These are not
+   real stop-order fills: the price can gap through the trigger. The API
+   enforces the observed 15:29 IST opening as the session cutoff.
+8. Compare trade counts, option-premium ₹ P&L, selected exit reasons,
+   realized-balance return, average hold, conservative no-data exclusions
+   and closed-trade drawdown, using the **same original spot signals and
+   chosen premium/size/capital/cost settings** for each policy. Quotes and
+   source receipts are historical, stored locally with SHA-256 checks;
+   results are **hypothetical next-open execution proxies**, not orders.
+
+**Read-only API:** `POST /api/trading-cockpit/options/backtest` with
+`confirm_readonly=true` starts a bounded local job. The UI polls
+`GET /api/jobs/{job_id}` for progress/results and remembers in-flight
+job identifiers across tab switches. No order placement or automatic trading
+API calls exist in this workflow.
+
+**Evidence and economic limitations:**
+- Historical Dhan rolling OHLC/volume/strike observations have no historic
+  bid/ask, 20-level book or proved executable fills. Displayed assumed
+  per-side slippage and brokerage are user-set, not Dhan-verified fills.
+- The rolling expiry code does NOT prove immutable expired contract identity,
+  actual per-bar expiry date, or that its series can be treated as a single
+  listed contract across multiple sessions. The backtest uses only intraday
+  same-strike comparisons and explicitly flags this limit.
+- Historical lot size is a user assumption, not a verified exchange record
+  for the backtested dates. The ₹300 selection refers to the signal minute's
+  last option premium, not a guaranteed entry at exactly ₹300.
+- The +5%/−2.5% policy is based on a *completed option candle CLOSE*,
+  followed by assumed next-minute OPEN execution. It is not a tick-level
+  or intrabar stop/target fill.
+- Taxes, statutory levies, impact of the bid/ask spread, broker rejection,
+  quote latency and partial fills are not reproduced. Closed-trade drawdown
+  does not include intratrade losses. No Dhan plan/credentials or original
+  vendor observation has been validated in CI; tests use *offline
+  clearly labeled fixtures*, never fabricated production backtest results.
+- Missing options data means **unscored**, not zero P&L or a successful
+  simulation. Fetch/inspect original Dhan data and lot-size evidence before
+  treating results as decision-grade.
+
+Source specification: https://dhanhq.co/docs/v2/expired-options-data/
+ExpiryCode semantics: https://dhanhq.co/docs/v2/annexure/
+
 ## BANKNIFTY option chain, exchange lots and 20-level live depth
 
 **BANKNIFTY is an index level, not a directly purchasable security.**
