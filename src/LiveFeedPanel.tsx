@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useState} from 'react'
-import {Activity,BookOpen,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
+import {Activity,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
 import './live-feed.css'
 
 type DepthLevel={price:number;quantity:number;orders:number}
@@ -21,10 +21,6 @@ type Signal={ready:boolean;reason?:string;identity:string;direction?:'UP'|'DOWN'
   rsi14?:number|null;ema9?:number|null;ema21?:number|null;
   contiguous_session_bars?:number;rows?:{timestamp_utc:string;close:number}[];
   source_warning?:string}
-type Replay={identity:string;observed_source_bars:number;overall:{
-  scored:number;correct:number;incorrect:number;no_trade:number;unverifiable:number;
-  directional_accuracy:number|null};horizon_minutes:number;source_warning:string;disclaimer:string}
-type SavedBooks={identity:string;sampling:string;snapshots:Book[];historical_download_supported:boolean}
 async function request<T>(path:string,body?:unknown):Promise<T>{
   const options:RequestInit=body===undefined?{}:{
     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}
@@ -43,7 +39,7 @@ const timeIST=(value?:string)=>value?new Date(value).toLocaleTimeString('en-IN',
   {timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—'
 const isExactDepth=(value:string)=>/^NSE_(?:EQ|FNO):[0-9]{1,12}$/.test(value)
 
-export default function LiveFeedPanel(){
+export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
   const [feed,setFeed]=useState<Feed|null>(null)
   const [connectedToLocal,setConnectedToLocal]=useState(false)
   const [index,setIndex]=useState<'INDEX:BANKNIFTY'|'INDEX:NIFTY50'>('INDEX:BANKNIFTY')
@@ -58,9 +54,8 @@ export default function LiveFeedPanel(){
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
   const [signal,setSignal]=useState<Signal|null>(null)
-  const [savedBooks,setSavedBooks]=useState<SavedBooks|null>(null)
-  const [replay,setReplay]=useState<Replay|null>(null)
   const [replayHorizon,setReplayHorizon]=useState<'3'|'6'>('6')
+  const [configOpen,setConfigOpen]=useState(false)
   const [now,setNow]=useState(()=>Date.now())
 
   const refresh=useCallback(async()=>{
@@ -129,23 +124,6 @@ export default function LiveFeedPanel(){
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
-  const runReplay=async()=>{
-    if(busy)return
-    setBusy(true);setError('')
-    try{setReplay(await request<Replay>('replay?'+new URLSearchParams({
-      identity:watchedIndex,horizon_minutes:replayHorizon,limit:'1500'})))}
-    catch(e){setError(e instanceof Error?e.message:String(e))}
-    finally{setBusy(false)}
-  }
-  const viewBooks=async()=>{
-    const key=feed?.depth_identity||depthIdentity.trim().toUpperCase()
-    if(!isExactDepth(key)){setError('Select an exact NSE equity or option Security ID first.');return}
-    setBusy(true);setError('')
-    try{setSavedBooks(await request<SavedBooks>('depth-history?'+
-      new URLSearchParams({identity:key,limit:'150'})))}
-    catch(e){setError(e instanceof Error?e.message:String(e))}
-    finally{setBusy(false)}
-  }
   const quote=feed?.quotes?.[watchedIndex]
   const optionQuote=feed?.depth_identity?feed.quotes?.[feed.depth_identity]:undefined
   const liveBook=feed?.latest_book
@@ -176,7 +154,29 @@ export default function LiveFeedPanel(){
     {feed?.index_packet_note&&!livePrice&&<p className="tc-warning" role="status">
       Broker index packet not supported by the published binary layout · {feed.unsupported_index_packets} observed.
       {' '}{feed.index_packet_note}</p>}
-    {!feed?.active?<div className="lf-start-form">
+    <div className="lf-cards">
+      <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
+        <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':
+          'Waiting for fresh Dhan ticker data'}</small></div>
+      <div className="lf-stat"><span>Source age</span><strong>{quoteAge===null?'—':fmt(quoteAge,1)+' s'}</strong>
+        <small>{livePrice?'Received from authenticated Dhan feed':'Stale or unverified'}</small></div>
+      <div className="lf-stat"><span>Next {replayHorizon} min index direction</span><strong className={hasSignal?'lf-good':'lf-neutral'}>
+        {hasSignal?(signal?.direction==='UP'?'UP':signal?.direction==='DOWN'?'DOWN':'NO TRADE'):'NOT READY'}</strong>
+        <small>{signal?.contiguous_session_bars??0} consecutive completed observed one-minute bars · minimum 30</small></div>
+      <div className="lf-stat"><span>Depth best bid / ask</span><strong>{bookFresh?
+        '₹'+fmt(liveBook?.best_bid)+' / ₹'+fmt(liveBook?.best_ask):'—'}</strong>
+        <small>{bookFresh?'Original paired 20-level book':'No fresh NSE depth snapshot'}</small></div>
+    </div>
+
+    {!feed?.active&&<div className="lf-connect-block">
+      <div><strong>Real-time feed is stopped</strong><p>Index signals and 20-level depth require original broker packets. Historical analysis remains separate and available at any time.</p></div>
+      <button type="button" onClick={()=>setConfigOpen(v=>!v)}>{configOpen?'Close configuration':'Configure live feed'}</button>
+    </div>}
+    {!feed?.active&&feed&&!feed.client_id_configured&&<div className="lf-connect-warning" role="status">
+      <span>Add your Dhan client ID and token in Connections before starting a stream.</span>
+      {onOpenSetup&&<button type="button" onClick={onOpenSetup}>Open Connections</button>}
+    </div>}
+    {!feed?.active&&configOpen&&<div className="lf-start-form">
       <label>Analyze index<select aria-label="Live underlying index" value={index}
         onChange={e=>setIndex(e.target.value as typeof index)}>
         <option value="INDEX:BANKNIFTY">BANKNIFTY · spot index</option>
@@ -208,25 +208,13 @@ export default function LiveFeedPanel(){
         disabled={busy||!consent||Boolean(depthIdentity.trim()&&!isExactDepth(depthIdentity.trim()))}>
         <Activity size={16}/>{busy?'Connecting':'Start live feed'}
       </button>
-    </div>:<div className="lf-live-actions"><div><strong>Running: {watchedIndex.replace('INDEX:','')}</strong>
+    </div>}
+    {feed?.active&&<div className="lf-live-actions"><div><strong>Running: {watchedIndex.replace('INDEX:','')}</strong>
       <small>20-level target: {configuredDepth||'None selected · index prices only'}</small>
       <small>Index packets {fmt(feed.ticks,0)} · depth snapshots {fmt(feed.depth_snapshots,0)} · saved samples {fmt(feed.saved_books,0)}</small></div>
       <button type="button" onClick={()=>void stop()} disabled={busy}><Square size={15}/> Stop streams</button>
       <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Check connection</button>
     </div>}
-    <div className="lf-cards">
-      <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
-        <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':
-          'Waiting for fresh Dhan ticker data'}</small></div>
-      <div className="lf-stat"><span>Source age</span><strong>{quoteAge===null?'—':fmt(quoteAge,1)+' s'}</strong>
-        <small>{livePrice?'Received from authenticated Dhan feed':'Stale or unverified'}</small></div>
-      <div className="lf-stat"><span>Next 3/6m index direction</span><strong className={hasSignal?'lf-good':'lf-neutral'}>
-        {hasSignal?(signal?.direction==='UP'?'UP':signal?.direction==='DOWN'?'DOWN':'NO TRADE'):'NOT READY'}</strong>
-        <small>{signal?.contiguous_session_bars??0} consecutive completed observed one-minute bars · minimum 30</small></div>
-      <div className="lf-stat"><span>Depth best bid / ask</span><strong>{bookFresh?
-        '₹'+fmt(liveBook?.best_bid)+' / ₹'+fmt(liveBook?.best_ask):'—'}</strong>
-        <small>{bookFresh?'Original paired 20-level book':'No fresh NSE depth snapshot'}</small></div>
-    </div>
     <div className="lf-depth-summary">
       <div className="tc-panel-title"><strong>20-level market depth · {configuredDepth||'select a stock / option'}</strong>
         <span>20 bids + 20 asks, original NSE equity/derivative packet pairs</span></div>
@@ -247,34 +235,11 @@ export default function LiveFeedPanel(){
           You may need full-market-depth entitlement and an active NSE_EQ or NSE_FNO contract.</p>}
       <p className="tc-muted">20-level depth is NOT available on IDX_I itself. Depth is sampled for storage at up to one observed pair per second, while the live screen uses the newest observed packet. No historical book is inferred from candles.</p>
     </div>
-    <div className="lf-replay">
-      <div className="tc-panel-title"><strong><BookOpen size={16}/> Live capture becomes historical research</strong>
-        <span>Original observations, not simulated option executions</span></div>
-      <div className="lf-replay-actions"><label>Horizon <select value={replayHorizon}
-          onChange={e=>setReplayHorizon(e.target.value as typeof replayHorizon)}>
-          <option value="3">3 minutes</option><option value="6">6 minutes</option></select></label>
-        <button type="button" onClick={()=>void record()} disabled={!hasSignal||busy}>Record live prediction</button>
-        <button type="button" onClick={()=>void runReplay()} disabled={busy}>Replay saved live minutes</button>
-        <button type="button" onClick={()=>void viewBooks()} disabled={busy}>Inspect stored 20-level books</button>
-      </div>
-      {replay&&<div className="lf-meta"><span>Recorded minute bars <b>{replay.observed_source_bars}</b></span>
-        <span>Signals scored <b>{replay.overall.scored}</b></span>
-        <span>Accuracy <b>{replay.overall.directional_accuracy===null?'Insufficient':fmt(replay.overall.directional_accuracy*100,1)+'%'}</b></span>
-        <span>Unverifiable gaps <b>{replay.overall.unverifiable}</b></span></div>}
-      {savedBooks&&<>
-        <p className="tc-confirm">Stored genuine 20-level samples for {savedBooks.identity}: {savedBooks.snapshots.length}.
-          Sampling is at most one original paired snapshot per second. These samples are available on future local sessions.</p>
-        {!!savedBooks.snapshots.length&&<div className="tc-table-scroll lf-history">
-          <table><thead><tr><th>IST observed (local receipt)</th><th>Best bid (₹)</th><th>Best ask (₹)</th>
-          <th>Spread (bps)</th><th>Bid-side depth share (%)</th><th>Full 20+20?</th></tr></thead>
-          <tbody>{savedBooks.snapshots.slice(-40).reverse().map((book,i)=><tr key={book.received_utc+i}>
-            <td>{timeIST(book.received_utc)}</td><td>{fmt(book.best_bid)}</td>
-            <td>{fmt(book.best_ask)}</td><td>{fmt(book.spread_bps)}</td>
-            <td>{fmt((book.imbalance+1)*50,1)}</td><td>{book.full_depth?'Yes':'Incomplete'}</td>
-          </tr>)}</tbody></table>
-        </div>}
-      </>}
-      <p className="tc-muted">The historical BANKNIFTY backtest and research model library remain available below. Live-captured index minute bars and saved 20-level books are additional source-backed views of the same library. No live option P&amp;L is inferred from index direction.</p>
+    <div className="lf-signal-actions">
+      <div><strong>Record prospective index call</strong><p>Only available after genuine fresh Dhan index packets and at least 30 consecutive completed one-minute candles. Results are evaluated against observed future candles.</p></div>
+      <label>Horizon <select value={replayHorizon} onChange={e=>setReplayHorizon(e.target.value as '3'|'6')}>
+        <option value="3">3 minutes</option><option value="6">6 minutes</option></select></label>
+      <button type="button" onClick={()=>void record()} disabled={!hasSignal||busy}>Record {replayHorizon}m prediction</button>
     </div>
     <div className="tc-warning"><ShieldCheck size={14}/> Read-only research. Real-time data requires valid Dhan Data API plus live market/depth permissions. A connected socket is not proof of fresh trades. Any stale feed, absent market data or missing completed candles disables live directional claims. Closing this tab does not stop the local streaming session; clicking Stop or shutting down QuantLab does.</div>
   </section>
