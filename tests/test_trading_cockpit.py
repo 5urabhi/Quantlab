@@ -3,12 +3,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from hashlib import sha256
+import json
+import csv
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from workstation_api import service, trading_cockpit
+from workstation_api import service, trading_cockpit, cockpit_sources, manual_trade_journal
 from workstation_api.app import app
 
 
@@ -91,6 +94,110 @@ class TradingCockpitTests(unittest.TestCase):
         self.assertEqual(len(data["rows"]), 45)
         self.assertEqual(data["model_version"], trading_cockpit.VERSION)
         self.assertEqual(data["quote_mode"], "HISTORICAL_ONLY")
+
+
+    def test_horizon_requires_exact_original_minute(self):
+        observed = candles()
+        event = trading_cockpit.record(trading_cockpit.snapshot(
+            "NSE_EQ:1001", observed, now=START + timedelta(minutes=45)), 3)
+        self.assertEqual(event["evaluation"], "PENDING")
+        # Prediction bar 44m + 3m => 47m. No observation at 47m;
+        # 48m exists, but must not stand in for the missing horizon bar.
+        next_rows = [row for row in candles(50)
+                     if row["timestamp_utc"] !=
+                     (START + timedelta(minutes=47)).isoformat()]
+        scored = trading_cockpit.evaluate("NSE_EQ:1001", next_rows)
+        self.assertEqual(scored["predictions"][0]["evaluation"], "UNVERIFIABLE_GAP")
+
+    def test_session_boundary_suppresses_signal_and_replay_reports_no_trade(self):
+        rows = candles(50)
+        second = candles(10, start=START+timedelta(days=1), drift=1)
+        for row in second:
+            row["session_ist"] = "2026-11-19"
+        snapshot = trading_cockpit.snapshot(
+            "NSE_EQ:1001", rows+second,
+            now=START+timedelta(days=1,minutes=10))
+        self.assertEqual(snapshot["contiguous_session_bars"], 10)
+        self.assertEqual(snapshot["direction"], "NO_TRADE")
+        self.assertEqual(snapshot["signal_suppression"], "insufficient_consecutive_bars")
+        replay = trading_cockpit.historical_replay("NSE_EQ:1001", rows, 6)
+        self.assertEqual(replay["mode"], "RETROSPECTIVE_HISTORICAL_RULE_REPLAY")
+        self.assertEqual(replay["overall"]["scored"], 0)
+        self.assertGreater(replay["overall"]["no_trade"], 0)
+
+    def test_day_report_counts_prospective_no_trades_separately(self):
+        observed = trading_cockpit.snapshot(
+            "NSE_EQ:1001", candles(), now=START + timedelta(minutes=45))
+        trading_cockpit.record(observed, 3)
+        trading_cockpit.record(observed, 6)
+        report = trading_cockpit.day_report("NSE_EQ:1001", "2026-11-18")
+        self.assertEqual(report["overall"]["total"], 2)
+        self.assertEqual(report["overall"]["pending"], 2)
+        self.assertIsNone(report["overall"]["directional_accuracy"])
+        self.assertEqual(report["days"][0]["session_ist"], "2026-11-18")
+        with self.assertRaisesRegex(ValueError, "valid YYYY-MM-DD"):
+            trading_cockpit.day_report("NSE_EQ:1001", "wrong")
+
+    def test_original_index_spot_sha_and_manifest_are_required(self):
+        batch = service.DATA / "dhan" / "index_spot" / "batch_000000000000abcd"
+        batch.mkdir(parents=True)
+        source = batch / "BANKNIFTY_INDEX_intraday_1m.csv"
+        rows = candles(40)
+        with source.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=[
+                "datetime", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({"datetime": row["timestamp_utc"], **{
+                    k:row[k] for k in ("open","high","low","close","volume")}})
+        meta = {
+            "source":"DhanHQ REST API v2", "interval_minutes":1,
+            "retrieved_utc":"2026-11-18T12:00:00+00:00",
+            "row_count":40, "sha256":sha256(source.read_bytes()).hexdigest(),
+            "instrument":{"label":"BANKNIFTY_INDEX","exchange_segment":"IDX_I",
+                          "instrument":"INDEX","security_id":"25"},
+        }
+        manifest = batch / "BANKNIFTY_INDEX_intraday_1m.manifest.json"
+        manifest.write_text(json.dumps(meta))
+        self.assertTrue(next(x for x in cockpit_sources.catalog()["instruments"]
+                             if x["identity"]=="INDEX:BANKNIFTY")["ready"])
+        response = cockpit_sources.series("INDEX:BANKNIFTY", limit=30)
+        self.assertEqual(response["rows"][-1]["close"], rows[-1]["close"])
+        self.assertEqual(len(response["rows"]), 30)
+        self.assertEqual(response["basis"], "original_Dhan_IDX_I_unadjusted_spot_index")
+        source.write_text(source.read_text().replace("62000", "62001", 1))
+        with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+            cockpit_sources.series("INDEX:BANKNIFTY")
+
+    def test_manual_option_journal_is_explicitly_unverified_and_immutable(self):
+        entry = manual_trade_journal.enter("BANKNIFTY23NOV61900PE", "PUT", 90, 460)
+        self.assertEqual(entry["status"], "OPEN")
+        self.assertIsNone(entry["net_pnl_inr"])
+        closed = manual_trade_journal.exit_trade(entry["id"], 300, fees_inr=40)
+        self.assertEqual(closed["status"], "CLOSED")
+        self.assertEqual(closed["net_pnl_inr"], -14440)
+        self.assertIn("UNVERIFIED", closed["data_quality"])
+        with self.assertRaisesRegex(ValueError, "already closed"):
+            manual_trade_journal.exit_trade(entry["id"], 500)
+        daily = manual_trade_journal.list_trades()
+        self.assertEqual(daily["summary"]["closed"], 1)
+        self.assertEqual(daily["summary"]["closed_net_pnl_inr"], -14440)
+
+    def test_trade_journal_endpoints_never_accept_order_requests(self):
+        with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+            payload={"symbol":"BANKNIFTY23NOV61900PE","direction":"PUT",
+                     "quantity":90,"entry_price":460}
+            result=client.post("/api/trading-cockpit/trades", json=payload)
+            self.assertEqual(result.status_code, 200, result.text)
+            trade_id=result.json()["id"]
+            bad=client.post("/api/trading-cockpit/trades",
+                            json={**payload,"submit_order":True})
+            self.assertEqual(bad.status_code,422)
+            outcome=client.post(f"/api/trading-cockpit/trades/{trade_id}/exit",
+                                json={"exit_price":300,"fees_inr":50})
+            self.assertEqual(outcome.status_code,200,outcome.text)
+            self.assertEqual(outcome.json()["net_pnl_inr"], -14450)
+
 
 
 if __name__ == "__main__":
