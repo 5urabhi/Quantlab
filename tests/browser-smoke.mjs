@@ -107,6 +107,56 @@ try {
     await page.getByRole('tabpanel',{name:'Live Trading'}).waitFor()
     await screenshot('01-trading-copilot-live-v4')
     assert.equal(await page.locator('.tc-cockpit-v4>section[role="tabpanel"]').count(),1)
+    // The option chain is always a read-only snapshot, never an assumed
+    // tradable index or a real option fill. Exercise with explicit UI fixtures.
+    await page.route('**/api/trading-cockpit/options/expiries',route=>route.fulfill({
+      status:200,contentType:'application/json',
+      body:JSON.stringify({underlying:'BANKNIFTY',expiries:['2026-11-23'],
+        nearest_expiry:'2026-11-23',received_utc:new Date().toISOString(),
+        source:'Dhan v2 original expirylist',read_only:true,cache_hit:false}),
+    }))
+    await page.route('**/api/trading-cockpit/options/chain?*',route=>route.fulfill({
+      status:200,contentType:'application/json',
+      body:JSON.stringify({
+        underlying:'BANKNIFTY',underlying_identity:'INDEX:BANKNIFTY',
+        underlying_spot:62950,expiry:'2026-11-23',
+        received_utc:new Date().toISOString(),
+        source:'Dhan v2 read-only optionchain snapshot',
+        source_clock:'local_received_utc_not_exchange_quote_time',
+        not_live_stream:true,market_master_fresh:true,
+        master_message:'Official local master',master_age_hours:0,
+        read_only:true,quote_count:1,warning:'Snapshot only',cache_hit:false,
+        contracts:[{identity:'NSE_FNO:58742',symbol:'BANKNIFTY23NOV63000CE',
+          strike:63000,expiry:'2026-11-23',option_type:'CE',lot_size:30,
+          contract_master_verified:true,bid:299,ask:300,ltp:299.5,
+          top_bid_quantity:150,top_ask_quantity:150,oi:10000,volume:4000,
+          iv:13,delta:.5,theta:-12,gamma:.002,vega:10,
+          quote_valid:true,one_lot_ask_inr:9000,
+          one_lot_bid_inr:8970,spread_inr_per_lot:30}],
+      }),
+    }))
+    const optionPanel=page.getByRole('region',{name:'BANKNIFTY option chain and lot calculator'})
+    await optionPanel.getByRole('button',{name:'Refresh expiry list'}).click()
+    await optionPanel.getByRole('radio',{name:'Select 63000 CE'}).check()
+    await optionPanel.getByRole('spinbutton',{name:'BANKNIFTY option lots'}).fill('2')
+    await optionPanel.getByText('₹18,000.00',{exact:true}).waitFor()
+    await optionPanel.getByRole('button',{name:'Use for live 20-level depth'}).click()
+    await page.getByRole('textbox',{name:'Exact depth instrument'}).waitFor()
+    assert.equal(await page.getByRole('textbox',{name:'Exact depth instrument'}).inputValue(),
+      'NSE_FNO:58742')
+    await screenshot('01-trading-copilot-option-chain-lots-v7')
+    await optionPanel.getByRole('button',{name:'Prepare manual journal entry'}).click()
+    await page.getByRole('tabpanel',{name:'Trade Journal'}).waitFor()
+    assert.equal(await page.getByRole('textbox',{name:'Exact contract symbol'}).inputValue(),
+      'BANKNIFTY23NOV63000CE')
+    assert.equal(await page.getByRole('spinbutton',{name:'Trade quantity'}).inputValue(),
+      '60')
+    assert.equal(await page.getByRole('spinbutton',{name:'Trade entry premium'}).inputValue(),
+      '', 'Dhan best ask is not an actual broker fill')
+    await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
+      .getByRole('tab',{name:'Live Trading'}).click()
+    await page.unroute('**/api/trading-cockpit/options/expiries')
+    await page.unroute('**/api/trading-cockpit/options/chain?*')
     await modes.getByRole('tab',{name:'Market Replay'}).click()
     await page.getByRole('tabpanel',{name:'Market Replay'}).waitFor()
     await page.getByRole('tablist',{name:'Market replay views'})
