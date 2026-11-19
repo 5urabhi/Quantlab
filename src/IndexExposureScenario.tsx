@@ -152,7 +152,9 @@ export default function IndexExposureScenario({scenario}:{scenario:ScenarioResul
       <summary>See {scenario.latest_trades.length} latest complete entries and exits</summary>
       <div className="tc-table-scroll"><table><thead><tr>
         <th>Signal IST</th><th>Direction</th><th>Entry (IST / index)</th>
-        <th>Exit (IST / index)</th><th>Index move</th><th>Scenario return</th>
+        <th>Exit (IST / index)</th><th>Index move (points)</th>
+        <th>Index move (%)</th><th>Scenario return</th>
+        <th>Gross ₹</th><th>Assumed cost ₹</th>
         <th>Illustrative net ₹</th><th>Balance ₹</th></tr></thead>
         <tbody>{[...scenario.latest_trades].reverse().map(t=><tr key={t.signal_utc}>
           <td>{clock(t.signal_utc)}</td>
@@ -161,8 +163,12 @@ export default function IndexExposureScenario({scenario}:{scenario:ScenarioResul
             {t.direction==='UP'?'Long proxy':'Short proxy'}</span></td>
           <td>{clock(t.entry_utc)} · {pts(t.entry_points)}</td>
           <td>{clock(t.exit_utc)} · {pts(t.exit_points)}</td>
+          <td className={t.exit_points>=t.entry_points?'tc-illustrative-positive':'tc-illustrative-negative'}>
+            {t.exit_points>=t.entry_points?'+':''}{pts(t.exit_points-t.entry_points)}</td>
           <td>{t.index_move_pct>=0?'+':''}{pct(t.index_move_pct)}</td>
           <td>{t.exposure_return_pct>=0?'+':''}{pct(t.exposure_return_pct)}</td>
+          <td>{t.gross_pnl_inr>=0?'+':''}{cash(t.gross_pnl_inr)}</td>
+          <td>{cash(t.illustrative_cost_inr)}</td>
           <td className={t.net_pnl_inr>=0?'tc-illustrative-positive':'tc-illustrative-negative'}>
             {t.net_pnl_inr>=0?'+':''}{cash(t.net_pnl_inr)}</td>
           <td>{cash(t.equity_inr)}</td>
