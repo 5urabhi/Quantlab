@@ -1,5 +1,5 @@
 import {useEffect,useMemo,useState} from 'react'
-import {CalendarDays,ChevronLeft,ChevronRight,Pause,Play,RefreshCw,RotateCcw,Database,AlertTriangle} from 'lucide-react'
+import {CalendarDays,ChevronLeft,ChevronRight,Pause,Play,RotateCcw,Database,AlertTriangle} from 'lucide-react'
 import CandleChart,{type Candle} from './TradingCandleChart'
 import {marketApi,readableError,MarketApiError} from './tradingCockpitApi'
 
@@ -110,7 +110,7 @@ export default function MarketReplayPanel({instruments,onOpenData}:{
           series?'Only original saved candles are shown': 'No fabricated price history'}</small>
       </div>
     </div>
-    {error&&<div className="tc-api-help" role="alert">
+    {error!==null&&<div className="tc-api-help" role="alert">
       <AlertTriangle size={21}/><div><strong>Unable to open this historical source</strong>
         <p>{readableError(error)}</p>
         <small>{error instanceof MarketApiError?error.hint:
