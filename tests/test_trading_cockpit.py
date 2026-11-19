@@ -147,6 +147,70 @@ class TradingCockpitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "valid YYYY-MM-DD"):
             trading_cockpit.day_report("NSE_EQ:1001", "wrong")
 
+    def test_recorded_signal_reports_do_not_mix_three_and_six_minutes(self):
+        original = trading_cockpit.snapshot(
+            "INDEX:BANKNIFTY", candles(),
+            now=START + timedelta(minutes=45))
+        three = trading_cockpit.record(original, 3)
+        six = trading_cockpit.record(original, 6)
+        self.assertNotEqual(three["id"], six["id"])
+        overall = trading_cockpit.day_report("INDEX:BANKNIFTY")
+        only_three = trading_cockpit.day_report(
+            "INDEX:BANKNIFTY", horizon_minutes=3)
+        only_six = trading_cockpit.day_report(
+            "INDEX:BANKNIFTY", horizon_minutes=6)
+        self.assertEqual(overall["overall"]["total"], 2)
+        self.assertEqual(only_three["overall"]["total"], 1)
+        self.assertEqual(only_six["overall"]["total"], 1)
+        self.assertEqual(only_three["horizon_minutes"], 3)
+        self.assertEqual(only_six["horizon_minutes"], 6)
+        self.assertEqual(only_three["overall"]["pending"], 1)
+        self.assertEqual(only_six["overall"]["pending"], 1)
+        self.assertEqual(only_three["overall"]["up_signals"], 0)
+        self.assertEqual(only_three["overall"]["down_signals"], 0)
+        self.assertEqual(only_three["overall"]["local_observed"], 1)
+        self.assertEqual(only_six["overall"]["live_observed"], 0)
+        with self.assertRaisesRegex(ValueError, "3- or 6-minute"):
+            trading_cockpit.day_report("INDEX:BANKNIFTY", horizon_minutes=5)
+        with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+            report = client.get("/api/trading-cockpit/report", params={
+                "identity": "INDEX:BANKNIFTY", "horizon_minutes": 3})
+            self.assertEqual(report.status_code, 200, report.text)
+            self.assertEqual(report.json()["overall"]["total"], 1)
+            invalid = client.get("/api/trading-cockpit/report", params={
+                "identity": "INDEX:BANKNIFTY", "horizon_minutes": 4})
+            self.assertEqual(invalid.status_code, 422)
+
+    def test_historical_banknifty_directions_are_scored_after_exact_horizon(self):
+        original = candles(45)
+        timestamps = [row["timestamp_utc"] for row in original]
+        seen = []
+        def only_past_rows(identity, rows, **kwargs):
+            self.assertEqual(identity, "INDEX:BANKNIFTY")
+            self.assertEqual(rows[-1]["timestamp_utc"],
+                             timestamps[len(seen) + 29])
+            self.assertNotIn(timestamps[-1], [row["timestamp_utc"] for row in rows[:-1]])
+            seen.append(rows[-1]["timestamp_utc"])
+            return {"direction": "UP"}
+        with patch.object(trading_cockpit, "snapshot", side_effect=only_past_rows):
+            history = trading_cockpit.historical_replay(
+                "INDEX:BANKNIFTY", original, horizon_minutes=3)
+        self.assertEqual(history["overall"]["total"], 16)
+        self.assertEqual(history["overall"]["correct"], 13)
+        self.assertEqual(history["overall"]["incorrect"], 0)
+        self.assertEqual(history["overall"]["unverifiable"], 3)
+        self.assertEqual(history["overall"]["up_signals"], 16)
+        self.assertEqual(history["overall"]["actual_up"], 13)
+        self.assertEqual(history["overall"]["directional_accuracy"], 1)
+        first = history["latest_events"][0]
+        self.assertEqual(first["horizon_minutes"], 3)
+        self.assertEqual(first["evaluation"], "CORRECT")
+        self.assertEqual(first["actual_direction"], "UP")
+        self.assertEqual(first["reference_close"], original[29]["close"])
+        self.assertEqual(first["observed_close"], original[32]["close"])
+        self.assertGreater(first["movement_bps"], 0)
+        self.assertEqual(history["mode"], "RETROSPECTIVE_HISTORICAL_RULE_REPLAY")
+
     def test_original_index_spot_sha_and_manifest_are_required(self):
         batch = service.DATA / "dhan" / "index_spot" / "batch_000000000000abcd"
         batch.mkdir(parents=True)
