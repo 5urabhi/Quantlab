@@ -24,7 +24,7 @@ import struct
 import time
 import uuid
 
-from . import dhan_workspace, index_spot, market_depth, service, shared_market_data
+from . import dhan_workspace, market_depth, shared_market_data
 
 IST = ZoneInfo("Asia/Kolkata")
 LOCK = RLock()
@@ -61,6 +61,10 @@ def _init_db() -> None:
     with DB_SETUP_LOCK:
         if DB_INITIALIZED and shared_market_data.database_path().is_file():
             return
+        # A live-first installation still needs the canonical instrument/
+        # daily tables that the Market Library expects on its first visit.
+        canonical = shared_market_data._connect()
+        canonical.close()
         with _database() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS live_ticks(
@@ -480,9 +484,14 @@ def start(index_identity: str, depth_identity: str = "", auto_audit: bool = Fals
             workers.append(Thread(target=_depth_worker,args=(STOP,depth_identity,depth_url),
                                   daemon=True,name="quantlab-dhan-depth20"))
         WORKERS=workers
-    _init_db()
-    for worker in workers:
-        worker.start()
+    try:
+        _init_db()
+        for worker in workers:
+            worker.start()
+    except (OSError,sqlite3.Error,RuntimeError):
+        STOP.set()
+        _update(active=False,ticker_connection="storage_or_thread_error")
+        raise ValueError("Unable to initialize local live capture storage or workers") from None
     return status()
 
 
@@ -506,6 +515,10 @@ def events():
             CHANGED.wait_for(lambda: ACTIVE.get("revision",0)!=last,timeout=10)
             last=ACTIVE.get("revision",0)
         yield "data: "+json.dumps(status(),ensure_ascii=True,allow_nan=False)+"\n\n"
+        # A depth subscription can receive hundreds of updates per second;
+        # bounded SSE prevents browser re-render storms while source storage
+        # and broker receive loops remain independent.
+        time.sleep(0.25)
 
 
 def latest_depth_history(identity: str, limit: int = 150) -> dict:
