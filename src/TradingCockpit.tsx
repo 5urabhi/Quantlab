@@ -9,14 +9,12 @@ import './trading-cockpit.css'
 import LiveFeedPanel from './LiveFeedPanel'
 
 type Entry = {id:string;created_utc:string;identity:string;bar_utc:string;direction:string;reference_close:number;horizon_minutes:number;quote_mode:string;evaluation:string;observed_close:number|null;actual_direction:string|null}
-type Snapshot = {identity:string;model_version:string;horizon_minutes:number;quote_mode:string;last_observed_utc:string;source_age_seconds:number;direction:'UP'|'DOWN'|'NO_TRADE';confidence:null;validation:string;latest_close:number;rsi14:number|null;atr14:number|null;ema9:number|null;ema21:number|null;rows:Candle[];note:string;source_warning:string;has_more:boolean}
 type SourceInstrument = {identity:string;display_name?:string;asset_class?:string;ready:boolean;state:string;needs_preparation?:boolean;needs_download?:boolean}
 type Catalog = {instruments:SourceInstrument[];prepared_equities:number;downloaded_equities_pending_preparation:number}
 type SourceJob = {id:string;status:string;stage?:string;percent?:number;error?:string;result?:{status?:string;prepared_count?:number;blocked_count?:number;checked?:number;rows?:number;remaining_unselected?:number}}
 type History = {predictions:Entry[];summary:{evaluated_directions:number;correct_directions:number;direction_accuracy:number|null;qualification:string}}
 type DaySummary = {session_ist:string;total:number;scored:number;correct:number;incorrect:number;pending:number;no_trade:number;flat:number;unverifiable:number;directional_accuracy:number|null}
 type Report = {days:DaySummary[];overall:Omit<DaySummary,'session_ist'>;source:string;disclaimer:string;truncated:boolean}
-type Replay = {mode:string;identity:string;model_version:string;horizon_minutes:number;observed_source_bars:number;overall:Omit<DaySummary,'session_ist'>;days:DaySummary[];has_more_history:boolean;source_warning:string;disclaimer:string}
 type DhanCheck = {ok:boolean;code:string;message:string;token_present:boolean;token_valid:boolean|null;data_plan_active:boolean|null;client_id_configured?:boolean;expires_at_utc?:string|null;seconds_remaining?:number|null}
 type DhanConnect = {connected:boolean;message:string}
 type CockpitView = 'live'|'replay'|'strategy'|'journal'|'setup'
@@ -353,7 +351,35 @@ export default function TradingCockpit(){
         <button role="tab" type="button" aria-selected={journalView==='accuracy'} onClick={()=>setJournalView('accuracy')}>Prediction accuracy</button>
       </nav>
       {error&&<div role="alert" className="tc-error">{error}</div>}
-      {journalView==='trades'&&<>{journal}</>}
+      {journalView==='trades'&&<>    <section className="tc-panel tc-ledger" aria-label="Manual options trade journal">
+      <div className="tc-panel-title"><strong>Manual options journal · six-minute discipline</strong><span>Read-only research · you type actual prices</span></div>
+      <p className="tc-muted">Enter a new trade at the time you actually fill it. QuantLab stores server receipt times and computes P&amp;L only after you report an exit. The app cannot verify your broker fills, enforce a stop, or place orders.</p>
+      <p className="tc-confirm">Signal input: BANKNIFTY spot candles only. You choose the exact CE/PE contract, expiry, strike and actual filled premium in your broker. The signal does not forecast the option premium.</p>
+      <form className="tc-trade-form" onSubmit={event=>void recordEntry(event)}>
+        <label>Exact contract symbol<input required maxLength={48} value={optionSymbol} placeholder="BANKNIFTY23NOV61900PE" onChange={event=>setOptionSymbol(event.target.value.toUpperCase())}/></label>
+        <label>Type<select value={optionSide} onChange={event=>setOptionSide(event.target.value as 'CALL'|'PUT')}><option value="PUT">Long put</option><option value="CALL">Long call</option></select></label>
+        <label>Quantity<input aria-label="Trade quantity" required type="number" min="1" max="1000000" step="1" value={optionQty} onChange={event=>setOptionQty(event.target.value)}/></label>
+        <label>Entry premium (₹)<input aria-label="Trade entry premium" required type="number" min="0.01" step="0.01" value={optionEntry} onChange={event=>setOptionEntry(event.target.value)}/></label>
+        <label>Note (optional)<input maxLength={250} value={tradeNote} onChange={event=>setTradeNote(event.target.value)}/></label>
+        <button className="tc-primary" disabled={journalBusy} type="submit">Record manual entry + start six-minute timer</button>
+      </form>
+      <div className="tc-ledger-summary"><span>Open positions <strong>{journal?.summary.open??0}</strong></span><span>Closed trades <strong>{journal?.summary.closed??0}</strong></span><span>Net realized from entered fills <strong>₹{fmt(journal?.summary.closed_net_pnl_inr)}</strong></span><span>Over six minutes <strong>{journal?.summary.holding_violations??0}</strong></span></div>
+      {journal?.trades.some(trade=>trade.status==='OPEN')&&<div className="tc-trade-active"><strong>Currently open (manual records)</strong>
+        {journal.trades.filter(trade=>trade.status==='OPEN').map(trade=><div className="tc-open-trade" key={trade.id}>
+          <span>{trade.symbol} · {trade.direction} · {trade.quantity} × ₹{fmt(trade.entry_price)}</span>
+          <span className={now-Date.parse(trade.entry_recorded_utc)>360000?'tc-overdue':'tc-muted'}>Elapsed {Math.floor(Math.max(0,now-Date.parse(trade.entry_recorded_utc))/60000)}m</span>
+          <button onClick={()=>{setClosingId(trade.id);setExitPremium('')}} disabled={journalBusy}>Record exit</button></div>)}
+      </div>}
+      {closingId&&<form className="tc-trade-form tc-exit" onSubmit={event=>void recordExit(event)}>
+        <strong>Record exit for {journal?.trades.find(trade=>trade.id===closingId)?.symbol}</strong>
+        <label>Exit premium (₹)<input required aria-label="Exit premium" type="number" min="0" step="0.01" value={exitPremium} onChange={event=>setExitPremium(event.target.value)}/></label>
+        <label>Total charges (₹)<input aria-label="Total charges" required type="number" min="0" step="0.01" value={fees} onChange={event=>setFees(event.target.value)}/></label>
+        <button type="submit" className="tc-primary" disabled={journalBusy}>Close manual record</button>
+        <button type="button" onClick={()=>setClosingId('')}>Cancel</button>
+      </form>}
+      <div className="tc-table-scroll"><table><thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Holding</th><th>Over 6m?</th><th>Net P&amp;L</th></tr></thead><tbody>{journal?.trades.map(trade=><tr key={trade.id}><td>{trade.symbol}</td><td>{trade.status}</td><td>{trade.direction}</td><td>{trade.quantity}</td><td>₹{fmt(trade.entry_price)}</td><td>{fmt(trade.exit_price)}</td><td>{Math.floor(trade.holding_seconds/60)}m</td><td>{trade.holding_rule_exceeded?'YES':'No'}</td><td>{trade.net_pnl_inr===null?'—':'₹'+fmt(trade.net_pnl_inr)}</td></tr>)}{!journal?.trades.length&&<tr><td colSpan={9}>No manual positions recorded.</td></tr>}</tbody></table></div>
+      <p className="tc-warning">Unverified manual entries: the time starts when this local server receives your request, not the broker execution timestamp. This is a discipline journal, not an account reconciliation or evidence of actual fills.</p>
+    </section></>}
       {journalView==='accuracy'&&<>
         <div className="tc-toolbar tc-journal-source"><label>Prediction ledger index
           <select aria-label="Prediction ledger index" value={journalIdentity} onChange={event=>{
@@ -365,7 +391,16 @@ export default function TradingCockpit(){
           <button type="button" onClick={()=>void loadPredictionLedger()}><RefreshCw size={15}/> Refresh</button>
           <span className="tc-muted">Existing prospective records; independent of historical chart selection.</span>
         </div>
-        {accuracy}
+            <section className="tc-panel tc-ledger"><div className="tc-panel-title"><strong>Permanent prediction ledger</strong><button onClick={()=>void evaluateJournal()} disabled={busy}>Evaluate saved live outcomes</button></div>
+      <div className="tc-ledger-summary"><span>Scored directions <strong>{summary?.evaluated_directions??0}</strong></span><span>Correct directions <strong>{summary?.correct_directions??0}</strong></span><span>Directional accuracy <strong>{summary?.direction_accuracy===null||summary?.direction_accuracy===undefined?'Not enough observations':(summary.direction_accuracy*100).toFixed(1)+'%'}</strong></span></div>
+      {recordMessage&&<p role="status" className="tc-confirm">{recordMessage}</p>}
+      <p className="tc-muted">Directional accuracy excludes no-trade decisions, flat moves and unverifiable source gaps. No historical option P&L is inferred from spot candles.</p>
+      {monitor&&<p className="tc-confirm">Auto-audit enabled in this browser tab. Every 15 seconds QuantLab records both 3/6-minute calls only from freshly completed original source bars and scores due outcomes. Closing the page stops monitoring. A current local candle alone is not evidence of a streaming broker connection.</p>}
+      <div className="tc-report-title"><h3>End-of-day accuracy · prospective ledger only</h3><span className="tc-muted">No option trade P&amp;L or validated alpha</span></div>
+      <div className="tc-ledger-summary"><span>Logged decisions <strong>{journalReport?.overall.total??0}</strong></span><span>Direction score <strong>{journalReport?.overall.directional_accuracy===null||journalReport?.overall.directional_accuracy===undefined?'—':(journalReport.overall.directional_accuracy*100).toFixed(1)+'%'}</strong></span><span>Pending <strong>{journalReport?.overall.pending??0}</strong></span><span>Source gaps <strong>{journalReport?.overall.unverifiable??0}</strong></span></div>
+      <div className="tc-table-scroll"><table><thead><tr><th>Session IST</th><th>Calls</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Pending</th><th>Gaps</th><th>Accuracy</th></tr></thead><tbody>{journalReport?.days.map(day=><tr key={day.session_ist}><td>{day.session_ist}</td><td>{day.total}</td><td>{day.scored}</td><td>{day.correct}</td><td>{day.incorrect}</td><td>{day.no_trade}</td><td>{day.pending}</td><td>{day.unverifiable}</td><td>{day.directional_accuracy===null?'—':(day.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}{!journalReport?.days.length&&<tr><td colSpan={9}>No prospective logged decisions yet.</td></tr>}</tbody></table></div>
+      <div className="tc-table-scroll"><table><thead><tr><th>Recorded UTC</th><th>Source bar UTC</th><th>Signal</th><th>Horizon</th><th>Reference</th><th>Observed</th><th>Outcome</th></tr></thead><tbody>{journalHistory?.predictions.map(x=><tr key={x.id}><td>{x.created_utc.slice(0,19)}</td><td>{x.bar_utc.slice(0,19)}</td><td>{x.direction}</td><td>{x.horizon_minutes}m</td><td>{fmt(x.reference_close)}</td><td>{fmt(x.observed_close)}</td><td>{x.evaluation.replaceAll('_',' ')}</td></tr>)}{!journalHistory?.predictions.length&&<tr><td colSpan={7}>No prospective predictions logged for this instrument yet.</td></tr>}</tbody></table></div>
+    </section>
       </>}
     </section>}
 
