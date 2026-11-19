@@ -259,7 +259,8 @@ def list_predictions(identity: str = "", limit: int = 50) -> dict:
                         "qualification": "In-sample operational scoreboard, not out-of-sample strategy evidence"}}
 
 
-def evaluate(identity: str, source_rows: list[dict]) -> dict:
+def evaluate(identity: str, source_rows: list[dict], *,
+             source_modes: frozenset[str] | None = None) -> dict:
     """Resolve only due horizons backed by observed same-session minute bars.
 
     Pending fields never change. When a later session exists but the horizon
@@ -271,6 +272,11 @@ def evaluate(identity: str, source_rows: list[dict]) -> dict:
             WHERE identity=? AND evaluation='PENDING'""", (identity,)).fetchall()
         updates = 0
         for item in pending:
+            # A broker-observed prospective signal must be evaluated from
+            # broker-captured source bars; locally prepared candles are a
+            # different evidence tier and must never silently replace them.
+            if source_modes is not None and item["quote_mode"] not in source_modes:
+                continue
             target = _ts(item["bar_utc"]) + timedelta(minutes=item["horizon_minutes"])
             later = [r for r in rows if _ts(r["timestamp_utc"]) >= target]
             if not later:
@@ -455,7 +461,10 @@ def observe_and_score(identity: str, source_rows: list[dict], *,
     if recent:
         for horizon in (3, 6):
             recorded.append(record(observation, horizon))
-    outcome = evaluate(identity, source_rows)
+    outcome = evaluate(
+        identity, source_rows,
+        source_modes=frozenset({"LIVE_OBSERVED"} if live_observed
+                               else {"RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE"}))
     return {
         "last_observation": observation["last_observed_utc"],
         "source_status": observation["quote_mode"],
