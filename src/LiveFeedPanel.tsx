@@ -10,7 +10,8 @@ type Quote={price:number;exchange_utc:string;received_utc:string;age_seconds:num
 type Feed={active:boolean;session_id?:string;index_identity?:string;depth_identity?:string|null;
   ticker_connection?:string;depth_connection?:string;auto_audit?:boolean;
   ticks?:number;depth_snapshots?:number;saved_books?:number;revision?:number;
-  last_error?:string|null;ticker_note?:string;depth_note?:string;started_utc?:string;
+  last_error?:string|null;ticker_note?:string;depth_note?:string;index_packet_note?:string;
+  unsupported_index_packets?:number;started_utc?:string;
   quotes?:Record<string,Quote>;latest_book?:Book|null;client_id_configured:boolean;
   depth_recording?:string;audit_state?:string;read_only:boolean}
 type Contract={identity:string;symbol:string;display_name:string;instrument:string;
@@ -171,6 +172,9 @@ export default function LiveFeedPanel(){
       <span>Stored in <b>dhan_shared</b></span></div>
     {error&&<p role="alert" className="tc-error">{error}</p>}
     {notice&&<p role="status" className="tc-confirm">{notice}</p>}
+    {feed?.index_packet_note&&!livePrice&&<p className="tc-warning" role="status">
+      Broker index packet not supported by the published binary layout · {feed.unsupported_index_packets} observed.
+      {' '}{feed.index_packet_note}</p>}
     {!feed?.active?<div className="lf-start-form">
       <label>Analyze index<select aria-label="Live underlying index" value={index}
         onChange={e=>setIndex(e.target.value as typeof index)}>
