@@ -203,7 +203,7 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
                          "USER_INPUT_NOT_VERIFIED_FOR_EXPIRED_CONTRACTS")
 
     def test_api_requires_explicit_readonly_and_validates_bounds(self):
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1:8765")
         response = client.post("/api/trading-cockpit/options/backtest",
                                json={"confirm_readonly": False})
         self.assertEqual(response.status_code, 400)
@@ -223,9 +223,9 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         master = service.DATA / "dhan" / "instrument_master.csv"
         master.parent.mkdir(parents=True, exist_ok=True)
         master.write_text(
-            "SECURITY_ID,EXCH_ID,SEGMENT,INSTRUMENT,TRADING_SYMBOL,LOT_SIZE,SM_EXPIRY_DATE,STRIKE_PRICE,OPTION_TYPE,UNDERLYING_SYMBOL\\n"
-            "41001,NSE,D,OPTIDX,BANKNIFTY-TEST-CE,20,2026-11-25,62000,CE,BANKNIFTY\\n"
-            "41002,NSE,D,OPTIDX,BANKNIFTY-TEST-PE,20,2026-11-25,62000,PE,BANKNIFTY\\n",
+            "SECURITY_ID,EXCH_ID,SEGMENT,INSTRUMENT,TRADING_SYMBOL,LOT_SIZE,SM_EXPIRY_DATE,STRIKE_PRICE,OPTION_TYPE,UNDERLYING_SYMBOL\n"
+            "41001,NSE,D,OPTIDX,BANKNIFTY-TEST-CE,20,2026-11-25,62000,CE,BANKNIFTY\n"
+            "41002,NSE,D,OPTIDX,BANKNIFTY-TEST-PE,20,2026-11-25,62000,PE,BANKNIFTY\n",
             encoding="utf-8")
         def active(body):
             self.assertEqual(body["exchangeSegment"], "NSE_FNO")
