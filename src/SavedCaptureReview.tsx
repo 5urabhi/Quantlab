@@ -1,5 +1,6 @@
 import {useCallback,useEffect,useState} from 'react'
 import {Archive,RefreshCw} from 'lucide-react'
+import {marketApi,readableError} from './tradingCockpitApi'
 
 type Source={identity:string;observations:number;first_utc:string;last_utc:string}
 type CaptureCatalog={
@@ -29,16 +30,7 @@ const time=(value:string)=>new Date(value).toLocaleString('en-IN',{
   timeZone:'Asia/Kolkata',year:'numeric',month:'short',day:'numeric',
   hour:'2-digit',minute:'2-digit',hourCycle:'h23',
 })
-async function read<T>(url:string):Promise<T>{
-  const response=await fetch(url)
-  if(!response.ok){
-    let detail='Recorded-data request failed'
-    try{const body=await response.json() as {detail?:string};detail=body.detail||detail}
-    catch{/* no body */}
-    throw new Error(detail)
-  }
-  return response.json() as Promise<T>
-}
+const read = marketApi
 
 export default function SavedCaptureReview(){
   const [catalog,setCatalog]=useState<CaptureCatalog|null>(null)
@@ -59,7 +51,7 @@ export default function SavedCaptureReview(){
         indexSources[0]?.identity||'INDEX:BANKNIFTY')
       setDepthIdentity(current=>next.depth_sources.some(x=>x.identity===current)?current:
         next.depth_sources[0]?.identity||'')
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
   },[])
   useEffect(()=>{void refresh()},[refresh])
   const replayMinutes=async()=>{
@@ -68,7 +60,7 @@ export default function SavedCaptureReview(){
       const result=await read<Replay>('/api/trading-cockpit/live/replay?'+
         new URLSearchParams({identity,horizon_minutes:horizon,limit:'5000'}))
       setReplay(result)
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
     finally{setBusy(false)}
   }
   const inspectBooks=async()=>{
@@ -78,7 +70,7 @@ export default function SavedCaptureReview(){
       const result=await read<SavedBooks>('/api/trading-cockpit/live/depth-history?'+
         new URLSearchParams({identity:depthIdentity,limit:'150'}))
       setBooks(result);setSelectedBook(null)
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
     finally{setBusy(false)}
   }
   const chosenBook=selectedBook===null?null:books?.snapshots[selectedBook]
