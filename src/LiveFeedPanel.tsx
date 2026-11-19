@@ -147,6 +147,7 @@ export default function LiveFeedPanel(){
     finally{setBusy(false)}
   }
   const quote=feed?.quotes?.[watchedIndex]
+  const optionQuote=feed?.depth_identity?feed.quotes?.[feed.depth_identity]:undefined
   const liveBook=feed?.latest_book
   const quoteAge=quote?Math.max(0,(now-Date.parse(quote.received_utc))/1000):null
   const livePrice=Boolean(feed?.active&&feed.ticker_connection==='connected'
@@ -229,6 +230,11 @@ export default function LiveFeedPanel(){
     <div className="lf-depth-summary">
       <div className="tc-panel-title"><strong>20-level market depth · {configuredDepth||'select a stock / option'}</strong>
         <span>20 bids + 20 asks, original NSE equity/derivative packet pairs</span></div>
+      {optionQuote&&<div className="lf-meta">
+        <span>Selected option/stock last observed premium <b>₹{fmt(optionQuote.price)}</b></span>
+        <span>Received <b>{timeIST(optionQuote.received_utc)} IST</b></span>
+        <span>Ticker freshness <b>{optionQuote.fresh?'Fresh':'STALE'}</b></span>
+      </div>}
       {liveBook&&<div className="lf-meta"><span>Bid–ask spread <b>{fmt(liveBook.spread_bps)} bps</b></span>
         <span>Order-book imbalance <b>{fmt((liveBook.imbalance+1)*50,1)}% bid-side share</b></span>
         <span>Book update <b>{timeIST(liveBook.received_utc)} IST</b></span>
@@ -255,8 +261,19 @@ export default function LiveFeedPanel(){
         <span>Signals scored <b>{replay.overall.scored}</b></span>
         <span>Accuracy <b>{replay.overall.directional_accuracy===null?'Insufficient':fmt(replay.overall.directional_accuracy*100,1)+'%'}</b></span>
         <span>Unverifiable gaps <b>{replay.overall.unverifiable}</b></span></div>}
-      {savedBooks&&<p className="tc-confirm">Stored genuine 20-level samples for {savedBooks.identity}: {savedBooks.snapshots.length}.
-        Sampling is at most one original paired snapshot per second. These samples are available on future local sessions.</p>}
+      {savedBooks&&<>
+        <p className="tc-confirm">Stored genuine 20-level samples for {savedBooks.identity}: {savedBooks.snapshots.length}.
+          Sampling is at most one original paired snapshot per second. These samples are available on future local sessions.</p>
+        {!!savedBooks.snapshots.length&&<div className="tc-table-scroll lf-history">
+          <table><thead><tr><th>IST observed (local receipt)</th><th>Best bid (₹)</th><th>Best ask (₹)</th>
+          <th>Spread (bps)</th><th>Bid-side depth share (%)</th><th>Full 20+20?</th></tr></thead>
+          <tbody>{savedBooks.snapshots.slice(-40).reverse().map((book,i)=><tr key={book.received_utc+i}>
+            <td>{timeIST(book.received_utc)}</td><td>{fmt(book.best_bid)}</td>
+            <td>{fmt(book.best_ask)}</td><td>{fmt(book.spread_bps)}</td>
+            <td>{fmt((book.imbalance+1)*50,1)}</td><td>{book.full_depth?'Yes':'Incomplete'}</td>
+          </tr>)}</tbody></table>
+        </div>}
+      </>}
       <p className="tc-muted">The historical BANKNIFTY backtest and research model library remain available below. Live-captured index minute bars and saved 20-level books are additional source-backed views of the same library. No live option P&amp;L is inferred from index direction.</p>
     </div>
     <div className="tc-warning"><ShieldCheck size={14}/> Read-only research. Real-time data requires valid Dhan Data API plus live market/depth permissions. A connected socket is not proof of fresh trades. Any stale feed, absent market data or missing completed candles disables live directional claims. Closing this tab does not stop the local streaming session; clicking Stop or shutting down QuantLab does.</div>
