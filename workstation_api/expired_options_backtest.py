@@ -49,6 +49,8 @@ def _validate_params(*, limit: int, expiry_flag: str, expiry_code: int,
         raise ValueError("Choose original Dhan monthly/weekly and near/next/far expiry")
     if type(wings) is not int or not 0 <= wings <= 5:
         raise ValueError("Option strike wings must be between zero and five")
+    if wings > 3 and expiry_code != 0:
+        raise ValueError("Dhan permits ATM +/-4 or +/-5 index strikes only for current/near expiry; use ATM +/-3 for next/far expiry")
     if type(lots) is not int or not 1 <= lots <= 20:
         raise ValueError("Option quantity must be a whole number of 1 to 20 lots")
     if type(lot_size) is not int or not 1 <= lot_size <= 100:
