@@ -742,6 +742,9 @@ def trading_cockpit_replay(
     identity: str, horizon_minutes: Literal["1", "3", "5", "6", "10", "30", "60"] = "6",
     limit: int = 1500, starting_capital: float = 50_000.0,
     allocation_pct: float = 100.0, cost_bps_per_side: float = 0.0,
+    hold_rule: Literal["fixed", "signal_reversal", "signal_reversal_or_cap"] = "fixed",
+    hold_minutes: Literal["1", "3", "5", "6", "10", "30", "60"] | None = None,
+    reversal_cap_minutes: int = 10,
 ):
     """Historical index rule accuracy + NON-EXECUTABLE rupee exposure scenario.
 
@@ -753,7 +756,9 @@ def trading_cockpit_replay(
         result = trading_cockpit.historical_replay(
             identity, original["rows"], int(horizon_minutes),
             starting_capital=starting_capital, allocation_pct=allocation_pct,
-            cost_bps_per_side=cost_bps_per_side)
+            cost_bps_per_side=cost_bps_per_side, hold_rule=hold_rule,
+            hold_minutes=int(hold_minutes) if hold_minutes else None,
+            reversal_cap_minutes=reversal_cap_minutes)
         result["source_warning"] = original["warning"]
         result["has_more_history"] = original["has_more"]
         return result
