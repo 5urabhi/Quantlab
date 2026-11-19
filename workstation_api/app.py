@@ -700,7 +700,9 @@ def trading_cockpit_record(body: TradingCockpitRecordRequest):
 def trading_cockpit_evaluate(body: TradingCockpitRecordRequest):
     try:
         original = cockpit_sources.series(body.identity, limit=5000)
-        return trading_cockpit.evaluate(body.identity, original["rows"])
+        return trading_cockpit.evaluate(
+            body.identity, original["rows"],
+            source_modes=frozenset({"RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE"}))
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
@@ -852,7 +854,9 @@ def trading_cockpit_live_evaluate(body: TradingCockpitRecordRequest):
         raise HTTPException(400,"Live evaluation requires the index spot identity")
     try:
         source=live_market.minute_series(body.identity,5000)
-        return trading_cockpit.evaluate(body.identity,source["rows"])
+        return trading_cockpit.evaluate(
+            body.identity, source["rows"],
+            source_modes=frozenset({"LIVE_OBSERVED"}))
     except (ValueError,OSError,sqlite3.Error) as exc:
         bad(exc)
 
