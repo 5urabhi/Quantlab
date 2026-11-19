@@ -18,6 +18,37 @@ batch with matching SHA-256 manifest** exists in the local source library.
 These are index spot values, **not live quotes or traded option prices**.
 NSE_FNO options contracts are not yet connected to a streaming quote feed.
 
+## One shared market library — resolving "source unavailable"
+
+QuantLab's everyday market database is **`dhan_shared`** (canonical
+daily-price history per exchange/Security ID). BANKNIFTY, NIFTY 50, sectors
+and other groups are *dated views*, not one database for each universe.
+The UI's **Download History** entries are retained original vendor receipts,
+not user-facing datasets. Keep original per-batch evidence for existing
+research runs; do not erase it during a migration.
+
+Existing Dhan **one-minute** CSV+SHA files are distinct-resolution market
+observations in the same logical library. Their regenerable Parquet chart
+indexes are *not* separate datasets. Trading Copilot now lets you select
+**Prepare cached minute instruments** to build up to 40 verified charts
+from existing local originals without calling Dhan again. Subsequent small
+(<=30 instruments) one-minute downloads prepare their charts automatically.
+A budget guard skips oversized sources and reports them instead of
+exhausting workstation storage.
+
+When **BANKNIFTY spot** or **NIFTY 50 spot** is unavailable, the index does
+not become ready just because its component stocks were downloaded. Trading
+Copilot offers **Get missing index spot candles**, with explicitly chosen
+dates (<=90 calendar days) and a read-only Dhan Data API entitlement check.
+The source is original Dhan IDX_I data; no index levels are simulated from
+the 14 bank stocks. No additional research dataset is created; the original
+index-spot source receipt remains verifiable.
+
+The Market Library now shows observed daily closes and one-minute source
+readiness side-by-side for each equity. A prepared daily series alone cannot
+power a 3/6-minute cockpit signal. Historical observations also cannot be
+presented as current streaming quotes.
+
 ## Dhan token management (inside Trading Cockpit)
 
 The **Dhan market data connection** panel calls the existing local-only
