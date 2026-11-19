@@ -2,6 +2,7 @@ import {useCallback,useEffect,useState} from 'react'
 import {AlertTriangle,ArrowRight,BarChart3,CheckCircle2,Database,RefreshCw,Target,TrendingDown,TrendingUp,Clock3} from 'lucide-react'
 import {marketApi,marketPost,MarketApiError,readableError} from './tradingCockpitApi'
 import './signal-backtest.css'
+import IndexExposureScenario,{type ScenarioResult} from './IndexExposureScenario'
 
 type Source={identity:string;display_name?:string;ready:boolean;asset_class?:string}
 type Counts={
@@ -20,10 +21,11 @@ type HistoricalEvent={
   unscored_reason?:'after_last_observed_bar'|'missing_original_minute'|null
 }
 type HistoricalResult={
-  identity:string;horizon_minutes:3|6;observed_source_bars:number;
+  identity:string;horizon_minutes:HistoricalHorizon;observed_source_bars:number;
   model_version:string;mode:'RETROSPECTIVE_HISTORICAL_RULE_REPLAY';
   overall:Counts;days:Day[];latest_events:HistoricalEvent[];
   latest_signal_events:HistoricalEvent[];
+  index_exposure_scenario:ScenarioResult;
   disclaimer:string;source_warning:string;has_more_history:boolean
 }
 type ForwardReport={
@@ -38,6 +40,8 @@ type ForwardEntry={
 type ForwardLedger={predictions:ForwardEntry[]}
 
 const INDEX='INDEX:BANKNIFTY'
+const HISTORICAL_HORIZONS=[1,3,5,6,10,30,60] as const
+type HistoricalHorizon=typeof HISTORICAL_HORIZONS[number]
 const fmt=(n:number|null|undefined,d=2)=>
   n===null||n===undefined?'—':n.toLocaleString('en-IN',{maximumFractionDigits:d})
 const score=(n:number|null)=>n===null?'Not enough scored signals':fmt(n*100,1)+'%'
@@ -56,8 +60,12 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
   instruments:Source[],onOpenData:()=>void,onOpenReplay:()=>void
 }){
   const [limit,setLimit]=useState<'500'|'1500'|'3000'|'5000'>('1500')
-  const [results,setResults]=useState<Partial<Record<3|6,HistoricalResult>>>({})
-  const [selected,setSelected]=useState<3|6>(6)
+  const [result,setResult]=useState<HistoricalResult|null>(null)
+  const [selected,setSelected]=useState<HistoricalHorizon>(5)
+  const [capital,setCapital]=useState(50_000)
+  const [allocation,setAllocation]=useState(100)
+  const [costBps,setCostBps]=useState(0)
+  const [forwardSelected,setForwardSelected]=useState<3|6>(6)
   const [showAll,setShowAll]=useState(false)
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState<unknown>(null)
@@ -67,9 +75,9 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
   const [scoredNew,setScoredNew]=useState<number|null>(null)
   const [recordedError,setRecordedError]=useState<unknown>(null)
   const ready=instruments.some(s=>s.identity===INDEX&&s.ready)
-  const tested=results[selected]
-  const testsDone=Boolean(results[3]&&results[6])
-  const noActionable=testsDone&&results[3]?.overall.scored===0&&results[6]?.overall.scored===0
+  const tested=result?.horizon_minutes===selected?result:null
+  const testsDone=Boolean(tested)
+  const noActionable=Boolean(tested&&tested.overall.scored===0)
 
   const refreshForward=useCallback(async()=>{
     setRecordedBusy(true);setRecordedError(null);setScoredNew(null)
@@ -100,12 +108,15 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
 
   const runTest=async()=>{
     if(busy||!ready)return
-    setBusy(true);setError(null);setResults({})
+    setBusy(true);setError(null);setResult(null)
     try{
-      const [three,six]=await Promise.all([3,6].map(horizon=>
-        marketApi<HistoricalResult>('/api/trading-cockpit/replay?'+
-          new URLSearchParams({identity:INDEX,horizon_minutes:String(horizon),limit}))))
-      setResults({3:three,6:six})
+      const scenario=await marketApi<HistoricalResult>(
+        '/api/trading-cockpit/replay?'+new URLSearchParams({
+          identity:INDEX,horizon_minutes:String(selected),limit,
+          starting_capital:String(capital),allocation_pct:String(allocation),
+          cost_bps_per_side:String(costBps),
+        }))
+      setResult(scenario)
     }catch(e){setError(e)}
     finally{setBusy(false)}
   }
@@ -116,22 +127,22 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
     ?(tested?.latest_events||[])
     :(tested?.latest_signal_events||
       (tested?.latest_events||[]).filter(row=>row.direction!=='NO_TRADE'))
-  const recentForward=(ledger?.predictions||[]).filter(row=>row.horizon_minutes===selected)
+  const recentForward=(ledger?.predictions||[]).filter(row=>row.horizon_minutes===forwardSelected)
     .slice(0,25)
 
   return <div className="tc-signal-workbench" aria-label="BANKNIFTY signal backtest workspace">
     <div className="tc-v4-intro">
       <div><span className="tc-page-kicker">PHASE 1 · DIRECTION FIRST</span>
         <h3>BANKNIFTY Signal Backtest</h3>
-        <p>Did our UP or DOWN signal correctly predict the BANKNIFTY index after 3 or 6 minutes? Compare historical rule replay with predictions actually recorded forward in time.</p>
+        <p>Choose when a position opens and closes, test how accurately the model predicted BANKNIFTY, and inspect a separately labeled illustrative rupee-denominated index-exposure scenario. Real options profits require option-contract history.</p>
       </div>
-      <span className="tc-signal-tag"><Target size={15}/> Direction only · no option P&amp;L</span>
+      <span className="tc-signal-tag"><Target size={15}/> Index signal + illustrative investment · no option P&amp;L</span>
     </div>
 
     <section className="tc-panel tc-signal-main" aria-label="Historical BANKNIFTY signal accuracy">
       <div className="tc-panel-title">
         <div><strong><BarChart3 size={17}/> Historical signal backtest</strong>
-          <p className="tc-muted">Fixed EMA/RSI rule, evaluated minute-by-minute on original BANKNIFTY index candles. The rule sees no future data when issuing a signal.</p>
+          <p className="tc-muted">Test the same existing EMA/RSI rule with a clear entry, holding period and exit. All calculated scenario balances are illustrative, never executed broker trades.</p>
         </div>
         <span className="tc-signal-provenance">HISTORICAL REPLAY · NOT RECORDED LIVE</span>
       </div>
@@ -144,15 +155,40 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
         </div>
         <label>Historical window
           <select aria-label="Historical signal window" value={limit}
-            onChange={e=>{setLimit(e.target.value as typeof limit);setResults({})}}>
+            onChange={e=>{setLimit(e.target.value as typeof limit);setResult(null)}}>
             <option value="500">Last 500 minutes</option>
             <option value="1500">Last 1,500 minutes</option>
             <option value="3000">Last 3,000 minutes</option>
             <option value="5000">Last 5,000 minutes</option>
           </select>
         </label>
-        <button className="tc-signal-run" type="button" onClick={()=>void runTest()} disabled={busy||!ready}>
-          <Target size={16}/>{busy?'Checking both horizons…':'Test 3m and 6m signals'}
+        <label>Hold position
+          <select aria-label="Trade holding period" value={selected}
+            onChange={e=>{setSelected(Number(e.target.value) as HistoricalHorizon);setResult(null)}}>
+            {HISTORICAL_HORIZONS.map(h=><option key={h} value={h}>{h===60?'1 hour':h+' minutes'}</option>)}
+          </select>
+        </label>
+        <label>Illustrative capital (₹)
+          <input type="number" aria-label="Illustrative starting capital" min="1000" max="100000000"
+            step="1000" value={capital} onChange={e=>{setCapital(Number(e.target.value));setResult(null)}}/>
+        </label>
+        <label>Capital used per position
+          <select aria-label="Capital allocation" value={allocation}
+            onChange={e=>{setAllocation(Number(e.target.value));setResult(null)}}>
+            <option value="25">25%</option><option value="50">50%</option>
+            <option value="75">75%</option><option value="100">100%</option>
+          </select>
+        </label>
+        <label>Assumed cost per side
+          <select aria-label="Hypothetical cost per side" value={costBps}
+            onChange={e=>{setCostBps(Number(e.target.value));setResult(null)}}>
+            <option value="0">0 bps (gross)</option><option value="2">2 bps</option>
+            <option value="5">5 bps</option><option value="10">10 bps</option>
+          </select>
+        </label>
+        <button className="tc-signal-run" type="button" onClick={()=>void runTest()}
+          disabled={busy||!ready||!Number.isFinite(capital)||capital<1000||capital>100000000}>
+          <Target size={16}/>{busy?'Testing original candles…':'Run signal + trade simulation'}
         </button>
       </div>
       {!ready&&<div className="tc-signal-recover">
@@ -167,29 +203,34 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
             'Inspect the original source; the software has not invented missing candles.'}</small></div>
         <button type="button" onClick={onOpenData}>Review source</button></div>}
       {testsDone?<div className="tc-signal-scorecards">
-        {([3,6] as const).map(horizon=>{
-          const data=results[horizon]!
-          return <button key={horizon} type="button" className={'tc-signal-scorecard '+(selected===horizon?'selected':'')}
-            onClick={()=>setSelected(horizon)} aria-pressed={selected===horizon}>
-            <div className="tc-signal-scorecard-title"><span>{horizon}-minute horizon</span>
-              <strong>{score(data.overall.directional_accuracy)}</strong></div>
-            <div className="tc-signal-tally">
-              <span><b className="good">{data.overall.correct}</b> Correct</span>
-              <span><b className="bad">{data.overall.incorrect}</b> Incorrect</span>
-              <span><b>{data.overall.no_trade}</b> No trade</span>
-              <span title="Only UP/DOWN calls with no exact observed outcome. Includes session-end and true missing-minute cases."><b>{data.overall.unverifiable}</b> Unscored</span>
-            </div>
-            <small>Accuracy = correct ÷ ({data.overall.correct} correct + {data.overall.incorrect} incorrect). Flat outcomes excluded.</small>
-          </button>
-        })}
+        <div className="tc-signal-scorecard selected">
+          <div className="tc-signal-scorecard-title"><span>Directional accuracy · {selected===60?'1 hour':selected+'m'}</span>
+            <strong>{score(tested!.overall.directional_accuracy)}</strong></div>
+          <div className="tc-signal-tally">
+            <span><b className="good">{tested!.overall.correct}</b> Correct</span>
+            <span><b className="bad">{tested!.overall.incorrect}</b> Incorrect</span>
+            <span><b>{tested!.overall.no_trade}</b> No trade</span>
+            <span><b>{tested!.overall.unverifiable}</b> Unscored</span>
+          </div>
+          <small>Measured on historical index closes after the selected horizon; overlapping signal observations are not independent trades.</small>
+        </div>
+        <div className="tc-signal-scorecard tc-signal-investment-summary">
+          <div className="tc-signal-scorecard-title"><span>Illustrative account change · not options P&amp;L</span>
+            <strong>{tested!.index_exposure_scenario.net_return_pct>=0?'+':''}{pct(tested!.index_exposure_scenario.net_return_pct)}</strong></div>
+          <strong className="tc-signal-scenario-pnl">{tested!.index_exposure_scenario.net_pnl_inr>=0?'+':''}{cash(tested!.index_exposure_scenario.net_pnl_inr)}</strong>
+          <small>{tested!.index_exposure_scenario.trade_count} nonoverlapping positions, next-bar entries and fixed {selected}-minute exits. Zero-cost model unless adjusted above.</small>
+        </div>
       </div>:!busy&&ready&&<div className="tc-signal-prompt">
-        <TrendingUp size={22}/><div><strong>Run the 3-minute and 6-minute tests together.</strong>
-          <p>The tool will replay each historical bar using the information available at that point, then compare the signal with the observed BANKNIFTY move.</p></div>
-      </div>}
+        <TrendingUp size={22}/><div><strong>Select a holding period and run a simulation.</strong>
+          <p>We enter on the next observed minute's open after an actionable UP/DOWN signal, hold the selected number of minutes, and exit at the next eligible observed open. No overlapping positions or overnight carry.</p></div>
+      </div>
       {noActionable&&<p className="tc-signal-caution"><AlertTriangle size={18}/>
         The current EMA/RSI baseline produced no scored UP/DOWN predictions in this window.
         This is a valid finding, not 100% accuracy; review the NO TRADE count and source coverage.</p>}
-      {tested&&<div className="tc-signal-detail">
+      {tested&&<>
+        {tested.index_exposure_scenario&&<IndexExposureScenario scenario={tested.index_exposure_scenario}/>}
+        <details className="tc-signal-raw-details"><summary>Inspect the underlying signals and daily accuracy</summary>
+        <div className="tc-signal-detail">
         <div className="tc-signal-detail-head">
           <div><span className="tc-page-kicker">HISTORICAL REPLAY · {selected} MINUTES</span>
             <h4>What the model predicted versus what happened</h4></div>
@@ -238,7 +279,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
           </tr>)}</tbody></table></div>
         <p className="tc-muted">Model: {tested.model_version}. {tested.disclaimer} {tested.source_warning}
           {tested.has_more_history?' Older observations exist outside this run.':''}</p>
-      </div>}
+      </div></details></>}
     </section>
 
     <section className="tc-panel tc-signal-forward" aria-label="Recorded prospective BANKNIFTY signal accuracy">
@@ -265,8 +306,8 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
         })}
       </div>
       <div className="tc-signal-detail-head">
-        <strong>Latest recorded {selected}-minute calls</strong>
-        <span className="tc-muted">Select the matching horizon card above to compare the same window.</span>
+        <strong>Latest recorded {forwardSelected}-minute calls</strong>
+        <span className="tc-muted">Prospective recording currently supports 3m and 6m; select either card below. Other periods are historical-only until their live evaluation is implemented.</span>
       </div>
       <div className="tc-table-scroll tc-signal-event-table">
         <table><thead><tr><th>Recorded IST</th><th>Signal</th><th>Index then</th><th>Index at outcome</th><th>Observed</th><th>Result</th><th>Source</th></tr></thead>
@@ -278,7 +319,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
             row.quote_mode==='RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE'?'Observed local bar, live unverified':
             row.quote_mode}</td>
         </tr>)}
-        {!recentForward.length&&<tr><td colSpan={7}>No {selected}-minute predictions have been recorded yet. The live recorder starts a prospective ledger only with permitted fresh observations.</td></tr>}
+        {!recentForward.length&&<tr><td colSpan={7}>No {forwardSelected}-minute predictions have been recorded yet. The live recorder starts a prospective ledger only with permitted fresh observations.</td></tr>}
         </tbody></table></div>
       <p className="tc-muted">Forward scorecards use persistent, timestamped predictions—not signals reconstructed after the market moved. A successfully scored historical replay is not proof of live predictive accuracy.</p>
     </section>
