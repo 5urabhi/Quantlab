@@ -45,6 +45,10 @@ type HistoricalHorizon=typeof HISTORICAL_HORIZONS[number]
 const fmt=(n:number|null|undefined,d=2)=>
   n===null||n===undefined?'—':n.toLocaleString('en-IN',{maximumFractionDigits:d})
 const score=(n:number|null)=>n===null?'Not enough scored signals':fmt(n*100,1)+'%'
+const pct=(n:number)=>fmt(n,2)+'%'
+const cash=(n:number)=>new Intl.NumberFormat('en-IN',{
+  style:'currency',currency:'INR',minimumFractionDigits:2,maximumFractionDigits:2,
+}).format(n)
 const timeIST=(date:string)=>new Date(date).toLocaleString('en-IN',{
   timeZone:'Asia/Kolkata',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})
 const moveText=(bps:number|null)=>{
@@ -212,7 +216,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
             <span><b>{tested!.overall.no_trade}</b> No trade</span>
             <span><b>{tested!.overall.unverifiable}</b> Unscored</span>
           </div>
-          <small>Measured on historical index closes after the selected horizon; overlapping signal observations are not independent trades.</small>
+          <small>Measured on historical index closes after the selected horizon; overlapping signal observations are not independent trades. Entries in the illustration begin at the next observed opening price.</small>
         </div>
         <div className="tc-signal-scorecard tc-signal-investment-summary">
           <div className="tc-signal-scorecard-title"><span>Illustrative account change · not options P&amp;L</span>
@@ -295,14 +299,15 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
       <div className="tc-signal-forward-grid">
         {([3,6] as const).map(horizon=>{
           const info=recorded[horizon]
-          return <div className="tc-signal-forward-card" key={horizon}>
+          return <button type="button" className={'tc-signal-forward-card '+(forwardSelected===horizon?'selected':'')}
+            key={horizon} aria-pressed={forwardSelected===horizon} onClick={()=>setForwardSelected(horizon)}>
             <span>{horizon}-minute recorded predictions</span>
             <strong>{info?score(info.overall.directional_accuracy):'—'}</strong>
             <div><b>{info?.overall.correct??0}</b> right · <b>{info?.overall.incorrect??0}</b> wrong ·
               <b> {info?.overall.pending??0}</b> pending</div>
             <small>{info?.overall.live_observed??0} live-broker observations · {info?.overall.local_observed??0} locally observed bar records.
               {info?.truncated?' Report truncated; increase source coverage.':''}</small>
-          </div>
+          </button>
         })}
       </div>
       <div className="tc-signal-detail-head">
