@@ -1,6 +1,7 @@
 import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Activity,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
 import './live-feed.css'
+import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 
 type DepthLevel={price:number;quantity:number;orders:number}
 type Book={identity:string;received_utc:string;bid:DepthLevel[];ask:DepthLevel[];
@@ -21,17 +22,9 @@ type Signal={ready:boolean;reason?:string;identity:string;direction?:'UP'|'DOWN'
   rsi14?:number|null;ema9?:number|null;ema21?:number|null;
   contiguous_session_bars?:number;rows?:{timestamp_utc:string;close:number}[];
   source_warning?:string}
-async function request<T>(path:string,body?:unknown):Promise<T>{
-  const options:RequestInit=body===undefined?{}:{
-    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}
-  const result=await fetch('/api/trading-cockpit/live/'+path,options)
-  if(!result.ok){
-    let detail='Market-data action failed ('+result.status+')'
-    try{const body=await result.json() as {detail?:string};detail=body.detail||detail}
-    catch{/* text or empty */}
-    throw new Error(detail)
-  }
-  return result.json() as Promise<T>
+const request = <T,>(path:string,body?:unknown):Promise<T>=>{
+  const url='/api/trading-cockpit/live/'+path
+  return body===undefined?marketApi<T>(url):marketPost<T>(url,body)
 }
 const fmt=(value:number|null|undefined,decimals=2)=>value===undefined||value===null?'—':
   value.toLocaleString('en-IN',{maximumFractionDigits:decimals})
@@ -60,7 +53,7 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
 
   const refresh=useCallback(async()=>{
     try{setFeed(await request<Feed>('status'))}
-    catch(e){setError(e instanceof Error?e.message:String(e))}
+    catch(e){setError(readableError(e))}
   },[])
   useEffect(()=>{
     void refresh()
@@ -77,7 +70,7 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
   useEffect(()=>{
     const poll=async()=>{
       try{setSignal(await request<Signal>('signal?'+new URLSearchParams({identity:watchedIndex})))}
-      catch(e){setError(e instanceof Error?e.message:String(e))}
+      catch(e){setError(readableError(e))}
     }
     void poll()
     const interval=window.setInterval(()=>{void poll()},4000)
@@ -90,7 +83,7 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
       const found=await request<{contracts:Contract[];catalog_available:boolean;message:string}>(
         'contracts?'+new URLSearchParams({query:contractSearch.trim(),limit:'35'}))
       setContracts(found.contracts);setContractInfo(found.message)
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
     finally{setQueryBusy(false)}
   }
   const start=async()=>{
@@ -102,14 +95,14 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
         auto_audit:autoAudit,confirm_live_data:true})
       setFeed(state);setNotice('Broker WebSockets starting. Wait for actual observed packets before interpreting a signal.')
       setConsent(false)
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
     finally{setBusy(false)}
   }
   const stop=async()=>{
     if(busy)return
     setBusy(true);setError('');setNotice('')
     try{setFeed(await request<Feed>('stop',{}));setNotice('Live session stopped. Saved observations remain available for research.')}
-    catch(e){setError(e instanceof Error?e.message:String(e))}
+    catch(e){setError(readableError(e))}
     finally{setBusy(false)}
   }
   const record=async()=>{
@@ -121,7 +114,7 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
         body:JSON.stringify({identity:watchedIndex,horizon_minutes:Number(replayHorizon)})})
       if(!r.ok){const b=await r.json() as {detail?:string};throw new Error(b.detail||'Live prediction unavailable')}
       setNotice('Prospective '+replayHorizon+'-minute prediction permanently recorded.')
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
     finally{setBusy(false)}
   }
   const quote=feed?.quotes?.[watchedIndex]
