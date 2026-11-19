@@ -38,7 +38,7 @@ An explicit manual tab selection is never overwritten by the clock.
 | --- | --- |
 | **Live Trading** | Observe genuine Dhan BANKNIFTY/NIFTY 50 ticks, actual selected option premium, paired 20-level NSE option/stock order book, prospective 3/6-minute decisions, and a six-minute manual discipline timer. A stale or missing socket is visibly **not live**. |
 | **Market Replay** | Select a real recorded IST session, play/pause/step one minute at a time, choose replay speed and move the timeline slider. Each chart shows observations **only up to the replay cursor**, never future bars. Its **Recorded 20-level books** subtab inspects actual previously saved depth samples. |
-| **Strategy Testing** | Primary **options strategy readiness** screen explains the source requirements for a real 5% target / 2.5% stop / six-minute maximum-hold options backtest. **EMA/RSI index-direction testing** remains available under an explicitly labeled *Model diagnostics* expansion, **not** as claimed option P&L. No historical options performance is invented when options price history and execution assumptions are absent. |
+| **Signal Backtest (Phase 1)** | Primary scorecards for BANKNIFTY **UP/DOWN signal correctness** at both 3-minute and 6-minute horizons, using a fixed causal historical rule replay. Shows correct, incorrect, NO TRADE, flat, and unscorable observations; daily results; and a per-signal evidence table. Separate prospective scorecards reconcile actually recorded predictions with matching observed-source history. |
 | **Trade Journal** | Manual options trades, actual entered premiums and exit results, plus a separate prospective index prediction accuracy ledger. Journal evaluations are not coupled to whichever historical chart was last opened. |
 | **Connections** | Locally verify/replace Dhan token and client ID, see expiry, review one `dhan_shared` library, and prepare/fetch missing original index/equity minute files. Normal workflow never requires terminal API calls. |
 
@@ -57,6 +57,43 @@ Live recorded source catalog remains
 `GET /api/trading-cockpit/live/capture-catalog`. Both read the same
 underlying logical shared market library instead of manufacturing duplicate
 named datasets.
+
+## Evaluation sequence: BANKNIFTY direction first, options P&L second
+
+**Current feature: BANKNIFTY Signal Backtest.** In the primary
+**Signal Backtest** tab choose 500–5,000 original one-minute source candles
+and click **Test 3m and 6m signals**. The software replays the fixed EMA/RSI
+baseline from each historical candle using only information through that
+candle, then checks the genuine BANKNIFTY index level at the **exact**
+3-minute and 6-minute future timestamp. It will not use a nearby candle
+if the expected observation is missing.
+
+Each horizon has its own scorecard (correct, incorrect, NO TRADE, source
+gaps, flat outcomes). **Directional accuracy** is correct/(correct+incorrect);
+NO TRADE, flat and unscorable outcomes are reported separately rather than
+counted as wins. The event table lists the source timestamp, prediction,
+BANKNIFTY before/after, actual directional movement, and outcome. Daily
+totals and source-specific caveats remain visible. A baseline that emits
+no scored UP/DOWN signals is **insufficient evidence**, not 100% accuracy.
+
+The second section, **Recorded forward predictions**, is NOT a restatement
+of this retrospective replay. It reads immutable timestamped prospective
+predictions from the prediction ledger and scores each 3/6-minute
+horizon independently. Local prepared-file predictions can only be scored
+against original prepared-file observations; broker-originated live
+predictions can only be scored against previously captured original live
+observations. On opening/refreshing the tab, QuantLab attempts these
+source-matched local reconciliations without placing orders or downloading
+new data. Missing future candles remain pending or unscorable, and the
+recorded cards explicitly show how many decisions were captured from
+the authenticated broker feed versus the local observed file.
+
+**Later feature (not complete): BANKNIFTY options P&L backtesting.**
+A directional hit does not imply a profitable option trade. To test a
+5% profit target / 2.5% stop-loss with 3–6 minute holding, QuantLab
+will need original contract-specific CE/PE minute quotes or trade prices,
+expiry/strike mapping, entry/exit and spread/slippage assumptions, fees and
+risk controls. Nothing in the Phase 1 scorecard estimates those fills.
 
 ## Dual-mode operation: historical + real-time Dhan
 
@@ -107,7 +144,7 @@ Market Library (`dhan_shared`)**:
    ticker minute observations and source-backed depth history remain.
 6. Open **Market Replay → Recorded 20-level books** to run a source-
    limited directional replay against captured minute bars or inspect archived
-   paired 20-level depth evidence. **Strategy Testing → Model diagnostics**
+   paired 20-level depth evidence. **Signal Backtest → Historical signal backtest**
    remains available while streaming is stopped.
 
 ### Real data / execution limitations
