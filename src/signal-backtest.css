@@ -101,3 +101,13 @@
 @media(max-width:690px){.tc-signal-controls input[type=number]{min-width:0;max-width:none}}
 
 .tc-signal-followup-actions{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+
+
+.tc-holding-compare{margin-top:15px;display:grid;gap:12px}
+.tc-holding-compare .tc-table-scroll{overflow-x:auto}
+.tc-holding-compare table{width:100%;border-collapse:collapse;font-size:12px}
+.tc-holding-compare th,.tc-holding-compare td{padding:11px 10px;text-align:left;white-space:nowrap;border-bottom:1px solid #35556c}
+.tc-holding-compare th{font-size:11px;color:#9cc3cf}
+.tc-holding-compare .tc-hold-selected{background:rgba(45,149,119,.16)}
+.tc-holding-compare .good{color:#80e4b6}
+.tc-holding-compare .bad{color:#ff9d9d}
