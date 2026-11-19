@@ -7,13 +7,15 @@ substitute futures or reconstruct missing index candles from today's members.
 from __future__ import annotations
 
 from collections import deque
+from datetime import date, timedelta
+import uuid
 from hashlib import sha256
 from pathlib import Path
 import csv
 import json
 import re
 
-from . import intraday_parquet, service
+from . import intraday_parquet, index_spot, service
 
 INDEX_IDENTITIES = {
     "INDEX:BANKNIFTY": ("BANKNIFTY_INDEX", "Bank Nifty · Dhan spot index"),
@@ -85,11 +87,17 @@ def catalog(limit: int = 200) -> dict:
             "identity": identity, "display_name": display, "asset_class": "spot_index",
             "ready": bool(source), "state": "source_available" if source else "not_downloaded",
             "source": "Dhan original IDX_I batch, 1-minute historical" if source else None,
+            "needs_download": not bool(source), "needs_preparation": False,
         })
     for item in existing["instruments"]:
-        result.append({**item, "display_name": item["identity"], "asset_class": "equity"})
+        result.append({**item, "display_name": item["identity"], "asset_class": "equity",
+                       "needs_download": False,
+                       "needs_preparation": bool(item["source_available"] and not item["ready"])})
     return {
         "instruments": result, "interval_minutes": 1,
+        "prepared_equities": sum(1 for item in result if item["asset_class"] == "equity" and item["ready"]),
+        "downloaded_equities_pending_preparation": sum(
+            1 for item in result if item["asset_class"] == "equity" and item["needs_preparation"]),
         "warning": ("Spot-index candles require a verified original Dhan IDX_I "
                     "one-minute batch. No index volume/VWAP, live streaming or "
                     "broker execution is inferred."),
@@ -151,3 +159,95 @@ def series(identity: str, *, limit: int = 500) -> dict:
                     "volume has no VWAP meaning. Not live, not an options quote."),
         "source_file_sha256": metadata["sha256"],
     }
+
+
+def prepare_local(identities: list[str] | None = None, *, progress=None) -> dict:
+    """Build disposable one-minute chart views from *existing* SHA-verified caches.
+
+    No vendor calls, dataset duplication, or price reconstruction. An optional
+    list restricts automatic post-download preparation to its original batch.
+    Bounded work avoids unpredictable CPU/disk costs for large universes.
+    """
+    if identities is None:
+        candidates = [entry["identity"] for entry in intraday_parquet.catalog(300)["instruments"]]
+    else:
+        candidates = list(dict.fromkeys(identities))
+    if len(candidates) > 40:
+        raise ValueError("Prepare at most 40 original one-minute instruments per job")
+    prepared, reused, skipped = [], [], []
+    max_file_bytes = 80 * 1024 * 1024
+    max_total_bytes = 500 * 1024 * 1024
+    allocated = 0
+    for i, identity in enumerate(candidates):
+        if progress:
+            progress(4 + 90 * i / max(1, len(candidates)),
+                     "Preparing existing one-minute charts " + str(i + 1) +
+                     "/" + str(len(candidates)))
+        try:
+            state = intraday_parquet.status(identity)
+            if state["ready"]:
+                reused.append(identity)
+                continue
+            if not state["source_available"]:
+                skipped.append({"identity": identity, "reason": "original one-minute source missing"})
+                continue
+            if not state["engine_available"]:
+                skipped.append({"identity": identity, "reason": "DuckDB is not installed"})
+                continue
+            size = state["source_bytes"]
+            if size > max_file_bytes or allocated + size > max_total_bytes:
+                skipped.append({"identity": identity, "reason":
+                                "Existing minute source exceeds automatic preparation budget"})
+                continue
+            intraday_parquet.build(identity)
+            allocated += size
+            prepared.append(identity)
+        except (ValueError, OSError) as exc:
+            skipped.append({"identity": identity, "reason": str(exc)[:160]})
+    if progress:
+        progress(100, "Shared one-minute chart views checked")
+    return {
+        "canonical_library_id": "dhan_shared",
+        "original_sources_unchanged": True, "external_market_requests": 0,
+        "checked": len(candidates), "prepared_count": len(prepared),
+        "already_ready_count": len(reused), "blocked_count": len(skipped),
+        "prepared": prepared, "already_ready": reused, "blocked": skipped,
+        "note": ("One shared market-data library with per-instrument source-backed "
+                 "one-minute chart indexes, not separate datasets."),
+    }
+
+
+def download_spot(identity: str, from_date: str, to_date: str, *, progress=None) -> dict:
+    """Only a user-approved Dhan IDX_I download; never synthesize index from stocks."""
+    if identity not in INDEX_IDENTITIES:
+        raise ValueError("Select BANKNIFTY or NIFTY 50 spot index")
+    start, stop = date.fromisoformat(from_date), date.fromisoformat(to_date)
+    if not start < stop <= date.today() + timedelta(days=1):
+        raise ValueError("Choose a valid historical date window (end exclusive)")
+    if (stop - start) > timedelta(days=90):
+        raise ValueError("Request up to 90 calendar days of index history at a time")
+    if progress:
+        progress(10, "Requesting original Dhan spot index candles")
+    selection = "banknifty_pit" if identity == "INDEX:BANKNIFTY" else "nifty50_pit"
+    result = index_spot.download({
+        "id": "batch_" + uuid.uuid4().hex[:16], "selection": selection,
+        "from_date": from_date, "to_date": to_date, "interval": 1,
+    })
+    if result.get("status") != "complete":
+        raise ValueError("Original Dhan index spot could not be downloaded: " +
+                         str(result.get("error") or result.get("status"))[:160])
+    if progress:
+        progress(95, "Verifying saved Dhan IDX_I source receipt")
+    # An original Dhan candle is not necessarily live; the cockpit checks age.
+    response = {
+        "identity": identity, "status": "complete", "rows": result["rows"],
+        "source": "Dhan original IDX_I one-minute price index",
+        "canonical_library_id": "dhan_shared",
+        "new_research_dataset_created": False,
+        "index_spot_available": bool(_selected_index(identity)),
+    }
+    if not response["index_spot_available"]:
+        raise ValueError("Index download finished but the source receipt is unreadable")
+    if progress:
+        progress(100, "Original index source available in the shared market-data library")
+    return response
