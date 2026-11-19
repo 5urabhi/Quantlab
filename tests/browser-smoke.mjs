@@ -114,7 +114,7 @@ try {
     assert.equal(await directNse.getByRole('button',{name:'Check NSE source'}).isEnabled(),true)
     await screenshot('01-nse-sources-visible-in-data-library')
     await dataTabs.getByRole('button',{name:'Data manager',exact:true}).click()
-    await page.locator('.mdw-root').getByRole('tab',{name:'My Datasets'}).waitFor()
+    await page.locator('.mdw-root').getByRole('tab',{name:'Market Library'}).waitFor()
     await dataTabs.getByRole('button',{name:'NSE Sources',exact:true}).click()
     await directNse.waitFor()
     await nav('Compare & Visualize').click()
@@ -257,7 +257,7 @@ try {
     const workspace=page.locator('.mdw-root')
     await workspace.getByRole('heading',{
       name:'Get the data. QuantLab handles the preparation.'}).waitFor()
-    for(const tab of ['Get Data','My Datasets','Downloads & Jobs'])
+    for(const tab of ['Get Data','Market Library','Download History'])
       await workspace.getByRole('tab',{name:tab}).waitFor()
     await workspace.getByRole('heading',{name:'Choose your research data'}).waitFor()
     assert.equal(await workspace.getByRole('heading',{name:'What history do you need?'}).count(),0,
@@ -304,7 +304,7 @@ try {
     await workspace.getByLabel('Stock ticker list').fill('RELIANCE\nTCS\n')
     await workspace.getByText('2 unique tickers').waitFor()
     await screenshot('02-unified-market-data-source-plan')
-    await workspace.getByRole('tab',{name:'My Datasets'}).click()
+    await workspace.getByRole('tab',{name:'Market Library'}).click()
     await workspace.getByRole('heading',{name:"Everything you've collected"}).waitFor()
     await workspace.getByRole('tab',{name:'Downloads & Jobs'}).click()
     await workspace.getByRole('heading',{name:"See exactly what's happening"}).waitFor()
@@ -487,7 +487,7 @@ try {
     await page.getByRole('region',{name:'Automatic model data acquisition'}).waitFor()
     assert.equal(await page.getByRole('button',{name:/Get & prepare data/}).count(),0,
       'Existing dataset extension must not show an unrelated general-universe batch CTA')
-    await page.locator('.mdw-root').getByRole('tab',{name:'My Datasets'}).click()
+    await page.locator('.mdw-root').getByRole('tab',{name:'Market Library'}).click()
     await page.locator('details.ws-tri-advanced.ws-data-advanced').first().locator('summary').first().click()
     await page.locator('.ws-dataset-advanced summary').waitFor()
     assert.equal(await page.locator('.ws-dataset-advanced').first().evaluate(el=>el.open),false,
