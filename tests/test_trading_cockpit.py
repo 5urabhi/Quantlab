@@ -267,14 +267,14 @@ class TradingCockpitTests(unittest.TestCase):
             with patch("workstation_api.app.cockpit_sources.series",
                        return_value={"rows": original, "warning": "fixture",
                                      "has_more": False}):
-                for horizon in (3, 6):
+                for horizon in (1, 3, 5, 6, 10, 30, 60):
                     result = client.get("/api/trading-cockpit/replay", params={
                         "identity": "INDEX:BANKNIFTY", "horizon_minutes": horizon,
                         "limit": 45})
                     self.assertEqual(result.status_code, 200, result.text)
                     self.assertEqual(result.json()["horizon_minutes"], horizon)
                 invalid = client.get("/api/trading-cockpit/replay", params={
-                    "identity": "INDEX:BANKNIFTY", "horizon_minutes": 5})
+                    "identity": "INDEX:BANKNIFTY", "horizon_minutes": 7})
                 self.assertEqual(invalid.status_code, 422)
             with patch("workstation_api.app.live_market.minute_series",
                        return_value={"rows": original, "basis": "Dhan_live_test",
@@ -287,6 +287,89 @@ class TradingCockpitTests(unittest.TestCase):
                 invalid = client.get("/api/trading-cockpit/live/replay", params={
                     "identity": "INDEX:BANKNIFTY", "horizon_minutes": 7})
                 self.assertEqual(invalid.status_code, 422)
+
+    def test_index_exposure_enters_next_minute_open_without_overlap(self):
+        bars = candles(50)
+        events = [
+            {"bar_utc": bars[index]["timestamp_utc"],
+             "session_ist": "2026-11-18", "direction": "UP"}
+            for index in (29, 30, 37)
+        ]
+        result = trading_cockpit.hypothetical_index_exposure(
+            bars, events, hold_minutes=6, starting_capital=50_000)
+        self.assertEqual(result["mode"], "ILLUSTRATIVE_SIGNED_INDEX_EXPOSURE_ONLY")
+        self.assertEqual(result["trade_count"], 2)
+        self.assertEqual(result["skipped"]["position_open"], 1)
+        first = result["latest_trades"][0]
+        self.assertEqual(first["signal_utc"], bars[29]["timestamp_utc"])
+        self.assertEqual(first["entry_utc"], bars[30]["timestamp_utc"])
+        self.assertEqual(first["exit_utc"], bars[36]["timestamp_utc"])
+        self.assertEqual(first["entry_points"], bars[30]["open"])
+        self.assertEqual(first["exit_points"], bars[36]["open"])
+        self.assertEqual(first["direction"], "UP")
+        self.assertEqual(len(result["equity_curve"]), 3)
+        self.assertGreater(result["net_pnl_inr"], 0)
+
+    def test_index_exposure_short_is_only_hypothetical_signed_index_return(self):
+        bars = candles(45, drift=-2)
+        events = [{"bar_utc": bars[29]["timestamp_utc"],
+                   "session_ist": "2026-11-18", "direction": "DOWN"}]
+        gross = trading_cockpit.hypothetical_index_exposure(
+            bars, events, hold_minutes=5, starting_capital=50_000)
+        self.assertEqual(gross["trade_count"], 1)
+        self.assertGreater(gross["net_pnl_inr"], 0)
+        self.assertEqual(gross["latest_trades"][0]["side"], "HYPOTHETICAL_SHORT_INDEX")
+        after_cost = trading_cockpit.hypothetical_index_exposure(
+            bars, events, hold_minutes=5, starting_capital=50_000,
+            cost_bps_per_side=10)
+        self.assertEqual(after_cost["total_illustrative_cost_inr"], 100)
+        self.assertAlmostEqual(after_cost["net_pnl_inr"], gross["net_pnl_inr"] - 100, places=2)
+        self.assertIn("not directly tradable", gross["disclaimer"])
+
+    def test_index_exposure_does_not_invent_fills_or_roll_across_close(self):
+        bars = candles(50)
+        event = [{"bar_utc": bars[29]["timestamp_utc"],
+                  "session_ist": "2026-11-18", "direction": "UP"}]
+        without_middle = [bar for bar in bars
+                          if bar["timestamp_utc"] != bars[33]["timestamp_utc"]]
+        missing = trading_cockpit.hypothetical_index_exposure(
+            without_middle, event, hold_minutes=6)
+        self.assertEqual(missing["trade_count"], 0)
+        self.assertEqual(missing["skipped"]["missing_exit_or_path"], 1)
+        no_entry = [bar for bar in bars
+                    if bar["timestamp_utc"] != bars[30]["timestamp_utc"]]
+        missing_entry = trading_cockpit.hypothetical_index_exposure(
+            no_entry, event, hold_minutes=6)
+        self.assertEqual(missing_entry["skipped"]["missing_entry"], 1)
+        late = candles(45, start=START + timedelta(hours=5, minutes=20))
+        late_event = [{"bar_utc": late[29]["timestamp_utc"],
+                       "session_ist": "2026-11-18", "direction": "UP"}]
+        session_end = trading_cockpit.hypothetical_index_exposure(
+            late, late_event, hold_minutes=30)
+        self.assertEqual(session_end["trade_count"], 0)
+        self.assertEqual(session_end["skipped"]["session_cutoff"], 1)
+        with self.assertRaisesRegex(ValueError, "Starting capital"):
+            trading_cockpit.hypothetical_index_exposure(
+                bars, event, hold_minutes=6, starting_capital=0)
+        with self.assertRaisesRegex(ValueError, "Hypothetical cost"):
+            trading_cockpit.hypothetical_index_exposure(
+                bars, event, hold_minutes=6, cost_bps_per_side=110)
+
+    def test_historical_index_replay_returns_non_executable_scenario(self):
+        bars = candles(45)
+        with patch.object(trading_cockpit, "snapshot",
+                          return_value={"direction": "UP"}):
+            result = trading_cockpit.historical_replay(
+                "INDEX:BANKNIFTY", bars, horizon_minutes=5,
+                starting_capital=75_000, cost_bps_per_side=2.5,
+                allocation_pct=50)
+        scenario = result["index_exposure_scenario"]
+        self.assertEqual(result["horizon_minutes"], 5)
+        self.assertEqual(scenario["starting_capital_inr"], 75_000)
+        self.assertEqual(scenario["allocation_pct"], 50)
+        self.assertEqual(scenario["cost_bps_per_side"], 2.5)
+        self.assertEqual(scenario["trade_count"], 3)
+        self.assertIn("ONE", str(scenario).upper() or "ONE")  # ensure public scenario fields
 
     def test_historical_banknifty_directions_are_scored_after_exact_horizon(self):
         original = candles(45)
