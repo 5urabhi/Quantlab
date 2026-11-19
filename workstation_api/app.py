@@ -804,6 +804,17 @@ def trading_cockpit_live_record(body: TradingCockpitRecordRequest):
         bad(exc)
 
 
+@app.post("/api/trading-cockpit/live/evaluate")
+def trading_cockpit_live_evaluate(body: TradingCockpitRecordRequest):
+    if body.identity not in live_market.INDEX:
+        raise HTTPException(400,"Live evaluation requires the index spot identity")
+    try:
+        source=live_market.minute_series(body.identity,5000)
+        return trading_cockpit.evaluate(body.identity,source["rows"])
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/live/replay")
 def trading_cockpit_live_replay(
     identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY",
