@@ -18,6 +18,51 @@ batch with matching SHA-256 manifest** exists in the local source library.
 These are index spot values, **not live quotes or traded option prices**.
 NSE_FNO options contracts are not yet connected to a streaming quote feed.
 
+## Dhan token management (inside Trading Cockpit)
+
+The **Dhan market data connection** panel calls the existing local-only
+`POST /api/market-data/providers/dhan/connect` endpoint. Enter a fresh Dhan
+Web token and explicitly approve local storage. The backend verifies it
+against Dhan's profile endpoint and stores it only in the gitignored
+project-root `.env`; the React UI never saves it to localStorage, logs,
+reports, or a remote API.
+
+The panel also calls the existing `GET /api/dhan/credentials/check` on
+opening and roughly every 60 seconds while it remains open. Dhan's
+`tokenValidity` is parsed in Asia/Kolkata; the backend returns only the
+expiry timestamp and seconds remaining, never the token or account ID.
+The panel displays **CONNECTED**, **EXPIRING SOON** (under one hour),
+**EXPIRED / REJECTED**, or **UNVERIFIED / NEEDS ATTENTION**.
+A network failure is *unverified*, not automatically *expired*.
+The displayed countdown updates locally between broker checks.
+The browser does not attempt autonomous credential renewal, because
+renewal must follow the broker's authorized login flow.
+
+**Security:** QuantLab is designed to bind to loopback only. Do not expose
+its local API via a public URL, tunnel, shared proxy, or network interface.
+Credential verification tests use mocked broker responses, never real tokens.
+
+## Trading interpretation and backtests
+
+The signal is calculated from original **BANKNIFTY spot index one-minute
+candles** when available. It is not a prediction of a specific CE/PE
+premium. You manually select the contract, expiry and strike in your
+broker, then enter the *actual* filled option premium and quantity in the
+journal. The journal records manual receipts only, and cannot execute
+or independently verify those trades.
+
+The historical **directional backtest** reuses the existing fixed-rule
+replay. Choose 3 or 6 minutes and 500, 1,500, 3,000 or 5,000
+source candles. It reports original-index direction accuracy by day,
+counts skipped/no-trade and unverifiable bars, and never mixes
+retrospective results with the prospective real-time prediction ledger.
+
+This is **not yet an options P&L backtest**. A credible executable
+options backtest would require time-aligned historical contract symbols,
+expiry, bid/ask or realistic fill assumptions, spreads, fees, actual lot
+sizes, and contract turnover. Do not apply BANKNIFTY spot point changes
+to the manually entered option premium as if they were equivalent.
+
 ## What works now
 
 - Stable React cockpit panel with source-backed one-minute OHLC chart,
