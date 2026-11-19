@@ -534,6 +534,14 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
             expiry_code=0, today=date(2026, 11, 25)))
         self.assertFalse(exp._expired_eligible(
             date(2026, 11, 18), expiry_flag="MONTH", expiry_code=1, today=as_of))
+        # The third listed expiry may be a quarterly, not the calendar
+        # month after next; do not misroute it to expired near history.
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 12, 5), expiry_flag="MONTH",
+            expiry_code=2, today=date(2027, 4, 10)))
+        self.assertTrue(exp._expired_eligible(
+            date(2025, 3, 1), expiry_flag="MONTH",
+            expiry_code=2, today=date(2026, 11, 19)))
 
     def test_missing_live_current_option_never_falls_back_to_expired_request(self):
         """Exact regression of user's Nov 6-19 Dhan DH-905 failure."""
