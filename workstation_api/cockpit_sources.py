@@ -176,7 +176,10 @@ def prepare_local(identities: list[str] | None = None, *, progress=None) -> dict
     Bounded work avoids unpredictable CPU/disk costs for large universes.
     """
     if identities is None:
-        candidates = [entry["identity"] for entry in intraday_parquet.catalog(300)["instruments"]]
+        # Prefer sources that actually need building; a large library of
+        # already-ready securities must not starve new missing chart views.
+        candidates = [entry["identity"] for entry in intraday_parquet.catalog(300)["instruments"]
+                      if entry["source_available"] and not entry["ready"]]
     else:
         candidates = list(dict.fromkeys(identities))
     total_candidates = len(candidates)
