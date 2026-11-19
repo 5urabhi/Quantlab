@@ -375,13 +375,21 @@ export default function TradingCockpit(){
     <div className="tc-market-strip" role="status" aria-label="NSE session and live market feed status">
       <div className={'tc-status-item '+(marketWindow.regularWindow?'is-scheduled':'is-idle')}>
         <span className="tc-status-dot"/>
-        <div><strong>{marketWindow.regularWindow?'Regular session window':'Outside regular session'}</strong>
-          <small>NSE · 09:15–15:30 IST, Mon–Fri · holidays not verified</small></div>
+        <div><strong>{marketWindow.regularWindow?'Index session window':'Outside index session window'}</strong>
+          <small>Spot-index schedule · 09:15–15:30 IST · holiday exceptions possible</small></div>
       </div>
       <div className={'tc-status-item '+(liveFeedFresh?'is-live':liveHeader?.active?'is-scheduled':'is-idle')}>
         <span className="tc-status-dot"/>
         <div><strong>{liveFeedFresh?'LIVE · observed broker price':liveHeader?.active?'Connecting / no fresh price':'Live feed stopped'}</strong>
           <small>{liveFeedFresh?'Fresh Dhan observations':liveHeader?.active?'Awaiting valid market packets':'Start it from Live Market during an authorized session'}</small></div>
+      </div>
+      <div className={'tc-status-item '+(tokenState==='CONNECTED'?'is-live':tokenState==='EXPIRING SOON'?'is-scheduled':'is-idle')}>
+        <ShieldCheck size={17}/>
+        <div><strong>{tokenState==='CONNECTED'?'Dhan credentials ready':
+          tokenState==='EXPIRING SOON'?'Dhan token expiring soon':tokenState==='CHECKING'?'Checking Dhan token':'Dhan · '+tokenState}</strong>
+          <small>{tokenRemaining!==null&&tokenRemaining>0?
+            'Expires in '+tokenHours+'h '+tokenMinutes+'m':
+            'Manage broker credentials in Connections'}</small></div>
       </div>
       <div className="tc-status-item tc-clock-item"><Clock3 size={17}/>
         <div><strong>{marketWindow.istClock}</strong><small>Indian market clock</small></div></div>
