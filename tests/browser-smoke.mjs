@@ -105,9 +105,11 @@ try {
     // Only one focused tab-panel is mounted, not the previous all-in-one page.
     await modes.getByRole('tab',{name:/Live Market/}).click()
     await page.getByRole('tabpanel',{name:/Live Market/}).waitFor()
+    await screenshot('01-trading-copilot-live-market')
     assert.equal(await page.locator('.tc-workspace>section[role="tabpanel"]').count(),1)
     await modes.getByRole('tab',{name:/Historical Research/}).click()
     await page.getByRole('tabpanel',{name:/Historical Research/}).waitFor()
+    await screenshot('01-trading-copilot-historical-research')
     const historicalTabs=page.getByRole('tablist',{name:'Historical research views'})
     await historicalTabs.getByRole('tab',{name:'Directional backtest'}).click()
     await page.getByText('Historical BANKNIFTY directional backtest',{exact:false}).waitFor()
@@ -117,6 +119,7 @@ try {
     await page.getByRole('tabpanel',{name:/Trading Journal/}).waitFor()
     await modes.getByRole('tab',{name:/Connections & Data/}).click()
     await page.getByRole('tabpanel',{name:/Connections & Data/}).waitFor()
+    await screenshot('01-trading-copilot-connections')
     // The source assistant belongs in the Data Library shown in the UI.
     await nav('Data Library').click()
     const dataTabs=page.getByRole('navigation',{name:'Modules within selected research destination'})
