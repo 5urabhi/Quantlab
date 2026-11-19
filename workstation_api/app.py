@@ -714,6 +714,14 @@ class LiveCopilotRequest(BaseModel):
     confirm_live_data: bool = False
 
 
+@app.get("/api/trading-cockpit/live/contracts")
+def trading_cockpit_live_contracts(query: str = "BANKNIFTY", limit: int = 30):
+    try:
+        return live_market.search_contracts(query,limit)
+    except (ValueError,OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/live/status")
 def trading_cockpit_live_status():
     return live_market.status()
