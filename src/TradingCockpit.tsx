@@ -79,6 +79,7 @@ export default function TradingCockpit(){
   const [sourceBusy,setSourceBusy]=useState(false)
   const [sourceNotice,setSourceNotice]=useState('')
   const [sourceError,setSourceError]=useState('')
+  const [spotIdentity,setSpotIdentity]=useState<'INDEX:BANKNIFTY'|'INDEX:NIFTY50'>('INDEX:BANKNIFTY')
   const [spotFrom,setSpotFrom]=useState(()=>indiaDate(-45))
   const [spotTo,setSpotTo]=useState(()=>indiaDate(1))
   const [identity,setIdentity]=useState('')
@@ -187,6 +188,11 @@ export default function TradingCockpit(){
   const refreshCatalog=useCallback(async()=>{
     const data=await api<Catalog>('/api/trading-cockpit/instruments')
     setCatalog(data);setInstruments(data.instruments)
+    setSpotIdentity(previous=>{
+      const remaining=data.instruments.filter(x=>x.asset_class==='spot_index'&&!x.ready)
+      return remaining.some(x=>x.identity===previous)?previous:
+        remaining[0]?.identity==='INDEX:NIFTY50'?'INDEX:NIFTY50':'INDEX:BANKNIFTY'
+    })
     setIdentity(previous=>{
       if(data.instruments.some(x=>x.ready&&x.identity===previous))return previous
       return data.instruments.find(x=>x.ready&&x.identity==='INDEX:BANKNIFTY')?.identity
@@ -232,13 +238,13 @@ export default function TradingCockpit(){
   const acquireSpot=async(event:React.FormEvent<HTMLFormElement>)=>{
     event.preventDefault()
     if(sourceBusy||['queued','running'].includes(sourceJob?.status||''))return
-    if(!window.confirm('Download original BANKNIFTY spot index history from Dhan? Existing equities remain in the same shared library, and no order will be placed.'))return
+    if(!window.confirm('Download original '+(spotIdentity==='INDEX:BANKNIFTY'?'BANKNIFTY':'NIFTY 50')+' spot index history from Dhan? Existing equities remain in the same shared library, and no order will be placed.'))return
     setSourceBusy(true);setSourceError('');setSourceNotice('')
     try{
       const result=await api<{job_id:string;status:string}>(
         '/api/trading-cockpit/sources/index-spot',{method:'POST',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({identity:'INDEX:BANKNIFTY',from_date:spotFrom,
+          body:JSON.stringify({identity:spotIdentity,from_date:spotFrom,
             to_date:spotTo,confirm_readonly:true})})
       setSourceJob({id:result.job_id,status:result.status})
     }catch(e){setSourceError(e instanceof Error?e.message:String(e))}
@@ -306,6 +312,7 @@ export default function TradingCockpit(){
     :dhanCheck.ok?'CONNECTED':'NEEDS ATTENTION'
   const preparedInstruments=instruments.filter(x=>x.ready)
   const missingBankNifty=!instruments.some(x=>x.identity==='INDEX:BANKNIFTY'&&x.ready)
+  const missingIndexSources=instruments.filter(x=>x.asset_class==='spot_index'&&!x.ready)
   const pendingMinutes=catalog?.downloaded_equities_pending_preparation??0
   const sourceWorking=sourceBusy||['queued','running'].includes(sourceJob?.status||'')
   const forecast=snapshot?.direction??'NO_TRADE'
@@ -347,14 +354,15 @@ export default function TradingCockpit(){
       {sourceNotice&&<p className="tc-confirm" role="status">{sourceNotice}</p>}
       {sourceJob&&sourceWorking&&<p className="tc-muted" role="status">{sourceJob.stage||'Preparing market data'} {sourceJob.percent!==undefined?'· '+Math.round(sourceJob.percent)+'%':''}</p>}
       {pendingMinutes>0&&<div className="tc-source-action"><p>Existing Dhan one-minute stock candles have been downloaded, but their analytical chart index has not been built. Reuse those files without downloading anything again.</p><button type="button" disabled={sourceWorking} onClick={()=>void prepareCached()}>Prepare {Math.min(40,pendingMinutes)} cached minute instruments</button></div>}
-      {missingBankNifty&&<form className="tc-source-action" onSubmit={event=>void acquireSpot(event)}>
-        <div><strong>For BANKNIFTY signals, the actual index series is missing.</strong>
-        <p>The 14 constituent stocks are saved, but their prices are not interchangeable with the index. Fetch the original Dhan IDX_I index spot candles into the same shared library.</p></div>
+      {missingIndexSources.length>0&&<form className="tc-source-action" onSubmit={event=>void acquireSpot(event)}>
+        <div><strong>The real index series needs its own original observations.</strong>
+        <p>The downloaded constituent stocks are preserved, but they cannot substitute for BANKNIFTY or NIFTY 50 spot candles. Fetch missing IDX_I observations into the same shared library.</p></div>
+        <label>Spot index <select aria-label="Missing index spot series" value={spotIdentity} onChange={e=>setSpotIdentity(e.target.value as 'INDEX:BANKNIFTY'|'INDEX:NIFTY50')}>{missingIndexSources.map(x=><option value={x.identity} key={x.identity}>{x.display_name}</option>)}</select></label>
         <label>From (IST) <input type="date" required value={spotFrom} onChange={e=>setSpotFrom(e.target.value)}/></label>
         <label>Through (exclusive) <input type="date" required value={spotTo} onChange={e=>setSpotTo(e.target.value)}/></label>
-        <button type="submit" disabled={sourceWorking}>Get missing BANKNIFTY spot candles</button>
+        <button type="submit" disabled={sourceWorking}>Get missing index spot candles</button>
       </form>}
-      {!pendingMinutes&&!missingBankNifty&&<p className="tc-confirm">Existing local sources are prepared. These are historical observations, not a live broker stream.</p>}
+      {!pendingMinutes&&!missingIndexSources.length&&<p className="tc-confirm">Existing local sources are prepared. These are historical observations, not a live broker stream.</p>}
       <p className="tc-muted">All sources remain internally partitioned by instrument, interval and observation time for accuracy; you manage one library. Missing source dates are never invented or backfilled from today's membership.</p>
     </section>
     <div className="tc-toolbar"><label>Prepared chart source <select aria-label="Trading cockpit instrument" value={identity} onChange={event=>setIdentity(event.target.value)}><option value="">Choose a ready observed source</option>{preparedInstruments.map(s=><option key={s.identity} value={s.identity}>{s.display_name||s.identity} ({s.identity})</option>)}</select></label><label className="tc-monitor-toggle"><input type="checkbox" checked={monitor} onChange={event=>{
