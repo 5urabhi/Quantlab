@@ -98,7 +98,25 @@ try {
     }
     await nav('Trading Cockpit').click()
     await page.getByText('Intraday trading cockpit',{exact:true}).first().waitFor()
-    await page.getByText('NO ORIGINAL DATA',{exact:true}).waitFor()
+    const modes=page.getByRole('tablist',{name:'Trading cockpit workspaces'})
+    for(const name of ['Live Market','Historical Research','Trading Journal','Connections & Data']){
+      await modes.getByRole('tab',{name:new RegExp(name)}).waitFor()
+    }
+    // Only one focused tab-panel is mounted, not the previous all-in-one page.
+    await modes.getByRole('tab',{name:/Live Market/}).click()
+    await page.getByRole('tabpanel',{name:/Live Market/}).waitFor()
+    assert.equal(await page.locator('.tc-workspace>section[role="tabpanel"]').count(),1)
+    await modes.getByRole('tab',{name:/Historical Research/}).click()
+    await page.getByRole('tabpanel',{name:/Historical Research/}).waitFor()
+    const historicalTabs=page.getByRole('tablist',{name:'Historical research views'})
+    await historicalTabs.getByRole('tab',{name:'Directional backtest'}).click()
+    await page.getByText('Historical BANKNIFTY directional backtest',{exact:false}).waitFor()
+    await historicalTabs.getByRole('tab',{name:'Saved live recordings'}).click()
+    await page.getByRole('region',{name:'Captured live history'}).waitFor()
+    await modes.getByRole('tab',{name:/Trading Journal/}).click()
+    await page.getByRole('tabpanel',{name:/Trading Journal/}).waitFor()
+    await modes.getByRole('tab',{name:/Connections & Data/}).click()
+    await page.getByRole('tabpanel',{name:/Connections & Data/}).waitFor()
     // The source assistant belongs in the Data Library shown in the UI.
     await nav('Data Library').click()
     const dataTabs=page.getByRole('navigation',{name:'Modules within selected research destination'})
@@ -306,7 +324,7 @@ try {
     await screenshot('02-unified-market-data-source-plan')
     await workspace.getByRole('tab',{name:'Market Library'}).click()
     await workspace.getByRole('heading',{name:"Everything you've collected"}).waitFor()
-    await workspace.getByRole('tab',{name:'Downloads & Jobs'}).click()
+    await workspace.getByRole('tab',{name:'Download History'}).click()
     await workspace.getByRole('heading',{name:"See exactly what's happening"}).waitFor()
   })
   await step('Compare Workspace remains navigable after source review',async()=>{
@@ -601,7 +619,7 @@ try {
       name:'Download market data'
     }).click()
     const workspace=page.locator('.mdw-root')
-    await workspace.getByRole('tab',{name:'Downloads & Jobs'}).click()
+    await workspace.getByRole('tab',{name:'Download History'}).click()
     const detail=workspace.locator('.mdw-batch-detail')
     await detail.getByText('Dhan access needs attention').waitFor()
     await detail.getByText('Last attempted AUBANK').waitFor()
