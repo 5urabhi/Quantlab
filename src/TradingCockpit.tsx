@@ -451,11 +451,15 @@ export default function TradingCockpit(){
           onClick={()=>setHistoricalView('captures')}>Saved live recordings</button>
       </div>
       {historicalView!=='captures'&&<>
-    <div className="tc-toolbar"><label>Prepared chart source <select aria-label="Trading cockpit instrument" value={identity} onChange={event=>setIdentity(event.target.value)}><option value="">Choose a ready observed source</option>{preparedInstruments.map(s=><option key={s.identity} value={s.identity}>{s.display_name||s.identity} ({s.identity})</option>)}</select></label><label className="tc-monitor-toggle"><input type="checkbox" checked={monitor} onChange={event=>{
-  const enabled=event.target.checked;setMonitor(enabled);monitorRef.current=enabled
-  if(enabled)void refresh()
-}}/> Auto-audit while this page is open</label><button onClick={()=>void refresh()} disabled={!identity}><RefreshCw size={16}/> Refresh</button><button onClick={()=>setPaused(v=>!v)}>{paused?'Resume observations':'Pause updates'}</button><span className="tc-muted"><ShieldCheck size={14}/> No broker execution</span></div>
-    {!preparedInstruments.length&&<p className="tc-missing"><Database size={17}/> The library has no ready one-minute chart source yet. Use the actions above to prepare already-downloaded stocks or fetch the actual BANKNIFTY spot series. The existing daily market library remains intact.</p>}
+    <div className="tc-toolbar"><label>Prepared chart source <select aria-label="Trading cockpit instrument" value={identity} onChange={event=>setIdentity(event.target.value)}><option value="">Choose a ready observed source</option>{preparedInstruments.map(s=><option key={s.identity} value={s.identity}>{s.display_name||s.identity} ({s.identity})</option>)}</select></label><details className="tc-advanced-source">
+  <summary>Advanced source audit</summary>
+  <label className="tc-monitor-toggle"><input type="checkbox" checked={monitor} onChange={event=>{
+    const enabled=event.target.checked;setMonitor(enabled);monitorRef.current=enabled
+    if(enabled)void refresh()
+  }}/> Audit only newly observed prepared minute bars while the historical view is open.
+    This does not start a Dhan live stream.</label>
+</details><button onClick={()=>void refresh()} disabled={!identity}><RefreshCw size={16}/> Refresh</button><button onClick={()=>setPaused(v=>!v)}>{paused?'Resume observations':'Pause updates'}</button><span className="tc-muted"><ShieldCheck size={14}/> No broker execution</span></div>
+
 
         {!preparedInstruments.length&&<p className="tc-missing"><Database size={17}/> No prepared one-minute chart. The same shared Market Library can prepare already downloaded candles. <button type="button" onClick={()=>selectTab('setup')}>Open data tools</button></p>}
       </>}
@@ -472,8 +476,8 @@ export default function TradingCockpit(){
         <div className={'tc-direction '+forecast.toLowerCase()}>{forecast==='UP'?'UPWARD BIAS':forecast==='DOWN'?'DOWNWARD BIAS':'NO TRADE'}</div>
         <p className="tc-muted">Unvalidated technical rule. Not a measured win probability or options recommendation.</p>
         <div className="tc-audit-info"><div>Source age <strong>{snapshot?fmt(snapshot.source_age_seconds,0)+' sec':'—'}</strong></div><div>Confidence <strong>Not calibrated</strong></div><div>Option price <strong>Not connected</strong></div><div>Model status <strong>Research only</strong></div></div>
-        <button className="tc-primary" disabled={!snapshot||busy||!sourceRecent} onClick={()=>void action('record')}>Record prospective prediction</button>
-        {!sourceRecent&&<p className="tc-warning">Prediction recording is disabled for historical or stale candles. This prevents retroactively claiming a past observation as a live prediction.</p>}
+        <p className="tc-muted">Historical candles cannot be labeled as live. To record a genuine prospective prediction, switch to Live Market.</p>
+        <button type="button" className="tc-link-button" onClick={()=>selectTab('live')}>Open Live Market <ArrowRight size={15}/></button>
       </section>
 
     </div>
