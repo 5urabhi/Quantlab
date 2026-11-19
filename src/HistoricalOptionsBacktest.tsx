@@ -264,7 +264,7 @@ export default function HistoricalOptionsBacktest({
       Starting the read-only backtest will automatically download the original
       Dhan IDX_I candles first, then historical option candles.
       <button type="button" onClick={onOpenData}>Source settings <ArrowRight size={15}/></button>
-    </div>
+    </div>}
     <div className="hob-run">
       <button type="button" onClick={()=>void run()} disabled={running}>
         {running?<RefreshCw size={17}/>:<Play size={17}/>}
