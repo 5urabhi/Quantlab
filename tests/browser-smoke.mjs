@@ -226,6 +226,28 @@ try {
               unique_option_minute_bars:70,conflicted_excluded:0,
               source:'SYNTHETIC BROWSER TEST',expiry_flag:'MONTH',
               expiry_code:0,strike_wings:3},
+            research_readiness:{
+              status:'MORE_HISTORY_REQUIRED',
+              training_performed:false,research_grade_rl_ready:false,
+              observed_sessions:1,observed_index_minutes:70,
+              option_contract_identities:2,verified_active_security_ids:2,
+              index_minutes_with_both_option_sides:70,both_sides_coverage_pct:100,
+              directional_signal_bars:1,up_signal_bars:1,down_signal_bars:0,
+              same_direction_repeat_bars:0,direction_runs:1,
+              within_session_direction_changes:0,
+              signal_bars_with_target_premium_quote:1,
+              signal_bars_with_next_option_open:1,
+              signal_to_next_open_coverage_pct:100,
+              planning_gates:{
+                prototype_min_sessions:30,research_min_sessions:250,
+                research_min_direction_changes:100,
+                research_min_option_coverage_pct:90,
+                preliminary_source_coverage_gate_passed:false,
+                research_source_coverage_gate_passed:false,
+              },
+              blockers:['SYNTHETIC CI fixture: no real live historical trading data'],
+              next_steps:['Collect more verified original contract history'],
+            },
             selected_rule_id:'fixed_5',
             selected:{
               policy:'fixed',hold_minutes:5,time_cap_minutes:10,
@@ -234,6 +256,12 @@ try {
               net_pnl_inr:1200,return_pct:2.4,
               max_closed_trade_drawdown_pct:0,average_hold_minutes:5,
               total_assumed_fees_inr:40,unscored:{},
+              reversal_audit:{
+                opposite_signal_exits:0,same_open_reentry_attempts:0,
+                completed_flips:0,opposite_exits_without_completed_reentry:0,
+                rejected_reentry_reasons:{},session_end_exits:0,
+                time_cap_exits:0,fixed_hold_exits:1,note:'SYNTHETIC CI',
+              },
               equity_curve:[
                 {timestamp_utc:'2026-11-18T04:00:00+00:00',equity_inr:50000},
                 {timestamp_utc:'2026-11-18T04:35:00+00:00',equity_inr:51200},
@@ -273,6 +301,10 @@ try {
       name:'Historical CE/PE account results',
     }).waitFor()
     await historicalOptions.getByText('₹1,200.00',{exact:false}).first().waitFor()
+    await historicalOptions.getByRole('region',{
+      name:'Signal reversal diagnostics and RL training readiness',
+    }).waitFor()
+    await historicalOptions.getByText('RL: more history required').waitFor()
     await historicalOptions.getByRole('img',{
       name:'Cumulative paper account balance with interactive trade timestamps',
     }).waitFor()
