@@ -315,7 +315,7 @@ def _receive_ticker(record: dict) -> None:
                 if ACTIVE.get("last_audit_bar")==last_bar:
                     return
                 ACTIVE["last_audit_bar"]=last_bar
-            trading_cockpit.observe_and_score(identity,completed)
+            trading_cockpit.observe_and_score(identity,completed,live_observed=True)
         except (ValueError,OSError,sqlite3.Error):
             _update(audit_state="needs_review")
 
