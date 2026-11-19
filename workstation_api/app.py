@@ -781,10 +781,10 @@ def trading_cockpit_option_expiries():
 
 
 @app.get("/api/trading-cockpit/options/chain")
-def trading_cockpit_option_chain(expiry: str):
+def trading_cockpit_option_chain(expiry: str, force_refresh: bool = False):
     """Actual CE/PE snapshots, verified lot master and NSE_FNO identifiers."""
     try:
-        return option_chain_live.chain(expiry)
+        return option_chain_live.chain(expiry, force_refresh=force_refresh)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
