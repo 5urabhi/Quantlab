@@ -38,7 +38,7 @@ An explicit manual tab selection is never overwritten by the clock.
 | --- | --- |
 | **Live Trading** | Separate **Index Signal Monitor** and **BANKNIFTY Option Chain & 20-Level Depth** views. Select genuine expiry/CE/PE/strike, official master-based lot size and contract ID, preview premium outlay for lots, and connect the selected option to the existing 20-level feed. Actual freshness is independently checked; no broker order is placed. |
 | **Market Replay** | Select a real recorded IST session, play/pause/step one minute at a time, choose replay speed and move the timeline slider. Each chart shows observations **only up to the replay cursor**, never future bars. Its **Recorded 20-level books** subtab inspects actual previously saved depth samples. |
-| **Signal Backtest — one options workflow** | Primary screen: choose historical BANKNIFTY minutes, preferred CE/PE premium (~₹300), three lots, starting account, exit strategy and holding period; click **Run options backtest** to compare option P&L. Open **Advanced contract and cost settings** only when needed. Historical index-only directional validation and the recorded forward-signal ledger remain optional collapsed research panels. |
+| **Options Backtest — one trading workflow** | Primary screen: choose historical BANKNIFTY minutes, preferred CE/PE premium (~₹300), three lots, starting account, exit strategy and holding period; click **Run options backtest** to compare option P&L. Open **Advanced contract and cost settings** only when needed. Historical index-only directional validation and the recorded forward-signal ledger remain optional collapsed research panels. |
 | **Trade Journal** | Manual options trades, actual entered premiums and exit results, plus a separate prospective index prediction accuracy ledger. Journal evaluations are not coupled to whichever historical chart was last opened. |
 | **Connections** | Locally verify/replace Dhan token and client ID, see expiry, review one `dhan_shared` library, and prepare/fetch missing original index/equity minute files. Normal workflow never requires terminal API calls. |
 
@@ -60,7 +60,7 @@ named datasets.
 
 ## Evaluation workflow: directional skill and illustrative exposure
 
-**Current user experience — Signal Backtest.** Choose an original Dhan
+**Optional index-only research within Options Backtest.** Choose an original Dhan
 BANKNIFTY spot minute history window of 500, 1,500, 3,000 or 5,000
 observations. Choose **1, 3, 5, 6, 10, 30 or 60 minutes (1 hour)** for the
 historical signal-evaluation horizon and hypothetical holding period. The
@@ -171,7 +171,7 @@ selection stays read-only and requires a live Dhan F&O subscription.
 
 ## One-screen options backtest: BANKNIFTY signals buy historical CE/PE contracts
 
-**Open Trading Cockpit → Signal Backtest → Run options backtest.**
+**Open Trading Cockpit → Options Backtest → Run options backtest.**
 The CE/PE simulation is the primary workflow. Index-only directional
 accuracy and recorded prospective signal audits remain available under
 optional expandable sections, but never have to be run first.
