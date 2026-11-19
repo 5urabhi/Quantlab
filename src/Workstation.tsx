@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import './workstation.css'
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
+const TradingCockpit = lazy(() => import('./TradingCockpit'))
 const ModelLaboratory = lazy(() => import('./ModelLaboratory'))
 const ResearchGuide = lazy(() => import('./ResearchGuide'))
 const ResearchWorkspace = lazy(() => import('./ResearchWorkspace'))
@@ -38,8 +39,9 @@ type RunConfig = {
   validation_start:string;final_test_start:string;sector_cap:number|null
 }
 const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momentum:1,low_volatility:0,value:0,quality:0,size:0},top_n:10,weighting:'equal',max_weight:.2,rebalance_every:3,cost_bps:10,execution_lag:1,momentum_formation:12,momentum_skip:1,volatility_lookback:12,validation_start:'',final_test_start:'',sector_cap:null}
-type Tab = 'journey'|'overview'|'workspace'|'projects'|'data'|'dhan'|'nse'|'research'|'factors'|'construction'|'comparisons'|'mathematics'|'rolling'|'models'|'risk'|'robustness'|'visual'|'reports'|'history'|'settings'|'guide'
+type Tab = 'trading'|'journey'|'overview'|'workspace'|'projects'|'data'|'dhan'|'nse'|'research'|'factors'|'construction'|'comparisons'|'mathematics'|'rolling'|'models'|'risk'|'robustness'|'visual'|'reports'|'history'|'settings'|'guide'
 const primarySections:{id:Tab;label:string;icon:typeof Activity;tabs:Tab[]}[]=[
+ {id:'trading',label:'Trading Cockpit',icon:Activity,tabs:['trading']},
  {id:'journey',label:'Guided Research',icon:Play,tabs:['journey']},
  {id:'overview',label:'Home',icon:Gauge,tabs:['overview']},
  {id:'data',label:'Data Library',icon:Database,tabs:['data','dhan','nse']},
@@ -54,7 +56,7 @@ const primarySections:{id:Tab;label:string;icon:typeof Activity;tabs:Tab[]}[]=[
  {id:'guide',label:'Help & Settings',icon:Settings2,tabs:['guide','settings']},
 ]
 
-const titles:Record<Tab,string>={journey:'Guided Research · Five steps',overview:'Research command center',workspace:'Research workspace',projects:'Projects and notebooks',data:'Data manager',dhan:'Download market data',nse:'NSE Sources',research:'Index research engine',factors:'Factor laboratory',construction:'Index construction',comparisons:'Index comparisons',mathematics:'Advanced mathematics',rolling:'Rolling validation',models:'Quantitative models',risk:'Risk attribution',robustness:'Robustness & sensitivity',visual:'Visual validation',reports:'Research reports',history:'Results Studio · Research Intelligence',settings:'Workstation settings',guide:'How to use QuantLab'}
+const titles:Record<Tab,string>={trading:'Intraday trading cockpit',journey:'Guided Research · Five steps',overview:'Research command center',workspace:'Research workspace',projects:'Projects and notebooks',data:'Data manager',dhan:'Download market data',nse:'NSE Sources',research:'Index research engine',factors:'Factor laboratory',construction:'Index construction',comparisons:'Index comparisons',mathematics:'Advanced mathematics',rolling:'Rolling validation',models:'Quantitative models',risk:'Risk attribution',robustness:'Robustness & sensitivity',visual:'Visual validation',reports:'Research reports',history:'Results Studio · Research Intelligence',settings:'Workstation settings',guide:'How to use QuantLab'}
 const factors=[['momentum','Momentum'],['low_volatility','Low volatility'],['value','Value'],['quality','Quality'],['size','Size']] as const
 const number=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? v.toLocaleString('en-US',{maximumFractionDigits:d,minimumFractionDigits:d}) : '—'
 const percent=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? (v*100).toFixed(d)+'%' : '—'
@@ -492,6 +494,7 @@ function App(){
         <Suspense fallback={<div className="ws-empty" role="status" aria-live="polite">
           <LoaderCircle size={18}/> Loading {titles[tab]}…
         </div>}>
+        {tab==='trading'&&<TradingCockpit/>}
         {tab==='journey'&&<ResearchJourney datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
           onDataChanged={refresh} onOpenData={()=>begin('data')}
