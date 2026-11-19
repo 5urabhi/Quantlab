@@ -1,0 +1,47 @@
+/* Distinguish hypothetical index exposure from actual tradable options. */
+.tc-index-scenario{display:grid;gap:15px;border:1px solid #426b76;border-radius:12px;background:linear-gradient(140deg,#122b3b,#122237 70%);padding:17px;min-width:0}
+.tc-index-scenario-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px}
+.tc-index-scenario-head>div{flex:1;min-width:260px}
+.tc-index-scenario-head h3{font-size:20px;margin:6px 0;color:#effaff}
+.tc-index-scenario-head p{font-size:12px;line-height:1.5;color:#abc8d9;margin:0}
+.tc-index-nonoption{display:inline-flex;align-items:center;gap:7px;padding:8px 11px;background:#423324;border:1px solid #866b47;color:#f5c994;border-radius:99px;font-size:11px;font-weight:800}
+.tc-index-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.tc-index-stats>div{display:grid;gap:7px;align-content:start;background:#162f44;border:1px solid #35546d;border-radius:10px;padding:13px;min-width:0}
+.tc-index-stats span{color:#a2c1d4;font-size:11px}
+.tc-index-stats strong{font-size:19px;color:#edf7ff;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.tc-index-stats small{color:#9db8c9;font-size:10px;line-height:1.5}
+.tc-index-stats .tc-illustrative-positive,.tc-illustrative-positive{color:#8decca!important}
+.tc-index-stats .tc-illustrative-negative,.tc-illustrative-negative{color:#f6a4ac!important}
+.tc-index-exit-rules{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.tc-index-exit-rules>div{padding:12px;background:#152938;border:1px solid #30546b;border-radius:9px}
+.tc-index-exit-rules strong{font-size:12px;color:#e3f5ff}
+.tc-index-exit-rules p{font-size:11px;color:#a5bdce;margin:7px 0 0;line-height:1.55}
+.tc-index-chart{display:grid;gap:7px;min-width:0;border:1px solid #355672;background:#101f2f;padding:13px;border-radius:10px}
+.tc-index-chart-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:9px}
+.tc-index-chart-head strong{display:inline-flex;align-items:center;gap:8px;color:#e6f5ff;font-size:13px}
+.tc-index-chart-head small{color:#bad5e5;font-size:11px;font-variant-numeric:tabular-nums}
+.tc-index-chart svg{max-width:100%;width:100%;height:auto;min-height:190px}
+.tc-index-grid{stroke:#38536a;stroke-width:1;stroke-dasharray:4 4}
+.tc-index-axis{fill:#93b2c6;font-size:11px;pointer-events:none}
+.tc-index-curve{fill:none;stroke:#65d4ae;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.tc-index-guide{stroke:#a2e9d2;stroke-width:1;stroke-dasharray:3 3}
+.tc-index-dot{fill:#e3fff5;stroke:#54bd9a;stroke-width:2}
+.tc-index-chart .tc-muted{font-size:10px;margin:0;line-height:1.5}
+.tc-index-footnotes{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.tc-index-footnotes>span{border:1px solid #38576c;background:#192f41;border-radius:6px;padding:9px 10px;color:#a5bdcc;font-size:11px}
+.tc-index-footnotes b{color:#d8f0ff}
+.tc-index-trade-details{border:1px solid #36576c;border-radius:10px;min-width:0;overflow:hidden;background:#132536}
+.tc-index-trade-details summary{cursor:pointer;padding:14px;font-size:13px;font-weight:750;color:#cce8f5}
+.tc-index-trade-details summary:hover{background:#1d3b51}
+.tc-index-trade-details .tc-table-scroll{max-height:450px}
+.tc-index-trade-details th{white-space:nowrap}
+.tc-index-trade-details td{white-space:nowrap;font-size:11px}
+.tc-index-skips{margin:0;color:#9db8c7;font-size:11px;line-height:1.6}
+.tc-index-disclaimer,.tc-index-zero{display:flex;align-items:flex-start;gap:12px;background:#3c3026;border:1px solid #896a49;padding:12px 14px;border-radius:8px;color:#f4d09a}
+.tc-index-disclaimer svg,.tc-index-zero svg{flex:none;margin-top:2px}
+.tc-index-disclaimer p,.tc-index-zero p{margin:0;line-height:1.6;font-size:11px}
+.tc-index-zero>div{flex:1}
+.tc-index-zero strong{font-size:13px}
+.tc-index-zero p{margin:6px 0 0}
+@media(max-width:1100px){.tc-index-exit-rules{grid-template-columns:repeat(2,minmax(0,1fr))}.tc-index-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:680px){.tc-index-exit-rules,.tc-index-stats{grid-template-columns:minmax(0,1fr)}.tc-index-scenario{padding:12px}.tc-index-nonoption{border-radius:9px}.tc-index-scenario-head h3{font-size:18px}}

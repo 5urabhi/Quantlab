@@ -79,23 +79,296 @@ try {
         api500.push(r.status()+' '+r.request().method()+' '+new URL(r.url()).pathname)
     } catch {}
   })
-  await step('backend and nine-destination shell', async()=>{
+  await step('backend and ten-destination shell', async()=>{
     const health=await apiJson('/api/health')
     assert.equal(health.broker_orders_enabled,false,'Broker execution must be off')
     assert.equal(health.dhan_token_configured,false,'CI fixture must have no broker token')
     await page.goto(base,{waitUntil:'domcontentloaded'})
     await page.getByText('ENGINE ONLINE',{exact:true}).waitFor({timeout:25000})
     const buttons = page.locator('aside .ws-nav-item')
-    assert.equal(await buttons.count(),9,'Exactly nine main destinations')
+    assert.equal(await buttons.count(),10,'Exactly ten main destinations including Trading Cockpit')
     await screenshot('01-home-desktop')
   })
   await step('all research destination views and nested navigation',async()=>{
-    for (const section of ['Guided Research','Home','Data Library','Model Laboratory','Experiment Studio',
+    for (const section of ['Trading Cockpit','Guided Research','Home','Data Library','Model Laboratory','Experiment Studio',
       'Compare & Visualize','Results Studio','Research Projects','Help & Settings']) {
       await nav(section).click()
       const header=page.locator('.ws-titlebar h1')
       assert.ok((await header.innerText()).length>2,'Destination must have a visible title: '+section)
     }
+    await nav('Trading Cockpit').click()
+    await page.getByText('Intraday trading cockpit',{exact:true}).first().waitFor()
+    const modes=page.getByRole('tablist',{name:'Trading cockpit workspaces'})
+    for(const name of ['Live Trading','Market Replay','Signal Backtest','Trade Journal','Connections']){
+      await modes.getByRole('tab',{name,exact:true}).waitFor()
+    }
+    // One focused panel at a time. No duplicated Trading Cockpit heading.
+    await modes.getByRole('tab',{name:'Live Trading'}).click()
+    await page.getByRole('tabpanel',{name:'Live Trading'}).waitFor()
+    await screenshot('01-trading-copilot-live-v4')
+    assert.equal(await page.locator('.tc-cockpit-v4>section[role="tabpanel"]').count(),1)
+    // The option chain is always a read-only snapshot, never an assumed
+    // tradable index or a real option fill. Exercise with explicit UI fixtures.
+    await page.route('**/api/trading-cockpit/options/expiries',route=>route.fulfill({
+      status:200,contentType:'application/json',
+      body:JSON.stringify({underlying:'BANKNIFTY',expiries:['2026-11-23'],
+        nearest_expiry:'2026-11-23',received_utc:new Date().toISOString(),
+        source:'Dhan v2 original expirylist',read_only:true,cache_hit:false}),
+    }))
+    await page.route('**/api/trading-cockpit/options/chain?*',route=>route.fulfill({
+      status:200,contentType:'application/json',
+      body:JSON.stringify({
+        underlying:'BANKNIFTY',underlying_identity:'INDEX:BANKNIFTY',
+        underlying_spot:62950,expiry:'2026-11-23',
+        received_utc:new Date().toISOString(),
+        source:'Dhan v2 read-only optionchain snapshot',
+        source_clock:'local_received_utc_not_exchange_quote_time',
+        not_live_stream:true,market_master_fresh:true,
+        master_message:'Official local master',master_age_hours:0,
+        read_only:true,quote_count:1,warning:'Snapshot only',cache_hit:false,
+        contracts:[{identity:'NSE_FNO:58742',symbol:'BANKNIFTY23NOV63000CE',
+          strike:63000,expiry:'2026-11-23',option_type:'CE',lot_size:30,
+          contract_master_verified:true,bid:299,ask:300,ltp:299.5,
+          top_bid_quantity:150,top_ask_quantity:150,oi:10000,volume:4000,
+          iv:13,delta:.5,theta:-12,gamma:.002,vega:10,
+          quote_valid:true,one_lot_ask_inr:9000,
+          one_lot_bid_inr:8970,spread_inr_per_lot:30}],
+      }),
+    }))
+    const optionPanel=page.getByRole('region',{name:'BANKNIFTY option chain and lot calculator'})
+    await optionPanel.getByRole('button',{name:'Refresh expiry list'}).click()
+    await optionPanel.getByRole('radio',{name:'Select 63000 CE'}).check()
+    await optionPanel.getByRole('spinbutton',{name:'BANKNIFTY option lots'}).fill('2')
+    await optionPanel.getByText('₹18,000.00',{exact:true}).waitFor()
+    await optionPanel.getByRole('button',{name:'Use for live 20-level depth'}).click()
+    await page.getByRole('textbox',{name:'Exact depth instrument'}).waitFor()
+    assert.equal(await page.getByRole('textbox',{name:'Exact depth instrument'}).inputValue(),
+      'NSE_FNO:58742')
+    await screenshot('01-trading-copilot-option-chain-lots-v7')
+    await optionPanel.getByRole('button',{name:'Prepare manual journal entry'}).click()
+    await page.getByRole('tabpanel',{name:'Trade Journal'}).waitFor()
+    assert.equal(await page.getByRole('textbox',{name:'Exact contract symbol'}).inputValue(),
+      'BANKNIFTY23NOV63000CE')
+    assert.equal(await page.getByRole('spinbutton',{name:'Trade quantity'}).inputValue(),
+      '60')
+    assert.equal(await page.getByRole('spinbutton',{name:'Trade entry premium'}).inputValue(),
+      '', 'Dhan best ask is not an actual broker fill')
+    await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
+      .getByRole('tab',{name:'Live Trading'}).click()
+    await page.unroute('**/api/trading-cockpit/options/expiries')
+    await page.unroute('**/api/trading-cockpit/options/chain?*')
+    await modes.getByRole('tab',{name:'Market Replay'}).click()
+    await page.getByRole('tabpanel',{name:'Market Replay'}).waitFor()
+    await page.getByRole('tablist',{name:'Market replay views'})
+      .getByRole('tab',{name:'Session playback'}).click()
+    await page.getByRole('region',{name:'Historical market replay'}).waitFor()
+    await screenshot('01-trading-copilot-replay-v4')
+    await page.getByRole('tablist',{name:'Market replay views'})
+      .getByRole('tab',{name:'Recorded 20-level books'}).click()
+    await page.getByRole('region',{name:'Captured live history'}).waitFor()
+    await modes.getByRole('tab',{name:'Signal Backtest'}).click()
+    await page.getByRole('tabpanel',{name:'Signal Backtest'}).waitFor()
+    await page.getByRole('region',{name:'Historical BANKNIFTY signal accuracy'}).waitFor()
+    await page.getByRole('region',{name:'Recorded prospective BANKNIFTY signal accuracy'}).waitFor()
+    await page.getByText('Phase 2 · BANKNIFTY options P&L backtest').waitFor()
+
+    const historicalOptions=page.getByRole('region',{
+      name:'Historical BANKNIFTY signals to options backtest',
+    })
+    await historicalOptions.getByRole('heading',{
+      name:'BANKNIFTY Signal → Historical CE/PE Backtest',
+    }).waitFor()
+    assert.equal(await historicalOptions.getByRole('spinbutton',{
+      name:'Historical option lots',
+    }).inputValue(),'3','Trading style defaults to three historical option lots')
+    assert.equal(await historicalOptions.getByRole('spinbutton',{
+      name:'Historical option target LTP',
+    }).inputValue(),'300','Original options target premium is INR 300')
+    assert.equal(await historicalOptions.getByRole('spinbutton',{
+      name:'Historical lot size assumption',
+    }).inputValue(),'30','Historic units per lot are a clearly labeled assumption')
+    await historicalOptions.getByText('90 option units',{exact:false}).waitFor()
+
+    // Exercise the actual UI -> read-only job POST -> completed job result
+    // without any real vendor access; every returned price is synthetic CI.
+    await page.route('**/api/trading-cockpit/options/backtest',route=>{
+      const request=route.request().postDataJSON()
+      assert.equal(request.confirm_readonly,true)
+      assert.equal(request.lots,3)
+      assert.equal(request.target_ltp,300)
+      assert.equal(request.hold_rule,'fixed')
+      return route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify({job_id:'ci_synthetic_options_fixture',status:'queued'})})
+    })
+    await page.route('**/api/jobs/ci_synthetic_options_fixture',route=>
+      route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify({
+          id:'ci_synthetic_options_fixture',status:'complete',percent:100,
+          result:{
+            mode:'HISTORICAL_DHAN_OPTION_OHLC_NEXT_OPEN_PROXY',
+            underlying:'INDEX:BANKNIFTY',
+            signal_source:'SYNTHETIC CI - NO DHAN MARKET DATA',
+            signal_model:'fixture',signal_events:1,actionable_signals:1,
+            auto_downloaded_missing_spot:false,
+            historical_window:{first:'2026-11-18',
+              through_exclusive:'2026-11-19',observed_index_bars:70},
+            data_evidence:{request_count:0,fresh_requests:0,
+              cached_requests:0,empty_requests:0,
+              unique_option_minute_bars:70,conflicted_excluded:0,
+              source:'SYNTHETIC BROWSER TEST',expiry_flag:'MONTH',
+              expiry_code:0,strike_wings:3},
+            selected_rule_id:'fixed_5',
+            selected:{
+              policy:'fixed',hold_minutes:5,time_cap_minutes:10,
+              trade_count:1,win_rate:1,winning_trades:1,losing_trades:0,
+              starting_capital_inr:50000,ending_capital_inr:51200,
+              net_pnl_inr:1200,return_pct:2.4,
+              max_closed_trade_drawdown_pct:0,average_hold_minutes:5,
+              total_assumed_fees_inr:40,unscored:{},
+              equity_curve:[
+                {timestamp_utc:'2026-11-18T04:00:00+00:00',equity_inr:50000},
+                {timestamp_utc:'2026-11-18T04:35:00+00:00',equity_inr:51200},
+              ],
+              trades:[{
+                signal_utc:'2026-11-18T04:29:00+00:00',
+                entry_utc:'2026-11-18T04:30:00+00:00',
+                exit_utc:'2026-11-18T04:35:00+00:00',
+                session_ist:'2026-11-18',underlying_direction:'UP',
+                option_side:'CE',strike:62000,selection_ltp:300,
+                entry_premium:301,exit_premium:314.78,
+                lots:3,lot_size_assumed:30,units:90,
+                capital_deployed_inr:27090,net_pnl_inr:1200,
+                account_balance_inr:51200,exit_reason:'fixed_hold',
+                hold_minutes:5,source_identity:'SYNTHETIC_CI',
+              }],
+            },
+            comparison:[{
+              rule_id:'fixed_5',label:'Fixed 5m',trade_count:1,
+              win_rate:1,net_pnl_inr:1200,return_pct:2.4,
+              ending_capital_inr:51200,max_closed_trade_drawdown_pct:0,
+              average_hold_minutes:5,unscored:{},
+            }],
+            assumptions:{premium_target_inr:300,premium_tolerance_inr:50,
+              lots:3,historical_lot_size_units:30,
+              lot_size_basis:'USER_INPUT_NOT_VERIFIED_FOR_EXPIRED_CONTRACTS',
+              slippage_bps_per_side:5,brokerage_inr_per_side:20,
+              profit_target_pct:5,stop_loss_pct:2.5},
+            limitations:'SYNTHETIC CI FIXTURE. No original Dhan data or broker fills.',
+            read_only:true,orders_placed:0,
+          },
+        })}))
+    await historicalOptions.getByRole('button',{
+      name:/Run BANKNIFTY → CE\/PE backtest/,
+    }).click()
+    await historicalOptions.getByRole('heading',{
+      name:'Historical CE/PE account results',
+    }).waitFor()
+    await historicalOptions.getByText('₹1,200.00',{exact:false}).first().waitFor()
+    await historicalOptions.getByRole('img',{
+      name:'Cumulative paper account balance with interactive trade timestamps',
+    }).waitFor()
+    await screenshot('01-trading-copilot-historical-options-synthetic-pnl')
+    await page.unroute('**/api/jobs/ci_synthetic_options_fixture')
+    await page.unroute('**/api/trading-cockpit/options/backtest')
+
+
+    await screenshot('01-trading-copilot-signal-backtest-v5')
+    await modes.getByRole('tab',{name:'Trade Journal'}).click()
+    await page.getByRole('tabpanel',{name:'Trade Journal'}).waitFor()
+    await page.getByRole('tablist',{name:'Trading journal views'})
+      .getByRole('tab',{name:'Prediction accuracy'}).click()
+    await page.getByRole('combobox',{name:'Prediction ledger index'}).waitFor()
+    await page.getByRole('button',{name:'Evaluate saved live outcomes'}).waitFor()
+    await modes.getByRole('tab',{name:'Connections'}).click()
+    await page.getByRole('tabpanel',{name:'Connections'}).waitFor()
+    await screenshot('01-trading-copilot-connections-v4')
+    // Regression: a structured FastAPI 400/422 is readable, not [object Object].
+    await page.route('**/api/trading-cockpit/instruments',route=>route.fulfill({
+      status:200,contentType:'application/json',
+      body:JSON.stringify({instruments:[{identity:'INDEX:BANKNIFTY',
+        display_name:'Bank Nifty · synthetic UI routing fixture',
+        asset_class:'spot_index',ready:true,state:'source_available'}],
+        prepared_equities:0,downloaded_equities_pending_preparation:0})
+    }))
+    await page.route('**/api/trading-cockpit/historical/series?*',route=>route.fulfill({
+      status:422,contentType:'application/json',
+      body:JSON.stringify({detail:{code:'index_source_missing',
+        message:'Original index candles failed source validation'}})
+    }))
+    await nav('Home').click()
+    await nav('Trading Cockpit').click()
+    // Browser fixture asserts historical horizons, money labels and entry/exit
+    // transparency WITHOUT claiming these are real options trades.
+    await page.route('**/api/trading-cockpit/replay?*',async route=>{
+      const url=new URL(route.request().url())
+      const horizon=Number(url.searchParams.get('horizon_minutes'))
+      assert.ok([1,3,5,6,10,30,60].includes(horizon))
+      const correct=7,incorrect=3
+      const overall={total:30,scored:10,correct,incorrect,pending:0,no_trade:12,
+        flat:1,unverifiable:2,directional_accuracy:.7,up_signals:8,
+        down_signals:4,actual_up:7,actual_down:3,live_observed:0,local_observed:0,
+        unscored_after_last_bar:2,unscored_missing_minute:0}
+      const entry='2026-11-18T04:16:00+00:00'
+      const exit='2026-11-18T04:21:00+00:00'
+      const scenario={
+        mode:'ILLUSTRATIVE_SIGNED_INDEX_EXPOSURE_ONLY',
+        horizon_minutes:horizon,starting_capital_inr:50000,ending_capital_inr:50050.2,
+        net_pnl_inr:50.2,net_return_pct:.1004,max_closed_trade_drawdown_pct:0,
+        cost_bps_per_side:0,allocation_pct:100,trade_count:1,winning_trades:1,
+        losing_trades:0,breakeven_trades:0,win_rate:1,
+        total_illustrative_cost_inr:0,
+        skipped:{no_signal:12,position_open:1,session_cutoff:1,
+          missing_entry:0,missing_exit_or_path:0},
+        equity_curve:[
+          {timestamp_utc:'2026-11-18T04:15:00+00:00',equity_inr:50000},
+          {timestamp_utc:exit,equity_inr:50050.2},
+        ],
+        latest_trades:[{session_ist:'2026-11-18',
+          signal_utc:'2026-11-18T04:15:00+00:00',entry_utc:entry,exit_utc:exit,
+          direction:'UP',side:'HYPOTHETICAL_LONG_INDEX',entry_points:63000,
+          exit_points:63063.25,index_move_pct:.1004,exposure_return_pct:.1004,
+          allocated_inr:50000,gross_pnl_inr:50.2,illustrative_cost_inr:0,
+          net_pnl_inr:50.2,equity_inr:50050.2}],
+        entry_policy:'UP long index scenario next open, DOWN short',exit_policy:'Fixed horizon open',
+        disclaimer:'An illustrative index scenario is not BANKNIFTY CE/PE option P&L.',
+      }
+      await route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify({identity:'INDEX:BANKNIFTY',horizon_minutes:horizon,
+          observed_source_bars:1500,model_version:'ema-rsi-1m-v1',
+          mode:'RETROSPECTIVE_HISTORICAL_RULE_REPLAY',overall,days:[],
+          latest_events:[{bar_utc:'2026-11-18T04:15:00+00:00',
+            session_ist:'2026-11-18',horizon_minutes:horizon,direction:'UP',
+            reference_close:63000,observed_close:63045,movement_bps:7.14,
+            actual_direction:'UP',evaluation:'CORRECT'}],
+          latest_signal_events:[],index_exposure_scenario:scenario,
+          source_warning:'synthetic UI fixture',disclaimer:'Historical simulation only.',
+          has_more_history:false})})
+    })
+    await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
+      .getByRole('tab',{name:'Signal Backtest'}).click()
+    await page.getByRole('combobox',{name:'Trade holding period'}).selectOption('5')
+    await page.getByRole('spinbutton',{name:'Illustrative starting capital'}).fill('50000')
+    await page.getByRole('button',{name:'Run signal + trade simulation'}).click()
+    await page.getByRole('region',{name:'Illustrative BANKNIFTY index-exposure investment simulation'}).waitFor()
+    await page.getByText('70%',{exact:true}).waitFor()
+    await page.getByText('₹50,050.20',{exact:true}).first().waitFor()
+    await page.getByText('Not an option P&L estimate',{exact:false}).waitFor()
+    await page.getByText(/Hold 5 minutes/).waitFor()
+    await page.getByText(/See 1 latest complete entries and exits/).click()
+    await page.getByText(/Short proxy|Long proxy/).waitFor()
+    await screenshot('01-trading-copilot-index-exposure-v6')
+    await page.getByRole('combobox',{name:'Trade holding period'}).selectOption('60')
+    await page.getByRole('button',{name:'Run signal + trade simulation'}).click()
+    await page.getByText(/Hold 60 minutes/).waitFor()
+    await screenshot('01-trading-copilot-hour-horizon-v6')
+    await page.unroute('**/api/trading-cockpit/replay?*')
+    await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
+      .getByRole('tab',{name:'Market Replay'}).click()
+    await page.getByText('Original index candles failed source validation',{exact:true}).waitFor()
+    assert.equal(await page.getByText('[object Object]',{exact:true}).count(),0)
+    await screenshot('01-trading-copilot-source-error-readable')
+    await page.unroute('**/api/trading-cockpit/instruments')
+    await page.unroute('**/api/trading-cockpit/historical/series?*')
     // The source assistant belongs in the Data Library shown in the UI.
     await nav('Data Library').click()
     const dataTabs=page.getByRole('navigation',{name:'Modules within selected research destination'})
@@ -111,7 +384,7 @@ try {
     assert.equal(await directNse.getByRole('button',{name:'Check NSE source'}).isEnabled(),true)
     await screenshot('01-nse-sources-visible-in-data-library')
     await dataTabs.getByRole('button',{name:'Data manager',exact:true}).click()
-    await page.locator('.mdw-root').getByRole('tab',{name:'My Datasets'}).waitFor()
+    await page.locator('.mdw-root').getByRole('tab',{name:'Market Library'}).waitFor()
     await dataTabs.getByRole('button',{name:'NSE Sources',exact:true}).click()
     await directNse.waitFor()
     await nav('Compare & Visualize').click()
@@ -254,7 +527,7 @@ try {
     const workspace=page.locator('.mdw-root')
     await workspace.getByRole('heading',{
       name:'Get the data. QuantLab handles the preparation.'}).waitFor()
-    for(const tab of ['Get Data','My Datasets','Downloads & Jobs'])
+    for(const tab of ['Get Data','Market Library','Download History'])
       await workspace.getByRole('tab',{name:tab}).waitFor()
     await workspace.getByRole('heading',{name:'Choose your research data'}).waitFor()
     assert.equal(await workspace.getByRole('heading',{name:'What history do you need?'}).count(),0,
@@ -301,9 +574,9 @@ try {
     await workspace.getByLabel('Stock ticker list').fill('RELIANCE\nTCS\n')
     await workspace.getByText('2 unique tickers').waitFor()
     await screenshot('02-unified-market-data-source-plan')
-    await workspace.getByRole('tab',{name:'My Datasets'}).click()
+    await workspace.getByRole('tab',{name:'Market Library'}).click()
     await workspace.getByRole('heading',{name:"Everything you've collected"}).waitFor()
-    await workspace.getByRole('tab',{name:'Downloads & Jobs'}).click()
+    await workspace.getByRole('tab',{name:'Download History'}).click()
     await workspace.getByRole('heading',{name:"See exactly what's happening"}).waitFor()
   })
   await step('Compare Workspace remains navigable after source review',async()=>{
@@ -484,7 +757,7 @@ try {
     await page.getByRole('region',{name:'Automatic model data acquisition'}).waitFor()
     assert.equal(await page.getByRole('button',{name:/Get & prepare data/}).count(),0,
       'Existing dataset extension must not show an unrelated general-universe batch CTA')
-    await page.locator('.mdw-root').getByRole('tab',{name:'My Datasets'}).click()
+    await page.locator('.mdw-root').getByRole('tab',{name:'Market Library'}).click()
     await page.locator('details.ws-tri-advanced.ws-data-advanced').first().locator('summary').first().click()
     await page.locator('.ws-dataset-advanced summary').waitFor()
     assert.equal(await page.locator('.ws-dataset-advanced').first().evaluate(el=>el.open),false,
@@ -598,7 +871,7 @@ try {
       name:'Download market data'
     }).click()
     const workspace=page.locator('.mdw-root')
-    await workspace.getByRole('tab',{name:'Downloads & Jobs'}).click()
+    await workspace.getByRole('tab',{name:'Download History'}).click()
     const detail=workspace.locator('.mdw-batch-detail')
     await detail.getByText('Dhan access needs attention').waitFor()
     await detail.getByText('Last attempted AUBANK').waitFor()

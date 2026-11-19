@@ -23,13 +23,13 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, Response, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response, HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -570,6 +570,445 @@ def data_manager_intraday_series(identity: str, start: str = "",
     try:
         return intraday_parquet.series(identity, start, end, limit)
     except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class TradingCockpitRecordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: str
+    horizon_minutes: Literal[3, 6] = 6
+
+
+@app.get("/api/trading-cockpit/instruments")
+def trading_cockpit_instruments():
+    return cockpit_sources.catalog(200)
+
+
+
+class TradingCockpitSourceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm_reuse_originals: bool = False
+
+
+@app.post("/api/trading-cockpit/sources/prepare")
+def trading_cockpit_prepare_sources(body: TradingCockpitSourceRequest):
+    """Rebuild missing chart views only from locally verified original files."""
+    if not body.confirm_reuse_originals:
+        raise HTTPException(400, "Confirm reuse of existing original minute candles")
+    try:
+        count = cockpit_sources.catalog(200)["downloaded_equities_pending_preparation"]
+        if not count:
+            return {"status": "already_prepared", "job_id": None,
+                    "message": "No downloaded one-minute sources need preparation."}
+        return _spawn("cockpit_prepare_existing", cockpit_sources.prepare_local)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class TradingCockpitSpotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: Literal["INDEX:BANKNIFTY", "INDEX:NIFTY50"]
+    from_date: str
+    to_date: str
+    confirm_readonly: bool = False
+
+
+@app.post("/api/trading-cockpit/sources/index-spot")
+def trading_cockpit_acquire_index_spot(body: TradingCockpitSpotRequest):
+    """Explicitly authorized read-only Dhan spot data, not constituent approximation."""
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Approve read-only original Dhan spot history")
+    try:
+        market_data_workflow._dates(body.from_date, body.to_date, 1)
+        if (datetime.fromisoformat(body.to_date).date() -
+                datetime.fromisoformat(body.from_date).date()).days > 90:
+            raise ValueError("Select at most 90 calendar days per index request")
+        access = dhan_auth.check_profile()
+        if not access.get("ok"):
+            raise ValueError(access.get("message") or "Dhan historical Data API unavailable")
+        return _spawn("cockpit_original_index_spot", cockpit_sources.download_spot,
+                      body.identity, body.from_date, body.to_date)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/snapshot")
+def trading_cockpit_snapshot(identity: str, limit: int = 500):
+    try:
+        original = cockpit_sources.series(identity, limit=limit)
+        result = trading_cockpit.snapshot(identity, original["rows"])
+        result["source_warning"] = original["warning"]
+        result["has_more"] = original["has_more"]
+        return result
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/historical/series")
+def trading_cockpit_historical_series(identity: str = "INDEX:BANKNIFTY",
+                                      limit: int = 5000):
+    """Original observed 1-minute candles for user-controlled session replay.
+
+    The browser never sees future bars until the replay cursor reaches them.
+    Only the existing shared-source adapters supply prices, never synthesized
+    index levels, historical option premiums or missing minute fills.
+    """
+    if not 1 <= limit <= 5000:
+        raise HTTPException(400, "Select between 1 and 5,000 original minute bars")
+    try:
+        original = cockpit_sources.series(identity, limit=limit)
+        rows = original["rows"]
+        by_session = {}
+        for row in rows:
+            day = row["session_ist"]
+            entry = by_session.setdefault(day, {
+                "date_ist": day, "observed_bars": 0,
+                "first_utc": row["timestamp_utc"],
+                "last_utc": row["timestamp_utc"],
+            })
+            entry["observed_bars"] += 1
+            entry["last_utc"] = row["timestamp_utc"]
+        return {
+            "identity": identity, "interval_minutes": 1, "rows": rows,
+            "sessions": sorted(by_session.values(),
+                               key=lambda item: item["date_ist"], reverse=True),
+            "has_more": bool(original.get("has_more")),
+            "source": original.get("basis", "verified_original_local_minute_candles"),
+            "source_warning": original.get("warning", ""),
+            "kind": "historical_not_streaming",
+            "note": "Replay exposes only already observed original one-minute bars. "
+                    "Missing timestamps are never synthesized; original index "
+                    "candles are not options quotes, option P&L or a live feed.",
+        }
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/predictions")
+def trading_cockpit_record(body: TradingCockpitRecordRequest):
+    try:
+        original = cockpit_sources.series(body.identity, limit=500)
+        observation = trading_cockpit.snapshot(body.identity, original["rows"])
+        if observation["quote_mode"] != "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE":
+            raise ValueError("Cannot create a prospective prediction from stale historical bars")
+        return trading_cockpit.record(observation, body.horizon_minutes)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/evaluate")
+def trading_cockpit_evaluate(body: TradingCockpitRecordRequest):
+    try:
+        original = cockpit_sources.series(body.identity, limit=5000)
+        return trading_cockpit.evaluate(
+            body.identity, original["rows"],
+            source_modes=frozenset({"RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE"}))
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/predictions")
+def trading_cockpit_predictions(identity: str = "", limit: int = 50):
+    try:
+        return trading_cockpit.list_predictions(identity, limit)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/monitor/tick")
+def trading_cockpit_monitor_tick(body: TradingCockpitRecordRequest):
+    try:
+        original = cockpit_sources.series(body.identity, limit=5000)
+        return trading_cockpit.observe_and_score(body.identity, original["rows"])
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/report")
+def trading_cockpit_report(identity: str, date_ist: str = "",
+                           horizon_minutes: Literal["3", "6"] | None = None):
+    # FastAPI/Pydantic query parameters arrive as text, not JSON numbers.
+    # Integer Literals reject even valid ?horizon_minutes=3 with HTTP 422.
+    try:
+        return trading_cockpit.day_report(
+            identity, date_ist,
+            horizon_minutes=int(horizon_minutes) if horizon_minutes else None)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/replay")
+def trading_cockpit_replay(
+    identity: str, horizon_minutes: Literal["1", "3", "5", "6", "10", "30", "60"] = "6",
+    limit: int = 1500, starting_capital: float = 50_000.0,
+    allocation_pct: float = 100.0, cost_bps_per_side: float = 0.0,
+    hold_rule: Literal["fixed", "signal_reversal", "signal_reversal_or_cap"] = "fixed",
+    hold_minutes: Literal["1", "3", "5", "6", "10", "30", "60"] | None = None,
+    reversal_cap_minutes: int = 10,
+):
+    """Historical index rule accuracy + NON-EXECUTABLE rupee exposure scenario.
+
+    The prospective prediction ledger intentionally retains its independent,
+    existing 3/6-minute horizons and never uses these simulated fills.
+    """
+    try:
+        original = cockpit_sources.series(identity, limit=limit)
+        result = trading_cockpit.historical_replay(
+            identity, original["rows"], int(horizon_minutes),
+            starting_capital=starting_capital, allocation_pct=allocation_pct,
+            cost_bps_per_side=cost_bps_per_side, hold_rule=hold_rule,
+            hold_minutes=int(hold_minutes) if hold_minutes else None,
+            reversal_cap_minutes=reversal_cap_minutes)
+        result["source_warning"] = original["warning"]
+        result["has_more_history"] = original["has_more"]
+        return result
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+
+
+class HistoricalOptionsBacktestRequest(BaseModel):
+    """Read-only BANKNIFTY index signals mapped onto historical Dhan CE/PE bars."""
+    model_config = ConfigDict(extra="forbid")
+    limit: Literal[500, 1500, 3000, 5000] = 1500
+    expiry_flag: Literal["MONTH", "WEEK"] = "MONTH"
+    expiry_code: Literal[0, 1, 2] = 0
+    wings: int = Field(default=3, ge=0, le=5)
+    target_ltp: float = Field(default=300, ge=10, le=20000, allow_inf_nan=False)
+    tolerance: float = Field(default=50, ge=0, le=5000, allow_inf_nan=False)
+    lots: int = Field(default=3, ge=1, le=20)
+    lot_size: int = Field(default=30, ge=1, le=100)
+    starting_capital: float = Field(default=50000, ge=1000, le=100000000, allow_inf_nan=False)
+    stop_pct: float = Field(default=2.5, ge=.1, le=50, allow_inf_nan=False)
+    target_pct: float = Field(default=5, ge=.1, le=100, allow_inf_nan=False)
+    slippage_bps: float = Field(default=5, ge=0, le=500, allow_inf_nan=False)
+    fee_per_side: float = Field(default=20, ge=0, le=1000, allow_inf_nan=False)
+    hold_rule: Literal["fixed", "signal_reversal", "signal_reversal_or_cap",
+                       "premium_target_stop", "hybrid"] = "fixed"
+    hold_minutes: Literal[1, 3, 5, 6, 10, 30, 60] = 5
+    reversal_cap_minutes: int = Field(default=10, ge=1, le=120)
+    confirm_readonly: bool = False
+
+
+@app.post("/api/trading-cockpit/options/backtest")
+def trading_cockpit_options_backtest(body: HistoricalOptionsBacktestRequest):
+    """Start one bounded read-only options data acquisition and backtest job.
+
+    Source is original Dhan rolling one-minute CE/PE data, NOT index-proxy
+    returns and NEVER a live or historical order submission.
+    """
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Confirm read-only Dhan expired-options historical data acquisition")
+    try:
+        parameters = body.model_dump(exclude={"confirm_readonly"})
+        expired_options_backtest._validate_params(**parameters)
+        return _spawn("cockpit_dhan_expired_option_backtest",
+                      expired_options_backtest.run_backtest, **parameters)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class LiveCopilotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    index_identity: Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"] = "INDEX:BANKNIFTY"
+    depth_identity: str = Field(default="",max_length=30)
+    auto_audit: bool = False
+    confirm_live_data: bool = False
+
+
+@app.get("/api/trading-cockpit/options/expiries")
+def trading_cockpit_option_expiries():
+    """Current original Dhan BANKNIFTY expiries. Read-only, locally authenticated."""
+    try:
+        return option_chain_live.expiries()
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/options/chain")
+def trading_cockpit_option_chain(expiry: str, force_refresh: bool = False):
+    """Actual CE/PE snapshots, verified lot master and NSE_FNO identifiers."""
+    try:
+        return option_chain_live.chain(expiry, force_refresh=force_refresh)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/live/contracts")
+def trading_cockpit_live_contracts(query: str = "BANKNIFTY", limit: int = 30):
+    try:
+        return live_market.search_contracts(query,limit)
+    except (ValueError,OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/live/status")
+def trading_cockpit_live_status():
+    return live_market.status()
+
+
+@app.get("/api/trading-cockpit/live/events")
+def trading_cockpit_live_events():
+    """Same-origin server-sent updates, not repeated full-page reloading."""
+    return StreamingResponse(
+        live_market.events(), media_type="text/event-stream",
+        headers={"Cache-Control":"no-cache, no-transform", "X-Accel-Buffering":"no"})
+
+
+@app.post("/api/trading-cockpit/live/start")
+def trading_cockpit_live_start(body: LiveCopilotRequest):
+    if not body.confirm_live_data:
+        raise HTTPException(400,"Approve read-only Dhan real-time data recording")
+    if body.depth_identity and not market_depth.DEPTH_ID.fullmatch(body.depth_identity):
+        raise HTTPException(400,"20-level depth is supported for exact NSE_EQ/NSE_FNO identities, not IDX_I")
+    if not os.getenv("DHAN_CLIENT_ID","").strip():
+        raise HTTPException(400,"Add your Dhan client ID in the cockpit's secure connection panel")
+    if not os.getenv("DHAN_ACCESS_TOKEN","").strip():
+        raise HTTPException(400,"Add a Dhan access token in the cockpit connection panel")
+    try:
+        verified=dhan_auth.check_profile()
+        if not verified.get("ok"):
+            raise ValueError(verified.get("message") or "Dhan market data access unverified")
+        return live_market.start(body.index_identity,body.depth_identity,body.auto_audit)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/live/stop")
+def trading_cockpit_live_stop():
+    return live_market.stop()
+
+
+@app.get("/api/trading-cockpit/live/minutes")
+def trading_cockpit_live_minutes(identity: str="INDEX:BANKNIFTY",limit:int=500):
+    try:
+        return live_market.minute_series(identity,limit)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/live/signal")
+def trading_cockpit_live_signal(identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY"):
+    """Never substitute stale historical candles for authenticated live data."""
+    try:
+        original=live_market.minute_series(identity,500)
+        state=live_market.status()
+        if not original["rows"]:
+            return {"ready":False,"identity":identity,"source_kind":"Dhan live LTP",
+                    "reason":"No completed observed 1-minute candles yet",
+                    "quote_mode":"NO_LIVE_OBSERVATIONS"}
+        result=trading_cockpit.snapshot(identity,original["rows"])
+        fresh=(state.get("active") and state.get("ticker_connection")=="connected"
+               and state.get("quotes",{}).get(identity,{}).get("fresh",False))
+        recent=(result["quote_mode"]=="RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE")
+        result["source_kind"]="locally_aggregated_Dhan_live_LTP"
+        result["quote_mode"]="LIVE_OBSERVED" if fresh and recent else "HISTORICAL_OR_STALE"
+        result["ready"]=bool(fresh and recent and result["contiguous_session_bars"]>=30)
+        result["source_warning"]=original["source_warning"]
+        result["note"]="Observed Dhan live index LTP; incomplete ticks and missing minutes are not reconstructed. No option premium is predicted."
+        return result
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/live/predictions")
+def trading_cockpit_live_record(body: TradingCockpitRecordRequest):
+    if body.identity not in live_market.INDEX:
+        raise HTTPException(400,"Live directional predictions require genuine IDX_I observations")
+    observation=trading_cockpit_live_signal(body.identity)
+    if not observation.get("ready"):
+        raise HTTPException(400,"Live stream or 30 consecutive completed minute bars are not yet ready")
+    try:
+        return trading_cockpit.record(observation,body.horizon_minutes)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/live/evaluate")
+def trading_cockpit_live_evaluate(body: TradingCockpitRecordRequest):
+    if body.identity not in live_market.INDEX:
+        raise HTTPException(400,"Live evaluation requires the index spot identity")
+    try:
+        source=live_market.minute_series(body.identity,5000)
+        return trading_cockpit.evaluate(
+            body.identity, source["rows"],
+            source_modes=frozenset({"LIVE_OBSERVED"}))
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/live/replay")
+def trading_cockpit_live_replay(
+    identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY",
+    horizon_minutes:Literal["3","6"]="6",limit:int=1500):
+    """Past live-captured minute bars, not the 20-level stream transformed to prices."""
+    try:
+        source=live_market.minute_series(identity,limit)
+        result=trading_cockpit.historical_replay(identity,source["rows"],int(horizon_minutes))
+        result["source_kind"]=source["basis"]
+        result["source_warning"]=source["source_warning"]
+        result["has_more_history"]=source["has_more"]
+        return result
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/live/capture-catalog")
+def trading_cockpit_live_capture_catalog():
+    try:
+        return live_market.capture_catalog()
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/live/depth-history")
+def trading_cockpit_live_depth_history(identity: str,limit:int=150):
+    try:
+        return live_market.latest_depth_history(identity,limit)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+class ManualScalpEntryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str = Field(min_length=2, max_length=48)
+    direction: Literal["CALL", "PUT"]
+    quantity: int = Field(gt=0, le=1_000_000)
+    entry_price: float = Field(gt=0, le=1_000_000)
+    note: str = Field(default="", max_length=250)
+
+
+class ManualScalpExitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    exit_price: float = Field(ge=0, le=1_000_000)
+    fees_inr: float = Field(default=0, ge=0, le=100_000)
+
+
+@app.get("/api/trading-cockpit/trades")
+def trading_cockpit_trades(limit: int = 50):
+    try:
+        return manual_trade_journal.list_trades(limit)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/trades")
+def trading_cockpit_trade_enter(body: ManualScalpEntryRequest):
+    try:
+        return manual_trade_journal.enter(
+            body.symbol, body.direction, body.quantity, body.entry_price,
+            body.note)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/trades/{trade_id}/exit")
+def trading_cockpit_trade_exit(trade_id: str, body: ManualScalpExitRequest):
+    try:
+        return manual_trade_journal.exit_trade(
+            trade_id, body.exit_price, body.fees_inr)
+    except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
 
@@ -2165,6 +2604,7 @@ class DhanBatchCreate(BaseModel):
 class DhanLocalConnect(BaseModel):
     model_config = ConfigDict(extra="forbid")
     access_token: SecretStr
+    client_id: SecretStr | None = None
     confirm_local_storage: bool = False
 
 
@@ -2173,7 +2613,8 @@ def market_data_connect_dhan(body: DhanLocalConnect):
     """Explicit local-only, no-token-in-response Dhan account preflight."""
     try:
         return market_data_workflow.store_verified_dhan_access_token(
-            body.access_token.get_secret_value(), confirm_local_storage=body.confirm_local_storage)
+            body.access_token.get_secret_value(), confirm_local_storage=body.confirm_local_storage,
+            client_id=body.client_id.get_secret_value() if body.client_id else "")
     except Exception as exc:
         bad(exc)
 
@@ -2494,6 +2935,31 @@ def _run_bulk(batch_id: str, cancel: Event):
                               "it in the shared market library needs review: "+
                               job_safety.scrub(exc)[:140],
                     "next_action":"Database Manager → Market Library → Index original batches"}
+        # Make newly downloaded one-minute instruments usable immediately in
+        # Trading Cockpit. Only source-backed Parquet views are built; the
+        # canonical shared prices and immutable original Dhan receipts remain.
+        # Limit automatic work to moderate batches; large universes use the
+        # explicit cockpit preparation action to avoid surprise CPU/disk usage.
+        if outcome.get("status") == "completed" and not cancel.is_set():
+            try:
+                batch = dhan_workspace._load_batch(batch_id)
+                if batch.get("interval") == 1:
+                    identities = [row["id"] for row in batch.get("items", [])
+                                  if row.get("status") in ("complete", "cached")
+                                  and shared_market_data.SAFE_IDENTITY.fullmatch(
+                                      str(row.get("id", "")))]
+                    if len(identities) <= 30:
+                        outcome["minute_chart_preparation"] = cockpit_sources.prepare_local(
+                            identities)
+                    else:
+                        outcome["minute_chart_preparation"] = {
+                            "status": "manual_preparation_available",
+                            "source_count": len(identities),
+                            "note": "Open Trading Cockpit to prepare bounded source-backed chart views.",
+                        }
+            except (ValueError, OSError) as exc:
+                outcome["minute_chart_preparation"] = {
+                    "status": "needs_review", "reason": job_safety.scrub(exc)[:160]}
         # If the user previously enabled a small 1-minute cache, refresh
         # it after a successful original Dhan batch. Larger data remains a
         # visible manual action rather than an unexpected CPU/disk spike.

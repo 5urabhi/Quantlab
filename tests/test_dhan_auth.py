@@ -49,6 +49,31 @@ class DhanAuthTests(TestCase):
         self.assertTrue(result["data_plan_active"])
         self.assertNotIn("SECRET_PRIVATE_ACCOUNT", str(result))
         self.assertNotIn("SECRET_PRIVATE_TOKEN", str(result))
+        self.assertIsInstance(result["seconds_remaining"], int)
+        self.assertGreater(result["seconds_remaining"], 0)
+        self.assertIsNotNone(result["expires_at_utc"])
+        self.assertNotIn("SECRET_PRIVATE_ACCOUNT", result["expires_at_utc"])
+
+    def test_client_id_match_is_checked_without_exposing_identity(self):
+        future = datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(hours=12)
+        payload = {"dhanClientId":"1000001234",
+                   "tokenValidity":future.strftime("%d/%m/%Y %H:%M"),
+                   "dataPlan":"Active"}
+        good=dhan_auth.check_profile(
+            opener=lambda *a,**kw:MockResponse(payload),
+            token_override="PRIVATE_TEST_TOKEN",
+            client_id_override="1000001234")
+        self.assertTrue(good["ok"])
+        self.assertTrue(good["client_id_matches"])
+        self.assertNotIn("1000001234",str(good))
+        mismatch=dhan_auth.check_profile(
+            opener=lambda *a,**kw:MockResponse(payload),
+            token_override="PRIVATE_TEST_TOKEN",
+            client_id_override="1000009999")
+        self.assertFalse(mismatch["ok"])
+        self.assertFalse(mismatch["client_id_matches"])
+        self.assertEqual(mismatch["code"],"client_id_mismatch")
+        self.assertNotIn("1000001234",str(mismatch))
 
     def test_expired_token_is_not_truthy_validity(self):
         past = (datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=3))
@@ -59,6 +84,7 @@ class DhanAuthTests(TestCase):
         self.assertEqual(result["code"], "token_expired")
         self.assertFalse(result["token_valid"])
         self.assertFalse(result["ok"])
+        self.assertEqual(result["seconds_remaining"], 0)
 
     def test_data_api_inactive_does_not_pass(self):
         future = datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=1)

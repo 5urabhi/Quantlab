@@ -890,7 +890,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
           {observedNeeded&&<label className="ql-field"><span>1 · Market data source (shared library preferred)</span>
             <select aria-label="Model laboratory source dataset" value={selectedDataset} onChange={e=>onSelectDataset(e.target.value)}>
               <option value="">No dataset selected</option>
-              {datasets.map(d=><option key={d.id} value={d.id}>{d.label}{d.ready?'':' · incomplete'}</option>)}
+              {datasets.filter(d=>d.id==='dhan_shared'||!d.id.startsWith('dhan_')||d.id===selectedDataset).map(d=><option key={d.id} value={d.id}>{d.label}{d.ready?'':' · additional model evidence needed'}</option>)}
             </select></label>}
           {observedNeeded&&!selectedDataset&&onOpenData&&
             <button type="button" className="ql-source-needed-button" onClick={onOpenData}>

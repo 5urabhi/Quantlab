@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import './workstation.css'
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
+const TradingCockpit = lazy(() => import('./TradingCockpit'))
 const ModelLaboratory = lazy(() => import('./ModelLaboratory'))
 const ResearchGuide = lazy(() => import('./ResearchGuide'))
 const ResearchWorkspace = lazy(() => import('./ResearchWorkspace'))
@@ -38,8 +39,9 @@ type RunConfig = {
   validation_start:string;final_test_start:string;sector_cap:number|null
 }
 const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momentum:1,low_volatility:0,value:0,quality:0,size:0},top_n:10,weighting:'equal',max_weight:.2,rebalance_every:3,cost_bps:10,execution_lag:1,momentum_formation:12,momentum_skip:1,volatility_lookback:12,validation_start:'',final_test_start:'',sector_cap:null}
-type Tab = 'journey'|'overview'|'workspace'|'projects'|'data'|'dhan'|'nse'|'research'|'factors'|'construction'|'comparisons'|'mathematics'|'rolling'|'models'|'risk'|'robustness'|'visual'|'reports'|'history'|'settings'|'guide'
+type Tab = 'trading'|'journey'|'overview'|'workspace'|'projects'|'data'|'dhan'|'nse'|'research'|'factors'|'construction'|'comparisons'|'mathematics'|'rolling'|'models'|'risk'|'robustness'|'visual'|'reports'|'history'|'settings'|'guide'
 const primarySections:{id:Tab;label:string;icon:typeof Activity;tabs:Tab[]}[]=[
+ {id:'trading',label:'Trading Cockpit',icon:Activity,tabs:['trading']},
  {id:'journey',label:'Guided Research',icon:Play,tabs:['journey']},
  {id:'overview',label:'Home',icon:Gauge,tabs:['overview']},
  {id:'data',label:'Data Library',icon:Database,tabs:['data','dhan','nse']},
@@ -54,7 +56,7 @@ const primarySections:{id:Tab;label:string;icon:typeof Activity;tabs:Tab[]}[]=[
  {id:'guide',label:'Help & Settings',icon:Settings2,tabs:['guide','settings']},
 ]
 
-const titles:Record<Tab,string>={journey:'Guided Research · Five steps',overview:'Research command center',workspace:'Research workspace',projects:'Projects and notebooks',data:'Data manager',dhan:'Download market data',nse:'NSE Sources',research:'Index research engine',factors:'Factor laboratory',construction:'Index construction',comparisons:'Index comparisons',mathematics:'Advanced mathematics',rolling:'Rolling validation',models:'Quantitative models',risk:'Risk attribution',robustness:'Robustness & sensitivity',visual:'Visual validation',reports:'Research reports',history:'Results Studio · Research Intelligence',settings:'Workstation settings',guide:'How to use QuantLab'}
+const titles:Record<Tab,string>={trading:'Intraday trading cockpit',journey:'Guided Research · Five steps',overview:'Research command center',workspace:'Research workspace',projects:'Projects and notebooks',data:'Data manager',dhan:'Download market data',nse:'NSE Sources',research:'Index research engine',factors:'Factor laboratory',construction:'Index construction',comparisons:'Index comparisons',mathematics:'Advanced mathematics',rolling:'Rolling validation',models:'Quantitative models',risk:'Risk attribution',robustness:'Robustness & sensitivity',visual:'Visual validation',reports:'Research reports',history:'Results Studio · Research Intelligence',settings:'Workstation settings',guide:'How to use QuantLab'}
 const factors=[['momentum','Momentum'],['low_volatility','Low volatility'],['value','Value'],['quality','Quality'],['size','Size']] as const
 const number=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? v.toLocaleString('en-US',{maximumFractionDigits:d,minimumFractionDigits:d}) : '—'
 const percent=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? (v*100).toFixed(d)+'%' : '—'
@@ -265,6 +267,7 @@ function App(){
   const [auditResult,setAuditResult]=useState<Dict|null>(null)
   const [dhan,setDhan]=useState<DhanStatus|null>(null)
   const dataset=datasets.find(d=>d.id===selectedDataset)
+  const everydaySources=datasets.filter(d=>d.id==='dhan_shared'||d.kind!=='dhan'||d.id===selectedDataset)
   const selected=runs.find(r=>r.id===selectedRun)
   const metrics=detail?.meta.metrics_by_split??selected?.metrics_by_split??{}
   const split=Object.entries(metrics).at(-1)
@@ -290,8 +293,9 @@ function App(){
       setSelectedDataset(s=>{
         const existing=ds.datasets.find(d=>d.id===s)
         if(existing&&existing.kind!=='synthetic')return s
-        const prepared=ds.datasets.find(d=>d.kind==='dhan'&&d.has_prices)
-        return prepared?.id||(existing?.id)||ds.datasets.find(d=>d.ready)?.id||ds.datasets[0]?.id||''
+        const shared=ds.datasets.find(d=>d.id==='dhan_shared'&&d.has_prices)
+        const research=ds.datasets.find(d=>d.kind!=='dhan'&&d.kind!=='synthetic'&&d.has_prices)
+        return shared?.id||research?.id||existing?.id||ds.datasets.find(d=>d.ready)?.id||ds.datasets[0]?.id||''
       })
       setSelectedRun(s=>rr.runs.some(r=>r.id===s)?s:rr.runs[0]?.id||'')
     }catch(e){notify(errorMessage(e),true)}
@@ -401,7 +405,7 @@ function App(){
   }
   const downloadReport=()=>execute(()=>post<{job_id:string}>('/runs/'+selectedRun+'/reports',{}),r=>{setJob({id:r.job_id,kind:'reports',status:'queued'});notify('Report export queued.')})
   const runPicker=<select aria-label="Select completed experiment" className="ws-select" value={selectedRun} onChange={e=>setSelectedRun(e.target.value)}>{runs.length===0?<option value="">No runs yet</option>:runs.map(r=><option key={r.id} value={r.id}>{r.name} · {r.id}</option>)}</select>
-  const dataPicker=<select className="ws-select" aria-label="Select research dataset" value={selectedDataset} onChange={e=>{setSelectedDataset(e.target.value)}}><option value="">Choose dataset</option>{datasets.map(d=><option key={d.id} value={d.id}>{d.label}{d.ready?'':' (incomplete)'}</option>)}</select>
+  const dataPicker=<select className="ws-select" aria-label="Select research dataset" value={selectedDataset} onChange={e=>{setSelectedDataset(e.target.value)}}><option value="">Choose market source</option>{everydaySources.map(d=><option key={d.id} value={d.id}>{d.label}{d.ready?'':' (additional model evidence needed)'}</option>)}</select>
   const withRun=(content:React.ReactNode)=><>{runs.length===0?<Empty title="No research run selected" onAction={()=>begin('research')} action="Run an experiment">All charts are generated from Python research outputs, not hardcoded sample performance.</Empty>:<>{runPicker}{content}</>}</>
   const classification=<Tag tone={detail?.source.dataset_kind==='synthetic'?'warn':'blue'}>{detail?.source.dataset_kind==='synthetic'?'SYNTHETIC DATA — DEMONSTRATION':detail?'USER DATA · NOT INDEPENDENTLY AUDITED':'NO RESEARCH RUN'}</Tag>
   const chart=detail?<EquityChart rows={detail.returns}/>:null
@@ -492,6 +496,7 @@ function App(){
         <Suspense fallback={<div className="ws-empty" role="status" aria-live="polite">
           <LoaderCircle size={18}/> Loading {titles[tab]}…
         </div>}>
+        {tab==='trading'&&<TradingCockpit/>}
         {tab==='journey'&&<ResearchJourney datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
           onDataChanged={refresh} onOpenData={()=>begin('data')}
@@ -500,9 +505,9 @@ function App(){
           onOpenModels={()=>begin('mathematics')} onOpenResults={()=>begin('history')}/>}
         {tab==='overview'&&<>
           <div className="ws-overview-banner"><div><Tag tone="blue">RESEARCH CONTROL DESK / MODEL LAB V1</Tag><h2>One workstation.<br/><em>Every model, traceable.</em></h2><p>Keep datasets, factor experiments, risk calculations and generated evidence in one reproducible local research environment.</p><div className="ws-banner-actions"><button className="ws-button primary" onClick={()=>begin('journey')}><Play size={16}/> Start guided research</button><button className="ws-button secondary" onClick={()=>begin('dhan')}><Database size={16}/> Connect market data</button></div></div><div className="ws-banner-graphic"><div className="ws-orbit one"/><div className="ws-orbit two"/><div className="ws-orbit three"/><span className="ws-center-glow"><Activity size={45}/></span><span className="ws-orbit-label a">MOMENTUM</span><span className="ws-orbit-label b">RISK</span><span className="ws-orbit-label c">FACTOR</span></div></div>
-          <div className="ws-metrics-grid"><Metric label="Available datasets" value={String(datasets.length)} caption={datasets.filter(d=>d.ready).length+' ready for research'}/><Metric label="Completed runs" value={String(runs.length)} caption="Stored locally on disk"/><Metric label="DhanHQ data access" value={dhan?.token_configured?'SET':'NOT SET'} caption="Read-only market data"/><Metric label="Python computation" value={health?.ok?'ONLINE':'OFFLINE'} caption="127.0.0.1:8765" highlight/></div>
+          <div className="ws-metrics-grid"><Metric label="Market data library" value={datasets.some(d=>d.id==='dhan_shared')?'1':'—'} caption="One canonical set of downloaded stock prices"/><Metric label="Completed runs" value={String(runs.length)} caption="Stored locally on disk"/><Metric label="DhanHQ data access" value={dhan?.token_configured?'SET':'NOT SET'} caption="Read-only market data"/><Metric label="Python computation" value={health?.ok?'ONLINE':'OFFLINE'} caption="127.0.0.1:8765" highlight/></div>
           <div className="ws-grid two-thirds"><Card title="Portfolio research performance" extra={classification}>{chart??<Empty title="No historical run selected" onAction={()=>begin('research')} action="Configure experiment">Run the research engine to generate actual saved series and metrics.</Empty>}</Card><Card title="Latest research snapshot">{detail?<><div className="ws-overview-stat"><span>Strategy CAGR</span><strong>{percent(weighted(metric,'strategy_cagr'))}</strong></div><div className="ws-overview-stat"><span>Max drawdown</span><strong>{percent(weighted(metric,'max_drawdown'))}</strong></div><div className="ws-overview-stat"><span>Tracking error</span><strong>{percent(weighted(metric,'tracking_error'))}</strong></div><div className="ws-overview-stat"><span>Sample window</span><strong>{detail.meta.first_price_date?.slice(0,7)}–{detail.meta.last_price_date?.slice(0,7)}</strong></div><button className="ws-textlink" onClick={()=>begin('history')}>Inspect full run <ArrowRight size={15}/></button></>:<Empty title="Nothing to report">No metrics will appear until a Python experiment completes.</Empty>}</Card></div>
-          <div className="ws-grid halves"><Card title="Research datasets" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{datasets.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{datasets.length===0&&<p className="ws-caption">No datasets found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
+          <div className="ws-grid halves"><Card title="Market library & research inputs" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{everydaySources.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{everydaySources.length===0&&<p className="ws-caption">No market sources found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
         </>}
         {tab==='data'&&<>
           <MarketDataWorkspace key="library" initialPage="datasets" datasets={datasets}

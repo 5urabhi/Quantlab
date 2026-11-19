@@ -1,7 +1,7 @@
 """Offline validation for 1-minute Parquet and genuine market-depth evidence."""
 from __future__ import annotations
 
-from datetime import datetime,timezone
+from datetime import date,datetime,timedelta,timezone
 from hashlib import sha256
 from pathlib import Path
 from unittest.mock import patch
@@ -14,7 +14,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from workstation_api import dhan_workspace,intraday_parquet,market_depth,service
+from workstation_api import cockpit_sources,dhan_workspace,intraday_parquet,market_depth,service
 from workstation_api.app import app
 
 
@@ -184,6 +184,58 @@ class OriginalMicrostructureTests(unittest.TestCase):
             result=_run_bulk("batch_test",Event())
         self.assertEqual(result["minute_cache_refresh"],[{"status":"refreshed"}])
         refresh.assert_called_once_with("NSE_EQ:1333")
+
+    def test_cockpit_reuses_downloaded_minutes_without_new_dataset_or_provider(self):
+        self._minute_source()
+        before = cockpit_sources.catalog()
+        waiting = next(x for x in before["instruments"] if x["identity"] == self.identity)
+        self.assertFalse(waiting["ready"])
+        self.assertTrue(waiting["needs_preparation"])
+        with patch("workstation_api.index_spot.download") as provider:
+            completed = cockpit_sources.prepare_local([self.identity])
+            provider.assert_not_called()
+        self.assertEqual(completed["canonical_library_id"], "dhan_shared")
+        self.assertEqual(completed["external_market_requests"], 0)
+        self.assertEqual(completed["prepared_count"], 1)
+        self.assertEqual(completed["blocked_count"], 0)
+        after = self.client.get("/api/trading-cockpit/instruments")
+        self.assertEqual(after.status_code, 200, after.text)
+        self.assertTrue(next(x for x in after.json()["instruments"]
+                             if x["identity"] == self.identity)["ready"])
+        reused = cockpit_sources.prepare_local([self.identity])
+        self.assertEqual(reused["prepared_count"], 0)
+        self.assertEqual(reused["already_ready_count"], 1)
+
+    def test_index_source_requires_original_spot_not_bank_stock_candles(self):
+        self._minute_source()
+        catalog = cockpit_sources.catalog()
+        self.assertFalse(next(x for x in catalog["instruments"]
+                              if x["identity"] == "INDEX:BANKNIFTY")["ready"])
+        self.assertTrue(next(x for x in catalog["instruments"]
+                             if x["identity"] == "INDEX:BANKNIFTY")["needs_download"])
+        with self.assertRaisesRegex(ValueError, "original Dhan IDX_I"):
+            cockpit_sources.series("INDEX:BANKNIFTY")
+
+    def test_index_spot_fetch_requires_consent_entitlement_and_valid_dates(self):
+        start = (date.today() - timedelta(days=20)).isoformat()
+        stop = date.today().isoformat()
+        data = {"identity": "INDEX:BANKNIFTY",
+                "from_date": start, "to_date": stop}
+        refused = self.client.post("/api/trading-cockpit/sources/index-spot",
+                                   json={**data, "confirm_readonly": False})
+        self.assertEqual(refused.status_code, 400, refused.text)
+        with patch("workstation_api.dhan_auth.check_profile",
+                   return_value={"ok":False,"message":"No Data API entitlement"}):
+            denied = self.client.post("/api/trading-cockpit/sources/index-spot",
+                                      json={**data,"confirm_readonly":True})
+        self.assertEqual(denied.status_code, 400, denied.text)
+        self.assertIn("entitlement", denied.text)
+        long_start = (date.today() - timedelta(days=100)).isoformat()
+        with patch("workstation_api.dhan_auth.check_profile") as broker:
+            bad = self.client.post("/api/trading-cockpit/sources/index-spot",
+                json={**data,"from_date":long_start,"confirm_readonly":True})
+            broker.assert_not_called()
+        self.assertEqual(bad.status_code, 400, bad.text)
 
     def test_live_capture_requires_local_token_but_never_makes_orders(self):
         with patch.dict("os.environ",{"DHAN_ACCESS_TOKEN":"","DHAN_CLIENT_ID":""}):

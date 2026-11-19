@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -15,14 +15,15 @@ from urllib.request import Request, urlopen
 LOG = logging.getLogger("quantlab.dhan.auth")
 
 
-def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
+def check_profile(opener=urlopen, *, token_override: str | None = None,
+                  client_id_override: str | None = None) -> dict:
     """Verify existing or explicitly supplied one-time token; never return it."""
     token = (token_override if token_override is not None else os.getenv("DHAN_ACCESS_TOKEN", "")).strip()
     if not token:
         LOG.warning("Dhan profile preflight: token is missing from environment")
         return {"ok": False, "token_present": False, "token_valid": False,
                 "data_plan_active": False, "code": "token_missing",
-                "message": "Set DHAN_ACCESS_TOKEN in the project .env and restart QuantLab."}
+                "message": "Connect a Dhan access token in the QuantLab cockpit."}
     req = Request("https://api.dhan.co/v2/profile", headers={
         "access-token": token, "Accept": "application/json",
     }, method="GET")
@@ -35,7 +36,7 @@ def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
         if exc.code in (401, 403):
             return {"ok": False, "token_present": True, "token_valid": False,
                     "data_plan_active": False, "code": "auth_rejected",
-                    "message": "Dhan rejected this access token. Generate a fresh token in Dhan Web; restart the workstation."}
+                    "message": "Dhan rejected this access token. Enter a fresh token in QuantLab's Dhan connection panel."}
         return {"ok": False, "token_present": True, "token_valid": None,
                 "data_plan_active": None, "code": "profile_http_error",
                 "message": f"Dhan profile endpoint returned HTTP {exc.code}; token status not verified."}
@@ -58,12 +59,21 @@ def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
     try:
         valid_until = datetime.strptime(expiry, "%d/%m/%Y %H:%M").replace(
             tzinfo=ZoneInfo("Asia/Kolkata"))
-        token_valid = datetime.now(ZoneInfo("Asia/Kolkata")) < valid_until
+        remaining_seconds = max(0, int((valid_until - datetime.now(ZoneInfo("Asia/Kolkata"))).total_seconds()))
+        token_valid = remaining_seconds > 0
+        expires_at_utc = valid_until.astimezone(timezone.utc).isoformat()
     except ValueError:
         token_valid = None
+        remaining_seconds = None
+        expires_at_utc = None
     plan_active = state == "active"
-    if token_valid is False:
-        code, message = "token_expired", "Dhan access token expired. Generate a fresh access token in Dhan Web and restart the workstation."
+    client_matches = (client_id_override is None or
+                      str(payload.get("dhanClientId","")).strip() ==
+                      client_id_override)
+    if not client_matches:
+        code, message = "client_id_mismatch", "Dhan profile does not match the provided client ID. Check your account credentials."
+    elif token_valid is False:
+        code, message = "token_expired", "Dhan access token expired. Enter a fresh token in QuantLab's Dhan connection panel."
     elif token_valid is None:
         code, message = "token_expiry_unknown", "Dhan authenticated, but the token expiry field could not be interpreted."
     elif not plan_active:
@@ -73,8 +83,12 @@ def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
     LOG.log(logging.INFO if code == "ready" else logging.WARNING,
             "Dhan profile preflight result: code=%s token_valid=%s data_plan_active=%s",
             code, token_valid, plan_active)
-    return {"ok": bool(token_valid and plan_active), "token_present": True,
+    return {"ok": bool(token_valid and plan_active and client_matches), "token_present": True,
+            "client_id_matches":client_matches if client_id_override is not None else None,
+            "client_id_configured":bool(os.getenv("DHAN_CLIENT_ID","").strip()),
             "token_valid": token_valid, "data_plan_active": plan_active,
             "code": code, "message": message,
             "token_validity": expiry[:40],
+            "expires_at_utc": expires_at_utc,
+            "seconds_remaining": remaining_seconds,
             "data_validity": str(payload.get("dataValidity", ""))[:40]}
