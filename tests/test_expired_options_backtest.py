@@ -410,6 +410,69 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertIn("ATM+1", public_message)
         self.assertNotIn("SECRET-FOR-TEST-ONLY", public_message)
 
+    def test_partial_active_vendor_failure_preserves_other_contract_candles(self):
+        """One Dhan 400 on a newly listed CE must not discard valid PE data."""
+        from workstation_api import option_chain_live
+        listing = {
+            "available": True, "fresh": True,
+            "by_id": {
+                "41001": {"security_id": "41001", "expiry": "2026-11-23",
+                          "strike": 62000.0, "option_type": "CE", "lot_size": 30},
+                "41002": {"security_id": "41002", "expiry": "2026-11-23",
+                          "strike": 62000.0, "option_type": "PE", "lot_size": 30},
+            },
+        }
+        def source_response(body):
+            if body["securityId"] == "41001":
+                raise ValueError("Dhan active NSE_FNO options minute history failed (HTTP 400)")
+            prices = [300. + i * .5 for i in range(70)]
+            return {"timestamp": [
+                        int((START + timedelta(minutes=i)).timestamp())
+                        for i in range(70)],
+                    "open": prices, "high": [p + 1 for p in prices],
+                    "low": [p - 1 for p in prices], "close": prices,
+                    "volume": [100] * 70}
+        with patch.object(exp, "_ist_today",
+                          return_value=date(2026, 11, 19)), patch.object(
+                          option_chain_live, "_contracts", return_value=listing):
+            candles, evidence = exp.load_active_option_market(
+                source(), expiry_flag="MONTH", expiry_code=0,
+                wings=0, fetcher=source_response)
+        self.assertEqual(evidence["failed_contract_requests"], 1)
+        self.assertEqual(evidence["fresh_requests"], 1)
+        self.assertGreater(evidence["unique_option_minute_bars"], 0)
+        self.assertIn((stamp(29), "PUT"), candles)
+        self.assertNotIn((stamp(29), "CALL"), candles)
+
+    def test_master_refreshes_when_file_is_fresh_but_banknifty_ids_empty(self):
+        from unittest.mock import Mock
+        from workstation_api import option_chain_live
+        missing = {"available": True, "fresh": True,
+                   "by_id": {}, "message": "zero BANKNIFTY contracts"}
+        refreshed = {"available": True, "fresh": True, "by_id": {
+            "41001": {"security_id": "41001", "expiry": "2026-11-23",
+                      "strike": 62000., "option_type": "CE", "lot_size": 30},
+        }}
+        hits = Mock(return_value={"path": "original Dhan CSV"})
+        def source_response(body):
+            prices = [300.] * 70
+            return {"timestamp": [
+                        int((START + timedelta(minutes=i)).timestamp())
+                        for i in range(70)],
+                    "open": prices, "high": [301.] * 70,
+                    "low": [299.] * 70, "close": prices,
+                    "volume": [20] * 70}
+        with patch.object(exp, "_ist_today",
+                          return_value=date(2026, 11, 19)), patch.object(
+                          option_chain_live, "_contracts",
+                          side_effect=[missing, refreshed]):
+            candles, evidence = exp.load_active_option_market(
+                source(), expiry_flag="MONTH", expiry_code=0, wings=0,
+                fetcher=source_response, master_refresher=hits)
+        hits.assert_called_once()
+        self.assertGreater(evidence["unique_option_minute_bars"], 0)
+        self.assertIn((stamp(29), "CALL"), candles)
+
     def test_compact_master_uses_dhan_custom_symbol_when_trading_symbol_blank(self):
         from workstation_api import option_chain_live
         path = service.DATA / "dhan" / "instrument_master.csv"
