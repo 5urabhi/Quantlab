@@ -831,6 +831,14 @@ def trading_cockpit_live_replay(
         bad(exc)
 
 
+@app.get("/api/trading-cockpit/live/capture-catalog")
+def trading_cockpit_live_capture_catalog():
+    try:
+        return live_market.capture_catalog()
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/live/depth-history")
 def trading_cockpit_live_depth_history(identity: str,limit:int=150):
     try:
