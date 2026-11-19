@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useState} from 'react'
 import {AlertTriangle,ArrowRight,BarChart3,CheckCircle2,Database,RefreshCw,Target,TrendingDown,TrendingUp,Clock3} from 'lucide-react'
-import {marketApi,MarketApiError,readableError} from './tradingCockpitApi'
+import {marketApi,marketPost,MarketApiError,readableError} from './tradingCockpitApi'
 import './signal-backtest.css'
 
 type Source={identity:string;display_name?:string;ready:boolean;asset_class?:string}
@@ -61,6 +61,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
   const [recorded,setRecorded]=useState<Partial<Record<3|6,ForwardReport>>>({})
   const [ledger,setLedger]=useState<ForwardLedger|null>(null)
   const [recordedBusy,setRecordedBusy]=useState(false)
+  const [scoredNew,setScoredNew]=useState<number|null>(null)
   const [recordedError,setRecordedError]=useState<unknown>(null)
   const ready=instruments.some(s=>s.identity===INDEX&&s.ready)
   const tested=results[selected]
@@ -68,8 +69,18 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
   const noActionable=testsDone&&results[3]?.overall.scored===0&&results[6]?.overall.scored===0
 
   const refreshForward=useCallback(async()=>{
-    setRecordedBusy(true);setRecordedError(null)
+    setRecordedBusy(true);setRecordedError(null);setScoredNew(null)
     try{
+      // Reconcile only from original prepared or locally captured live bars,
+      // each with its own source provenance. These are read-only local APIs.
+      const request={identity:INDEX,horizon_minutes:6}
+      const reconciled=await Promise.allSettled([
+        marketPost<{updated:number}>('/api/trading-cockpit/evaluate',request),
+        marketPost<{updated:number}>('/api/trading-cockpit/live/evaluate',request),
+      ])
+      const updated=reconciled.reduce((sum,r)=>
+        sum+(r.status==='fulfilled'?r.value.updated:0),0)
+      setScoredNew(updated)
       const [three,six,observed]=await Promise.all([
         marketApi<ForwardReport>('/api/trading-cockpit/report?'+new URLSearchParams({
           identity:INDEX,horizon_minutes:'3'})),
@@ -218,10 +229,12 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
       <div className="tc-panel-title"><div><strong><Clock3 size={17}/> Recorded forward predictions</strong>
         <p className="tc-muted">Signals stored at the time of observation are scored separately from any retrospective simulation.</p></div>
         <button type="button" onClick={()=>void refreshForward()} disabled={recordedBusy}>
-          <RefreshCw size={15}/>{recordedBusy?'Refreshing…':'Refresh recorded signals'}</button></div>
+          <RefreshCw size={15}/>{recordedBusy?'Scoring available outcomes…':'Refresh and score recorded signals'}</button></div>
       {recordedError!==null&&<div className="tc-api-help" role="alert">
         <AlertTriangle size={19}/><div><strong>Unable to load the prediction ledger</strong>
         <p>{readableError(recordedError)}</p></div></div>}
+      {scoredNew!==null&&scoredNew>0&&<p className="tc-confirm" role="status">
+        Evaluated {scoredNew} recorded predictions using source-matched observed minute candles.</p>}
       <div className="tc-signal-forward-grid">
         {([3,6] as const).map(horizon=>{
           const info=recorded[horizon]
