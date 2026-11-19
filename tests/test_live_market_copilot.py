@@ -160,6 +160,30 @@ class LiveCopilotOfflineTests(TestCase):
         self.assertEqual(identities,["NSE_FNO:58742","NSE_FNO:58743"])
         self.assertNotIn("NSE_EQ:1333",identities)
 
+    def test_historical_session_replay_uses_only_original_minute_observations(self):
+        observations=[
+            {"timestamp_utc":(START+timedelta(minutes=m)).isoformat(),
+             "session_ist":"2026-11-19","open":63000+m,"high":63004+m,
+             "low":62996+m,"close":63002+m,"volume":0}
+            for m in (0,1,3)]
+        with patch("workstation_api.app.cockpit_sources.series",
+                   return_value={"rows":observations,"basis":"original_Dhan_IDX_I",
+                                 "warning":"Historical only","has_more":True}) as original:
+            response=self.client.get("/api/trading-cockpit/historical/series",
+                                     params={"identity":"INDEX:BANKNIFTY","limit":5000})
+        self.assertEqual(response.status_code,200,response.text)
+        data=response.json()
+        self.assertEqual(data["rows"],observations)
+        self.assertEqual(len(data["sessions"]),1)
+        self.assertEqual(data["sessions"][0]["observed_bars"],3)
+        self.assertEqual(data["kind"],"historical_not_streaming")
+        self.assertTrue(data["has_more"])
+        self.assertIn("never synthesized",data["note"])
+        original.assert_called_once_with("INDEX:BANKNIFTY",limit=5000)
+        invalid=self.client.get("/api/trading-cockpit/historical/series",
+                                params={"identity":"INDEX:BANKNIFTY","limit":5001})
+        self.assertEqual(invalid.status_code,400)
+
     def test_shared_minute_rows_are_not_labeled_original_vendor_history(self):
         snapshot=self.client.get("/api/trading-cockpit/live/minutes",
             params={"identity":"INDEX:BANKNIFTY"})
