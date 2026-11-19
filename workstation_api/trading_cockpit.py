@@ -303,6 +303,12 @@ def _report_summary(records: list[dict]) -> dict:
     return {
         "total": len(records),
         "correct": correct, "incorrect": incorrect,
+        "up_signals": sum(row["direction"] == "UP" for row in records),
+        "down_signals": sum(row["direction"] == "DOWN" for row in records),
+        "actual_up": sum(row["actual_direction"] == "UP" for row in records),
+        "actual_down": sum(row["actual_direction"] == "DOWN" for row in records),
+        "live_observed": sum(row.get("quote_mode") == "LIVE_OBSERVED" for row in records),
+        "local_observed": sum(row.get("quote_mode") == "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE" for row in records),
         "pending": sum(row["evaluation"] == "PENDING" for row in records),
         "no_trade": sum(row["evaluation"] == "NO_TRADE_REVIEWED" for row in records),
         "flat": sum(row["evaluation"] == "FLAT" for row in records),
@@ -312,21 +318,30 @@ def _report_summary(records: list[dict]) -> dict:
     }
 
 
-def day_report(identity: str, date_ist: str = "", *, limit: int = 2500) -> dict:
+def day_report(identity: str, date_ist: str = "", *, limit: int = 2500,
+               horizon_minutes: int | None = None) -> dict:
     """Operational day report from *prospectively logged* observations only.
 
     This is not inferred options P&L, nor a walk-forward performance claim.
     """
     if not 1 <= limit <= 20_000:
         raise ValueError("Invalid report limit")
+    if horizon_minutes is not None and horizon_minutes not in (3, 6):
+        raise ValueError("Select a 3- or 6-minute prediction horizon")
     if date_ist:
         try:
             datetime.strptime(date_ist, "%Y-%m-%d")
         except ValueError as exc:
             raise ValueError("Choose a valid YYYY-MM-DD Indian session") from exc
     with _connection() as conn:
-        rows = conn.execute("""SELECT * FROM predictions WHERE identity=?
-             ORDER BY created_utc DESC LIMIT ?""", (identity, limit)).fetchall()
+        if horizon_minutes is None:
+            rows = conn.execute("""SELECT * FROM predictions WHERE identity=?
+                 ORDER BY created_utc DESC LIMIT ?""", (identity, limit)).fetchall()
+        else:
+            rows = conn.execute("""SELECT * FROM predictions
+                 WHERE identity=? AND horizon_minutes=?
+                 ORDER BY created_utc DESC LIMIT ?""",
+                 (identity, horizon_minutes, limit)).fetchall()
     records = [_public(row) for row in rows]
     by_date: dict[str, list[dict]] = {}
     for record in records:
@@ -341,6 +356,7 @@ def day_report(identity: str, date_ist: str = "", *, limit: int = 2500) -> dict:
     return {
         "identity": identity,
         "date_filter": date_ist or None,
+        "horizon_minutes": horizon_minutes,
         "days": days,
         "overall": _report_summary([row for values in by_date.values() for row in values]),
         "source": "immutable-input prospective prediction ledger",
@@ -395,6 +411,7 @@ def historical_replay(identity: str, source_rows: list[dict],
         event = {
             "bar_utc": candle["timestamp_utc"],
             "session_ist": candle["session_ist"],
+            "horizon_minutes": horizon_minutes,
             "direction": observation["direction"],
             "reference_close": candle["close"], "observed_close": actual,
             "movement_bps": (round(10000*(actual/candle["close"]-1),2)
