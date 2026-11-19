@@ -400,7 +400,8 @@ def _normalize_active(payload: dict, contract: dict, days: set[str]) -> list[dic
 
 def load_active_option_market(spot_rows: list[dict], *,
                               expiry_flag: str, expiry_code: int, wings: int,
-                              fetcher=None, progress=None) -> tuple[dict, dict]:
+                              fetcher=None, progress=None,
+                              master_refresher=None) -> tuple[dict, dict]:
     """Supplement rolling expired options with exact active NSE_FNO contracts.
 
     Uses only fresh ORIGINAL Dhan instrument master. Expired contracts
@@ -409,10 +410,27 @@ def load_active_option_market(spot_rows: list[dict], *,
     from . import option_chain_live
     if expiry_flag != "MONTH":
         return {}, {"reason": "Active contract fallback currently supports monthly expiry"}
+    recent_days = {
+        row["session_ist"] for row in spot_rows
+        if date.fromisoformat(row["session_ist"]) >= datetime.now(IST).date() - timedelta(days=30)
+    }
+    if not recent_days:
+        return {}, {"reason": "Historical sample has no currently listed options; using archived expiry series"}
     master = option_chain_live._contracts()
+    if (not master.get("available") or not master.get("fresh")) and master_refresher is not None:
+        if progress:
+            progress(8, "Refreshing Dhan instrument master for current BANKNIFTY option contract IDs")
+        try:
+            master_refresher()
+            master = option_chain_live._contracts()
+        except (ValueError, OSError, TimeoutError) as exc:
+            return {}, {
+                "reason": "Automatic Dhan instrument-master refresh failed",
+                "next_action": str(exc)[:200],
+            }
     if not master.get("available") or not master.get("fresh"):
         return {}, {"reason": "Fresh Dhan contract master not present",
-                    "next_action": "Refresh official Dhan instrument master under Data Library"}
+                    "next_action": master.get("message") or "Refresh official Dhan instrument master under Data Library"}
     by_day: dict[str, list[dict]] = defaultdict(list)
     for row in spot_rows:
         by_day[row["session_ist"]].append(row)
@@ -724,7 +742,8 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
                  slippage_bps: float = 5, fee_per_side: float = 20,
                  hold_rule: str = "fixed", hold_minutes: int = 5,
                  reversal_cap_minutes: int = 10,
-                 fetcher=None, active_fetcher=None, throttle=None, progress=None) -> dict:
+                 fetcher=None, active_fetcher=None, throttle=None,
+                 master_refresher=None, progress=None) -> dict:
     """One-click original BANKNIFTY signals -> option-contract P&L proxy.
 
     Will re-use local verified option receipts, automatically requesting
@@ -779,7 +798,8 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
     try:
         active, active_evidence = load_active_option_market(
             rows, expiry_flag=expiry_flag, expiry_code=expiry_code,
-            wings=wings, fetcher=active_fetcher, progress=progress)
+            wings=wings, fetcher=active_fetcher, progress=progress,
+            master_refresher=master_refresher)
     except ValueError as exc:
         # A missing active entitlement must not prevent reuse of already
         # authenticated and SHA-verified expired source receipts.
