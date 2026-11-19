@@ -112,8 +112,9 @@ export default function TradingCockpit(){
   const [spotTo,setSpotTo]=useState(()=>indiaDate(1))
   const [identity,setIdentity]=useState('')
   const [snapshot,setSnapshot]=useState<Snapshot|null>(null)
-  const [history,setHistory]=useState<History|null>(null)
-  const [report,setReport]=useState<Report|null>(null)
+  const [journalHistory,setJournalHistory]=useState<History|null>(null)
+  const [journalReport,setJournalReport]=useState<Report|null>(null)
+  const [journalIdentity,setJournalIdentity]=useState<'INDEX:BANKNIFTY'|'INDEX:NIFTY50'>('INDEX:BANKNIFTY')
   const [replay,setReplay]=useState<Replay|null>(null)
   const [replayBusy,setReplayBusy]=useState(false)
   const [monitor,setMonitor]=useState(false)
@@ -289,15 +290,12 @@ export default function TradingCockpit(){
       if(monitorRef.current){
         await post('/api/trading-cockpit/monitor/tick',{identity,horizon_minutes:6})
       }
-      const [observed,ledger,daily]=await Promise.all([
-        api<Snapshot>('/api/trading-cockpit/snapshot?'+new URLSearchParams({identity,limit:'500'})),
-        api<History>('/api/trading-cockpit/predictions?'+new URLSearchParams({identity,limit:'60'})),
-        api<Report>('/api/trading-cockpit/report?'+new URLSearchParams({identity})),
-      ])
-      setSnapshot(observed);setHistory(ledger);setReport(daily)
+      const observed=await api<Snapshot>('/api/trading-cockpit/snapshot?'+
+        new URLSearchParams({identity,limit:'500'}))
+      setSnapshot(observed)
     }catch(e){setError(e instanceof Error?e.message:String(e))}
   },[identity])
-  useEffect(()=>{setSnapshot(null);setHistory(null);setReplay(null);setReport(null);void refresh()},[refresh])
+  useEffect(()=>{setSnapshot(null);setReplay(null);void refresh()},[refresh])
   useEffect(()=>{
     const timer=window.setInterval(()=>setNow(Date.now()),1000)
     return()=>window.clearInterval(timer)
@@ -307,18 +305,30 @@ export default function TradingCockpit(){
     const timer=window.setInterval(()=>{void refresh()},15000)
     return()=>window.clearInterval(timer)
   },[identity,refresh,paused,activeTab])
-  const action=async(kind:'record'|'evaluate')=>{
-    if(!identity||busy)return
+  const loadPredictionLedger=useCallback(async()=>{
+    const [ledger,daily]=await Promise.all([
+      api<History>('/api/trading-cockpit/predictions?'+new URLSearchParams({
+        identity:journalIdentity,limit:'100'})),
+      api<Report>('/api/trading-cockpit/report?'+new URLSearchParams({identity:journalIdentity})),
+    ])
+    setJournalHistory(ledger);setJournalReport(daily)
+  },[journalIdentity])
+  useEffect(()=>{
+    if(activeTab!=='journal'||journalView!=='accuracy')return
+    void loadPredictionLedger().catch(e=>setError(e instanceof Error?e.message:String(e)))
+    const interval=window.setInterval(()=>{
+      void loadPredictionLedger().catch(e=>setError(e instanceof Error?e.message:String(e)))
+    },20000)
+    return()=>window.clearInterval(interval)
+  },[activeTab,journalView,loadPredictionLedger])
+  const evaluateJournal=async()=>{
+    if(busy)return
     setBusy(true);setRecordMessage('');setError('')
     try{
-      if(kind==='record'){
-        const recorded=await post('/api/trading-cockpit/predictions',{identity,horizon_minutes:horizon}) as Entry
-        setRecordMessage('Saved unchanged: '+recorded.direction+' at '+recorded.bar_utc)
-      }else{
-        const data=await post('/api/trading-cockpit/evaluate',{identity,horizon_minutes:horizon}) as History & {updated:number}
-        setRecordMessage('Evaluated '+data.updated+' predictions against available source bars.')
-      }
-      await refresh()
+      const data=await post('/api/trading-cockpit/live/evaluate',{
+        identity:journalIdentity,horizon_minutes:6}) as {updated:number}
+      setRecordMessage('Evaluated '+data.updated+' recorded calls using observed live index minutes. Historical gaps are not invented.')
+      await loadPredictionLedger()
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
@@ -349,7 +359,7 @@ export default function TradingCockpit(){
   const sourceWorking=sourceBusy||['queued','running'].includes(sourceJob?.status||'')
   const forecast=snapshot?.direction??'NO_TRADE'
   const sourceRecent=snapshot?.quote_mode==='RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE'
-  const summary=history?.summary
+  const summary=journalHistory?.summary
   const marketWindow=nseMarketWindow(now)
   const activeQuote=liveHeader?.index_identity?liveHeader.quotes?.[liveHeader.index_identity]:undefined
   const liveFeedFresh=Boolean(liveHeader?.active&&liveHeader.ticker_connection==='connected'
@@ -547,15 +557,26 @@ export default function TradingCockpit(){
 
       </>}
       {journalView==='accuracy'&&<>
-    <section className="tc-panel tc-ledger"><div className="tc-panel-title"><strong>Permanent prediction ledger</strong><button onClick={()=>void action('evaluate')} disabled={!identity||busy}>Evaluate recorded outcomes</button></div>
+        <div className="tc-toolbar tc-journal-source">
+          <label>Prediction ledger index
+            <select aria-label="Prediction ledger index" value={journalIdentity}
+              onChange={event=>{setJournalIdentity(event.target.value as 'INDEX:BANKNIFTY'|'INDEX:NIFTY50');setJournalHistory(null);setJournalReport(null)}}>
+              <option value="INDEX:BANKNIFTY">BANKNIFTY</option>
+              <option value="INDEX:NIFTY50">NIFTY 50</option>
+            </select>
+          </label>
+          <button type="button" onClick={()=>void loadPredictionLedger()}><RefreshCw size={15}/> Refresh accuracy</button>
+          <span className="tc-muted">Uses permanent prospective records, independently of the historical chart selection.</span>
+        </div>
+    <section className="tc-panel tc-ledger"><div className="tc-panel-title"><strong>Permanent prediction ledger</strong><button onClick={()=>void evaluateJournal()} disabled={busy}>Evaluate saved live outcomes</button></div>
       <div className="tc-ledger-summary"><span>Scored directions <strong>{summary?.evaluated_directions??0}</strong></span><span>Correct directions <strong>{summary?.correct_directions??0}</strong></span><span>Directional accuracy <strong>{summary?.direction_accuracy===null||summary?.direction_accuracy===undefined?'Not enough observations':(summary.direction_accuracy*100).toFixed(1)+'%'}</strong></span></div>
       {recordMessage&&<p role="status" className="tc-confirm">{recordMessage}</p>}
       <p className="tc-muted">Directional accuracy excludes no-trade decisions, flat moves and unverifiable source gaps. No historical option P&L is inferred from spot candles.</p>
       {monitor&&<p className="tc-confirm">Auto-audit enabled in this browser tab. Every 15 seconds QuantLab records both 3/6-minute calls only from freshly completed original source bars and scores due outcomes. Closing the page stops monitoring. A current local candle alone is not evidence of a streaming broker connection.</p>}
       <div className="tc-report-title"><h3>End-of-day accuracy · prospective ledger only</h3><span className="tc-muted">No option trade P&amp;L or validated alpha</span></div>
-      <div className="tc-ledger-summary"><span>Logged decisions <strong>{report?.overall.total??0}</strong></span><span>Direction score <strong>{report?.overall.directional_accuracy===null||report?.overall.directional_accuracy===undefined?'—':(report.overall.directional_accuracy*100).toFixed(1)+'%'}</strong></span><span>Pending <strong>{report?.overall.pending??0}</strong></span><span>Source gaps <strong>{report?.overall.unverifiable??0}</strong></span></div>
-      <div className="tc-table-scroll"><table><thead><tr><th>Session IST</th><th>Calls</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Pending</th><th>Gaps</th><th>Accuracy</th></tr></thead><tbody>{report?.days.map(day=><tr key={day.session_ist}><td>{day.session_ist}</td><td>{day.total}</td><td>{day.scored}</td><td>{day.correct}</td><td>{day.incorrect}</td><td>{day.no_trade}</td><td>{day.pending}</td><td>{day.unverifiable}</td><td>{day.directional_accuracy===null?'—':(day.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}{!report?.days.length&&<tr><td colSpan={9}>No prospective logged decisions yet.</td></tr>}</tbody></table></div>
-      <div className="tc-table-scroll"><table><thead><tr><th>Recorded UTC</th><th>Source bar UTC</th><th>Signal</th><th>Horizon</th><th>Reference</th><th>Observed</th><th>Outcome</th></tr></thead><tbody>{history?.predictions.map(x=><tr key={x.id}><td>{x.created_utc.slice(0,19)}</td><td>{x.bar_utc.slice(0,19)}</td><td>{x.direction}</td><td>{x.horizon_minutes}m</td><td>{fmt(x.reference_close)}</td><td>{fmt(x.observed_close)}</td><td>{x.evaluation.replaceAll('_',' ')}</td></tr>)}{!history?.predictions.length&&<tr><td colSpan={7}>No prospective predictions logged for this instrument yet.</td></tr>}</tbody></table></div>
+      <div className="tc-ledger-summary"><span>Logged decisions <strong>{journalReport?.overall.total??0}</strong></span><span>Direction score <strong>{journalReport?.overall.directional_accuracy===null||journalReport?.overall.directional_accuracy===undefined?'—':(report.overall.directional_accuracy*100).toFixed(1)+'%'}</strong></span><span>Pending <strong>{journalReport?.overall.pending??0}</strong></span><span>Source gaps <strong>{journalReport?.overall.unverifiable??0}</strong></span></div>
+      <div className="tc-table-scroll"><table><thead><tr><th>Session IST</th><th>Calls</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Pending</th><th>Gaps</th><th>Accuracy</th></tr></thead><tbody>{journalReport?.days.map(day=><tr key={day.session_ist}><td>{day.session_ist}</td><td>{day.total}</td><td>{day.scored}</td><td>{day.correct}</td><td>{day.incorrect}</td><td>{day.no_trade}</td><td>{day.pending}</td><td>{day.unverifiable}</td><td>{day.directional_accuracy===null?'—':(day.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}{!journalReport?.days.length&&<tr><td colSpan={9}>No prospective logged decisions yet.</td></tr>}</tbody></table></div>
+      <div className="tc-table-scroll"><table><thead><tr><th>Recorded UTC</th><th>Source bar UTC</th><th>Signal</th><th>Horizon</th><th>Reference</th><th>Observed</th><th>Outcome</th></tr></thead><tbody>{journalHistory?.predictions.map(x=><tr key={x.id}><td>{x.created_utc.slice(0,19)}</td><td>{x.bar_utc.slice(0,19)}</td><td>{x.direction}</td><td>{x.horizon_minutes}m</td><td>{fmt(x.reference_close)}</td><td>{fmt(x.observed_close)}</td><td>{x.evaluation.replaceAll('_',' ')}</td></tr>)}{!journalHistory?.predictions.length&&<tr><td colSpan={7}>No prospective predictions logged for this instrument yet.</td></tr>}</tbody></table></div>
     </section>
 
       </>}
