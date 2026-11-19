@@ -11,9 +11,12 @@ type OptionTrade={
   lots:number;lot_size_assumed:number;units:number;capital_deployed_inr:number
   net_pnl_inr:number;account_balance_inr:number;exit_reason:string
   hold_minutes:number;source_identity:string
+  entry_reason?:'signal_entry'|'opposite_signal_flip'
+  flipped_from_option_side?:'CE'|'PE'|null
+  flipped_from_strike?:number|null
 }
 type OptionScenario={
-  policy:Rule;trade_count:number;win_rate:number|null;winning_trades:number
+  policy:Rule;trade_count:number;reversal_switches?:number;win_rate:number|null;winning_trades:number
   losing_trades:number;starting_capital_inr:number;ending_capital_inr:number
   net_pnl_inr:number;return_pct:number;max_closed_trade_drawdown_pct:number
   average_hold_minutes:number|null;total_assumed_fees_inr:number
@@ -21,7 +24,7 @@ type OptionScenario={
   equity_curve:{timestamp_utc:string;equity_inr:number}[]
 }
 type CompareRow={
-  rule_id:string;label:string;trade_count:number;win_rate:number|null
+  rule_id:string;label:string;trade_count:number;reversal_switches?:number;win_rate:number|null
   net_pnl_inr:number;return_pct:number;ending_capital_inr:number
   max_closed_trade_drawdown_pct:number;average_hold_minutes:number|null
   unscored:Record<string,number>
@@ -54,10 +57,10 @@ const IST=(value:string)=>new Date(value).toLocaleString('en-IN',{
 const OPTIONS_JOB_KEY='quantlab_banknifty_historical_options_job'
 const MODE_LABEL:Record<Rule,string>={
   fixed:'Fixed-time exit',
-  signal_reversal:'Until opposite BANKNIFTY signal',
-  signal_reversal_or_cap:'Signal reversal or capped hold',
+  signal_reversal:'Flip CE ↔ PE on opposite signal',
+  signal_reversal_or_cap:'Flip on opposite signal or time cap',
   premium_target_stop:'Option premium target/stop',
-  hybrid:'Signal reversal, time cap or premium stop/target',
+  hybrid:'Flip, time cap or option stop/target',
 }
 function OptionEquityCurve({data}:{data:OptionScenario['equity_curve']}){
   const [hover,setHover]=useState<number|null>(null)
@@ -121,7 +124,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
   const [stopLoss,setStopLoss]=useState(2.5)
   const [slippage,setSlippage]=useState(5)
   const [feePerSide,setFeePerSide]=useState(20)
-  const [selectedRule,setSelectedRule]=useState<Rule>('fixed')
+  const [selectedRule,setSelectedRule]=useState<Rule>('signal_reversal')
 
   const refreshJob=useCallback(async(id:string)=>{
     const status=await marketApi<Job>('/api/jobs/'+encodeURIComponent(id))
@@ -177,7 +180,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
     <header className="hob-head"><div>
       <span className="tc-page-kicker">YOUR STRATEGY · HISTORICAL BACKTEST</span>
       <h3>Trade BANKNIFTY signals through CE/PE options</h3>
-      <p>QuantLab generates UP/DOWN signals from BANKNIFTY, selects a historical CE/PE option near your preferred premium and tests what happens after buying. Compare the exit rules using option prices — not index points.</p>
+      <p>QuantLab generates UP/DOWN signals from BANKNIFTY and tests buying the corresponding historical CE or PE near your preferred premium. By default, an opposite signal closes the held option and opens the opposite side at the same next observed minute's OPEN, if original prices and purchasing power are available. No live orders are sent.</p>
     </div><span className="hob-badge"><ShieldCheck size={15}/> Read-only historical research</span></header>
 
     <div className="hob-flow" aria-label="Historical strategy execution flow">
@@ -286,6 +289,11 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
         </label>
       </div>
     </details>
+    <div className="hob-flip-note" role="note">
+      <strong>Default reversal:</strong> UP → buy CE · DOWN → sell CE and buy PE · UP → sell PE and buy CE.
+      An opposite signal is known only after its candle completes; both hypothetical transactions use the following minute's OPEN, with separately selected actual strikes.
+      If the replacement contract lacks original quotes or cash is insufficient, remain flat and record why.
+    </div>
     <div className="hob-description">
       <span><Database size={16}/> {requestedPairs} Dhan contract-series requests per 30-day chunk, minus cached receipts</span>
       <span>Preferred {lots} lots × {lotSize} assumed units = <strong>{lots*lotSize} option units</strong></span>
@@ -329,6 +337,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
         <div><span>Selected policy return</span><strong className={scenario.net_pnl_inr>=0?'hob-positive':'hob-negative'}>{scenario.net_pnl_inr>=0?'+':''}{CASH(scenario.net_pnl_inr)}</strong><small>{scenario.return_pct>=0?'+':''}{PCT(scenario.return_pct)}</small></div>
         <div><span>Account balance</span><strong>{CASH(scenario.ending_capital_inr)}</strong><small>Started {CASH(scenario.starting_capital_inr)}</small></div>
         <div><span>Option trades scored</span><strong>{scenario.trade_count}</strong><small>{scenario.winning_trades} winners · {scenario.losing_trades} losers</small></div>
+        <div><span>CE ↔ PE flips</span><strong>{scenario.reversal_switches??0}</strong><small>New contract at prior exit OPEN</small></div>
         <div><span>Option trade win rate</span><strong>{scenario.win_rate===null?'Insufficient data':PCT(scenario.win_rate*100)}</strong></div>
         <div><span>Closed-trade drawdown</span><strong>{PCT(scenario.max_closed_trade_drawdown_pct)}</strong><small>Intratrade drawdown not modeled</small></div>
         <div><span>Original Dhan request usage</span><strong>{result.data_evidence.fresh_requests} fetched</strong><small>{result.data_evidence.cached_requests} reused · {result.data_evidence.empty_requests} empty</small></div>
@@ -347,11 +356,11 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       </div>}
       <OptionEquityCurve data={scenario.equity_curve}/>
       <div className="tc-table-scroll hob-table">
-        <table><thead><tr><th>Exit strategy</th><th>Trades</th><th>Win rate</th><th>Option net P&amp;L</th>
+        <table><thead><tr><th>Exit strategy</th><th>Trades</th><th>CE/PE flips</th><th>Win rate</th><th>Option net P&amp;L</th>
           <th>Account return</th><th>Ending balance</th><th>Average hold</th><th>Closed drawdown</th></tr></thead>
           <tbody>{result.comparison.map(rule=><tr key={rule.rule_id} className={rule.rule_id===result.selected_rule_id?'hob-selected':''}>
             <td>{rule.label}{rule.rule_id===result.selected_rule_id?' · selected':''}</td>
-            <td>{rule.trade_count}</td><td>{rule.win_rate===null?'—':PCT(rule.win_rate*100)}</td>
+            <td>{rule.trade_count}</td><td>{rule.reversal_switches??0}</td><td>{rule.win_rate===null?'—':PCT(rule.win_rate*100)}</td>
             <td className={rule.net_pnl_inr>=0?'hob-positive':'hob-negative'}>{rule.net_pnl_inr>=0?'+':''}{CASH(rule.net_pnl_inr)}</td>
             <td>{rule.return_pct>=0?'+':''}{PCT(rule.return_pct)}</td><td>{CASH(rule.ending_capital_inr)}</td>
             <td>{rule.average_hold_minutes===null?'—':DEC(rule.average_hold_minutes,1)+'m'}</td>
@@ -368,11 +377,14 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       </details>
       <details className="hob-detail"><summary>See the last {scenario.trades.length} actual-strike option simulations</summary>
         <div className="tc-table-scroll hob-table"><table><thead><tr>
-          <th>Signal (IST)</th><th>Index</th><th>Contract side</th><th>Strike</th>
+          <th>Signal (IST)</th><th>Index</th><th>Contract side</th><th>Entry trigger</th><th>Strike</th>
           <th>Entry option ₹</th><th>Exit option ₹</th><th>Lots / units</th>
           <th>Exit reason</th><th>Hold</th><th>Net ₹</th><th>Balance ₹</th>
         </tr></thead><tbody>{[...scenario.trades].reverse().map(t=><tr key={t.signal_utc}>
-          <td>{IST(t.signal_utc)}</td><td>{t.underlying_direction}</td><td>{t.option_side}</td><td>{DEC(t.strike,0)}</td>
+          <td>{IST(t.signal_utc)}</td><td>{t.underlying_direction}</td><td>{t.option_side}</td>
+          <td>{t.entry_reason==='opposite_signal_flip'
+            ?'Flip from '+(t.flipped_from_option_side||'prior side')
+            :'New signal'}</td><td>{DEC(t.strike,0)}</td>
           <td>{DEC(t.entry_premium)}</td><td>{DEC(t.exit_premium)}</td>
           <td>{t.lots} / {t.units}</td><td>{t.exit_reason.replaceAll('_',' ')}</td>
           <td>{t.hold_minutes}m</td><td className={t.net_pnl_inr>=0?'hob-positive':'hob-negative'}>{CASH(t.net_pnl_inr)}</td>
