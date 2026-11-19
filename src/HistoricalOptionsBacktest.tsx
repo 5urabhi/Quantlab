@@ -28,7 +28,7 @@ type CompareRow={
 }
 type BacktestResult={
   mode:string;underlying:string;signal_source:string;signal_model:string
-  signal_events:number;actionable_signals:number
+  signal_events:number;actionable_signals:number;auto_downloaded_missing_spot?:boolean
   historical_window:{first:string;through_exclusive:string;observed_index_bars:number}
   data_evidence:{request_count:number;fresh_requests:number;cached_requests:number
     empty_requests:number;unique_option_minute_bars:number;conflicted_excluded:number
@@ -155,7 +155,7 @@ export default function HistoricalOptionsBacktest({
   },[jobId,refreshJob])
 
   const run=async()=>{
-    if(jobId||!ready)return
+    if(jobId)return
     setError('');setResult(null);setJob(null)
     try{
       const chosen=selectedRule==='inherit'?holdRule:selectedRule
@@ -259,13 +259,16 @@ export default function HistoricalOptionsBacktest({
       <span>Preferred {lots} lots × {lotSize} assumed units = <strong>{lots*lotSize} option units</strong></span>
       <span>Estimated ₹{DEC(targetLtp*lots*lotSize,0)} at target LTP, excluding spread and charges.</span>
     </div>
-    {!ready&&<div className="tc-warning">Historical BANKNIFTY original index data is missing.
-      <button type="button" onClick={onOpenData}>Prepare index history <ArrowRight size={15}/></button>
-    </div>}
+    {!ready&&<div className="tc-warning" role="status">
+      <Database size={17}/> BANKNIFTY index history is missing from the current library.
+      Starting the read-only backtest will automatically download the original
+      Dhan IDX_I candles first, then historical option candles.
+      <button type="button" onClick={onOpenData}>Source settings <ArrowRight size={15}/></button>
+    </div>
     <div className="hob-run">
-      <button type="button" onClick={()=>void run()} disabled={running||!ready}>
+      <button type="button" onClick={()=>void run()} disabled={running}>
         {running?<RefreshCw size={17}/>:<Play size={17}/>}
-        {running?'Loading option history and running scenarios…':'Run BANKNIFTY → CE/PE backtest (auto-fetch missing data)'}
+        {running?'Loading BANKNIFTY/option history and scenarios…':'Run BANKNIFTY → CE/PE backtest (auto-fetch missing data)'}
       </button>
       <p>Runs locally using your configured Dhan token. Reuses verified cached source receipts on repeat runs. For expired rolling records, lot size is a user assumption; active options can use a fresh original Dhan contract master. Slippage and fees remain assumptions. No orders, historical bid/ask or broker fills are claimed.</p>
     </div>
@@ -282,7 +285,7 @@ export default function HistoricalOptionsBacktest({
       <header className="hob-results-head"><div>
         <span className="tc-page-kicker"><CheckCircle2 size={15}/> ORIGINAL DHAN OPTION CANDLES · SIMULATED FILLS</span>
         <h4>Historical CE/PE account results</h4>
-        <p>{result.historical_window.first} through {result.historical_window.through_exclusive} (end exclusive) ·
+        <p>{result.auto_downloaded_missing_spot?'BANKNIFTY source auto-downloaded · ':''}{result.historical_window.first} through {result.historical_window.through_exclusive} (end exclusive) ·
           {' '}{result.actionable_signals} BANKNIFTY UP/DOWN signals ·
           {' '}{result.data_evidence.unique_option_minute_bars} actual-strike option minute bars.</p>
       </div></header>
