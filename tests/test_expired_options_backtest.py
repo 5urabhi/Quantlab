@@ -259,7 +259,8 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         with patch.object(exp.cockpit_sources, "series",
                           return_value={"rows": spot, "warning": "fixture",
                                         "has_more": False}), patch.object(
-                          exp, "_signals", return_value=events((29,"UP"))):
+                          exp, "_signals", return_value=events((29,"UP"))), patch.object(
+                          exp, "_ist_today", return_value=date(2026, 12, 2)):
             report = exp.run_backtest(limit=500, wings=1, fetcher=fake_dhan,
                                       slippage_bps=0, target_ltp=315,
                                       tolerance=50, hold_rule="fixed",
@@ -304,7 +305,8 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
                 missing, {"rows": source(), "warning": "fixture", "has_more": False}]), patch.object(
                 exp.cockpit_sources, "download_spot",
                 return_value={"status": "complete", "rows": 70}) as original_batch, patch.object(
-                exp, "_signals", return_value=events((29, "UP"))):
+                exp, "_signals", return_value=events((29, "UP"))), patch.object(
+                exp, "_ist_today", return_value=date(2026, 12, 2)):
             report = exp.run_backtest(
                 limit=500, wings=0, fetcher=fake_dhan,
                 target_ltp=315, tolerance=50, hold_rule="fixed",
@@ -346,7 +348,8 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         with patch.object(exp.cockpit_sources, "series",
                           return_value={"rows": source(), "warning": "fixture",
                                         "has_more": False}), patch.object(
-                          exp, "_signals", return_value=events((29,"UP"))):
+                          exp, "_signals", return_value=events((29,"UP"))), patch.object(
+                          exp, "_ist_today", return_value=date(2026, 11, 19)):
             result = exp.run_backtest(limit=500, wings=0,
                                       fetcher=expired_not_requested,
                                       active_fetcher=active, slippage_bps=0,
@@ -402,9 +405,91 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
                 exp._original_response(body, opener=rejected)
         public_message = str(caught.exception)
         self.assertIn("Dhan DH-905", public_message)
+        self.assertIn("expiryCode is required", public_message)
         self.assertIn("expiry=1", public_message)
         self.assertIn("ATM+1", public_message)
         self.assertNotIn("SECRET-FOR-TEST-ONLY", public_message)
+
+    def test_nominal_expiry_guards_current_november_and_after_october_expiry(self):
+        """November 23 monthly contract cannot be treated as expired on Nov 19."""
+        as_of = date(2026, 11, 19)
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 11, 6), expiry_flag="MONTH", expiry_code=0, today=as_of))
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 11, 18), expiry_flag="MONTH", expiry_code=0, today=as_of))
+        # After the October monthly expiry, near rolled to November,
+        # which has ALSO not expired on November 19.
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 10, 29), expiry_flag="MONTH", expiry_code=0, today=as_of))
+        self.assertTrue(exp._expired_eligible(
+            date(2026, 10, 22), expiry_flag="MONTH", expiry_code=0, today=as_of))
+        # Holiday-shifted Nov 23 expiry is conservatively covered by the
+        # nominal last Tuesday Nov 24: use rolling only after that date.
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 11, 18), expiry_flag="MONTH",
+            expiry_code=0, today=date(2026, 11, 24)))
+        self.assertTrue(exp._expired_eligible(
+            date(2026, 11, 18), expiry_flag="MONTH",
+            expiry_code=0, today=date(2026, 11, 25)))
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 11, 18), expiry_flag="MONTH", expiry_code=1, today=as_of))
+
+    def test_missing_live_current_option_never_falls_back_to_expired_request(self):
+        """Exact regression of user's Nov 6-19 Dhan DH-905 failure."""
+        def forbidden(body):
+            self.fail("An unexpired BANKNIFTY monthly option reached /charts/rollingoption")
+        with patch.object(exp, "_ist_today", return_value=date(2026, 11, 19)), patch.object(
+                exp.cockpit_sources, "series",
+                return_value={"rows": source(), "warning": "fixture",
+                              "has_more": False}), patch.object(
+                exp, "load_active_option_market",
+                return_value=({}, {"reason": "No matching current Dhan security IDs"})), patch.object(
+                exp, "_signals", return_value=events((29, "UP"))):
+            with self.assertRaisesRegex(ValueError, "has NOT expired") as caught:
+                exp.run_backtest(limit=500, wings=3, fetcher=forbidden)
+        self.assertIn("current-contract", str(caught.exception))
+        self.assertIn("No matching current Dhan security IDs",
+                      str(caught.exception))
+
+    def test_partial_active_current_quotes_do_not_trigger_expired_fallback(self):
+        """An incomplete live quote path is unscored, not replaced by expiry data."""
+        now = date(2026, 11, 19)
+        partial = {
+            (stamp(29), "CALL"): {
+                62000.: {**quote(29), "security_id": "41001",
+                          "expiry_date": "2026-11-23", "lot_size_verified": 30}},
+            (stamp(29), "PUT"): {
+                62000.: {**quote(29, side="PUT"), "security_id": "41002",
+                          "expiry_date": "2026-11-23", "lot_size_verified": 30}},
+        }
+        def forbidden(_):
+            self.fail("Partial active source must not invoke expired rolling endpoint")
+        with patch.object(exp, "_ist_today", return_value=now), patch.object(
+                exp.cockpit_sources, "series",
+                return_value={"rows": source(), "warning": "fixture",
+                              "has_more": False}), patch.object(
+                exp, "load_active_option_market",
+                return_value=(partial, {"source": "Dhan active NSE_FNO",
+                                        "requests": 2, "fresh_requests": 2})), patch.object(
+                exp, "_signals", return_value=events((29, "UP"))):
+            report = exp.run_backtest(
+                limit=500, wings=3, fetcher=forbidden,
+                target_ltp=300, tolerance=50,
+                hold_rule="fixed", hold_minutes=5)
+        self.assertEqual(report["selected"]["trade_count"], 0)
+        self.assertGreater(report["selected"]["unscored"]["missing_option_entry"], 0)
+        self.assertEqual(report["data_evidence"]["routing"]["expired_vendor_requests"], 0)
+        self.assertEqual(report["orders_placed"], 0)
+
+    def test_offline_banknifty_weekly_is_not_sent_to_recent_expired_api(self):
+        with patch.object(exp, "_ist_today",
+                          return_value=date(2026, 11, 19)), patch.object(
+                exp.cockpit_sources, "series",
+                return_value={"rows": source(), "warning": "fixture",
+                              "has_more": False}):
+            with self.assertRaisesRegex(ValueError, "weekly options"):
+                exp.run_backtest(limit=500, expiry_flag="WEEK", wings=0,
+                                 fetcher=lambda _: self.fail("unexpected rolling"))
 
     def test_no_history_without_confirmed_dhan_access_or_cached_originals(self):
         with patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": ""}):
