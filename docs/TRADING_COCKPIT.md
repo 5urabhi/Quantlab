@@ -171,6 +171,25 @@ selection stays read-only and requires a live Dhan F&O subscription.
 
 ## One-screen options backtest: BANKNIFTY signals buy historical CE/PE contracts
 
+**Default continuous-reversal research rule.** UP → long CE; at the
+first completed DOWN signal close the CE at the next observed minute OPEN
+and **buy a newly selected PE at that exact same OPEN**. On the next
+completed UP signal, close the PE and buy a newly selected CE at that
+same next observed OPEN. Each replacement strike is independently chosen
+from that option side's original signal-minute close (~₹300 default),
+so the new PE does not inherit the previous CE's strike. NO_TRADE is
+neutral and does not close or reverse a position. Reversals do not
+overlap positions: closed trade P&L and fees are recorded before buying
+the replacement. The buy is allowed only when there is a real historical
+entry/exit path, original option volume and sufficient simulated account
+balance. If the replacement option lacks data or cannot be afforded,
+the previous side still exits, but the next trade remains unscored
+until a later eligible signal. For fixed-time, stop/target or time-cap
+exits, a coincident opposite signal does not automatically enter at
+the same opening; explicit opposite-signal reversal triggers are required.
+All transitions are **hypothetical read-only next-open executions**, not
+broker orders or verified fills.
+
 **Open Trading Cockpit → Options Backtest → Run options backtest.**
 The CE/PE simulation is the primary workflow. Index-only directional
 accuracy and recorded prospective signal audits remain available under
