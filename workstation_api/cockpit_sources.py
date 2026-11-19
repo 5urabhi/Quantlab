@@ -15,7 +15,7 @@ import csv
 import json
 import re
 
-from . import intraday_parquet, index_spot, service
+from . import dhan_workspace, intraday_parquet, index_spot, service
 
 INDEX_IDENTITIES = {
     "INDEX:BANKNIFTY": ("BANKNIFTY_INDEX", "Bank Nifty · Dhan spot index"),
@@ -80,6 +80,10 @@ def _selected_index(identity: str) -> tuple[Path, dict] | None:
 
 def catalog(limit: int = 200) -> dict:
     existing = intraday_parquet.catalog(limit)
+    try:
+        names = {row["id"]: row for row in dhan_workspace.catalog()}
+    except (OSError, ValueError):
+        names = {}
     result = []
     for identity, (_basename, display) in INDEX_IDENTITIES.items():
         source = _selected_index(identity)
@@ -90,7 +94,10 @@ def catalog(limit: int = 200) -> dict:
             "needs_download": not bool(source), "needs_preparation": False,
         })
     for item in existing["instruments"]:
-        result.append({**item, "display_name": item["identity"], "asset_class": "equity",
+        record = names.get(item["identity"], {})
+        symbol = record.get("symbol") or item["identity"]
+        result.append({**item, "display_name": symbol, "asset_class": "equity",
+                       "company_name": record.get("display_name"),
                        "needs_download": False,
                        "needs_preparation": bool(item["source_available"] and not item["ready"])})
     return {
