@@ -15,14 +15,15 @@ from urllib.request import Request, urlopen
 LOG = logging.getLogger("quantlab.dhan.auth")
 
 
-def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
+def check_profile(opener=urlopen, *, token_override: str | None = None,
+                  client_id_override: str | None = None) -> dict:
     """Verify existing or explicitly supplied one-time token; never return it."""
     token = (token_override if token_override is not None else os.getenv("DHAN_ACCESS_TOKEN", "")).strip()
     if not token:
         LOG.warning("Dhan profile preflight: token is missing from environment")
         return {"ok": False, "token_present": False, "token_valid": False,
                 "data_plan_active": False, "code": "token_missing",
-                "message": "Set DHAN_ACCESS_TOKEN in the project .env and restart QuantLab."}
+                "message": "Connect a Dhan access token in the QuantLab cockpit."}
     req = Request("https://api.dhan.co/v2/profile", headers={
         "access-token": token, "Accept": "application/json",
     }, method="GET")
@@ -66,7 +67,12 @@ def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
         remaining_seconds = None
         expires_at_utc = None
     plan_active = state == "active"
-    if token_valid is False:
+    client_matches = (client_id_override is None or
+                      str(payload.get("dhanClientId","")).strip() ==
+                      client_id_override)
+    if not client_matches:
+        code, message = "client_id_mismatch", "Dhan profile does not match the provided client ID. Check your account credentials."
+    elif token_valid is False:
         code, message = "token_expired", "Dhan access token expired. Enter a fresh token in QuantLab's Dhan connection panel."
     elif token_valid is None:
         code, message = "token_expiry_unknown", "Dhan authenticated, but the token expiry field could not be interpreted."
@@ -77,7 +83,9 @@ def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
     LOG.log(logging.INFO if code == "ready" else logging.WARNING,
             "Dhan profile preflight result: code=%s token_valid=%s data_plan_active=%s",
             code, token_valid, plan_active)
-    return {"ok": bool(token_valid and plan_active), "token_present": True,
+    return {"ok": bool(token_valid and plan_active and client_matches), "token_present": True,
+            "client_id_matches":client_matches if client_id_override is not None else None,
+            "client_id_configured":bool(os.getenv("DHAN_CLIENT_ID","").strip()),
             "token_valid": token_valid, "data_plan_active": plan_active,
             "code": code, "message": message,
             "token_validity": expiry[:40],
