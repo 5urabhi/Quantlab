@@ -189,6 +189,89 @@ try {
     }).inputValue(),'30','Historic units per lot are a clearly labeled assumption')
     await historicalOptions.getByText('90 option units',{exact:false}).waitFor()
 
+    // Exercise the actual UI -> read-only job POST -> completed job result
+    // without any real vendor access; every returned price is synthetic CI.
+    await page.route('**/api/trading-cockpit/options/backtest',route=>{
+      const request=route.request().postDataJSON()
+      assert.equal(request.confirm_readonly,true)
+      assert.equal(request.lots,3)
+      assert.equal(request.target_ltp,300)
+      assert.equal(request.hold_rule,'fixed')
+      return route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify({job_id:'ci_synthetic_options_fixture',status:'queued'})})
+    })
+    await page.route('**/api/jobs/ci_synthetic_options_fixture',route=>
+      route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify({
+          id:'ci_synthetic_options_fixture',status:'complete',percent:100,
+          result:{
+            mode:'HISTORICAL_DHAN_OPTION_OHLC_NEXT_OPEN_PROXY',
+            underlying:'INDEX:BANKNIFTY',
+            signal_source:'SYNTHETIC CI - NO DHAN MARKET DATA',
+            signal_model:'fixture',signal_events:1,actionable_signals:1,
+            auto_downloaded_missing_spot:false,
+            historical_window:{first:'2026-11-18',
+              through_exclusive:'2026-11-19',observed_index_bars:70},
+            data_evidence:{request_count:0,fresh_requests:0,
+              cached_requests:0,empty_requests:0,
+              unique_option_minute_bars:70,conflicted_excluded:0,
+              source:'SYNTHETIC BROWSER TEST',expiry_flag:'MONTH',
+              expiry_code:0,strike_wings:3},
+            selected_rule_id:'fixed_5',
+            selected:{
+              policy:'fixed',hold_minutes:5,time_cap_minutes:10,
+              trade_count:1,win_rate:1,winning_trades:1,losing_trades:0,
+              starting_capital_inr:50000,ending_capital_inr:51200,
+              net_pnl_inr:1200,return_pct:2.4,
+              max_closed_trade_drawdown_pct:0,average_hold_minutes:5,
+              total_assumed_fees_inr:40,unscored:{},
+              equity_curve:[
+                {timestamp_utc:'2026-11-18T04:00:00+00:00',equity_inr:50000},
+                {timestamp_utc:'2026-11-18T04:35:00+00:00',equity_inr:51200},
+              ],
+              trades:[{
+                signal_utc:'2026-11-18T04:29:00+00:00',
+                entry_utc:'2026-11-18T04:30:00+00:00',
+                exit_utc:'2026-11-18T04:35:00+00:00',
+                session_ist:'2026-11-18',underlying_direction:'UP',
+                option_side:'CE',strike:62000,selection_ltp:300,
+                entry_premium:301,exit_premium:314.78,
+                lots:3,lot_size_assumed:30,units:90,
+                capital_deployed_inr:27090,net_pnl_inr:1200,
+                account_balance_inr:51200,exit_reason:'fixed_hold',
+                hold_minutes:5,source_identity:'SYNTHETIC_CI',
+              }],
+            },
+            comparison:[{
+              rule_id:'fixed_5',label:'Fixed 5m',trade_count:1,
+              win_rate:1,net_pnl_inr:1200,return_pct:2.4,
+              ending_capital_inr:51200,max_closed_trade_drawdown_pct:0,
+              average_hold_minutes:5,unscored:{},
+            }],
+            assumptions:{premium_target_inr:300,premium_tolerance_inr:50,
+              lots:3,historical_lot_size_units:30,
+              lot_size_basis:'USER_INPUT_NOT_VERIFIED_FOR_EXPIRED_CONTRACTS',
+              slippage_bps_per_side:5,brokerage_inr_per_side:20,
+              profit_target_pct:5,stop_loss_pct:2.5},
+            limitations:'SYNTHETIC CI FIXTURE. No original Dhan data or broker fills.',
+            read_only:true,orders_placed:0,
+          },
+        })}))
+    await historicalOptions.getByRole('button',{
+      name:/Run BANKNIFTY → CE\/PE backtest/,
+    }).click()
+    await historicalOptions.getByRole('heading',{
+      name:'Historical CE/PE account results',
+    }).waitFor()
+    await historicalOptions.getByText('₹1,200.00',{exact:false}).first().waitFor()
+    await historicalOptions.getByRole('img',{
+      name:'Cumulative paper account balance with interactive trade timestamps',
+    }).waitFor()
+    await screenshot('01-trading-copilot-historical-options-synthetic-pnl')
+    await page.unroute('**/api/jobs/ci_synthetic_options_fixture')
+    await page.unroute('**/api/trading-cockpit/options/backtest')
+
+
     await screenshot('01-trading-copilot-signal-backtest-v5')
     await modes.getByRole('tab',{name:'Trade Journal'}).click()
     await page.getByRole('tabpanel',{name:'Trade Journal'}).waitFor()
