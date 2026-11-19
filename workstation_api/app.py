@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -581,13 +581,13 @@ class TradingCockpitRecordRequest(BaseModel):
 
 @app.get("/api/trading-cockpit/instruments")
 def trading_cockpit_instruments():
-    return intraday_parquet.catalog(200)
+    return cockpit_sources.catalog(200)
 
 
 @app.get("/api/trading-cockpit/snapshot")
 def trading_cockpit_snapshot(identity: str, limit: int = 500):
     try:
-        original = intraday_parquet.series(identity, limit=limit)
+        original = cockpit_sources.series(identity, limit=limit)
         result = trading_cockpit.snapshot(identity, original["rows"])
         result["source_warning"] = original["warning"]
         result["has_more"] = original["has_more"]
@@ -599,7 +599,7 @@ def trading_cockpit_snapshot(identity: str, limit: int = 500):
 @app.post("/api/trading-cockpit/predictions")
 def trading_cockpit_record(body: TradingCockpitRecordRequest):
     try:
-        original = intraday_parquet.series(body.identity, limit=500)
+        original = cockpit_sources.series(body.identity, limit=500)
         observation = trading_cockpit.snapshot(body.identity, original["rows"])
         if observation["quote_mode"] != "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE":
             raise ValueError("Cannot create a prospective prediction from stale historical bars")
@@ -611,7 +611,7 @@ def trading_cockpit_record(body: TradingCockpitRecordRequest):
 @app.post("/api/trading-cockpit/evaluate")
 def trading_cockpit_evaluate(body: TradingCockpitRecordRequest):
     try:
-        original = intraday_parquet.series(body.identity, limit=5000)
+        original = cockpit_sources.series(body.identity, limit=5000)
         return trading_cockpit.evaluate(body.identity, original["rows"])
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
@@ -621,6 +621,37 @@ def trading_cockpit_evaluate(body: TradingCockpitRecordRequest):
 def trading_cockpit_predictions(identity: str = "", limit: int = 50):
     try:
         return trading_cockpit.list_predictions(identity, limit)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/monitor/tick")
+def trading_cockpit_monitor_tick(body: TradingCockpitRecordRequest):
+    try:
+        original = cockpit_sources.series(body.identity, limit=5000)
+        return trading_cockpit.observe_and_score(body.identity, original["rows"])
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/report")
+def trading_cockpit_report(identity: str, date_ist: str = ""):
+    try:
+        return trading_cockpit.day_report(identity, date_ist)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/replay")
+def trading_cockpit_replay(identity: str, horizon_minutes: Literal[3, 6] = 6,
+                           limit: int = 1500):
+    try:
+        original = cockpit_sources.series(identity, limit=limit)
+        result = trading_cockpit.historical_replay(
+            identity, original["rows"], horizon_minutes)
+        result["source_warning"] = original["warning"]
+        result["has_more_history"] = original["has_more"]
+        return result
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
