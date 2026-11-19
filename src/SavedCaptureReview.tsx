@@ -54,8 +54,9 @@ export default function SavedCaptureReview(){
     try{
       const next=await read<CaptureCatalog>('/api/trading-cockpit/live/capture-catalog')
       setCatalog(next)
-      setIdentity(current=>next.minute_sources.some(x=>x.identity===current)?current:
-        next.minute_sources[0]?.identity||'INDEX:BANKNIFTY')
+      const indexSources=next.minute_sources.filter(x=>x.identity.startsWith('INDEX:'))
+      setIdentity(current=>indexSources.some(x=>x.identity===current)?current:
+        indexSources[0]?.identity||'INDEX:BANKNIFTY')
       setDepthIdentity(current=>next.depth_sources.some(x=>x.identity===current)?current:
         next.depth_sources[0]?.identity||'')
     }catch(e){setError(e instanceof Error?e.message:String(e))}
@@ -91,7 +92,7 @@ export default function SavedCaptureReview(){
       <div className="tc-archive-card">
         <strong>Previously captured index minute bars</strong>
         <span className="tc-muted">3/6-minute directional replay · never infers option fills</span>
-        {catalog?.minute_sources.length?<><label>Recorded index source
+        {catalog?.minute_sources.some(x=>x.identity.startsWith('INDEX:'))?<><label>Recorded index source
           <select aria-label="Recorded index source" value={identity} onChange={e=>{setIdentity(e.target.value);setReplay(null)}}>
             {catalog.minute_sources.filter(x=>x.identity.startsWith('INDEX:')).map(x=>
               <option key={x.identity} value={x.identity}>{x.identity.replace('INDEX:','')} · {x.observations} bars</option>)}
