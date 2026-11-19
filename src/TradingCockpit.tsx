@@ -10,6 +10,8 @@ type History = {predictions:Entry[];summary:{evaluated_directions:number;correct
 type DaySummary = {session_ist:string;total:number;scored:number;correct:number;incorrect:number;pending:number;no_trade:number;flat:number;unverifiable:number;directional_accuracy:number|null}
 type Report = {days:DaySummary[];overall:Omit<DaySummary,'session_ist'>;source:string;disclaimer:string;truncated:boolean}
 type Replay = {mode:string;identity:string;model_version:string;horizon_minutes:number;observed_source_bars:number;overall:Omit<DaySummary,'session_ist'>;days:DaySummary[];has_more_history:boolean;source_warning:string;disclaimer:string}
+type DhanCheck = {ok:boolean;code:string;message:string;token_present:boolean;token_valid:boolean|null;data_plan_active:boolean|null;expires_at_utc?:string|null;seconds_remaining?:number|null}
+type DhanConnect = {connected:boolean;message:string}
 type ManualTrade = {id:string;symbol:string;direction:'CALL'|'PUT';quantity:number;entry_price:number;entry_recorded_utc:string;exit_price:number|null;exit_recorded_utc:string|null;holding_seconds:number;holding_rule_exceeded:boolean;gross_notional_inr:number;net_pnl_inr:number|null;status:'OPEN'|'CLOSED';data_quality:string}
 type TradeJournal = {trades:ManualTrade[];summary:{open:number;closed:number;closed_net_pnl_inr:number;holding_violations:number;days:{exit_session_ist:string;closed:number;net_pnl_inr:number;over_6_min:number}[]};disclaimer:string}
 
@@ -95,11 +97,45 @@ export default function TradingCockpit(){
   const [optionQty,setOptionQty]=useState('1')
   const [optionEntry,setOptionEntry]=useState('')
   const [tradeNote,setTradeNote]=useState('')
+  const [dhanCheck,setDhanCheck]=useState<DhanCheck|null>(null)
+  const [dhanToken,setDhanToken]=useState('')
+  const [tokenForm,setTokenForm]=useState(false)
+  const [tokenConsent,setTokenConsent]=useState(false)
+  const [tokenBusy,setTokenBusy]=useState(false)
+  const [tokenError,setTokenError]=useState('')
+  const [tokenMessage,setTokenMessage]=useState('')
+  const [replayLimit,setReplayLimit]=useState('1500')
   const [journalBusy,setJournalBusy]=useState(false)
   const [closingId,setClosingId]=useState('')
   const [exitPremium,setExitPremium]=useState('')
   const [fees,setFees]=useState('0')
 
+  const checkDhan=useCallback(async()=>{
+    try{
+      const state=await api<DhanCheck>('/api/dhan/credentials/check')
+      setDhanCheck(state);setTokenError('')
+    }catch(e){setTokenError(e instanceof Error?e.message:String(e))}
+  },[])
+  useEffect(()=>{
+    void checkDhan()
+    const poll=window.setInterval(()=>{void checkDhan()},60000)
+    return()=>window.clearInterval(poll)
+  },[checkDhan])
+  const connectDhan=async(event:React.FormEvent<HTMLFormElement>)=>{
+    event.preventDefault()
+    if(tokenBusy||!tokenConsent||!dhanToken.trim())return
+    setTokenBusy(true);setTokenError('');setTokenMessage('')
+    try{
+      const connected=await api<DhanConnect>('/api/market-data/providers/dhan/connect',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({access_token:dhanToken,confirm_local_storage:true}),
+      })
+      setDhanToken('');setTokenForm(false);setTokenConsent(false)
+      setTokenMessage(connected.message)
+      await checkDhan()
+    }catch(e){setTokenError(e instanceof Error?e.message:String(e))}
+    finally{setTokenBusy(false)}
+  }
   const loadJournal=useCallback(async()=>{
     try{setJournal(await api<TradeJournal>('/api/trading-cockpit/trades?limit=80'))}
     catch(e){setError(e instanceof Error?e.message:String(e))}
@@ -188,7 +224,7 @@ export default function TradingCockpit(){
     setReplayBusy(true);setError('')
     try{
       const result=await api<Replay>('/api/trading-cockpit/replay?'+
-        new URLSearchParams({identity,horizon_minutes:String(horizon),limit:'1500'}))
+        new URLSearchParams({identity,horizon_minutes:String(horizon),limit:replayLimit}))
       setReplay(result)
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setReplayBusy(false)}
@@ -196,6 +232,13 @@ export default function TradingCockpit(){
   const elapsed=startTime===null?0:Math.floor((now-startTime)/1000)
   const remaining=Math.max(0,6*60-elapsed)
   const countdown=`${String(Math.floor(remaining/60)).padStart(2,'0')}:${String(remaining%60).padStart(2,'0')}`
+  const tokenRemaining=dhanCheck?.expires_at_utc
+    ?Math.max(0,Math.floor((Date.parse(dhanCheck.expires_at_utc)-now)/1000)):null
+  const tokenHours=tokenRemaining===null?null:Math.floor(tokenRemaining/3600)
+  const tokenMinutes=tokenRemaining===null?null:Math.floor((tokenRemaining%3600)/60)
+  const tokenState=!dhanCheck?'CHECKING':dhanCheck.token_valid===false?'EXPIRED / REJECTED'
+    :dhanCheck.token_valid===null?'UNVERIFIED':tokenRemaining!==null&&tokenRemaining<=3600?'EXPIRING SOON'
+    :dhanCheck.ok?'CONNECTED':'NEEDS ATTENTION'
   const forecast=snapshot?.direction??'NO_TRADE'
   const sourceRecent=snapshot?.quote_mode==='RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE'
   const summary=history?.summary
@@ -206,6 +249,28 @@ export default function TradingCockpit(){
   return <div className="tc-shell">
     <header className="tc-header"><div><div className="tc-eyebrow">QUANTLAB / READ-ONLY MARKET RESEARCH</div><h2>Intraday trading cockpit</h2><p>One-minute observed candles · 3/6-minute forecasts · permanent outcome audit</p></div><span className={'tc-data-badge '+(sourceRecent?'tc-recent':'')}>{dataStatus}</span></header>
     {error&&<div className="tc-error" role="alert">{error}</div>}
+    <section className="tc-panel tc-token-panel" aria-label="Dhan data API connection">
+      <div className="tc-panel-title"><strong>Dhan market data connection</strong><span>Local-only token · read-only verification</span></div>
+      <div className="tc-token-status">
+        <span className={'tc-token-state '+(tokenState==='CONNECTED'?'good':tokenState==='EXPIRING SOON'?'soon':'attention')}>{tokenState}</span>
+        <span>{tokenRemaining!==null?(tokenRemaining>0?
+          `Expires in ${tokenHours}h ${tokenMinutes}m`:'Token expired'):
+          'Expiry time unavailable until broker verification succeeds'}</span>
+        <button type="button" onClick={()=>void checkDhan()} disabled={tokenBusy}>Check now</button>
+        <button type="button" onClick={()=>{setTokenForm(v=>!v);setTokenError('');setTokenMessage('')}}>
+          {tokenForm?'Cancel':'Add / replace Dhan token'}</button>
+      </div>
+      {dhanCheck?.expires_at_utc&&<p className="tc-muted">Dhan-reported token expiry: {new Date(dhanCheck.expires_at_utc).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} IST · historical Data API {dhanCheck.data_plan_active?'active':'not confirmed active'}.</p>}
+      {dhanCheck&&!dhanCheck.ok&&<p className="tc-warning">{dhanCheck.message}</p>}
+      {tokenError&&<div className="tc-error" role="alert">{tokenError}</div>}
+      {tokenMessage&&<p className="tc-confirm" role="status">{tokenMessage}</p>}
+      {tokenForm&&<form className="tc-token-form" onSubmit={event=>void connectDhan(event)}>
+        <label>New token from Dhan Web<input type="password" autoComplete="off" value={dhanToken} onChange={event=>setDhanToken(event.target.value)} placeholder="Paste Dhan access token"/></label>
+        <label className="tc-token-consent"><input type="checkbox" checked={tokenConsent} onChange={event=>setTokenConsent(event.target.checked)}/> Store this verified token in the local, gitignored .env file. Do not send it to GitHub or the browser's storage.</label>
+        <button type="submit" disabled={tokenBusy||!tokenConsent||!dhanToken.trim()}>{tokenBusy?'Verifying…':'Verify and save token'}</button>
+      </form>}
+      <p className="tc-muted">This verifies your Dhan session and data entitlement. A valid token alone does not start live market streaming; cockpit candles currently come from prepared historical files.</p>
+    </section>
     <div className="tc-toolbar"><label>Local instrument <select aria-label="Trading cockpit instrument" value={identity} onChange={event=>setIdentity(event.target.value)}><option value="">Select prepared minute candles</option>{instruments.map(s=><option key={s.identity} value={s.identity} disabled={!s.ready}>{s.display_name||s.identity} ({s.identity}){s.ready?'':' · Source unavailable'}</option>)}</select></label><label className="tc-monitor-toggle"><input type="checkbox" checked={monitor} onChange={event=>{
   const enabled=event.target.checked;setMonitor(enabled);monitorRef.current=enabled
   if(enabled)void refresh()
@@ -244,7 +309,7 @@ export default function TradingCockpit(){
       <div className="tc-table-scroll"><table><thead><tr><th>Recorded UTC</th><th>Source bar UTC</th><th>Signal</th><th>Horizon</th><th>Reference</th><th>Observed</th><th>Outcome</th></tr></thead><tbody>{history?.predictions.map(x=><tr key={x.id}><td>{x.created_utc.slice(0,19)}</td><td>{x.bar_utc.slice(0,19)}</td><td>{x.direction}</td><td>{x.horizon_minutes}m</td><td>{fmt(x.reference_close)}</td><td>{fmt(x.observed_close)}</td><td>{x.evaluation.replaceAll('_',' ')}</td></tr>)}{!history?.predictions.length&&<tr><td colSpan={7}>No prospective predictions logged for this instrument yet.</td></tr>}</tbody></table></div>
     </section>
     <section className="tc-panel tc-ledger">
-      <div className="tc-panel-title"><strong>Historical rule replay · diagnostics, not live predictions</strong><button disabled={!identity||replayBusy} onClick={()=>void runReplay()}>{replayBusy?'Evaluating source history…':'Evaluate last 1,500 bars'}</button></div>
+      <div className="tc-panel-title"><strong>Historical BANKNIFTY directional backtest · no option P&amp;L</strong><div className="tc-backtest-controls"><label>History window <select value={replayLimit} onChange={event=>setReplayLimit(event.target.value)}><option value="500">Last 500 minutes</option><option value="1500">Last 1,500 minutes</option><option value="3000">Last 3,000 minutes</option><option value="5000">Last 5,000 minutes</option></select></label><button disabled={!identity||replayBusy} onClick={()=>void runReplay()}>{replayBusy?'Evaluating source history…':'Run directional backtest'}</button></div></div>
       <p className="tc-muted">Runs the fixed untrained rule separately at each historical minute using only information available up to that minute. Checks actual 3/6-minute direction where observed; does not claim executable option fills, costs or out-of-sample trading skill.</p>
       {replay&&<><div className="tc-ledger-summary"><span>Horizon <strong>{replay.horizon_minutes} min</strong></span><span>Source bars <strong>{replay.observed_source_bars}</strong></span><span>Scored signals <strong>{replay.overall.scored}</strong></span><span>Correct <strong>{replay.overall.correct}</strong></span><span>Baseline accuracy <strong>{replay.overall.directional_accuracy===null?'—':(replay.overall.directional_accuracy*100).toFixed(1)+'%'}</strong></span><span>Gaps <strong>{replay.overall.unverifiable}</strong></span></div>
       <div className="tc-table-scroll"><table><thead><tr><th>IST session</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Gaps</th><th>Directional accuracy</th></tr></thead><tbody>{replay.days.map(d=><tr key={d.session_ist}><td>{d.session_ist}</td><td>{d.scored}</td><td>{d.correct}</td><td>{d.incorrect}</td><td>{d.no_trade}</td><td>{d.unverifiable}</td><td>{d.directional_accuracy===null?'—':(d.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}</tbody></table></div>
@@ -253,6 +318,7 @@ export default function TradingCockpit(){
     <section className="tc-panel tc-ledger" aria-label="Manual options trade journal">
       <div className="tc-panel-title"><strong>Manual options journal · six-minute discipline</strong><span>Read-only research · you type actual prices</span></div>
       <p className="tc-muted">Enter a new trade at the time you actually fill it. QuantLab stores server receipt times and computes P&amp;L only after you report an exit. The app cannot verify your broker fills, enforce a stop, or place orders.</p>
+      <p className="tc-confirm">Signal input: BANKNIFTY spot candles only. You choose the exact CE/PE contract, expiry, strike and actual filled premium in your broker. The signal does not forecast the option premium.</p>
       <form className="tc-trade-form" onSubmit={event=>void recordEntry(event)}>
         <label>Exact contract symbol<input required maxLength={48} value={optionSymbol} placeholder="BANKNIFTY23NOV61900PE" onChange={event=>setOptionSymbol(event.target.value.toUpperCase())}/></label>
         <label>Type<select value={optionSide} onChange={event=>setOptionSide(event.target.value as 'CALL'|'PUT')}><option value="PUT">Long put</option><option value="CALL">Long call</option></select></label>
