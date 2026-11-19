@@ -738,12 +738,22 @@ def trading_cockpit_report(identity: str, date_ist: str = "",
 
 
 @app.get("/api/trading-cockpit/replay")
-def trading_cockpit_replay(identity: str, horizon_minutes: Literal["3", "6"] = "6",
-                           limit: int = 1500):
+def trading_cockpit_replay(
+    identity: str, horizon_minutes: Literal["1", "3", "5", "6", "10", "30", "60"] = "6",
+    limit: int = 1500, starting_capital: float = 50_000.0,
+    allocation_pct: float = 100.0, cost_bps_per_side: float = 0.0,
+):
+    """Historical index rule accuracy + NON-EXECUTABLE rupee exposure scenario.
+
+    The prospective prediction ledger intentionally retains its independent,
+    existing 3/6-minute horizons and never uses these simulated fills.
+    """
     try:
         original = cockpit_sources.series(identity, limit=limit)
         result = trading_cockpit.historical_replay(
-            identity, original["rows"], int(horizon_minutes))
+            identity, original["rows"], int(horizon_minutes),
+            starting_capital=starting_capital, allocation_pct=allocation_pct,
+            cost_bps_per_side=cost_bps_per_side)
         result["source_warning"] = original["warning"]
         result["has_more_history"] = original["has_more"]
         return result
