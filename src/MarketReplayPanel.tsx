@@ -44,7 +44,7 @@ export default function MarketReplayPanel({instruments,onOpenData}:{
       ready[0]?.identity||'')
   },[instruments])
   useEffect(()=>{
-    if(!identity){setSeries(null);return}
+    if(!identity){setSeries(null);setError(null);setLoading(false);return}
     let mounted=true
     setLoading(true);setError(null);setSeries(null);setPlaying(false)
     void marketApi<OriginalSeries>('/api/trading-cockpit/historical/series?'+
