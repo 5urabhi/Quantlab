@@ -171,6 +171,24 @@ try {
     await page.getByRole('region',{name:'Historical BANKNIFTY signal accuracy'}).waitFor()
     await page.getByRole('region',{name:'Recorded prospective BANKNIFTY signal accuracy'}).waitFor()
     await page.getByText('Phase 2 · BANKNIFTY options P&L backtest').waitFor()
+
+    const historicalOptions=page.getByRole('region',{
+      name:'Historical BANKNIFTY signals to options backtest',
+    })
+    await historicalOptions.getByRole('heading',{
+      name:'BANKNIFTY Signal → Historical CE/PE Backtest',
+    }).waitFor()
+    assert.equal(await historicalOptions.getByRole('spinbutton',{
+      name:'Historical option lots',
+    }).inputValue(),'3','Trading style defaults to three historical option lots')
+    assert.equal(await historicalOptions.getByRole('spinbutton',{
+      name:'Historical option target LTP',
+    }).inputValue(),'300','Original options target premium is INR 300')
+    assert.equal(await historicalOptions.getByRole('spinbutton',{
+      name:'Historical lot size assumption',
+    }).inputValue(),'30','Historic units per lot are a clearly labeled assumption')
+    await historicalOptions.getByText('90 option units',{exact:false}).waitFor()
+
     await screenshot('01-trading-copilot-signal-backtest-v5')
     await modes.getByRole('tab',{name:'Trade Journal'}).click()
     await page.getByRole('tabpanel',{name:'Trade Journal'}).waitFor()
