@@ -229,6 +229,23 @@ The workflow is now:
 job identifiers across tab switches. No order placement or automatic trading
 API calls exist in this workflow.
 
+**Currently active option fallback.** Dhan's expired-options endpoint may
+not return a contract that has not yet expired. QuantLab first examines the
+original, fresh (<48 hours) Dhan NSE_FNO instrument master for eligible
+BANKNIFTY monthly contracts near the observed BANKNIFTY spot and the
+selected near/next/far expiry series. It downloads the original individual
+active-contract one-minute series from `POST /v2/charts/intraday`,
+using the master-provided exact security ID, strike, expiry and lot size.
+This active route applies only to recent sessions (30-day bound), never
+uses today's master to manufacture past expired contracts, and reuses
+SHA-checked cached sources. Active contracts with genuine security IDs are
+preferred over rolling strikes when both exist; a trade must remain on
+that exact ID throughout. If no current master or active candles are
+available, the software tries archived rolling data and reports the
+source/availability reason instead of guessing. Active option IDs support
+source-certified current lot sizes; expired rolling history still needs
+explicit historical lot-size assumptions.
+
 **Evidence and economic limitations:**
 - Historical Dhan rolling OHLC/volume/strike observations have no historic
   bid/ask, 20-level book or proved executable fills. Displayed assumed
