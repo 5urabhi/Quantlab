@@ -187,3 +187,6 @@
 .tc-advanced-source .tc-monitor-toggle{margin-top:10px;max-width:520px;line-height:1.5}
 .tc-historical-chart .tc-signal .tc-link-button{margin-top:10px}
 .tc-toolbar .tc-missing button,.tc-missing button{border:1px solid #44718a;border-radius:7px;padding:8px;background:#1c4d66;color:#e7f3ff;cursor:pointer}
+
+.tc-journal-source{padding:10px 13px;border:1px solid #2a4961;border-radius:10px;background:#162b3e}
+.tc-journal-source .tc-muted{max-width:540px}
