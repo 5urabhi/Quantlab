@@ -159,9 +159,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
       <span className="tc-signal-tag"><CheckCircle2 size={15}/> Index signals + CE/PE prices</span>
     </header>
 
-    <HistoricalOptionsBacktest ready={ready} limit={Number(limit)}
-      capital={capital} holdRule={holdRule} holdMinutes={selected}
-      reversalCap={reversalCap} onOpenData={onOpenData}/>
+    <HistoricalOptionsBacktest ready={ready} onOpenData={onOpenData}/>
 
     <details className="tc-optional-research" aria-label="Optional index-only diagnostics">
       <summary><span><BarChart3 size={17}/> Examine signal accuracy and index-only simulation</span>
