@@ -3,6 +3,7 @@ import {AlertTriangle,ArrowRight,BarChart3,CheckCircle2,Database,RefreshCw,Targe
 import {marketApi,marketPost,MarketApiError,readableError} from './tradingCockpitApi'
 import './signal-backtest.css'
 import IndexExposureScenario,{type ScenarioResult} from './IndexExposureScenario'
+import HistoricalOptionsBacktest from './HistoricalOptionsBacktest'
 
 type Source={identity:string;display_name?:string;ready:boolean;asset_class?:string}
 type Counts={
@@ -335,6 +336,10 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
           {tested.has_more_history?' Older observations exist outside this run.':''}</p>
       </div></details></>}
     </section>
+
+    <HistoricalOptionsBacktest ready={ready} limit={Number(limit)}
+      capital={capital} holdRule={holdRule} holdMinutes={selected}
+      reversalCap={reversalCap} onOpenData={onOpenData}/>
 
     <section className="tc-panel tc-signal-forward" aria-label="Recorded prospective BANKNIFTY signal accuracy">
       <div className="tc-panel-title"><div><strong><Clock3 size={17}/> Recorded forward predictions</strong>
