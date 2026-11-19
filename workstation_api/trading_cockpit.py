@@ -418,15 +418,24 @@ def historical_replay(identity: str, source_rows: list[dict],
     }
 
 
-def observe_and_score(identity: str, source_rows: list[dict]) -> dict:
+def observe_and_score(identity: str, source_rows: list[dict], *,
+                      live_observed: bool = False) -> dict:
     """One opt-in monitor tick. Deduplicate both horizons and evaluate due calls.
 
     Should be called only by an explicitly authorized session monitor.
     A background browser is *not* an always-on trading service.
     """
     observation = snapshot(identity, source_rows)
+    recent = observation["quote_mode"] == "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE"
+    if live_observed and recent:
+        if identity not in {"INDEX:BANKNIFTY", "INDEX:NIFTY50"}:
+            raise ValueError("Authenticated live monitoring requires an exact spot-index identity")
+        # This flag is set only by the live WebSocket receiver after it
+        # validates an actual received Dhan ticker and a completed minute bar.
+        observation["quote_mode"] = "LIVE_OBSERVED"
+        observation["source_kind"] = "locally_aggregated_Dhan_live_LTP"
     recorded = []
-    if observation["quote_mode"] == "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE":
+    if recent:
         for horizon in (3, 6):
             recorded.append(record(observation, horizon))
     outcome = evaluate(identity, source_rows)
@@ -436,5 +445,6 @@ def observe_and_score(identity: str, source_rows: list[dict]) -> dict:
         "recorded": recorded,
         "updated_outcomes": outcome["updated"],
         "summary": outcome["summary"],
-        "monitoring_scope": "browser-open opt-in; original source only; not a live feed",
+        "monitoring_scope": ("backend-local opt-in Dhan live observed index" if live_observed
+                             else "browser-open opt-in; original source only; not a live feed"),
     }
