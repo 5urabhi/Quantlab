@@ -36,7 +36,7 @@ An explicit manual tab selection is never overwritten by the clock.
 
 | Workspace | Main intended use |
 | --- | --- |
-| **Live Trading** | Observe genuine Dhan BANKNIFTY/NIFTY 50 ticks, actual selected option premium, paired 20-level NSE option/stock order book, prospective 3/6-minute decisions, and a six-minute manual discipline timer. A stale or missing socket is visibly **not live**. |
+| **Live Trading** | Separate **Index Signal Monitor** and **BANKNIFTY Option Chain & 20-Level Depth** views. Select genuine expiry/CE/PE/strike, official master-based lot size and contract ID, preview premium outlay for lots, and connect the selected option to the existing 20-level feed. Actual freshness is independently checked; no broker order is placed. |
 | **Market Replay** | Select a real recorded IST session, play/pause/step one minute at a time, choose replay speed and move the timeline slider. Each chart shows observations **only up to the replay cursor**, never future bars. Its **Recorded 20-level books** subtab inspects actual previously saved depth samples. |
 | **Signal Backtest (Phase 1)** | Choose historical 1/3/5/6/10/30/60-minute signal horizons; see directional correctness, a clearly labeled non-executable ₹ index-exposure scenario with next-open entry/fixed exit and an equity curve, plus an entry/exit journal. Recorded forward-signal evidence remains a distinct 3/6-minute ledger. |
 | **Trade Journal** | Manual options trades, actual entered premiums and exit results, plus a separate prospective index prediction accuracy ledger. Journal evaluations are not coupled to whichever historical chart was last opened. |
@@ -126,6 +126,80 @@ behavior are required before any options win rate or option-equity curve
 can be reported. The current scenario intentionally does *not* claim to
 implement those instruments, stops, orders or fills.
 
+
+## BANKNIFTY option chain, exchange lots and 20-level live depth
+
+**BANKNIFTY is an index level, not a directly purchasable security.**
+The index's original spot candles remain the input to the directional
+signal. Contract-level execution research uses a real **NSE_FNO option**
+with a specific strike, CE/PE type, expiry, official Dhan security ID,
+lot size, and actual quote or order-book observations.
+
+Under **Trading Cockpit → Live Trading → BANKNIFTY option chain &
+20-level depth**:
+
+1. Connect a valid Dhan access token and client ID under **Connections**.
+   No credentials enter the React browser state beyond the secure local
+   credential submission form; the chain/stream routes use existing local
+   server environment variables. Real data access requires entitlement.
+2. Refresh the expiry list from Dhan's read-only
+   `POST /optionchain/expirylist` (underlying `IDX_I:25`). Never assume
+   weekly BANKNIFTY contracts or generate expiration dates.
+3. Load a current expiry's Dhan `POST /optionchain` REST snapshot:
+   for each returned CE/PE contract view strike, LTP, best bid/ask,
+   top quantities, OI, volume, IV, delta, and original `security_id`.
+   REST snapshots are **not** live 20-level WebSocket packets.
+   The server throttles provider calls and caches unchanged snapshots
+   briefly (10s chain; 5m expiry list), displaying local receipt age.
+4. QuantLab independently reconciles the Dhan chain security ID,
+   strike, expiry and CE/PE with the locally downloaded official
+   Dhan derivative instrument master (`data/dhan/instrument_master.csv`).
+   Exact lot size is read from that contract's `LOT_SIZE` /
+   `SEM_LOT_UNITS`. For example, the BANKNIFTY 2026 contract
+   specification published by NSE is **30 units per lot**; do not
+   hardcode that constant for historical or future contracts.
+   If the master is absent, outdated or contradictory, the browser
+   displays original quote information but **withholds** a verified
+   security identity, lot size, premium-cost estimate and depth target.
+   Refresh the Dhan master through Data Library.
+5. Select **number of lots** and a paper capital budget. The app
+   displays quantity = lots × verified contract lot size; estimated
+   buy premium = observed best **ask** × quantity; and the immediate
+   bid/ask crossing cost = (ask − bid) × quantity. Those are quote
+   snapshots, **not actual broker fills**, slippage, brokerage,
+   margin, tax or a guaranteed execution price.
+6. Click **Use for live 20-level depth** to set that exact
+   `NSE_FNO:<security-id>` as the depth target in the existing
+   read-only Dhan WebSocket. Grant read-only streaming consent
+   and click Start. There is just **one** selected live depth
+   instrument at a time, and index spot has no order book.
+   A subscription state is not a guarantee of fresh paired
+   packets; the screen separately shows live feed status,
+   receipt age, best bid/ask, 20 bid and ask levels and the
+   underlying index's own freshness. Stop the current feed
+   before switching to a different option contract.
+7. **Prepare manual journal entry** copies only the exact
+   option symbol, CE/PE side and multiple-of-lot quantity
+   into the Trade Journal. The actual entry premium remains
+   **empty** until you type a broker-confirmed fill. No broker
+   order is submitted.
+
+Dhan option chain calls are synchronized and rate-limited on the
+local server; no authenticated vendor responses or secrets are logged.
+Validated, normalized chain snapshots are persisted at most every
+30 seconds to the existing single `dhan_shared` SQLite Market
+Library under `option_chain_observations`. This does **not**
+retroactively reconstruct historical option prices or every 20-level
+book: only actually received observations are saved. The live depth
+capture continues to use the pre-existing binary bid/ask packet pairing
+and per-second bounded book recorder.
+
+**Future historical options P&L** must use original options price
+observations for the exact selected expiry/strike at each entry
+and exit (ideally bid/ask and relevant book liquidity). A profitable
+underlying-index prediction alone cannot establish a profitable CE/PE
+trade. The historical index-exposure cash illustration in Signal
+Backtest remains explicitly non-executable and separate.
 
 ## Dual-mode operation: historical + real-time Dhan
 
