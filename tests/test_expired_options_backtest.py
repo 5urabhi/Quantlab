@@ -210,6 +210,12 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         invalid = client.post("/api/trading-cockpit/options/backtest",
                               json={"confirm_readonly": True, "wings": 50})
         self.assertEqual(invalid.status_code, 422)
+        unsupported_wings = client.post("/api/trading-cockpit/options/backtest",
+                                        json={"confirm_readonly": True,
+                                              "expiry_code": 1, "wings": 5})
+        self.assertEqual(unsupported_wings.status_code, 400)
+        self.assertIn("current/near expiry",
+                      unsupported_wings.json()["detail"])
         with patch("workstation_api.app._spawn",
                    return_value={"job_id": "test_local_id", "status": "queued"}) as mocked:
             okay = client.post("/api/trading-cockpit/options/backtest",
