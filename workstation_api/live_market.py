@@ -543,6 +543,29 @@ def events():
         time.sleep(0.25)
 
 
+def capture_catalog() -> dict:
+    """Discover stored live observations so replay works after the feed is stopped.
+
+    These are views of the same canonical SQLite file as the Market Library,
+    not new datasets. Instrument IDs are the exact original broker identities.
+    """
+    _init_db()
+    with _database() as db:
+        minutes=db.execute("""SELECT identity,COUNT(*) AS rows,MIN(minute_utc),
+                              MAX(minute_utc) FROM live_minute_bars
+                              GROUP BY identity ORDER BY MAX(minute_utc) DESC""").fetchall()
+        books=db.execute("""SELECT identity,COUNT(*) AS rows,MIN(received_utc),
+                            MAX(received_utc) FROM live_depth_books
+                            GROUP BY identity ORDER BY MAX(received_utc) DESC""").fetchall()
+    def listed(rows):
+        return [{"identity":identity,"observations":count,"first_utc":first,
+                 "last_utc":last} for identity,count,first,last in rows]
+    return {"shared_library":shared_market_data.SHARED_ID,
+            "minute_sources":listed(minutes),"depth_sources":listed(books),
+            "source":"actually received Dhan WebSocket packets",
+            "warning":"Recorded live evidence only. Historical depth before recording is unavailable."}
+
+
 def latest_depth_history(identity: str, limit: int = 150) -> dict:
     if not market_depth.DEPTH_ID.fullmatch(identity):
         raise ValueError("Choose exact NSE_EQ/NSE_FNO security ID")
