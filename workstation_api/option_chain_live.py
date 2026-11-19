@@ -250,6 +250,7 @@ def _save_snapshot(value: dict) -> None:
 
 def expiries(*, sleep=time.sleep) -> dict:
     """Read-only expiry discovery, cached. No trading API and no market inference."""
+    global _LAST_VENDOR_CALL
     token, client = _credentials()
     auth = _auth_key(token)
     now = time.monotonic()
@@ -259,12 +260,19 @@ def expiries(*, sleep=time.sleep) -> dict:
         if prior and now - prior[0] < EXPIRY_TTL_SECONDS:
             return {**prior[1], "cache_hit": True}
         body = {"UnderlyingScrip": 25, "UnderlyingSeg": "IDX_I"}
+        delay = MIN_CHAIN_INTERVAL_SECONDS - (time.monotonic() - _LAST_VENDOR_CALL)
+        if _LAST_VENDOR_CALL and delay > 0:
+            sleep(delay)
         raw, _ = dhan_option_chain._json_http(
             dhan_option_chain.EXPIRY_ENDPOINT, token=token,
             client_id=client, body=body)
+        _LAST_VENDOR_CALL = time.monotonic()
+        candidates = raw.get("data")
+        if not isinstance(candidates, list):
+            raise ValueError("Dhan expirylist response is not a date list")
         current = _clock().astimezone(IST).date()
         expirations = sorted({
-            val for val in raw.get("data", [])
+            val for val in candidates
             if isinstance(val, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", val)
             and _valid_expiry(val, current)
         })
@@ -305,7 +313,7 @@ def chain(expiry: str, *, sleep=time.sleep) -> dict:
         observed = expiries(sleep=sleep)
         if expiry not in observed["expiries"]:
             raise ValueError("Expiry is not in Dhan's current BANKNIFTY contract list")
-        delay = MIN_CHAIN_INTERVAL_SECONDS - (now - _LAST_VENDOR_CALL)
+        delay = MIN_CHAIN_INTERVAL_SECONDS - (time.monotonic() - _LAST_VENDOR_CALL)
         if delay > 0:
             sleep(delay)
         response, _ = dhan_option_chain._json_http(
