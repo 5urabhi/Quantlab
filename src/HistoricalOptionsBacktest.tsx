@@ -32,7 +32,9 @@ type BacktestResult={
   historical_window:{first:string;through_exclusive:string;observed_index_bars:number}
   data_evidence:{request_count:number;fresh_requests:number;cached_requests:number
     empty_requests:number;unique_option_minute_bars:number;conflicted_excluded:number
-    source:string;expiry_flag:string;expiry_code:number;strike_wings:number}
+    source:string;expiry_flag:string;expiry_code:number;strike_wings:number
+    active_source?:{reason?:string;next_action?:string;source?:string;requests?:number
+      fresh_requests?:number;cached_requests?:number}}
   selected_rule_id:string;selected:OptionScenario;comparison:CompareRow[]
   assumptions:{premium_target_inr:number;premium_tolerance_inr:number
     lots:number;historical_lot_size_units:number;lot_size_basis:string
@@ -265,7 +267,7 @@ export default function HistoricalOptionsBacktest({
         {running?<RefreshCw size={17}/>:<Play size={17}/>}
         {running?'Loading option history and running scenarios…':'Run BANKNIFTY → CE/PE backtest (auto-fetch missing data)'}
       </button>
-      <p>Runs locally using your configured Dhan token. Reuses verified cached source receipts on repeat runs. The historical lot size and execution costs are user assumptions; no orders, historical bid/ask or broker fills are claimed.</p>
+      <p>Runs locally using your configured Dhan token. Reuses verified cached source receipts on repeat runs. For expired rolling records, lot size is a user assumption; active options can use a fresh original Dhan contract master. Slippage and fees remain assumptions. No orders, historical bid/ask or broker fills are claimed.</p>
     </div>
     {job&&running&&<div className="hob-job" role="status">
       <span>{job.stage||'Loading original historical options'}</span>
@@ -292,10 +294,17 @@ export default function HistoricalOptionsBacktest({
         <div><span>Closed-trade drawdown</span><strong>{PCT(scenario.max_closed_trade_drawdown_pct)}</strong><small>Intratrade drawdown not modeled</small></div>
         <div><span>Original Dhan request usage</span><strong>{result.data_evidence.fresh_requests} fetched</strong><small>{result.data_evidence.cached_requests} reused · {result.data_evidence.empty_requests} empty</small></div>
       </div>
+      {result.data_evidence.active_source?.reason&&<div className="tc-warning" role="status">
+        <AlertTriangle size={17}/><div>
+          <strong>Current listed option fallback: {result.data_evidence.active_source.reason}</strong>
+          <p>{result.data_evidence.active_source.next_action||
+            'Older expired contracts use Dhan rolling history; currently active expiry contracts require the latest original Dhan instrument master and active contract candles.'}</p>
+        </div><button type="button" onClick={onOpenData}>Open connections <ArrowRight size={14}/></button>
+      </div>}
       {scenario.trade_count===0&&<div className="tc-warning">
         <AlertTriangle size={17}/> No complete historical CE/PE trades were scored for this sample.
         This is not zero-risk profitability or a failed trade signal; inspect the missing-data counts below.
-        Try a wider premium range or more ATM wings, but never substitute index returns for option premiums.
+        Try a wider premium range or more ATM wings. For recent sessions, refresh the Dhan instrument master so active (not-yet-expired) option security IDs can be used. Never substitute index returns for option premiums.
       </div>}
       <OptionEquityCurve data={scenario.equity_curve}/>
       <div className="tc-table-scroll hob-table">
