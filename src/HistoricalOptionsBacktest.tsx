@@ -60,6 +60,48 @@ const MODE_LABEL:Record<Rule,string>={
   premium_target_stop:'Option premium target/stop',
   hybrid:'Signal reversal, time cap or premium stop/target',
 }
+function OptionEquityCurve({data}:{data:OptionScenario['equity_curve']}){
+  const [hover,setHover]=useState<number|null>(null)
+  if(data.length<2)return null
+  const width=860,height=216,left=68,right=16,top=17,bottom=38
+  const lo=Math.min(...data.map(d=>d.equity_inr))
+  const hi=Math.max(...data.map(d=>d.equity_inr))
+  const pad=Math.max(1,(hi-lo)*.1)
+  const yMin=lo-pad,yMax=hi+pad
+  const xy=(i:number)=>({
+    x:left+(width-left-right)*i/Math.max(1,data.length-1),
+    y:top+(height-top-bottom)*(yMax-data[i].equity_inr)/(yMax-yMin),
+  })
+  const points=data.map((_,i)=>xy(i))
+  const path=points.map((p,i)=>(i===0?'M':'L')+p.x.toFixed(1)+' '+p.y.toFixed(1)).join(' ')
+  const focused=hover===null?null:points[hover]
+  return <div className="hob-equity">
+    <div className="hob-equity-head"><strong>Account balance after completed CE/PE trades</strong>
+      <small>{hover===null?'Hover for exact historic trade balances':
+        IST(data[hover].timestamp_utc)+' · '+CASH(data[hover].equity_inr)}</small></div>
+    <svg viewBox={'0 0 '+width+' '+height} role="img" aria-label="Cumulative paper account balance with interactive trade timestamps">
+      <title>Historical options account balance after each closed trade</title>
+      {[0,.5,1].map((share,i)=>{
+        const y=top+share*(height-top-bottom)
+        return <g key={i}><line x1={left} x2={width-right} y1={y} y2={y} className="hob-equity-grid"/>
+          <text x={left-7} y={y+4} textAnchor="end" className="hob-equity-axis">{DEC(yMax-share*(yMax-yMin),0)}</text></g>
+      })}
+      <path d={path} className="hob-equity-curve"/>
+      {focused&&<g><line x1={focused.x} x2={focused.x} y1={top} y2={height-bottom} className="hob-equity-cursor"/>
+        <circle cx={focused.x} cy={focused.y} r={4} className="hob-equity-dot"/></g>}
+      <text x={left} y={height-9} className="hob-equity-axis">{IST(data[0].timestamp_utc)}</text>
+      <text x={width-right} y={height-9} textAnchor="end" className="hob-equity-axis">{IST(data[data.length-1].timestamp_utc)}</text>
+      <rect x={left} y={top} width={width-left-right} height={height-top-bottom}
+        fill="transparent" onMouseMove={e=>{
+          const box=e.currentTarget.getBoundingClientRect()
+          const share=(e.clientX-box.left)/Math.max(1,box.width)
+          setHover(Math.max(0,Math.min(data.length-1,Math.round(share*(data.length-1)))))
+        }} onMouseLeave={()=>setHover(null)}/>
+    </svg>
+    <small>Closed-trade equity only. Position-specific unrealized drawdowns, partial fills and order-book liquidity are not reconstructed.</small>
+  </div>
+}
+
 export default function HistoricalOptionsBacktest({
   ready,limit,capital,holdRule,holdMinutes,reversalCap,onOpenData,
 }:Props){
@@ -255,6 +297,7 @@ export default function HistoricalOptionsBacktest({
         This is not zero-risk profitability or a failed trade signal; inspect the missing-data counts below.
         Try a wider premium range or more ATM wings, but never substitute index returns for option premiums.
       </div>}
+      <OptionEquityCurve data={scenario.equity_curve}/>
       <div className="tc-table-scroll hob-table">
         <table><thead><tr><th>Exit strategy</th><th>Trades</th><th>Win rate</th><th>Option net P&amp;L</th>
           <th>Account return</th><th>Ending balance</th><th>Average hold</th><th>Closed drawdown</th></tr></thead>
