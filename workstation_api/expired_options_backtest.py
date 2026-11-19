@@ -30,6 +30,9 @@ VALID_HOLDS = (1, 3, 5, 6, 10, 30, 60)
 VALID_POLICIES = ("fixed", "signal_reversal", "signal_reversal_or_cap",
                   "premium_target_stop", "hybrid")
 MAX_REQUESTS = 48
+# Current listed options can span several BANKNIFTY index levels across
+# a multi-day window; never reject all of them on the first unavailable ID.
+MAX_ACTIVE_REQUESTS = 96
 REQUIRED = ("open", "high", "low", "close", "volume", "oi", "iv", "strike", "spot")
 
 
@@ -529,33 +532,56 @@ def load_active_option_market(spot_rows: list[dict], *,
                     "contract": candidate, "days": set(),
                 })
                 state["days"].add(day)
-    if len(choices) > MAX_REQUESTS:
+    if len(choices) > MAX_ACTIVE_REQUESTS:
         return {}, {"reason": "Active contracts exceed bounded request budget",
-                    "candidates": len(choices)}
+                    "candidates": len(choices), "limit": MAX_ACTIVE_REQUESTS,
+                    "next_action": "Select a shorter historical BANKNIFTY window "
+                                   "or reduce ATM strike coverage under Advanced "
+                                   "settings to stay within the Dhan API request limit"}
     if not choices:
         return {}, {"reason": "No source-matched BANKNIFTY listed contracts for the index dates"}
     first = date.fromisoformat(days[0])
     last = date.fromisoformat(days[-1]) + timedelta(days=1)
     lookup: dict[tuple[str, str], dict[float, dict]] = defaultdict(dict)
     cache_count = vendor_count = invalid = 0
+    unavailable: Counter[str] = Counter()
     for i, (identity, item) in enumerate(sorted(choices.items())):
         if progress:
             progress(10 + i * 36 / len(choices), "Checking currently active Dhan option contracts")
         body = _active_body(identity, first, last)
+        # A SHA-invalid cached receipt is a source-integrity failure, NEVER
+        # a reason to silently redownload or manufacture a substitute.
         payload = _get_cached(body)
         if payload is None:
-            if fetcher is None:
-                time.sleep(.45)
-                payload = _active_response(body)
-            else:
-                payload = fetcher(body)
+            try:
+                if fetcher is None:
+                    time.sleep(.45)
+                    payload = _active_response(body)
+                else:
+                    payload = fetcher(body)
+            except ValueError as exc:
+                # A particular NEW strike may not have traded for the whole
+                # requested period. Keep other original listed contracts
+                # rather than aborting the entire backtest. Fail fast for
+                # account-wide entitlement or vendor rate-limit failures.
+                reason = str(exc)[:160]
+                if "access denied" in reason.lower() or "rate-limited" in reason.lower():
+                    raise
+                unavailable[reason] += 1
+                continue
             if not isinstance(payload, dict) or not isinstance(payload.get("timestamp"), list):
-                raise ValueError("Original active option history request failed for a master-listed contract")
+                unavailable["Dhan active contract request returned no timestamped minute candles"] += 1
+                continue
             _save_cache(body, payload)
             vendor_count += 1
         else:
             cache_count += 1
-        for row in _normalize_active(payload, item["contract"], item["days"]):
+        try:
+            parsed = _normalize_active(payload, item["contract"], item["days"])
+        except ValueError:
+            unavailable["Dhan active contract candles were not structurally valid"] += 1
+            continue
+        for row in parsed:
             key = (row["timestamp_utc"], row["side"])
             strike = row["strike"]
             if strike in lookup[key] and lookup[key][strike]["security_id"] != identity:
@@ -563,14 +589,25 @@ def load_active_option_market(spot_rows: list[dict], *,
                 invalid += 1
             else:
                 lookup[key][strike] = row
-    return lookup, {
+    returned = sum(len(v) for v in lookup.values())
+    skipped = sum(unavailable.values())
+    result = {
         "source": "Dhan original active NSE_FNO OPTIDX /charts/intraday",
         "requests": len(choices), "fresh_requests": vendor_count,
-        "cached_requests": cache_count, "unique_option_minute_bars":
-            sum(len(v) for v in lookup.values()),
+        "cached_requests": cache_count, "unique_option_minute_bars": returned,
+        "failed_contract_requests": skipped,
+        "failure_reasons": dict(unavailable.most_common(3)),
         "conflicted_excluded": invalid,
         "identity": "exact current Dhan security_id, expiry date and lot size",
     }
+    if not returned:
+        result["reason"] = "No original current-contract option minute bars matched the selected dates"
+        result["next_action"] = (
+            "Check Dhan's active NSE_FNO option-history entitlement and "
+            "refresh its official instrument master. "
+            "If a specific strike is newly listed, its older minutes "
+            "may be unavailable; narrow the window or adjust strike coverage.")
+    return lookup, result
 
 
 def _signals(source_rows: list[dict]) -> list[dict]:
