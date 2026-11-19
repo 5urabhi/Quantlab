@@ -46,7 +46,10 @@ export default function OptionChainLive({feedActive,depthIdentity,
   const [chain,setChain]=useState<Chain|null>(null)
   const [selected,setSelected]=useState<string>('')
   const [side,setSide]=useState<'ALL'|'CE'|'PE'>('ALL')
-  const [lots,setLots]=useState(1)
+  const [lots,setLots]=useState(3)
+  const [targetPremium,setTargetPremium]=useState(300)
+  const [premiumTolerance,setPremiumTolerance]=useState(50)
+  const [nearTargetOnly,setNearTargetOnly]=useState(false)
   const [capital,setCapital]=useState(50_000)
   const [busy,setBusy]=useState(false)
   const [expiryBusy,setExpiryBusy]=useState(false)
@@ -128,10 +131,15 @@ export default function OptionChainLive({feedActive,depthIdentity,
   },[])
   const filtered=useMemo(()=>{
     const rows=(chain?.expiry===expiry?chain.contracts:[]).filter(c=>
-      side==='ALL'||c.option_type===side)
-    return [...rows].sort((a,b)=>a.strike-b.strike||
-      a.option_type.localeCompare(b.option_type))
-  },[chain,expiry,side])
+      (side==='ALL'||c.option_type===side)&&
+      (!nearTargetOnly||(c.ltp!==null&&Math.abs(c.ltp-targetPremium)<=premiumTolerance)))
+    return [...rows].sort((a,b)=>{
+      // Closest to preferred premium first; ties resolved by strike and type.
+      const aPrice=a.ltp===null?Number.POSITIVE_INFINITY:Math.abs(a.ltp-targetPremium)
+      const bPrice=b.ltp===null?Number.POSITIVE_INFINITY:Math.abs(b.ltp-targetPremium)
+      return aPrice-bPrice||a.strike-b.strike||a.option_type.localeCompare(b.option_type)
+    })
+  },[chain,expiry,side,nearTargetOnly,targetPremium,premiumTolerance])
   const picked=chain?.expiry===expiry
     ?chain.contracts.find(c=>c.identity&&c.identity===selected):null
   const valid=Boolean(picked?.contract_master_verified&&picked?.quote_valid&&
@@ -142,6 +150,9 @@ export default function OptionChainLive({feedActive,depthIdentity,
   const spread=totalAsk!==null&&totalBid!==null?totalAsk-totalBid:null
   const maxLots=(picked&&valid&&picked.ask&&picked.lot_size)
     ?Math.floor(capital/(picked.ask*picked.lot_size)):0
+  const matchingPremiumCount=(chain?.expiry===expiry?chain.contracts:[]).filter(c=>
+    (side==='ALL'||c.option_type===side)&&c.ltp!==null&&
+    Math.abs(c.ltp-targetPremium)<=premiumTolerance).length
   const age=chain?.received_utc?Math.max(0,Math.round((now-Date.parse(chain.received_utc))/1000)):null
   const bookCurrent=Boolean(picked?.identity&&picked.identity===depthIdentity)
   const mapSignal=currentIndexDirection==='UP'?'CE':
@@ -203,6 +214,23 @@ export default function OptionChainLive({feedActive,depthIdentity,
       <span>Signal: <b>{currentIndexDirection||'Not ready'}</b>
         {mapSignal?' · '+mapSignal+' contracts are one possible long-options expression':' · no contract suggestion'}</span>
     </div>
+    <div className="oc-preferences">
+      <strong>Preferred scalp setup · adjustable, never a guaranteed fill</strong>
+      <label>Target option LTP (₹)
+        <input aria-label="Preferred option LTP" type="number" min={1} max={100000}
+          value={targetPremium} onChange={e=>setTargetPremium(Math.max(1,Number(e.target.value)||1))}/>
+      </label>
+      <label>Premium range ± ₹
+        <input aria-label="Preferred premium tolerance" type="number" min={0} max={10000}
+          value={premiumTolerance} onChange={e=>setPremiumTolerance(Math.max(0,Number(e.target.value)||0))}/>
+      </label>
+      <label className="oc-preference-checkbox">
+        <input type="checkbox" checked={nearTargetOnly}
+          onChange={e=>setNearTargetOnly(e.target.checked)}/>
+        Only show premiums near target
+      </label>
+      <span>{matchingPremiumCount} matching contract(s). Sorted closest to ₹{num(targetPremium)} LTP. Bid/ask, spread and liquidity still matter.</span>
+    </div>
     <div className="tc-table-scroll oc-table">
       <table><thead><tr><th>Choose</th><th>Strike</th><th>Type</th>
         <th>LTP ₹</th><th>Bid ₹</th><th>Ask ₹</th><th>OI</th><th>Volume</th>
@@ -214,7 +242,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
             <td><input type="radio" name="oc-selected" aria-label={'Select '+c.strike+' '+c.option_type}
               checked={Boolean(c.identity&&selected===c.identity)}
               disabled={!c.contract_master_verified||!c.identity}
-              onChange={()=>{setSelected(c.identity||'');setLots(1)}}/></td>
+              onChange={()=>{setSelected(c.identity||'');setLots(3)}}/></td>
             <td>{num(c.strike,0)} {atm&&<small>ATM vicinity</small>}</td>
             <td><span className={'tc-direction '+(c.option_type==='CE'?'up':'down')}>{c.option_type}</span></td>
             <td>{num(c.ltp)}</td><td>{num(c.bid)}</td><td>{num(c.ask)}</td>
@@ -224,7 +252,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
           </tr>
         })}
         {!filtered.length&&<tr><td colSpan={12}>
-          {busy?'Loading original Dhan option chain…':'No verified original strikes for the selected expiry. Refresh the chain, token or instrument master.'}
+          {busy?'Loading original Dhan option chain…':nearTargetOnly?'No contracts in the preferred premium range. Widen the range or turn off the filter.':'No verified original strikes for the selected expiry. Refresh the chain, token or instrument master.'}
         </td></tr>}</tbody></table>
     </div>
     <div className="oc-preview">
@@ -233,6 +261,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
           <h4>{picked?picked.symbol+' · '+picked.expiry:
             'Select an available CE or PE to calculate lots'}</h4>
           <p>{picked?picked.identity+' · '+picked.option_type+' '+num(picked.strike,0):'BANKNIFTY index cannot be bought or sold directly.'}</p>
+          <p>Default 3 lots · currently around {picked?.lot_size===30?'90':'3 × verified lot size'} units · preferred LTP ₹{num(targetPremium)}. Exact premium is based on the ask, not LTP.</p>
         </div>
         <span className="oc-source">{bookCurrent?'Selected for order book':'No order-book subscription selected'}</span>
       </div>
