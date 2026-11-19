@@ -726,21 +726,24 @@ def trading_cockpit_monitor_tick(body: TradingCockpitRecordRequest):
 
 @app.get("/api/trading-cockpit/report")
 def trading_cockpit_report(identity: str, date_ist: str = "",
-                           horizon_minutes: Literal[3, 6] | None = None):
+                           horizon_minutes: Literal["3", "6"] | None = None):
+    # FastAPI/Pydantic query parameters arrive as text, not JSON numbers.
+    # Integer Literals reject even valid ?horizon_minutes=3 with HTTP 422.
     try:
         return trading_cockpit.day_report(
-            identity, date_ist, horizon_minutes=horizon_minutes)
+            identity, date_ist,
+            horizon_minutes=int(horizon_minutes) if horizon_minutes else None)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
 
 @app.get("/api/trading-cockpit/replay")
-def trading_cockpit_replay(identity: str, horizon_minutes: Literal[3, 6] = 6,
+def trading_cockpit_replay(identity: str, horizon_minutes: Literal["3", "6"] = "6",
                            limit: int = 1500):
     try:
         original = cockpit_sources.series(identity, limit=limit)
         result = trading_cockpit.historical_replay(
-            identity, original["rows"], horizon_minutes)
+            identity, original["rows"], int(horizon_minutes))
         result["source_warning"] = original["warning"]
         result["has_more_history"] = original["has_more"]
         return result
@@ -864,11 +867,11 @@ def trading_cockpit_live_evaluate(body: TradingCockpitRecordRequest):
 @app.get("/api/trading-cockpit/live/replay")
 def trading_cockpit_live_replay(
     identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY",
-    horizon_minutes:Literal[3,6]=6,limit:int=1500):
+    horizon_minutes:Literal["3","6"]="6",limit:int=1500):
     """Past live-captured minute bars, not the 20-level stream transformed to prices."""
     try:
         source=live_market.minute_series(identity,limit)
-        result=trading_cockpit.historical_replay(identity,source["rows"],horizon_minutes)
+        result=trading_cockpit.historical_replay(identity,source["rows"],int(horizon_minutes))
         result["source_kind"]=source["basis"]
         result["source_warning"]=source["source_warning"]
         result["has_more_history"]=source["has_more"]
