@@ -14,8 +14,15 @@ const showTime=(v:string)=>new Date(v).toLocaleTimeString('en-IN',{
   timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',hourCycle:'h23'})
 function decorate(rows:OriginalBar[]):Candle[]{
   let ema9=0,ema21=0
-  const closes:number[]=[]
+  let previous:OriginalBar|undefined
+  let closes:number[]=[]
   return rows.map(row=>{
+    if(previous&&(previous.session_ist!==row.session_ist||
+      Date.parse(row.timestamp_utc)-Date.parse(previous.timestamp_utc)!==60_000)){
+      // Never carry an EMA across an unobserved minute or another session.
+      closes=[];ema9=0;ema21=0
+    }
+    previous=row
     closes.push(row.close)
     if(closes.length===9)ema9=closes.slice(0,9).reduce((a,b)=>a+b,0)/9
     else if(closes.length>9)ema9=(2/10)*row.close+(1-2/10)*ema9
