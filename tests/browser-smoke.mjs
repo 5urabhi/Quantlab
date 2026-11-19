@@ -132,6 +132,28 @@ try {
     await modes.getByRole('tab',{name:'Connections'}).click()
     await page.getByRole('tabpanel',{name:'Connections'}).waitFor()
     await screenshot('01-trading-copilot-connections-v4')
+    // Regression: a structured FastAPI 400/422 is readable, not [object Object].
+    await page.route('**/api/trading-cockpit/instruments',route=>route.fulfill({
+      status:200,contentType:'application/json',
+      body:JSON.stringify({instruments:[{identity:'INDEX:BANKNIFTY',
+        display_name:'Bank Nifty · synthetic UI routing fixture',
+        asset_class:'spot_index',ready:true,state:'source_available'}],
+        prepared_equities:0,downloaded_equities_pending_preparation:0})
+    }))
+    await page.route('**/api/trading-cockpit/historical/series?*',route=>route.fulfill({
+      status:422,contentType:'application/json',
+      body:JSON.stringify({detail:{code:'index_source_missing',
+        message:'Original index candles failed source validation'}})
+    }))
+    await nav('Home').click()
+    await nav('Trading Cockpit').click()
+    await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
+      .getByRole('tab',{name:'Market Replay'}).click()
+    await page.getByText('Original index candles failed source validation',{exact:true}).waitFor()
+    assert.equal(await page.getByText('[object Object]',{exact:true}).count(),0)
+    await screenshot('01-trading-copilot-source-error-readable')
+    await page.unroute('**/api/trading-cockpit/instruments')
+    await page.unroute('**/api/trading-cockpit/historical/series?*')
     // The source assistant belongs in the Data Library shown in the UI.
     await nav('Data Library').click()
     const dataTabs=page.getByRole('navigation',{name:'Modules within selected research destination'})
