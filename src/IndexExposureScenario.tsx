@@ -7,10 +7,12 @@ export type IndexTrade={
   direction:'UP'|'DOWN';side:string;entry_points:number;exit_points:number
   index_move_pct:number;exposure_return_pct:number;allocated_inr:number
   gross_pnl_inr:number;illustrative_cost_inr:number;net_pnl_inr:number
-  equity_inr:number
+  equity_inr:number;actual_hold_minutes?:number;exit_reason?:string
 }
 export type ScenarioResult={
   mode:'ILLUSTRATIVE_SIGNED_INDEX_EXPOSURE_ONLY';horizon_minutes:number
+  hold_rule?:'fixed'|'signal_reversal'|'signal_reversal_or_cap';reversal_cap_minutes?:number|null
+  average_hold_minutes?:number|null
   starting_capital_inr:number;ending_capital_inr:number
   net_pnl_inr:number;net_return_pct:number
   max_closed_trade_drawdown_pct:number;cost_bps_per_side:number
@@ -18,7 +20,7 @@ export type ScenarioResult={
   losing_trades:number;breakeven_trades:number;win_rate:number|null
   total_illustrative_cost_inr:number
   skipped:{no_signal:number;position_open:number;session_cutoff:number
-    missing_entry:number;missing_exit_or_path:number}
+    missing_entry:number;missing_exit_or_path:number;missing_session_close?:number}
   equity_curve:{timestamp_utc:string;equity_inr:number}[]
   latest_trades:IndexTrade[];entry_policy:string;exit_policy:string
   disclaimer:string
@@ -133,8 +135,14 @@ export default function IndexExposureScenario({scenario}:{scenario:ScenarioResul
         <p>UP = hypothetical long exposure; DOWN = hypothetical short exposure. Ignore NO TRADE.</p></div>
       <div><strong>2 · Assume next observed open</strong>
         <p>A signal needs a completed one-minute candle. Entry uses the following observed candle's opening index level, not the signal's close.</p></div>
-      <div><strong>3 · Hold {scenario.horizon_minutes} minute{scenario.horizon_minutes===1?'':'s'}</strong>
-        <p>Ignore overlapping signals while the position is open. Exit at the observed opening index level after the selected holding period.</p></div>
+      <div><strong>3 · {scenario.hold_rule==='signal_reversal'?'Hold until opposite signal':
+        scenario.hold_rule==='signal_reversal_or_cap'?'Hold until reversal or time cap':
+        'Hold '+scenario.horizon_minutes+' minute'+(scenario.horizon_minutes===1?'':'s')}</strong>
+        <p>{scenario.hold_rule==='signal_reversal'?
+          'Exit only after the opposite completed signal, at the next observed open. Otherwise exit by the observed session-close opening price. NO TRADE is neutral.':
+          scenario.hold_rule==='signal_reversal_or_cap'?
+          'Exit after the opposite completed signal, or at the '+scenario.reversal_cap_minutes+'-minute cap, whichever comes first. Force flat before session end.':
+          'Ignore overlapping signals while the position is open. Exit at the observed opening index level after the selected holding period.'}</p></div>
       <div><strong>4 · Stay flat across session close</strong>
         <p>No synthetic missing-minute fills or overnight positions. Incomplete trades are excluded and counted separately.</p></div>
     </div>
@@ -151,7 +159,7 @@ export default function IndexExposureScenario({scenario}:{scenario:ScenarioResul
     <details className="tc-index-trade-details">
       <summary>See {scenario.latest_trades.length} latest complete entries and exits</summary>
       <div className="tc-table-scroll"><table><thead><tr>
-        <th>Signal IST</th><th>Direction</th><th>Entry (IST / index)</th>
+        <th>Signal IST</th><th>Direction</th><th>Exit reason</th><th>Hold</th><th>Entry (IST / index)</th>
         <th>Exit (IST / index)</th><th>Index move (points)</th>
         <th>Index move (%)</th><th>Scenario return</th>
         <th>Gross ₹</th><th>Assumed cost ₹</th>
@@ -161,6 +169,7 @@ export default function IndexExposureScenario({scenario}:{scenario:ScenarioResul
           <td><span className={'tc-direction '+t.direction.toLowerCase()}>
             {t.direction==='UP'?<ArrowUpRight size={13}/>:<ArrowDownRight size={13}/>}
             {t.direction==='UP'?'Long proxy':'Short proxy'}</span></td>
+          <td>{t.exit_reason?.replaceAll('_',' ')||'Fixed hold'}</td><td>{t.actual_hold_minutes??scenario.horizon_minutes}m</td>
           <td>{clock(t.entry_utc)} · {pts(t.entry_points)}</td>
           <td>{clock(t.exit_utc)} · {pts(t.exit_points)}</td>
           <td className={t.exit_points>=t.entry_points?'tc-illustrative-positive':'tc-illustrative-negative'}>
@@ -178,7 +187,8 @@ export default function IndexExposureScenario({scenario}:{scenario:ScenarioResul
       {' '}{scenario.skipped.position_open} overlapping signals;
       {' '}{scenario.skipped.session_cutoff} too close to session end;
       {' '}{scenario.skipped.missing_entry} no exact entry bar;
-      {' '}{scenario.skipped.missing_exit_or_path} incomplete observed paths.
+      {' '}{scenario.skipped.missing_exit_or_path} incomplete observed paths;
+      {' '}{scenario.skipped.missing_session_close||0} missing observed session-close bars.
     </p>
     <div className="tc-index-disclaimer"><AlertTriangle size={18}/>
       <p><strong>Not actual investment or options P&amp;L.</strong> {scenario.disclaimer}</p></div>
