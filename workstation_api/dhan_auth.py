@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -35,7 +35,7 @@ def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
         if exc.code in (401, 403):
             return {"ok": False, "token_present": True, "token_valid": False,
                     "data_plan_active": False, "code": "auth_rejected",
-                    "message": "Dhan rejected this access token. Generate a fresh token in Dhan Web; restart the workstation."}
+                    "message": "Dhan rejected this access token. Enter a fresh token in QuantLab's Dhan connection panel."}
         return {"ok": False, "token_present": True, "token_valid": None,
                 "data_plan_active": None, "code": "profile_http_error",
                 "message": f"Dhan profile endpoint returned HTTP {exc.code}; token status not verified."}
@@ -58,12 +58,16 @@ def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
     try:
         valid_until = datetime.strptime(expiry, "%d/%m/%Y %H:%M").replace(
             tzinfo=ZoneInfo("Asia/Kolkata"))
-        token_valid = datetime.now(ZoneInfo("Asia/Kolkata")) < valid_until
+        remaining_seconds = max(0, int((valid_until - datetime.now(ZoneInfo("Asia/Kolkata"))).total_seconds()))
+        token_valid = remaining_seconds > 0
+        expires_at_utc = valid_until.astimezone(timezone.utc).isoformat()
     except ValueError:
         token_valid = None
+        remaining_seconds = None
+        expires_at_utc = None
     plan_active = state == "active"
     if token_valid is False:
-        code, message = "token_expired", "Dhan access token expired. Generate a fresh access token in Dhan Web and restart the workstation."
+        code, message = "token_expired", "Dhan access token expired. Enter a fresh token in QuantLab's Dhan connection panel."
     elif token_valid is None:
         code, message = "token_expiry_unknown", "Dhan authenticated, but the token expiry field could not be interpreted."
     elif not plan_active:
@@ -77,4 +81,6 @@ def check_profile(opener=urlopen, *, token_override: str | None = None) -> dict:
             "token_valid": token_valid, "data_plan_active": plan_active,
             "code": code, "message": message,
             "token_validity": expiry[:40],
+            "expires_at_utc": expires_at_utc,
+            "seconds_remaining": remaining_seconds,
             "data_validity": str(payload.get("dataValidity", ""))[:40]}
