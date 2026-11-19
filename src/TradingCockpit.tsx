@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useState} from 'react'
-import {Activity, Clock3, Database, RefreshCw, ShieldCheck} from 'lucide-react'
+import {Clock3, Database, RefreshCw, ShieldCheck} from 'lucide-react'
 import './trading-cockpit.css'
 
 type Candle = {timestamp_utc:string;session_ist:string;open:number;high:number;low:number;close:number;volume:number;ema9:number|null;ema21:number|null}
