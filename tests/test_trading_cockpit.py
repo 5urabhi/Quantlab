@@ -147,6 +147,36 @@ class TradingCockpitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "valid YYYY-MM-DD"):
             trading_cockpit.day_report("NSE_EQ:1001", "wrong")
 
+    def test_logged_live_and_local_predictions_use_matching_evidence_only(self):
+        first = trading_cockpit.snapshot(
+            "INDEX:BANKNIFTY", candles(45),
+            now=START + timedelta(minutes=45))
+        self.assertEqual(first["quote_mode"],
+                         "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE")
+        live = trading_cockpit.snapshot(
+            "INDEX:BANKNIFTY", candles(46),
+            now=START + timedelta(minutes=46))
+        live["quote_mode"] = "LIVE_OBSERVED"  # offline source-provenance fixture
+        local_record = trading_cockpit.record(first, 3)
+        live_record = trading_cockpit.record(live, 3)
+        self.assertNotEqual(local_record["id"], live_record["id"])
+        original = candles(55)
+        local_outcome = trading_cockpit.evaluate(
+            "INDEX:BANKNIFTY", original,
+            source_modes=frozenset({"RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE"}))
+        by_id = {row["id"]: row for row in local_outcome["predictions"]}
+        self.assertEqual(local_outcome["updated"], 1)
+        self.assertEqual(by_id[local_record["id"]]["evaluation"], "NO_TRADE_REVIEWED")
+        self.assertEqual(by_id[live_record["id"]]["evaluation"], "PENDING")
+        broker_outcome = trading_cockpit.evaluate(
+            "INDEX:BANKNIFTY", original,
+            source_modes=frozenset({"LIVE_OBSERVED"}))
+        by_id = {row["id"]: row for row in broker_outcome["predictions"]}
+        self.assertEqual(broker_outcome["updated"], 1)
+        self.assertEqual(by_id[live_record["id"]]["evaluation"], "NO_TRADE_REVIEWED")
+        self.assertEqual(by_id[local_record["id"]]["quote_mode"],
+                         "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE")
+
     def test_recorded_signal_reports_do_not_mix_three_and_six_minutes(self):
         original = trading_cockpit.snapshot(
             "INDEX:BANKNIFTY", candles(),
