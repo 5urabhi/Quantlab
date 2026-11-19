@@ -127,6 +127,48 @@ can be reported. The current scenario intentionally does *not* claim to
 implement those instruments, stops, orders or fills.
 
 
+## Multiple holding rules and preferred options scalp setup (November 19)
+
+Under **Signal Backtest**, keep the index signal horizon separate from the
+exit rule. The **Exit / hold rule** control offers fixed time (1/3/5/6/10/30/60
+minutes), **until opposite signal or session end**, and **opposite signal or
+time cap** (3/5/6/10/15/30/60-minute controls). After one replay the
+**Compare all exit rules** table evaluates every fixed horizon, the pure
+opposite-signal policy, and capped reversal at 10 and 30 minutes, plus the
+user-selected custom cap. Same original causal EMA/RSI signal events,
+historical window, illustrative starting capital, allocation and assumed
+costs across the comparison. Policies may take different numbers of
+non-overlapping trades; compare exposures and entry opportunity as well as P&L.
+
+A signal at minute t is decided after that bar completes and enters on t+1
+OPEN. For a long index-exposure proxy, a DOWN signal is the opposite; for a
+short index-exposure proxy, an UP signal is the opposite. NO_TRADE is
+neutral. A reversal decided on minute u exits only on u+1 OPEN, never using
+the already-known close or later candles for an earlier fill. Capped reversal
+exits on the earliest of the opposite-signal next open, the user-selected
+time cap, or observed 15:29 IST open. Uncapped reversal requires a valid
+opposite signal or an original 15:29 IST opening observation.
+Incomplete paths or missing session-end observations are **excluded**, not
+filled or carried to the next session. Every simulated trade exposes
+`exit_reason` and `actual_hold_minutes`.
+
+**Important:** The comparison is only a non-executable signed BANKNIFTY
+index-exposure illustration. It does **not** claim the user could trade
+the index directly or that any CE/PE premium gained the same percentage.
+
+Under **Live Trading → BANKNIFTY option chain**, contract rows are ranked
+by closeness to a user-editable **₹300 target LTP**, with initial ±₹50
+tolerance and an optional "Only show premiums near target" filter. Users
+can disable the filter to see every returned real contract. Default size
+is **3 lots**, or 90 units **when the verified contract's lot size is 30**;
+changing the selected CE/PE contract retains the 3-lot default.
+Actual units, total estimated premium paid at the **best ask**, spread
+cost and capital affordability use original Dhan instrument-master identity
+and lot data. `LTP × quantity` is not an executable entry-price claim.
+Broker fill, historical option fills, slippage and real options P&L
+are not inferred from the spot index replay. The existing 20-level depth
+selection stays read-only and requires a live Dhan F&O subscription.
+
 ## BANKNIFTY option chain, exchange lots and 20-level live depth
 
 **BANKNIFTY is an index level, not a directly purchasable security.**
