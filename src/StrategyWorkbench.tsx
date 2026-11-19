@@ -113,7 +113,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
         {!spotAvailable&&<div className="tc-replay-empty"><Database size={20}/>
           <span>Original {index.replace('INDEX:','')} minute history is unavailable.</span>
           <button type="button" onClick={onOpenData}>Open data setup</button></div>}
-        {error&&<div className="tc-api-help" role="alert"><AlertTriangle size={18}/>
+        {error!==null&&<div className="tc-api-help" role="alert"><AlertTriangle size={18}/>
           <div><strong>Signal diagnostics could not run</strong><p>{readableError(error)}</p>
           <small>{error instanceof MarketApiError?error.hint:'Check the original source and retry.'}</small></div>
           <button type="button" onClick={onOpenData}>Review original source</button></div>}
