@@ -140,8 +140,9 @@ def _get_cached(body: dict) -> dict | None:
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         if item["request"] != body or sha256(raw).hexdigest() != item["sha256"]:
             raise ValueError("Cached expired-option source failed SHA-256 validation")
-        if not isinstance(payload.get("data"), dict):
-            raise ValueError("Cached expired-option source lacks Dhan data")
+        if not (isinstance(payload.get("data"), dict) or
+                isinstance(payload.get("timestamp"), list)):
+            raise ValueError("Cached option source lacks original timestamped data")
         return payload
     except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
         raise ValueError("Cached Dhan expired-options receipt is corrupted; remove the affected receipt in your local data library before retrying") from None
@@ -285,6 +286,177 @@ def load_option_market(start: date, stop: date, *, expiry_flag: str,
     }
 
 
+def _active_body(security_id: str, start: date, stop: date) -> dict:
+    """Dhan active NSE_FNO option minute history, exact listed security ID."""
+    return {"securityId": str(security_id), "exchangeSegment": "NSE_FNO",
+            "instrument": "OPTIDX", "interval": "1", "oi": False,
+            "fromDate": start.isoformat() + " 00:00:00",
+            "toDate": stop.isoformat() + " 00:00:00"}
+
+
+def _active_response(body: dict, *, opener=None) -> dict:
+    token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
+    if not token or len(token) > 4096:
+        raise ValueError("Connect your Dhan Data API token under Trading Copilot > Connections")
+    request = Request("https://api.dhan.co/v2/charts/intraday",
+                      data=json.dumps(body, separators=(",", ":")).encode(),
+                      headers={"access-token": token, "Accept": "application/json",
+                               "Content-Type": "application/json"}, method="POST")
+    try:
+        with (opener or urlopen)(request, timeout=25) as reply:
+            raw = reply.read(MAX_RESPONSE_BYTES + 1)
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ValueError("Dhan current option-history access denied. Verify the Data API subscription and token") from None
+        if exc.code == 429:
+            raise ValueError("Dhan rate-limited active option candles; reuse existing cached source receipts or retry later") from None
+        raise ValueError(f"Dhan active NSE_FNO options minute history failed (HTTP {exc.code})") from None
+    except (URLError, TimeoutError):
+        raise ValueError("Dhan active options history is unreachable") from None
+    if not raw or len(raw) > MAX_RESPONSE_BYTES:
+        raise ValueError("Dhan active option history response is empty or oversized")
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise ValueError("Dhan active options history response is not JSON") from None
+    if not isinstance(data, dict) or not isinstance(data.get("timestamp"), list):
+        raise ValueError("Dhan active options history has no timestamped candles")
+    return data
+
+
+def _normalize_active(payload: dict, contract: dict, days: set[str]) -> list[dict]:
+    stamps = payload.get("timestamp")
+    if not isinstance(stamps, list) or len(stamps) > MAX_SOURCE_ROWS:
+        raise ValueError("Dhan active option timestamps are missing or exceed source limit")
+    for key in ("open", "high", "low", "close"):
+        if not isinstance(payload.get(key), list) or len(payload[key]) != len(stamps):
+            raise ValueError("Active option candle values do not align with original timestamps")
+    volume = payload.get("volume")
+    if not isinstance(volume, list) or len(volume) != len(stamps):
+        raise ValueError("Active option history has no aligned trade volume")
+    rows = []
+    seen = set()
+    for i, epoch in enumerate(stamps):
+        try:
+            timestamp = datetime.fromtimestamp(float(epoch), timezone.utc)
+            local = timestamp.astimezone(IST)
+            day = local.date().isoformat()
+            if day not in days or not clock_time(9, 15) <= local.time().replace(tzinfo=None) <= clock_time(15, 29):
+                continue
+            if timestamp in seen:
+                raise ValueError("Repeated active option source timestamp")
+            seen.add(timestamp)
+            op, hi, lo, cl, vol = (float(payload[key][i])
+                                  for key in ("open", "high", "low", "close", "volume"))
+            if (any(not math.isfinite(v) for v in (op, hi, lo, cl, vol))
+                    or min(op, hi, lo, cl) <= 0 or vol < 0
+                    or lo > min(op, cl) or hi < max(op, cl)):
+                continue
+            rows.append({
+                "timestamp_utc": timestamp.isoformat(),
+                "session_ist": day, "strike": float(contract["strike"]),
+                "side": "CALL" if contract["option_type"] == "CE" else "PUT",
+                "open": op, "high": hi, "low": lo, "close": cl,
+                "volume": vol, "expiry_flag": "MONTH",
+                "expiry_code": 0, "expiry_date": contract["expiry"],
+                "origin_offset": None, "security_id": contract["security_id"],
+                "lot_size_verified": contract["lot_size"],
+            })
+        except (ValueError, OverflowError, TypeError, OSError):
+            continue
+    return rows
+
+
+def load_active_option_market(spot_rows: list[dict], *,
+                              expiry_flag: str, expiry_code: int, wings: int,
+                              fetcher=None, progress=None) -> tuple[dict, dict]:
+    """Supplement rolling expired options with exact active NSE_FNO contracts.
+
+    Uses only fresh ORIGINAL Dhan instrument master. Expired contracts
+    removed from today's master are never invented; those need rolling data.
+    """
+    from . import option_chain_live
+    if expiry_flag != "MONTH":
+        return {}, {"reason": "Active contract fallback currently supports monthly expiry"}
+    master = option_chain_live._contracts()
+    if not master.get("available") or not master.get("fresh"):
+        return {}, {"reason": "Fresh Dhan contract master not present",
+                    "next_action": "Refresh official Dhan instrument master under Data Library"}
+    by_day: dict[str, list[dict]] = defaultdict(list)
+    for row in spot_rows:
+        by_day[row["session_ist"]].append(row)
+    days = sorted(by_day)
+    if not days:
+        return {}, {"reason": "No original BANKNIFTY source days"}
+    all_contracts = list(master["by_id"].values())
+    choices: dict[str, dict] = {}
+    for day in days:
+        expiries = sorted({x["expiry"] for x in all_contracts if x["expiry"] >= day})
+        if len(expiries) <= expiry_code:
+            continue
+        expiry = expiries[expiry_code]
+        for side in ("CE", "PE"):
+            side_rows = [x for x in all_contracts if x["expiry"] == expiry
+                         and x["option_type"] == side]
+            if not side_rows:
+                continue
+            reference = by_day[day][0]["close"]
+            strikes = sorted({x["strike"] for x in side_rows})
+            near = min(range(len(strikes)), key=lambda idx:
+                       abs(strikes[idx] - reference))
+            permitted = set(strikes[max(0, near-wings):near+wings+1])
+            for candidate in side_rows:
+                if candidate["strike"] not in permitted:
+                    continue
+                identity = candidate["security_id"]
+                state = choices.setdefault(identity, {
+                    "contract": candidate, "days": set(),
+                })
+                state["days"].add(day)
+    if len(choices) > MAX_REQUESTS:
+        return {}, {"reason": "Active contracts exceed bounded request budget",
+                    "candidates": len(choices)}
+    if not choices:
+        return {}, {"reason": "No source-matched BANKNIFTY listed contracts for the index dates"}
+    first = date.fromisoformat(days[0])
+    last = date.fromisoformat(days[-1]) + timedelta(days=1)
+    lookup: dict[tuple[str, str], dict[float, dict]] = defaultdict(dict)
+    cache_count = vendor_count = invalid = 0
+    for i, (identity, item) in enumerate(sorted(choices.items())):
+        if progress:
+            progress(10 + i * 36 / len(choices), "Checking currently active Dhan option contracts")
+        body = _active_body(identity, first, last)
+        payload = _get_cached(body)
+        if payload is None:
+            if fetcher is None:
+                time.sleep(.45)
+                payload = _active_response(body)
+            else:
+                payload = fetcher(body)
+            if not isinstance(payload, dict) or not isinstance(payload.get("timestamp"), list):
+                raise ValueError("Original active option history request failed for a master-listed contract")
+            _save_cache(body, payload)
+            vendor_count += 1
+        else:
+            cache_count += 1
+        for row in _normalize_active(payload, item["contract"], item["days"]):
+            key = (row["timestamp_utc"], row["side"])
+            strike = row["strike"]
+            if strike in lookup[key] and lookup[key][strike]["security_id"] != identity:
+                lookup[key].pop(strike, None)
+                invalid += 1
+            else:
+                lookup[key][strike] = row
+    return lookup, {
+        "source": "Dhan original active NSE_FNO OPTIDX /charts/intraday",
+        "requests": len(choices), "fresh_requests": vendor_count,
+        "cached_requests": cache_count, "unique_option_minute_bars":
+            sum(len(v) for v in lookup.values()),
+        "conflicted_excluded": invalid,
+        "identity": "exact current Dhan security_id, expiry date and lot size",
+    }
+
+
 def _signals(source_rows: list[dict]) -> list[dict]:
     """Same causal completed-bar EMA/RSI decision used by the index cockpit."""
     rows = trading_cockpit._validated(source_rows)
@@ -412,7 +584,8 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             missing["missing_option_entry"] += 1
             continue
         entry_premium = entry_quote["open"] * (1 + slippage_bps / 10_000)
-        units = lots * lot_size
+        used_lot_size = int(chosen.get("lot_size_verified") or lot_size)
+        units = lots * used_lot_size
         outlay = entry_premium * units
         if outlay + fee_per_side > balance:
             missing["insufficient_capital"] += 1
@@ -436,7 +609,9 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             index_tick = spot_map.get(tick)
             if (option_tick is None or index_tick is None
                     or option_tick["session_ist"] != session
-                    or index_tick["session_ist"] != session):
+                    or index_tick["session_ist"] != session
+                    or (chosen.get("security_id") and
+                        option_tick.get("security_id") != chosen.get("security_id"))):
                 path_valid = False
                 break
         if not path_valid:
@@ -464,13 +639,19 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             "entry_premium": round(entry_premium, 4),
             "exit_premium": round(exit_premium, 4),
             "raw_entry_open": entry_quote["open"], "raw_exit_open": exit_quote["open"],
-            "lots": lots, "lot_size_assumed": lot_size, "units": units,
+            "lots": lots, "lot_size_assumed": used_lot_size,
+            "lot_size_basis": ("ORIGINAL_CURRENT_DHAN_MASTER" if chosen.get("security_id")
+                               else "USER_HISTORICAL_ASSUMPTION"),
+            "units": units,
             "capital_deployed_inr": round(outlay, 2),
             "gross_pnl_inr": round(gross, 2), "assumed_fees_inr": charges,
             "net_pnl_inr": round(net, 2), "account_balance_inr": round(balance, 2),
             "exit_reason": reason, "hold_minutes": step_count,
-            "source_identity": f"BANKNIFTY_ROLLING_{side}_{strike:g}_{session}",
-            "contract_identity_verified": False,
+            "source_identity": (
+                "NSE_FNO:" + chosen["security_id"] if chosen.get("security_id")
+                else f"BANKNIFTY_ROLLING_{side}_{strike:g}_{session}"),
+            "contract_identity_verified": bool(chosen.get("security_id")),
+            "contract_expiry_date": chosen.get("expiry_date"),
         }
         trades.append(trade)
         equity.append({"timestamp_utc": exit_at.isoformat(),
@@ -504,7 +685,7 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
                  slippage_bps: float = 5, fee_per_side: float = 20,
                  hold_rule: str = "fixed", hold_minutes: int = 5,
                  reversal_cap_minutes: int = 10,
-                 fetcher=None, throttle=None, progress=None) -> dict:
+                 fetcher=None, active_fetcher=None, throttle=None, progress=None) -> dict:
     """One-click original BANKNIFTY signals -> option-contract P&L proxy.
 
     Will re-use local verified option receipts, automatically requesting
@@ -531,9 +712,44 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
         raise ValueError("Selected spot window spans more than 90 days; choose fewer minute candles")
     if progress:
         progress(7, "Checking Dhan expired-option history coverage")
-    candles, data_evidence = load_option_market(
-        start, stop, expiry_flag=expiry_flag, expiry_code=expiry_code,
-        wings=wings, progress=progress, fetcher=fetcher, throttle=throttle)
+    # Most recent monthly options may still be ACTIVE rather than expired.
+    # Use an exact current security ID when a fresh original Dhan master and
+    # corresponding active option candles exist. Otherwise use rolling data.
+    active, active_evidence = load_active_option_market(
+        rows, expiry_flag=expiry_flag, expiry_code=expiry_code,
+        wings=wings, fetcher=active_fetcher, progress=progress)
+    source_days = {row["session_ist"] for row in rows}
+    active_sides = {(row["session_ist"], row["side"])
+                    for choices in active.values() for row in choices.values()}
+    all_sides = {(day, side) for day in source_days
+                 for side in ("CALL", "PUT")}
+    if active and active_sides >= all_sides:
+        candles = active
+        data_evidence = {
+            "request_count": active_evidence.get("requests", 0),
+            "fresh_requests": active_evidence.get("fresh_requests", 0),
+            "cached_requests": active_evidence.get("cached_requests", 0),
+            "empty_requests": 0,
+            "unique_option_minute_bars": active_evidence.get("unique_option_minute_bars", 0),
+            "conflicted_excluded": active_evidence.get("conflicted_excluded", 0),
+            "source": active_evidence["source"], "expiry_flag": expiry_flag,
+            "expiry_code": expiry_code, "strike_wings": wings,
+            "cache": "SHA-256 verified local receipts", "active_source": active_evidence,
+        }
+    else:
+        candles, data_evidence = load_option_market(
+            start, stop, expiry_flag=expiry_flag, expiry_code=expiry_code,
+            wings=wings, progress=progress, fetcher=fetcher, throttle=throttle)
+        # When both exist, exact active security IDs take precedence on their
+        # own date/strike and remain fixed for the entire trade path.
+        for key, entries in active.items():
+            candles.setdefault(key, {}).update(entries)
+        data_evidence["active_source"] = active_evidence
+        data_evidence["unique_option_minute_bars"] = sum(
+            len(choices) for choices in candles.values())
+        data_evidence["fresh_requests"] += active_evidence.get("fresh_requests", 0)
+        data_evidence["cached_requests"] += active_evidence.get("cached_requests", 0)
+        data_evidence["request_count"] += active_evidence.get("requests", 0)
     if progress:
         progress(67, "Replaying original completed BANKNIFTY directional signals")
     events = _signals(rows)
@@ -609,9 +825,10 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
             "spot_signal_is_not_option_fill": True,
         },
         "limitations": (
-            "Dhan rolling expiry code does not supply immutable per-bar expiry/security ID; "
+            "Active NSE_FNO contracts can use original security ID, expiry and lot size. "
+            "Dhan expired rolling expiry code does not supply immutable per-bar expiry/security ID; "
             "results use same-session matching actual strike and CE/PE only. "
-            "Historical lot size is an assumption. Dhan expired-options minute OHLC "
+            "Historical lot size is assumed for rolling expired contracts. Dhan option minute OHLC "
             "does NOT include historical bid/ask, 20-level depth or executable fills. "
             "Options are selected by their price at the completed signal minute "
             "and bought next minute OPEN with assumed slippage. Profit targets "
