@@ -288,6 +288,68 @@ class TradingCockpitTests(unittest.TestCase):
                     "identity": "INDEX:BANKNIFTY", "horizon_minutes": 7})
                 self.assertEqual(invalid.status_code, 422)
 
+    def test_exit_until_signal_reversal_uses_next_minute_not_same_close(self):
+        bars = candles(55)
+        signals = [
+            {"bar_utc": bars[29]["timestamp_utc"],
+             "session_ist": "2026-11-18", "direction": "UP"},
+            {"bar_utc": bars[32]["timestamp_utc"],
+             "session_ist": "2026-11-18", "direction": "NO_TRADE"},
+            {"bar_utc": bars[34]["timestamp_utc"],
+             "session_ist": "2026-11-18", "direction": "DOWN"},
+        ]
+        result = trading_cockpit.hypothetical_index_exposure(
+            bars, signals, hold_minutes=5, hold_rule="signal_reversal")
+        self.assertEqual(result["trade_count"], 1)
+        first = result["latest_trades"][0]
+        self.assertEqual(first["entry_utc"], bars[30]["timestamp_utc"])
+        self.assertEqual(first["exit_utc"], bars[35]["timestamp_utc"])
+        self.assertEqual(first["exit_reason"], "opposite_signal")
+        self.assertEqual(first["actual_hold_minutes"], 5)
+        self.assertEqual(result["skipped"]["position_open"], 1)
+
+    def test_reversal_cap_wins_over_late_opposite_signal(self):
+        bars = candles(65)
+        signals = [
+            {"bar_utc": bars[29]["timestamp_utc"],
+             "session_ist": "2026-11-18", "direction": "UP"},
+            {"bar_utc": bars[40]["timestamp_utc"],
+             "session_ist": "2026-11-18", "direction": "DOWN"},
+        ]
+        result = trading_cockpit.hypothetical_index_exposure(
+            bars, signals, hold_minutes=5, hold_rule="signal_reversal_or_cap",
+            reversal_cap_minutes=6)
+        first = result["latest_trades"][0]
+        self.assertEqual(first["exit_utc"], bars[36]["timestamp_utc"])
+        self.assertEqual(first["exit_reason"], "time_cap")
+        self.assertEqual(first["actual_hold_minutes"], 6)
+
+    def test_reversal_without_opposite_requires_original_session_close(self):
+        bars = candles(55)
+        signals = [{"bar_utc": bars[29]["timestamp_utc"],
+                    "session_ist": "2026-11-18", "direction": "UP"}]
+        result = trading_cockpit.hypothetical_index_exposure(
+            bars, signals, hold_minutes=5, hold_rule="signal_reversal")
+        self.assertEqual(result["trade_count"], 0)
+        self.assertEqual(result["skipped"]["missing_session_close"], 1)
+
+    def test_replay_returns_same_signal_hold_rule_comparison(self):
+        bars = candles(45)
+        with patch.object(trading_cockpit, "snapshot",
+                          return_value={"direction": "UP"}):
+            result = trading_cockpit.historical_replay(
+                "INDEX:BANKNIFTY", bars, horizon_minutes=5,
+                hold_rule="signal_reversal_or_cap", reversal_cap_minutes=6)
+        self.assertIn("fixed_5", [r["rule_id"]
+                                  for r in result["holding_rule_comparison"]])
+        self.assertEqual(result["selected_holding_rule_id"],
+                         "signal_reversal_or_cap_6")
+        self.assertEqual(result["index_exposure_scenario"]["hold_rule"],
+                         "signal_reversal_or_cap")
+        self.assertEqual(len({r["rule_id"] for r in
+                              result["holding_rule_comparison"]}),
+                         len(result["holding_rule_comparison"]))
+
     def test_index_exposure_enters_next_minute_open_without_overlap(self):
         bars = candles(50)
         events = [
