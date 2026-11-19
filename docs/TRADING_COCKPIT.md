@@ -279,11 +279,33 @@ This active route applies only to recent sessions (30-day bound), never
 uses today's master to manufacture past expired contracts, and reuses
 SHA-checked cached sources. Active contracts with genuine security IDs are
 preferred over rolling strikes when both exist; a trade must remain on
-that exact ID throughout. If no current master or active candles are
-available, the software tries archived rolling data and reports the
-source/availability reason instead of guessing. Active option IDs support
-source-certified current lot sizes; expired rolling history still needs
-explicit historical lot-size assumptions.
+that exact ID throughout. **Never** fall back to the expired-options
+endpoint for a session whose chosen monthly contract has not yet expired.
+When the original active source is missing/incomplete, QuantLab reports the
+missing contracts and stops or marks those signals unscored. It does not
+treat Dhan HTTP 400 as proof that current options are expired.
+
+**Historical split and November 2026 fix.** Dhan's rolling endpoint may be
+called only for a calendar prefix whose selected contract has passed its
+monthly expiry. QuantLab uses the last-Tuesday monthly rule as a conservative
+guard, allowing for exchange holiday shifts to an earlier day; it does NOT
+replace the master for actual expiry identification. For a BANKNIFTY window
+of November 6–19, 2026, the November monthly series has not expired
+(November 23 holiday-adjusted), so the simulator must only use current
+listed-contract candles. The prior implementation retried
+`/charts/rollingoption` on the entire window when even one currently
+active contract was missing; this sent a forbidden current-month request and
+surfaced Dhan HTTP 400/DH-905 despite an active Dhan data subscription.
+That fallback has been removed. Contract matching also uses all official
+compact-master symbol columns, including the Dhan custom symbol when the
+exchange trading symbol is blank. Users see source and routing counts and a
+direct action to refresh the official instrument master when needed.
+The exact original 400 cause cannot be certified without the private
+vendor response; QuantLab now includes allowlisted error-message details
+without exposing token/account data.
+
+Active option IDs support source-certified current lot sizes; expired
+rolling history still needs explicit historical lot-size assumptions.
 
 **Evidence and economic limitations:**
 - Historical Dhan rolling OHLC/volume/strike observations have no historic
