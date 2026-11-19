@@ -195,6 +195,11 @@ def status() -> dict:
     state["client_id_configured"] = bool(os.getenv("DHAN_CLIENT_ID","").strip())
     state["book_source"] = "Dhan original 20-level NSE_EQ/NSE_FNO" if state.get("depth_identity") else None
     state["depth_supported_for_index"] = False
+    if state.get("unsupported_index_packets",0):
+        state["index_packet_note"] = (
+            "Dhan sent index response code 1, whose binary payload is not "
+            "documented in the current public feed specification. "
+            "Awaiting supported index price packets; no price was guessed.")
     state["shared_library"] = shared_market_data.SHARED_ID
     state["read_only"] = True
     return state
@@ -346,6 +351,22 @@ def _ticker_worker(stop: Event, subscriptions: list[dict], url: str) -> None:
                     except ValueError:
                         _update(ticker_decode_errors=ACTIVE.get("ticker_decode_errors",0)+1)
                         continue
+                    # The broker protocol lists a distinct index response
+                    # (code 1). Do not decode that undocumented body as LTP.
+                    # Count it as actionable telemetry, not a market price.
+                    offset=0
+                    index_count=0
+                    while offset+8<=len(data):
+                        code,length,segment,sid=struct.unpack_from("<BHBI",data,offset)
+                        if length<8 or offset+length>len(data):
+                            break
+                        if code==1 and segment==0:
+                            index_count+=1
+                        offset+=length
+                    if index_count:
+                        with LOCK:
+                            count=ACTIVE.get("unsupported_index_packets",0)+index_count
+                        _update(unsupported_index_packets=count)
                     for packet in packets:
                         _receive_ticker(packet)
         except Exception:
@@ -470,6 +491,7 @@ def start(index_identity: str, depth_identity: str = "", auto_audit: bool = Fals
             "started_utc":_iso(datetime.now(timezone.utc)),
             "auto_audit":auto_audit,"last_audit_bar":None,"audit_state":"ready",
             "ticks":0,"depth_snapshots":0,"saved_books":0,"ticker_decode_errors":0,
+            "unsupported_index_packets":0,
             "quotes":{},"latest_book":None,"revision":1,
             "source_identity_map":mapping,
             "depth_recording":"sampled_at_most_1_snapshot_per_second" if depth_identity else "not_subscribed",
