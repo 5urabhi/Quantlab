@@ -64,7 +64,6 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
   const [recordedError,setRecordedError]=useState<unknown>(null)
   const ready=instruments.some(s=>s.identity===INDEX&&s.ready)
   const tested=results[selected]
-  const forward=recorded[selected]
   const testsDone=Boolean(results[3]&&results[6])
   const noActionable=testsDone&&results[3]?.overall.scored===0&&results[6]?.overall.scored===0
 
