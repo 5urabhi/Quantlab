@@ -82,3 +82,9 @@
 @media(max-width:550px){.hob-controls.hob-controls-primary,
  .hob-controls.hob-controls-advanced{grid-template-columns:1fr}
  .hob-advanced-settings>summary small{flex-basis:100%}}
+
+
+/* Signal reversals are the primary testable trade action. */
+.hob-flip-note{background:#173849;border:1px solid #3f7680;border-radius:9px;
+  padding:13px 15px;font-size:12px;line-height:1.7;color:#bde7ed}
+.hob-flip-note strong{color:#e6fff4}
