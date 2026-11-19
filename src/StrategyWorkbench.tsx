@@ -227,7 +227,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
       </div>:!busy&&ready&&<div className="tc-signal-prompt">
         <TrendingUp size={22}/><div><strong>Select a holding period and run a simulation.</strong>
           <p>We enter on the next observed minute's open after an actionable UP/DOWN signal, hold the selected number of minutes, and exit at the next eligible observed open. No overlapping positions or overnight carry.</p></div>
-      </div>
+      </div>}
       {noActionable&&<p className="tc-signal-caution"><AlertTriangle size={18}/>
         The current EMA/RSI baseline produced no scored UP/DOWN predictions in this window.
         This is a valid finding, not 100% accuracy; review the NO TRADE count and source coverage.</p>}
