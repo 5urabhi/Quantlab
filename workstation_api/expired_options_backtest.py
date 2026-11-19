@@ -87,9 +87,15 @@ def _request_body(start: date, end: date, flag: str, code: int,
                   offset: str, side: str) -> dict:
     if not start < end or (end - start).days > 30:
         raise ValueError("Dhan expired option requests require up to 30 calendar days")
+    # Dhan /charts/rollingoption has its OWN ordinal convention:
+    # 1 = near, 2 = next, 3 = far. Other Dhan endpoints use 0/1/2.
+    # Confirmed by Dhan support on 2026-01-30 (MadeForTrade #60509).
+    # Preserve the 0/1/2 UI value for active-option contract selection.
+    if code not in (0, 1, 2):
+        raise ValueError("Rolling option expiry must be near, next or far")
     return {
         "exchangeSegment": "NSE_FNO", "interval": "1", "securityId": 25,
-        "instrument": "OPTIDX", "expiryFlag": flag, "expiryCode": code,
+        "instrument": "OPTIDX", "expiryFlag": flag, "expiryCode": code + 1,
         "strike": offset, "drvOptionType": side,
         "requiredData": list(REQUIRED),
         "fromDate": start.isoformat(), "toDate": end.isoformat(),
@@ -111,7 +117,28 @@ def _original_response(body: dict, *, opener=None) -> dict:
             raise ValueError("Dhan expired-options data access denied (401/403). Verify your token and expired-options data subscription") from None
         if exc.code == 429:
             raise ValueError("Dhan rate-limited expired-options history (429); retry later using existing cached calls") from None
-        raise ValueError(f"Dhan expired-options request failed (HTTP {exc.code}); confirm underlying security ID and expiry parameters") from None
+        # Never print the access token or the complete provider response.
+        # Dhan can return DH-905 for an invalid expiry code or another
+        # invalid request value, and DH-907 for unavailable source history.
+        detail = ""
+        try:
+            failure = json.loads(exc.read(4096))
+            if isinstance(failure, dict):
+                vendor_code = str(failure.get("errorCode", "")).strip()
+                if vendor_code in ("DH-905", "DH-907", "DH-902",
+                                   "805", "806", "811", "812", "813", "814"):
+                    detail = f" (Dhan {vendor_code})"
+        except (ValueError, TypeError, UnicodeError, OSError):
+            pass
+        context = (f"{body['expiryFlag'].lower()} {body['drvOptionType']} "
+                   f"{body['strike']}, expiry={body['expiryCode']}, "
+                   f"dates={body['fromDate']}..{body['toDate']}")
+        raise ValueError(
+            f"Dhan expired-options HTTP {exc.code}{detail} for {context}. "
+            "This endpoint uses expiryCode 1=near, 2=next, 3=far. "
+            "If the expiry is still active, refresh the Dhan instrument master "
+            "and use the active-contract history; no option prices have been invented."
+        ) from None
     except (URLError, TimeoutError) as exc:
         raise ValueError("Dhan expired-options data connection unavailable; check local network") from None
     if not raw or len(raw) > MAX_RESPONSE_BYTES:
@@ -283,7 +310,9 @@ def load_option_market(start: date, stop: date, *, expiry_flag: str,
         "unique_option_minute_bars": len(prices),
         "conflicted_excluded": invalid,
         "source": "Dhan v2 one-minute rolling expired-options (OHLC, no historical bid/ask)",
-        "expiry_flag": expiry_flag, "expiry_code": expiry_code,
+        "expiry_flag": expiry_flag,
+        "expiry_code": expiry_code,
+        "dhan_rolling_expiry_code": expiry_code + 1,
         "strike_wings": wings, "cache": "SHA-256 verified local receipts",
     }
 
@@ -371,7 +400,8 @@ def _normalize_active(payload: dict, contract: dict, days: set[str]) -> list[dic
 
 def load_active_option_market(spot_rows: list[dict], *,
                               expiry_flag: str, expiry_code: int, wings: int,
-                              fetcher=None, progress=None) -> tuple[dict, dict]:
+                              fetcher=None, progress=None,
+                              master_refresher=None) -> tuple[dict, dict]:
     """Supplement rolling expired options with exact active NSE_FNO contracts.
 
     Uses only fresh ORIGINAL Dhan instrument master. Expired contracts
@@ -380,10 +410,27 @@ def load_active_option_market(spot_rows: list[dict], *,
     from . import option_chain_live
     if expiry_flag != "MONTH":
         return {}, {"reason": "Active contract fallback currently supports monthly expiry"}
+    recent_days = {
+        row["session_ist"] for row in spot_rows
+        if date.fromisoformat(row["session_ist"]) >= datetime.now(IST).date() - timedelta(days=30)
+    }
+    if not recent_days:
+        return {}, {"reason": "Historical sample has no currently listed options; using archived expiry series"}
     master = option_chain_live._contracts()
+    if (not master.get("available") or not master.get("fresh")) and master_refresher is not None:
+        if progress:
+            progress(8, "Refreshing Dhan instrument master for current BANKNIFTY option contract IDs")
+        try:
+            master_refresher()
+            master = option_chain_live._contracts()
+        except (ValueError, OSError, TimeoutError) as exc:
+            return {}, {
+                "reason": "Automatic Dhan instrument-master refresh failed",
+                "next_action": str(exc)[:200],
+            }
     if not master.get("available") or not master.get("fresh"):
         return {}, {"reason": "Fresh Dhan contract master not present",
-                    "next_action": "Refresh official Dhan instrument master under Data Library"}
+                    "next_action": master.get("message") or "Refresh official Dhan instrument master under Data Library"}
     by_day: dict[str, list[dict]] = defaultdict(list)
     for row in spot_rows:
         by_day[row["session_ist"]].append(row)
@@ -695,7 +742,8 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
                  slippage_bps: float = 5, fee_per_side: float = 20,
                  hold_rule: str = "fixed", hold_minutes: int = 5,
                  reversal_cap_minutes: int = 10,
-                 fetcher=None, active_fetcher=None, throttle=None, progress=None) -> dict:
+                 fetcher=None, active_fetcher=None, throttle=None,
+                 master_refresher=None, progress=None) -> dict:
     """One-click original BANKNIFTY signals -> option-contract P&L proxy.
 
     Will re-use local verified option receipts, automatically requesting
@@ -750,7 +798,8 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
     try:
         active, active_evidence = load_active_option_market(
             rows, expiry_flag=expiry_flag, expiry_code=expiry_code,
-            wings=wings, fetcher=active_fetcher, progress=progress)
+            wings=wings, fetcher=active_fetcher, progress=progress,
+            master_refresher=master_refresher)
     except ValueError as exc:
         # A missing active entitlement must not prevent reuse of already
         # authenticated and SHA-verified expired source receipts.

@@ -43,10 +43,7 @@ type BacktestResult={
   limitations:string;read_only:boolean;orders_placed:number
 }
 type Job={id:string;status:string;stage?:string;percent?:number;error?:string;result?:BacktestResult}
-type Props={
-  ready:boolean;limit:number;capital:number;holdRule:Rule
-  holdMinutes:number;reversalCap:number;onOpenData:()=>void
-}
+type Props={ready:boolean;onOpenData:()=>void}
 const CASH=(value:number)=>new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2}).format(value)
 const DEC=(value:number,d=2)=>value.toLocaleString('en-IN',{maximumFractionDigits:d})
 const PCT=(value:number)=>DEC(value,2)+'%'
@@ -104,14 +101,15 @@ function OptionEquityCurve({data}:{data:OptionScenario['equity_curve']}){
   </div>
 }
 
-export default function HistoricalOptionsBacktest({
-  ready,limit,capital,holdRule,holdMinutes,reversalCap,onOpenData,
-}:Props){
+export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
   const [jobId,setJobId]=useState(()=>sessionStorage.getItem(OPTIONS_JOB_KEY)||'')
   const [job,setJob]=useState<Job|null>(null)
   const [result,setResult]=useState<BacktestResult|null>(null)
   const [error,setError]=useState('')
-  const [startingCapital,setStartingCapital]=useState(capital)
+  const [startingCapital,setStartingCapital]=useState(50_000)
+  const [historicalWindow,setHistoricalWindow]=useState<500|1500|3000|5000>(1500)
+  const [holdMinutes,setHoldMinutes]=useState<1|3|5|6|10|30|60>(5)
+  const [reversalCap,setReversalCap]=useState(10)
   const [lots,setLots]=useState(3)
   const [lotSize,setLotSize]=useState(30)
   const [targetLtp,setTargetLtp]=useState(300)
@@ -123,7 +121,7 @@ export default function HistoricalOptionsBacktest({
   const [stopLoss,setStopLoss]=useState(2.5)
   const [slippage,setSlippage]=useState(5)
   const [feePerSide,setFeePerSide]=useState(20)
-  const [selectedRule,setSelectedRule]=useState<Rule|'inherit'>('inherit')
+  const [selectedRule,setSelectedRule]=useState<Rule>('fixed')
 
   const refreshJob=useCallback(async(id:string)=>{
     const status=await marketApi<Job>('/api/jobs/'+encodeURIComponent(id))
@@ -158,12 +156,12 @@ export default function HistoricalOptionsBacktest({
     if(jobId)return
     setError('');setResult(null);setJob(null)
     try{
-      const chosen=selectedRule==='inherit'?holdRule:selectedRule
       const request={
-        limit,starting_capital:startingCapital,expiry_flag:expiryFlag,expiry_code:expiryCode,
+        limit:historicalWindow,starting_capital:startingCapital,
+        expiry_flag:expiryFlag,expiry_code:expiryCode,
         wings,target_ltp:targetLtp,tolerance,lots,lot_size:lotSize,
         stop_pct:stopLoss,target_pct:profitTarget,slippage_bps:slippage,
-        fee_per_side:feePerSide,hold_rule:chosen,hold_minutes:holdMinutes,
+        fee_per_side:feePerSide,hold_rule:selectedRule,hold_minutes:holdMinutes,
         reversal_cap_minutes:reversalCap,confirm_readonly:true,
       }
       const started=await marketPost<{job_id:string}>('/api/trading-cockpit/options/backtest',request)
@@ -177,87 +175,117 @@ export default function HistoricalOptionsBacktest({
   const coverage=scenario?.unscored||{}
   return <section className="tc-panel hob-root" aria-label="Historical BANKNIFTY signals to options backtest">
     <header className="hob-head"><div>
-      <span className="tc-page-kicker">PHASE 2 · TRADE OPTION PREMIUMS, NOT INDEX POINTS</span>
-      <h3>BANKNIFTY Signal → Historical CE/PE Backtest</h3>
-      <p>Use the same completed BANKNIFTY EMA/RSI signal to select a real historical CE/PE strike near ₹300, buy its next observed option-candle open and exit under competing rules. No option trading orders are sent.</p>
+      <span className="tc-page-kicker">YOUR STRATEGY · HISTORICAL BACKTEST</span>
+      <h3>Trade BANKNIFTY signals through CE/PE options</h3>
+      <p>QuantLab generates UP/DOWN signals from BANKNIFTY, selects a historical CE/PE option near your preferred premium and tests what happens after buying. Compare the exit rules using option prices — not index points.</p>
     </div><span className="hob-badge"><ShieldCheck size={15}/> Read-only historical research</span></header>
 
     <div className="hob-flow" aria-label="Historical strategy execution flow">
-      <span>1 · BANKNIFTY signal</span><ArrowRight size={16}/><span>2 · CE / PE at ₹300</span>
-      <ArrowRight size={16}/><span>3 · Three option lots</span>
-      <ArrowRight size={16}/><span>4 · Exit rule → ₹ P&amp;L</span>
+      <span>1 · BANKNIFTY UP/DOWN signal</span><ArrowRight size={16}/><span>2 · Select historical CE/PE</span>
+      <ArrowRight size={16}/><span>3 · Buy {lots} lots near ₹{DEC(targetLtp,0)}</span>
+      <ArrowRight size={16}/><span>4 · Compare exits and ₹ P&amp;L</span>
     </div>
 
-    <div className="hob-controls">
-      <label>Expiry family
-        <select aria-label="Historical Dhan expiry family" value={expiryFlag}
-          onChange={e=>setExpiryFlag(e.target.value as 'MONTH'|'WEEK')}>
-          <option value="MONTH">Monthly (default)</option>
-          <option value="WEEK">Weekly (only when historical data exists)</option>
+    <div className="hob-controls hob-controls-primary" aria-label="Options backtest main settings">
+      <label>Historical BANKNIFTY window
+        <select aria-label="Options backtest historical window" value={historicalWindow}
+          onChange={e=>setHistoricalWindow(Number(e.target.value) as typeof historicalWindow)}>
+          <option value={500}>Last 500 minutes</option>
+          <option value={1500}>Last 1,500 minutes</option>
+          <option value={3000}>Last 3,000 minutes</option>
+          <option value={5000}>Last 5,000 minutes</option>
         </select>
       </label>
-      <label>Expiry series
-        <select aria-label="Historical option expiry code" value={expiryCode}
-          onChange={e=>{
-            const code=Number(e.target.value) as 0|1|2
-            setExpiryCode(code)
-            if(code!==0)setWings(old=>Math.min(old,3))
-          }}>
-          <option value={0}>Current / near expiry</option>
-          <option value={1}>Next expiry</option>
-          <option value={2}>Far expiry</option>
-        </select>
-      </label>
-      <label>Preferred entry option LTP ₹
+      <label>Preferred option premium ₹
         <input aria-label="Historical option target LTP" type="number" min="10" max="20000" step="5"
           value={targetLtp} onChange={e=>setTargetLtp(Number(e.target.value))}/>
       </label>
-      <label>Allowed difference ±₹
-        <input aria-label="Historical option price tolerance" type="number" min="0" max="5000"
-          value={tolerance} onChange={e=>setTolerance(Number(e.target.value))}/>
-      </label>
-      <label>Option lots
+      <label>Number of option lots
         <input aria-label="Historical option lots" type="number" min="1" max="20" step="1"
           value={lots} onChange={e=>setLots(Number(e.target.value))}/>
-      </label>
-      <label title="Dhan rolling history does not contain historical exchange lot size. You must validate it for your dates.">Historical units per lot · assumption
-        <input aria-label="Historical lot size assumption" type="number" min="1" max="100" step="1"
-          value={lotSize} onChange={e=>setLotSize(Number(e.target.value))}/>
       </label>
       <label>Starting account ₹
         <input aria-label="Historical options starting capital" type="number" min="1000" max="100000000" step="1000"
           value={startingCapital} onChange={e=>setStartingCapital(Number(e.target.value))}/>
       </label>
-      <label>ATM strike wings
-        <select aria-label="Historical option strike wings" value={wings}
-          onChange={e=>setWings(Number(e.target.value))}>
-          {[0,1,2,3,4,5].filter(n=>expiryCode===0||n<=3).map(n=><option key={n} value={n}>ATM ±{n} ({2*(2*n+1)} side/strike requests per 30d)</option>)}
-        </select>
-      </label>
-      <label>Highlighted exit rule
+      <label>Exit rule to examine
         <select aria-label="Highlighted option exit rule" value={selectedRule}
-          onChange={e=>setSelectedRule(e.target.value as Rule|'inherit')}>
-          <option value="inherit">Same as index backtest: {MODE_LABEL[holdRule]}</option>
+          onChange={e=>setSelectedRule(e.target.value as Rule)}>
           {(Object.keys(MODE_LABEL) as Rule[]).map(rule=><option key={rule} value={rule}>{MODE_LABEL[rule]}</option>)}
         </select>
       </label>
-      <label>Profit target % · option premium
-        <input aria-label="Historical option profit target percent" type="number" min=".1" max="100" step=".5"
-          value={profitTarget} onChange={e=>setProfitTarget(Number(e.target.value))}/>
-      </label>
-      <label>Stop loss % · option premium
-        <input aria-label="Historical option stop loss percent" type="number" min=".1" max="50" step=".5"
-          value={stopLoss} onChange={e=>setStopLoss(Number(e.target.value))}/>
-      </label>
-      <label>Assumed slippage bps per side
-        <input aria-label="Historical option slippage bps" type="number" min="0" max="500" step="1"
-          value={slippage} onChange={e=>setSlippage(Number(e.target.value))}/>
-      </label>
-      <label>Assumed brokerage ₹ per side
-        <input aria-label="Historical option brokerage per side" type="number" min="0" max="1000" step="1"
-          value={feePerSide} onChange={e=>setFeePerSide(Number(e.target.value))}/>
+      <label>Fixed holding period
+        <select aria-label="Options backtest holding period" value={holdMinutes}
+          onChange={e=>setHoldMinutes(Number(e.target.value) as typeof holdMinutes)}>
+          {[1,3,5,6,10,30,60].map(minutes=><option key={minutes} value={minutes}>
+            {minutes===60?'1 hour':minutes+' minutes'}</option>)}
+        </select>
       </label>
     </div>
+    <details className="hob-advanced-settings" aria-label="Advanced backtest data and cost settings">
+      <summary><Database size={16}/> Advanced contract and cost settings
+        <small>Expiry, premium range, lot-size assumption, stop/target, slippage and fees</small>
+      </summary>
+      <div className="hob-controls hob-controls-advanced">
+        <label>Expiry family
+          <select aria-label="Historical Dhan expiry family" value={expiryFlag}
+            onChange={e=>setExpiryFlag(e.target.value as 'MONTH'|'WEEK')}>
+            <option value="MONTH">Monthly (default)</option>
+            <option value="WEEK">Weekly (only when historical data exists)</option>
+          </select>
+        </label>
+        <label>Expiry series
+          <select aria-label="Historical option expiry code" value={expiryCode}
+            onChange={e=>{
+              const code=Number(e.target.value) as 0|1|2
+              setExpiryCode(code)
+              if(code!==0)setWings(old=>Math.min(old,3))
+            }}>
+            <option value={0}>Near expiry</option>
+            <option value={1}>Next expiry</option>
+            <option value={2}>Far expiry</option>
+          </select>
+        </label>
+        <label>Allowed option premium difference ±₹
+          <input aria-label="Historical option price tolerance" type="number" min="0" max="5000"
+            value={tolerance} onChange={e=>setTolerance(Number(e.target.value))}/>
+        </label>
+        <label title="Historical Dhan rolling options do not report exchange lot size. Validate the assumption for each date.">
+          Historical units per lot · assumption
+          <input aria-label="Historical lot size assumption" type="number" min="1" max="100" step="1"
+            value={lotSize} onChange={e=>setLotSize(Number(e.target.value))}/>
+        </label>
+        <label>ATM strike coverage
+          <select aria-label="Historical option strike wings" value={wings}
+            onChange={e=>setWings(Number(e.target.value))}>
+            {[0,1,2,3,4,5].filter(n=>expiryCode===0||n<=3).map(n=>
+              <option key={n} value={n}>ATM ±{n} ({2*(2*n+1)} source requests per 30d)</option>)}
+          </select>
+        </label>
+        <label>Maximum hold when reversal is delayed
+          <select aria-label="Options backtest reversal time cap" value={reversalCap}
+            onChange={e=>setReversalCap(Number(e.target.value))}>
+            {[3,5,6,10,15,30,60].map(n=><option key={n} value={n}>{n} minutes</option>)}
+          </select>
+        </label>
+        <label>Profit target % · option premium
+          <input aria-label="Historical option profit target percent" type="number" min=".1" max="100" step=".5"
+            value={profitTarget} onChange={e=>setProfitTarget(Number(e.target.value))}/>
+        </label>
+        <label>Stop loss % · option premium
+          <input aria-label="Historical option stop loss percent" type="number" min=".1" max="50" step=".5"
+            value={stopLoss} onChange={e=>setStopLoss(Number(e.target.value))}/>
+        </label>
+        <label>Assumed slippage (bps per side)
+          <input aria-label="Historical option slippage bps" type="number" min="0" max="500" step="1"
+            value={slippage} onChange={e=>setSlippage(Number(e.target.value))}/>
+        </label>
+        <label>Assumed brokerage (₹ per side)
+          <input aria-label="Historical option brokerage per side" type="number" min="0" max="1000" step="1"
+            value={feePerSide} onChange={e=>setFeePerSide(Number(e.target.value))}/>
+        </label>
+      </div>
+    </details>
     <div className="hob-description">
       <span><Database size={16}/> {requestedPairs} Dhan contract-series requests per 30-day chunk, minus cached receipts</span>
       <span>Preferred {lots} lots × {lotSize} assumed units = <strong>{lots*lotSize} option units</strong></span>
@@ -272,9 +300,9 @@ export default function HistoricalOptionsBacktest({
     <div className="hob-run">
       <button type="button" onClick={()=>void run()} disabled={running}>
         {running?<RefreshCw size={17}/>:<Play size={17}/>}
-        {running?'Loading BANKNIFTY/option history and scenarios…':'Run BANKNIFTY → CE/PE backtest (auto-fetch missing data)'}
+        {running?'Loading BANKNIFTY and option history…':'Run options backtest · compare exit rules'}
       </button>
-      <p>Runs locally using your configured Dhan token. Reuses verified cached source receipts on repeat runs. For expired rolling records, lot size is a user assumption; active options can use a fresh original Dhan contract master. Slippage and fees remain assumptions. No orders, historical bid/ask or broker fills are claimed.</p>
+      <p>Automatically retrieves missing historical data using your connected Dhan account. This is read-only; charges and fills are estimated, never broker-confirmed.</p>
     </div>
     {job&&running&&<div className="hob-job" role="status">
       <span>{job.stage||'Loading original historical options'}</span>
@@ -282,9 +310,13 @@ export default function HistoricalOptionsBacktest({
       <progress max="100" value={job.percent||0}/>
     </div>}
     {error&&<div className="tc-warning" role="alert"><AlertTriangle size={17}/><div>
-      <strong>Historical option backtest needs attention</strong><p>{error}</p>
-      <p>Check your Dhan expired-options Data API entitlement, original index history, expiry selection and cached source integrity.</p>
-    </div><button type="button" onClick={onOpenData}>Connections <ArrowRight size={14}/></button></div>}
+      <strong>{/Dhan expired-options HTTP 400|DH-905|DH-907/.test(error)
+        ?'Dhan rejected this options-history request':'Historical options data needs attention'}</strong>
+      <p>{error}</p>
+      <p>{/Dhan expired-options HTTP 400|DH-905|DH-907/.test(error)
+        ?'Your Dhan profile may be connected successfully. Near/next/far expired-option series use API codes 1/2/3, and the selected dates must contain available expired contracts. For an unexpired monthly contract, QuantLab checks current option history using the Dhan instrument master.'
+        :'Check the original source status or token only if the error specifically reports missing access. No simulated option price replaces a failed vendor request.'}</p>
+    </div><button type="button" onClick={onOpenData}>Open data sources <ArrowRight size={14}/></button></div>}
     {result&&scenario&&<div className="hob-results">
       <header className="hob-results-head"><div>
         <span className="tc-page-kicker"><CheckCircle2 size={15}/> ORIGINAL DHAN OPTION CANDLES · SIMULATED FILLS</span>

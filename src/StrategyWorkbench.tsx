@@ -150,10 +150,25 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
     .slice(0,25)
 
   return <div className="tc-signal-workbench" aria-label="BANKNIFTY signal backtest workspace">
+    <header className="tc-backtest-unified-head">
+      <div>
+        <span className="tc-page-kicker">BANKNIFTY OPTIONS RESEARCH</span>
+        <h2>Backtest your BANKNIFTY options strategy</h2>
+        <p>Use historical BANKNIFTY signals to select a real CE or PE contract, compare exits and see hypothetical account P&amp;L. One backtest — from signal to option premium.</p>
+      </div>
+      <span className="tc-signal-tag"><CheckCircle2 size={15}/> Index signals + CE/PE prices</span>
+    </header>
+
+    <HistoricalOptionsBacktest ready={ready} onOpenData={onOpenData}/>
+
+    <details className="tc-optional-research" aria-label="Optional index-only diagnostics">
+      <summary><span><BarChart3 size={17}/> Examine signal accuracy and index-only simulation</span>
+        <small>Optional research tools — these do not calculate actual CE/PE profit.</small></summary>
+      <div className="tc-optional-research-content">
     <div className="tc-v4-intro">
-      <div><span className="tc-page-kicker">PHASE 1 · DIRECTION FIRST</span>
+      <div><span className="tc-page-kicker">SIGNAL DIAGNOSTICS · OPTIONAL</span>
         <h3>BANKNIFTY Signal Backtest</h3>
-        <p>Choose when a position opens and closes, test how accurately the model predicted BANKNIFTY, and inspect a separately labeled illustrative rupee-denominated index-exposure scenario. Real options profits require option-contract history.</p>
+        <p>Inspect historical direction accuracy and a separate hypothetical index-only exposure scenario. Your CE/PE backtest above is the main trading result.</p>
       </div>
       <span className="tc-signal-tag"><Target size={15}/> Index signal + illustrative investment · no option P&amp;L</span>
     </div>
@@ -336,11 +351,13 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
           {tested.has_more_history?' Older observations exist outside this run.':''}</p>
       </div></details></>}
     </section>
+      </div>
+    </details>
 
-    <HistoricalOptionsBacktest ready={ready} limit={Number(limit)}
-      capital={capital} holdRule={holdRule} holdMinutes={selected}
-      reversalCap={reversalCap} onOpenData={onOpenData}/>
-
+    <details className="tc-optional-research tc-forward-research" aria-label="Optional recorded prospective predictions">
+      <summary><span><Clock3 size={17}/> Audit previously recorded live signals</span>
+        <small>Separate from the historical options backtest; only forward-recorded observations count.</small></summary>
+      <div className="tc-optional-research-content">
     <section className="tc-panel tc-signal-forward" aria-label="Recorded prospective BANKNIFTY signal accuracy">
       <div className="tc-panel-title"><div><strong><Clock3 size={17}/> Recorded forward predictions</strong>
         <p className="tc-muted">Signals stored at the time of observation are scored separately from any retrospective simulation.</p></div>
@@ -383,14 +400,13 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
         </tbody></table></div>
       <p className="tc-muted">Forward scorecards use persistent, timestamped predictions—not signals reconstructed after the market moved. A successfully scored historical replay is not proof of live predictive accuracy.</p>
     </section>
-
-    <section className="tc-signal-next" aria-label="Options P&L follow-up phase">
-      <div><strong>Phase 2 · BANKNIFTY options P&amp;L backtest</strong>
-        <p>After assessing signal correctness, we can map each call to a real CE/PE contract and test premium changes, the +5% target, −2.5% stop, six-minute exits, fees, and slippage. Not included in Phase 1 metrics.</p></div>
-      <div className="tc-signal-followup-actions">
-        <button type="button" onClick={onOpenReplay}>Review underlying replay <ArrowRight size={15}/></button>
-        {onOpenOptions&&<button type="button" onClick={onOpenOptions}>Inspect actual BANKNIFTY CE/PE chain <ArrowRight size={15}/></button>}
       </div>
-    </section>
+    </details>
+
+    <div className="tc-backtest-link-actions">
+      <span>Need to inspect original candles or current contracts?</span>
+      <button type="button" onClick={onOpenReplay}>Review BANKNIFTY index replay <ArrowRight size={15}/></button>
+      {onOpenOptions&&<button type="button" onClick={onOpenOptions}>View live CE/PE chain <ArrowRight size={15}/></button>}
+    </div>
   </div>
 }

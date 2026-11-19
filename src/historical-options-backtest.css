@@ -58,3 +58,27 @@
 .hob-equity-curve{fill:none;stroke:#6cddb8;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round}
 .hob-equity-cursor{stroke:#f0d698;stroke-width:.8;stroke-dasharray:3 4}
 .hob-equity-dot{fill:#d9ffea;stroke:#4ab58f;stroke-width:1}
+
+
+/* Primary trade configuration: two short rows, everything advanced disclosed on demand. */
+.hob-controls.hob-controls-primary{grid-template-columns:repeat(3,minmax(0,1fr));
+  background:#1a3648;border-color:#427286}
+.hob-controls.hob-controls-primary label{font-size:12px;color:#c9e8f3}
+.hob-controls.hob-controls-primary input,.hob-controls.hob-controls-primary select{font-size:13px}
+.hob-advanced-settings{border:1px solid #32546c;border-radius:10px;background:#142a3a;overflow:hidden}
+.hob-advanced-settings>summary{cursor:pointer;display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+  padding:12px 15px;color:#bde4ed;font-size:12px;font-weight:700;list-style:none}
+.hob-advanced-settings>summary::-webkit-details-marker{display:none}
+.hob-advanced-settings>summary::after{content:'▸';margin-left:auto;font-size:18px;color:#84cfd4}
+.hob-advanced-settings[open]>summary::after{transform:rotate(90deg)}
+.hob-advanced-settings>summary small{color:#8eb4c5;font-size:11px;font-weight:400}
+.hob-controls.hob-controls-advanced{margin:0 11px 11px;grid-template-columns:repeat(3,minmax(0,1fr));background:#122639}
+.hob-root{margin:0}
+.hob-head p{max-width:850px}
+.hob-run>button{font-size:14px;min-height:48px;padding:12px 18px}
+.hob-description{padding:4px 0;line-height:1.7}
+@media(max-width:940px){.hob-controls.hob-controls-primary,
+ .hob-controls.hob-controls-advanced{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:550px){.hob-controls.hob-controls-primary,
+ .hob-controls.hob-controls-advanced{grid-template-columns:1fr}
+ .hob-advanced-settings>summary small{flex-basis:100%}}

@@ -111,3 +111,30 @@
 .tc-holding-compare .tc-hold-selected{background:rgba(45,149,119,.16)}
 .tc-holding-compare .good{color:#80e4b6}
 .tc-holding-compare .bad{color:#ff9d9d}
+
+
+/* The CE/PE backtest is the primary workflow. Index-only and live audits
+   are optional disclosures, not separate mandatory phases. */
+.tc-backtest-unified-head{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;
+  border:1px solid #345a70;background:linear-gradient(125deg,#153149,#112233);
+  border-radius:14px;padding:19px 21px}
+.tc-backtest-unified-head h2{font-size:21px;color:#f0faff;line-height:1.3;margin:7px 0}
+.tc-backtest-unified-head p{font-size:12px;line-height:1.7;color:#b6d0df;max-width:760px;margin:0}
+.tc-optional-research{min-width:0;border:1px solid #335267;border-radius:12px;background:#12283a;color:#c9e4f2;overflow:hidden}
+.tc-optional-research>summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  flex-wrap:wrap;padding:14px 17px;list-style:none;color:#c6e1f1}
+.tc-optional-research>summary::-webkit-details-marker{display:none}
+.tc-optional-research>summary::after{content:'▸';font-size:18px;transition:transform .18s ease;color:#84c9dd}
+.tc-optional-research[open]>summary::after{transform:rotate(90deg)}
+.tc-optional-research>summary>span{display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:13px}
+.tc-optional-research>summary small{color:#91b9cb;font-size:11px;flex:1;min-width:160px;text-align:right}
+.tc-optional-research-content{padding:0 16px 16px;display:grid;gap:14px}
+.tc-backtest-link-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+  color:#94b6c9;font-size:11px;padding:8px 5px}
+.tc-backtest-link-actions span{flex:1}
+.tc-backtest-link-actions button{display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+  border:1px solid #446d83;border-radius:8px;padding:9px 11px;background:#1c4053;color:#ceeefa}
+@media(max-width:700px){
+  .tc-optional-research>summary small{flex-basis:100%;text-align:left}
+  .tc-backtest-unified-head{padding:15px}
+}

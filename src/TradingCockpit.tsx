@@ -303,7 +303,7 @@ export default function TradingCockpit(){
       <button type="button" role="tab" id="tc-tab-replay" aria-controls="tc-view-replay" aria-selected={activeTab==='replay'}
         onClick={()=>selectTab('replay')}><History size={17}/><span>Market Replay</span></button>
       <button type="button" role="tab" id="tc-tab-strategy" aria-controls="tc-view-strategy" aria-selected={activeTab==='strategy'}
-        onClick={()=>selectTab('strategy')}><BarChart3 size={17}/><span>Signal Backtest</span></button>
+        onClick={()=>selectTab('strategy')}><BarChart3 size={17}/><span>Options Backtest</span></button>
       <button type="button" role="tab" id="tc-tab-journal" aria-controls="tc-view-journal" aria-selected={activeTab==='journal'}
         onClick={()=>selectTab('journal')}><ClipboardList size={17}/><span>Trade Journal</span></button>
       <button type="button" role="tab" id="tc-tab-setup" aria-controls="tc-view-setup" aria-selected={activeTab==='setup'}
