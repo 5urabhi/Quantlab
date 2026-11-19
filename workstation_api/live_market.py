@@ -9,6 +9,7 @@ or authenticated URLs are returned, persisted or logged.
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+from contextlib import contextmanager
 from hashlib import sha256
 from threading import Event, RLock, Thread, Condition
 from urllib.parse import quote
@@ -33,26 +34,33 @@ MAX_SAVED_BOOKS = 30_000  # session safety bound; display keeps receiving
 STALE_AFTER_SECONDS = 8
 MAX_TICK_LATENCY_SECONDS = 45
 DB_INITIALIZED = False
+DB_SETUP_LOCK = RLock()
 SESSION_ID = ""
 INDEX = {"INDEX:BANKNIFTY": ("IDX_I", "25"),
          "INDEX:NIFTY50": ("IDX_I", "13")}
 SEGMENT_CODE = {0: "IDX_I", 1: "NSE_EQ", 2: "NSE_FNO", 4: "BSE_EQ"}
 
 
-def _database() -> sqlite3.Connection:
+@contextmanager
+def _database():
     path = shared_market_data.database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=5)
     conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _init_db() -> None:
     global DB_INITIALIZED
-    if DB_INITIALIZED and shared_market_data.database_path().is_file():
-        return
-    with _database() as db:
-        db.executescript("""
+    with DB_SETUP_LOCK:
+        if DB_INITIALIZED and shared_market_data.database_path().is_file():
+            return
+        with _database() as db:
+            db.executescript("""
             CREATE TABLE IF NOT EXISTS live_ticks(
                 identity TEXT NOT NULL,
                 exchange_utc TEXT NOT NULL,
@@ -87,7 +95,7 @@ def _init_db() -> None:
             CREATE INDEX IF NOT EXISTS live_book_recent
               ON live_depth_books(identity,received_utc);
         """)
-    DB_INITIALIZED = True
+        DB_INITIALIZED = True
 
 
 def _iso(value: datetime) -> str:
@@ -162,6 +170,7 @@ def status() -> dict:
         state = dict(ACTIVE)
         book = _public_book(state.pop("latest_book",None))
         quotes = dict(state.pop("quotes", {}))
+        state.pop("source_identity_map",None)
     now = datetime.now(timezone.utc)
     safe_quotes = {}
     for identity, item in quotes.items():
@@ -194,8 +203,6 @@ def ingest_tick(identity: str, packet: dict, *, received: datetime | None = None
     event = _utc(packet["exchange_utc"])
     if abs((now-event).total_seconds()) > MAX_TICK_LATENCY_SECONDS:
         return False
-    if not (time.struct_time):  # no-op intentionally omitted
-        return False
     price = float(packet["price"])
     if not math.isfinite(price) or price <= 0:
         return False
@@ -204,7 +211,10 @@ def ingest_tick(identity: str, packet: dict, *, received: datetime | None = None
         raise ValueError("Original ticker packet missing SHA-256 evidence")
     minute = event.replace(second=0,microsecond=0)
     session = minute.astimezone(IST)
-    if session.weekday() >= 5 or not (9 <= session.hour <= 15):
+    if session.weekday() >= 5 or not (
+        (session.hour == 9 and session.minute >= 15)
+        or (10 <= session.hour <= 14)
+        or (session.hour == 15 and session.minute <= 29)):
         return False
     minute_utc = _iso(minute)
     event_utc = _iso(event)
