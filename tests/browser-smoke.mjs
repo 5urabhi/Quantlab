@@ -168,15 +168,17 @@ try {
     await page.getByRole('region',{name:'Captured live history'}).waitFor()
     await modes.getByRole('tab',{name:'Signal Backtest'}).click()
     await page.getByRole('tabpanel',{name:'Signal Backtest'}).waitFor()
-    await page.getByRole('region',{name:'Historical BANKNIFTY signal accuracy'}).waitFor()
+    await page.getByRole('heading',{name:'Backtest your BANKNIFTY options strategy'}).waitFor()
+    const forwardAudit=page.locator('details.tc-forward-research > summary')
+    await forwardAudit.click()
     await page.getByRole('region',{name:'Recorded prospective BANKNIFTY signal accuracy'}).waitFor()
-    await page.getByText('Phase 2 · BANKNIFTY options P&L backtest').waitFor()
+    await forwardAudit.click()
 
     const historicalOptions=page.getByRole('region',{
       name:'Historical BANKNIFTY signals to options backtest',
     })
     await historicalOptions.getByRole('heading',{
-      name:'BANKNIFTY Signal → Historical CE/PE Backtest',
+      name:'Trade BANKNIFTY signals through CE/PE options',
     }).waitFor()
     assert.equal(await historicalOptions.getByRole('spinbutton',{
       name:'Historical option lots',
@@ -184,9 +186,12 @@ try {
     assert.equal(await historicalOptions.getByRole('spinbutton',{
       name:'Historical option target LTP',
     }).inputValue(),'300','Original options target premium is INR 300')
+    const advancedOptionSettings=historicalOptions.locator('details.hob-advanced-settings > summary')
+    await advancedOptionSettings.click()
     assert.equal(await historicalOptions.getByRole('spinbutton',{
       name:'Historical lot size assumption',
     }).inputValue(),'30','Historic units per lot are a clearly labeled assumption')
+    await advancedOptionSettings.click()
     await historicalOptions.getByText('90 option units',{exact:false}).waitFor()
 
     // Exercise the actual UI -> read-only job POST -> completed job result
@@ -258,7 +263,7 @@ try {
           },
         })}))
     await historicalOptions.getByRole('button',{
-      name:/Run BANKNIFTY → CE\/PE backtest/,
+      name:/Run options backtest · compare exit rules/,
     }).click()
     await historicalOptions.getByRole('heading',{
       name:'Historical CE/PE account results',
@@ -346,6 +351,8 @@ try {
     })
     await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
       .getByRole('tab',{name:'Signal Backtest'}).click()
+    await page.locator('details.tc-optional-research').first().locator('summary').click()
+    await page.getByRole('region',{name:'Historical BANKNIFTY signal accuracy'}).waitFor()
     await page.getByRole('combobox',{name:'Trade holding period'}).selectOption('5')
     await page.getByRole('spinbutton',{name:'Illustrative starting capital'}).fill('50000')
     await page.getByRole('button',{name:'Run signal + trade simulation'}).click()
