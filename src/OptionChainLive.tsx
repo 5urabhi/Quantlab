@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useState} from 'react'
-import {AlertTriangle,ArrowRight,CheckCircle2,Clock3,Database,RefreshCw,ShieldCheck,TrendingUp} from 'lucide-react'
+import {AlertTriangle,ArrowRight,Clock3,Database,RefreshCw,ShieldCheck,TrendingUp} from 'lucide-react'
 import {marketApi,readableError} from './tradingCockpitApi'
 import './option-chain-live.css'
 
@@ -101,7 +101,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
   const totalAsk=valid?units*picked!.ask!:null
   const totalBid=valid&&picked!.bid!==null?units*picked!.bid!:null
   const spread=totalAsk!==null&&totalBid!==null?totalAsk-totalBid:null
-  const maxLots=valid&&picked!.ask&&picked!.lot_size
+  const maxLots=(picked&&valid&&picked.ask&&picked.lot_size)
     ?Math.floor(capital/(picked.ask*picked.lot_size)):0
   const age=chain?.received_utc?Math.max(0,Math.round((now-Date.parse(chain.received_utc))/1000)):null
   const bookCurrent=Boolean(picked?.identity&&picked.identity===depthIdentity)
