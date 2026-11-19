@@ -15,12 +15,35 @@ type OptionTrade={
   flipped_from_option_side?:'CE'|'PE'|null
   flipped_from_strike?:number|null
 }
+type ReversalAudit={
+  opposite_signal_exits:number;same_open_reentry_attempts:number
+  completed_flips:number;opposite_exits_without_completed_reentry:number
+  rejected_reentry_reasons:Record<string,number>;session_end_exits:number
+  time_cap_exits:number;fixed_hold_exits:number;note:string
+}
+type OptionsResearchReadiness={
+  status:string;training_performed:boolean;research_grade_rl_ready:boolean
+  observed_sessions:number;observed_index_minutes:number
+  option_contract_identities:number;verified_active_security_ids:number
+  index_minutes_with_both_option_sides:number;both_sides_coverage_pct:number
+  directional_signal_bars:number;up_signal_bars:number;down_signal_bars:number
+  same_direction_repeat_bars:number;direction_runs:number
+  within_session_direction_changes:number
+  signal_bars_with_target_premium_quote:number
+  signal_bars_with_next_option_open:number;signal_to_next_open_coverage_pct:number
+  planning_gates:{prototype_min_sessions:number;research_min_sessions:number
+    research_min_direction_changes:number;research_min_option_coverage_pct:number
+    preliminary_source_coverage_gate_passed:boolean
+    research_source_coverage_gate_passed:boolean}
+  blockers:string[];next_steps:string[]
+}
 type OptionScenario={
   policy:Rule;trade_count:number;reversal_switches?:number;win_rate:number|null;winning_trades:number
   losing_trades:number;starting_capital_inr:number;ending_capital_inr:number
   net_pnl_inr:number;return_pct:number;max_closed_trade_drawdown_pct:number
   average_hold_minutes:number|null;total_assumed_fees_inr:number
   unscored:Record<string,number>;trades:OptionTrade[]
+  reversal_audit?:ReversalAudit
   equity_curve:{timestamp_utc:string;equity_inr:number}[]
 }
 type CompareRow={
@@ -43,6 +66,7 @@ type BacktestResult={
       unexpired_or_unavailable_weekly_sessions:number
       active_source_sessions:number;expired_vendor_requests?:number;policy?:string}}
   selected_rule_id:string;selected:OptionScenario;comparison:CompareRow[]
+  research_readiness?:OptionsResearchReadiness
   assumptions:{premium_target_inr:number;premium_tolerance_inr:number
     lots:number;historical_lot_size_units:number;lot_size_basis:string
     slippage_bps_per_side:number;brokerage_inr_per_side:number
@@ -355,6 +379,66 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
         <div><span>Closed-trade drawdown</span><strong>{PCT(scenario.max_closed_trade_drawdown_pct)}</strong><small>Intratrade drawdown not modeled</small></div>
         <div><span>Original Dhan request usage</span><strong>{result.data_evidence.fresh_requests} fetched</strong><small>{result.data_evidence.cached_requests} reused · {result.data_evidence.empty_requests} empty</small></div>
       </div>
+      {result.research_readiness&&<section className="hob-research-audit"
+        aria-label="Signal reversal diagnostics and RL training readiness">
+        <header>
+          <div><span className="tc-page-kicker">RESEARCH EVIDENCE · NOT MODEL TRAINING</span>
+            <h5>Why aren't all signals becoming options trades?</h5>
+            <p>Signal labels repeat every minute. A reversal trade requires an actual
+              UP↔DOWN transition while holding, an eligible replacement contract,
+              a usable next OPEN, and sufficient simulated capital.</p></div>
+          <span className="hob-research-status">RL: more history required</span>
+        </header>
+        <div className="hob-audit-grid">
+          <div><span>Historical sessions</span><strong>{result.research_readiness.observed_sessions}</strong>
+            <small>Prototyping target {result.research_readiness.planning_gates.prototype_min_sessions} ·
+              research target {result.research_readiness.planning_gates.research_min_sessions}</small></div>
+          <div><span>Actual UP↔DOWN changes</span><strong>{result.research_readiness.within_session_direction_changes}</strong>
+            <small>{DEC(result.research_readiness.same_direction_repeat_bars,0)} repeated same-side signal bars</small></div>
+          <div><span>Option entry availability</span>
+            <strong>{PCT(result.research_readiness.signal_to_next_open_coverage_pct)}</strong>
+            <small>{DEC(result.research_readiness.signal_bars_with_next_option_open,0)} of
+              {' '}{DEC(result.research_readiness.directional_signal_bars,0)} directional bars
+              have matched original option quotes and next OPEN</small></div>
+          <div><span>Reversal exits / actual flips</span>
+            <strong>{scenario.reversal_audit?.opposite_signal_exits??0}
+              {' / '}{scenario.reversal_switches??0}</strong>
+            <small>{scenario.reversal_audit?.opposite_exits_without_completed_reentry??0}
+              {' '}reversal exits not followed by scored replacement entries</small></div>
+        </div>
+        {scenario.policy==='signal_reversal'&&(scenario.reversal_switches??0)===0&&
+          <p className="hob-zero-flip-diagnostic" role="status">
+            {scenario.reversal_audit?.opposite_signal_exits===0
+              ?'No completed trade exited on an opposite BANKNIFTY signal in this sample. A large count of repeated UP/DOWN candles does not mean the held positions encountered tradable reversals.'
+              :`${scenario.reversal_audit?.opposite_signal_exits??0} completed position(s) exited on an opposite signal, but no replacement CE/PE trade passed all original-price, cash and complete-path requirements. Expand the source gaps below for the rejected entries.`}
+          </p>}
+        <details className="hob-audit-detail">
+          <summary>See reversal rejections, RL blockers and next experiments</summary>
+          <div className="hob-audit-detail-body">
+            <p><strong>Matched source:</strong> {DEC(result.research_readiness.observed_index_minutes,0)}
+              {' '}BANKNIFTY minutes, {DEC(result.research_readiness.option_contract_identities,0)}
+              {' '}option contract/session identities, and{' '}
+              {DEC(result.research_readiness.verified_active_security_ids,0)} verified active IDs.
+              Both CE and PE appear in {PCT(result.research_readiness.both_sides_coverage_pct)}
+              {' '}of observed index minutes; that does not guarantee a tradable ₹{DEC(targetLtp,0)} option.</p>
+            <strong>Why reversal entries were rejected:</strong>
+            <div className="hob-audit-rejections">
+              {Object.entries(scenario.reversal_audit?.rejected_reentry_reasons||{}).length===0
+                ?<span>No replacement entries were rejected under this selected policy.</span>
+                :Object.entries(scenario.reversal_audit?.rejected_reentry_reasons||{}).map(([reason,count])=>
+                  <span key={reason}>{reason.replaceAll('_',' ')}: {count}</span>)}
+            </div>
+            <strong>Before training RL:</strong>
+            <ul>{result.research_readiness.blockers.map((reason,i)=>
+              <li key={i}>{reason}</li>)}</ul>
+            <strong>Research sequence:</strong>
+            <ol>{result.research_readiness.next_steps.map((step,i)=>
+              <li key={i}>{step}</li>)}</ol>
+            <p>This panel does not train a model or claim profitable fills. Its
+              session/coverage thresholds are project planning gates—not statistical guarantees.</p>
+          </div>
+        </details>
+      </section>}
       {result.data_evidence.active_source?.reason&&<div className="tc-warning" role="status">
         <AlertTriangle size={17}/><div>
           <strong>Current listed option fallback: {result.data_evidence.active_source.reason}</strong>
