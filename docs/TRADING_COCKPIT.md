@@ -53,9 +53,10 @@ NSE_FNO options contracts are not yet connected to a streaming quote feed.
 - The existing one-minute Parquet store is an **offline prepared source**,
   not a streaming market data connection. The UI refreshes the backend
   snapshot but does not launch a broker live-feed recorder.
-- Only an original, market-hours candle between **60 and 180 seconds
+- Only an original, market-hours candle between **60 and 90 seconds
   old**, assumed stamped at the *start* of its one-minute interval,
-  can generate a new prospective local snapshot. That still does not
+  can generate a new prospective local snapshot; the observation window
+  is deliberately narrow to limit stale-bar horizon bias. That still does not
   prove a live quote or an executable option fill.
 - The auto-audit is active **only while its page remains open** and the
   user enables the switch. It cannot replace a dedicated server-side
