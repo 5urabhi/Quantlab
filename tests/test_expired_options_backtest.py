@@ -151,6 +151,65 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertEqual(result["trades"][0]["exit_utc"], stamp(36))
         self.assertEqual(result["trades"][0]["exit_reason"], "opposite_signal")
 
+    def test_full_up_down_up_flips_ce_pe_ce_at_identical_next_open(self):
+        """Reverse long CE -> long PE -> long CE, no overlapping execution."""
+        outcome = exp.simulate_options(
+            events((29, "UP"), (32, "NO_TRADE"), (35, "DOWN"), (40, "UP")),
+            source(), market(), policy="signal_reversal_or_cap",
+            hold=5, cap=10, slippage_bps=0)
+        self.assertEqual(outcome["trade_count"], 3)
+        self.assertEqual(outcome["reversal_switches"], 2)
+        first, second, third = outcome["trades"]
+        self.assertEqual(
+            [(t["option_side"], t["entry_utc"], t["exit_utc"])
+             for t in (first, second, third)],
+            [("CE", stamp(30), stamp(36)),
+             ("PE", stamp(36), stamp(41)),
+             ("CE", stamp(41), stamp(51))])
+        self.assertEqual(
+            [t["entry_reason"] for t in outcome["trades"]],
+            ["signal_entry", "opposite_signal_flip", "opposite_signal_flip"])
+        self.assertEqual(first["exit_reason"], "opposite_signal")
+        self.assertEqual(second["exit_reason"], "opposite_signal")
+        self.assertEqual(second["flipped_from_option_side"], "CE")
+        self.assertEqual(third["flipped_from_option_side"], "PE")
+        self.assertEqual(first["exit_utc"], second["entry_utc"])
+        self.assertEqual(second["exit_utc"], third["entry_utc"])
+        self.assertEqual(sum(t["assumed_fees_inr"]
+                             for t in outcome["trades"]), 120)
+        self.assertEqual(outcome["unscored"].get("position_open", 0), 0)
+
+    def test_no_trade_does_not_trigger_close_or_reverse(self):
+        result = exp.simulate_options(
+            events((29, "UP"), (32, "NO_TRADE"), (35, "DOWN")),
+            source(), market(), policy="signal_reversal",
+            slippage_bps=0)
+        self.assertEqual(result["trade_count"], 1)
+        self.assertEqual(result["trades"][0]["exit_utc"], stamp(36))
+        self.assertEqual(result["trades"][0]["exit_reason"], "opposite_signal")
+        self.assertEqual(result["reversal_switches"], 0)
+
+    def test_fixed_time_exit_cannot_trigger_automatic_flip(self):
+        result = exp.simulate_options(
+            events((29, "UP"), (34, "DOWN")), source(), market(),
+            policy="fixed", hold=5, slippage_bps=0)
+        self.assertEqual(result["trade_count"], 1)
+        self.assertEqual(result["trades"][0]["exit_utc"], stamp(35))
+        self.assertEqual(result["trades"][0]["exit_reason"], "fixed_hold")
+        self.assertEqual(result["reversal_switches"], 0)
+        self.assertEqual(result["unscored"]["position_open"], 1)
+
+    def test_reverse_exit_stays_flat_when_new_put_has_no_real_option_candle(self):
+        only_ce = market(sides=("CALL",))
+        result = exp.simulate_options(
+            events((29, "UP"), (35, "DOWN")), source(), only_ce,
+            policy="signal_reversal", slippage_bps=0)
+        self.assertEqual(result["trade_count"], 1)
+        self.assertEqual(result["reversal_switches"], 0)
+        self.assertEqual(result["trades"][0]["exit_reason"], "opposite_signal")
+        self.assertEqual(result["trades"][0]["exit_utc"], stamp(36))
+        self.assertEqual(result["unscored"]["no_option_near_target_at_signal"], 1)
+
     def test_expired_source_is_fetched_then_reused_without_second_vendor_call(self):
         start = date(2026, 11, 18)
         end = date(2026, 11, 19)
