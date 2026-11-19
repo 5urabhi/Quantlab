@@ -185,7 +185,7 @@ class TradingCockpitTests(unittest.TestCase):
         closed = manual_trade_journal.exit_trade(entry["id"], 300, fees_inr=40)
         self.assertEqual(closed["status"], "CLOSED")
         self.assertEqual(closed["net_pnl_inr"], -14440)
-        self.assertIn("UNVERIFIED", closed["data_quality"])
+        self.assertIn("NOT_BROKER_VERIFIED", closed["data_quality"])
         with self.assertRaisesRegex(ValueError, "already closed"):
             manual_trade_journal.exit_trade(entry["id"], 500)
         daily = manual_trade_journal.list_trades()
