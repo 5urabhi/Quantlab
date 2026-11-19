@@ -156,6 +156,18 @@ class BankNiftyOptionChainTests(TestCase):
         self.assertEqual(self.client.get("/api/trading-cockpit/options/chain",
             params={"expiry": "2026-11-23%0ADELETE"}).status_code, 400)
 
+    def test_forced_refresh_after_master_replacement_updates_lot_size(self):
+        self.write_master(size=35)
+        with self.vendor() as calls:
+            old = option_chain_live.chain(EXPIRY, sleep=lambda _: None)
+            self.assertEqual(old["contracts"][0]["lot_size"], 35)
+            self.write_master(size=30)
+            new = option_chain_live.chain(
+                EXPIRY, force_refresh=True, sleep=lambda _: None)
+        self.assertEqual(new["contracts"][0]["lot_size"], 30)
+        self.assertEqual(new["contracts"][0]["one_lot_ask_inr"], 9030)
+        self.assertEqual(calls.call_count, 3, "one expiry and two original chain captures")
+
     def test_lot_size_is_from_source_not_fixed_to_30(self):
         self.write_master(size=35)
         with self.vendor():
