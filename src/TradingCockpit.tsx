@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {Clock3, Database, RefreshCw, ShieldCheck} from 'lucide-react'
 import './trading-cockpit.css'
+import LiveFeedPanel from './LiveFeedPanel'
 
 type Candle = {timestamp_utc:string;session_ist:string;open:number;high:number;low:number;close:number;volume:number;ema9:number|null;ema21:number|null}
 type Entry = {id:string;created_utc:string;identity:string;bar_utc:string;direction:string;reference_close:number;horizon_minutes:number;quote_mode:string;evaluation:string;observed_close:number|null;actual_direction:string|null}
@@ -12,7 +13,7 @@ type History = {predictions:Entry[];summary:{evaluated_directions:number;correct
 type DaySummary = {session_ist:string;total:number;scored:number;correct:number;incorrect:number;pending:number;no_trade:number;flat:number;unverifiable:number;directional_accuracy:number|null}
 type Report = {days:DaySummary[];overall:Omit<DaySummary,'session_ist'>;source:string;disclaimer:string;truncated:boolean}
 type Replay = {mode:string;identity:string;model_version:string;horizon_minutes:number;observed_source_bars:number;overall:Omit<DaySummary,'session_ist'>;days:DaySummary[];has_more_history:boolean;source_warning:string;disclaimer:string}
-type DhanCheck = {ok:boolean;code:string;message:string;token_present:boolean;token_valid:boolean|null;data_plan_active:boolean|null;expires_at_utc?:string|null;seconds_remaining?:number|null}
+type DhanCheck = {ok:boolean;code:string;message:string;token_present:boolean;token_valid:boolean|null;data_plan_active:boolean|null;client_id_configured?:boolean;expires_at_utc?:string|null;seconds_remaining?:number|null}
 type DhanConnect = {connected:boolean;message:string}
 type ManualTrade = {id:string;symbol:string;direction:'CALL'|'PUT';quantity:number;entry_price:number;entry_recorded_utc:string;exit_price:number|null;exit_recorded_utc:string|null;holding_seconds:number;holding_rule_exceeded:boolean;gross_notional_inr:number;net_pnl_inr:number|null;status:'OPEN'|'CLOSED';data_quality:string}
 type TradeJournal = {trades:ManualTrade[];summary:{open:number;closed:number;closed_net_pnl_inr:number;holding_violations:number;days:{exit_session_ist:string;closed:number;net_pnl_inr:number;over_6_min:number}[]};disclaimer:string}
@@ -110,6 +111,7 @@ export default function TradingCockpit(){
   const [tradeNote,setTradeNote]=useState('')
   const [dhanCheck,setDhanCheck]=useState<DhanCheck|null>(null)
   const [dhanToken,setDhanToken]=useState('')
+  const [dhanClientId,setDhanClientId]=useState('')
   const [tokenForm,setTokenForm]=useState(false)
   const [tokenConsent,setTokenConsent]=useState(false)
   const [tokenBusy,setTokenBusy]=useState(false)
@@ -139,9 +141,11 @@ export default function TradingCockpit(){
     try{
       const connected=await api<DhanConnect>('/api/market-data/providers/dhan/connect',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({access_token:dhanToken,confirm_local_storage:true}),
+        body:JSON.stringify({access_token:dhanToken,
+          ...(dhanClientId.trim()?{client_id:dhanClientId.trim()}:{}),
+          confirm_local_storage:true}),
       })
-      setDhanToken('');setTokenForm(false);setTokenConsent(false)
+      setDhanToken('');setDhanClientId('');setTokenForm(false);setTokenConsent(false)
       setTokenMessage(connected.message)
       await checkDhan()
     }catch(e){setTokenError(e instanceof Error?e.message:String(e))}
@@ -343,11 +347,17 @@ export default function TradingCockpit(){
       {tokenMessage&&<p className="tc-confirm" role="status">{tokenMessage}</p>}
       {tokenForm&&<form className="tc-token-form" onSubmit={event=>void connectDhan(event)}>
         <label>New token from Dhan Web<input type="password" autoComplete="off" value={dhanToken} onChange={event=>setDhanToken(event.target.value)} placeholder="Paste Dhan access token"/></label>
+        <label>Dhan client ID for live streaming (numeric; verified against your broker profile)
+          <input type="password" autoComplete="off" value={dhanClientId}
+            onChange={event=>setDhanClientId(event.target.value)}
+            placeholder="Your Dhan client ID · leave blank to keep existing"/>
+        </label>
         <label className="tc-token-consent"><input type="checkbox" checked={tokenConsent} onChange={event=>setTokenConsent(event.target.checked)}/> Store this verified token in the local, gitignored .env file. Do not send it to GitHub or the browser's storage.</label>
         <button type="submit" disabled={tokenBusy||!tokenConsent||!dhanToken.trim()}>{tokenBusy?'Verifying…':'Verify and save token'}</button>
       </form>}
-      <p className="tc-muted">This verifies your Dhan session and data entitlement. A valid token alone does not start live market streaming; cockpit candles currently come from prepared historical files.</p>
+      <p className="tc-muted">This verifies your Dhan session and Data API entitlement. Live WebSockets also need your Dhan client ID {dhanCheck?.client_id_configured?'(configured)':'(not configured or not yet checked)'}. This connection alone does not start market streaming.</p>
     </section>
+    <LiveFeedPanel/>
     <section className="tc-panel tc-source-panel" aria-label="Shared market data library status">
       <div className="tc-panel-title"><strong>One shared market-data library · dhan_shared</strong><span>Original downloads are reusable source receipts, not separate datasets</span></div>
       <div className="tc-source-summary"><span>Ready one-minute charts <strong>{catalog?.prepared_equities??0}</strong></span><span>Existing minute sources awaiting chart preparation <strong>{pendingMinutes}</strong></span><span>BANKNIFTY spot index <strong>{missingBankNifty?'Original index not yet available':'Source available'}</strong></span></div>
@@ -373,11 +383,11 @@ export default function TradingCockpit(){
     {!preparedInstruments.length&&<p className="tc-missing"><Database size={17}/> The library has no ready one-minute chart source yet. Use the actions above to prepare already-downloaded stocks or fetch the actual BANKNIFTY spot series. The existing daily market library remains intact.</p>}
     <div className="tc-layout">
       <section className="tc-panel tc-main">
-        <div className="tc-panel-title"><strong>Price action</strong><span>1-minute original OHLC · EMA 9 / EMA 21</span></div>
+        <div className="tc-panel-title"><strong>Historical price action</strong><span>Prepared original Dhan 1-minute OHLC · EMA 9 / EMA 21</span></div>
         {snapshot?<><div className="tc-price">{fmt(snapshot.latest_close)} <small>at {new Date(snapshot.last_observed_utc).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} IST</small></div><CandleChart rows={snapshot.rows}/><div className="tc-metrics"><div>EMA 9 <strong>{fmt(snapshot.ema9)}</strong></div><div>EMA 21 <strong>{fmt(snapshot.ema21)}</strong></div><div>RSI 14 <strong>{fmt(snapshot.rsi14)}</strong></div><div>ATR 14 <strong>{fmt(snapshot.atr14)}</strong></div></div></>:<p className="tc-missing">Select an instrument with verified local one-minute candles.</p>}
       </section>
       <section className="tc-panel tc-signal">
-        <div className="tc-panel-title"><strong>Next {horizon} minutes</strong><span>Rule baseline v1</span></div>
+        <div className="tc-panel-title"><strong>Historical-candle rule · next {horizon} minutes</strong><span>Not a live streaming signal · baseline v1</span></div>
         <div className="tc-horizon"><button className={horizon===3?'active':''} onClick={()=>setHorizon(3)}>3 MIN</button><button className={horizon===6?'active':''} onClick={()=>setHorizon(6)}>6 MIN</button></div>
         <div className={'tc-direction '+forecast.toLowerCase()}>{forecast==='UP'?'UPWARD BIAS':forecast==='DOWN'?'DOWNWARD BIAS':'NO TRADE'}</div>
         <p className="tc-muted">Unvalidated technical rule. Not a measured win probability or options recommendation.</p>
