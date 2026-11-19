@@ -107,8 +107,10 @@ class TradingCockpitTests(unittest.TestCase):
 
     def test_horizon_requires_exact_original_minute(self):
         observed = candles()
-        event = trading_cockpit.record(trading_cockpit.snapshot(
-            "NSE_EQ:1001", observed, now=START + timedelta(minutes=45)), 3)
+        original_signal = trading_cockpit.snapshot(
+            "NSE_EQ:1001", observed, now=START + timedelta(minutes=45))
+        original_signal["direction"] = "UP"  # isolate a true directional gap
+        event = trading_cockpit.record(original_signal, 3)
         self.assertEqual(event["evaluation"], "PENDING")
         # Prediction bar 44m + 3m => 47m. No observation at 47m;
         # 48m exists, but must not stand in for the missing horizon bar.
@@ -117,6 +119,54 @@ class TradingCockpitTests(unittest.TestCase):
                      (START + timedelta(minutes=47)).isoformat()]
         scored = trading_cockpit.evaluate("NSE_EQ:1001", next_rows)
         self.assertEqual(scored["predictions"][0]["evaluation"], "UNVERIFIABLE_GAP")
+
+    def test_no_trade_at_session_end_is_not_counted_as_a_source_gap(self):
+        rows = candles(45)
+        with patch.object(trading_cockpit, "snapshot",
+                          return_value={"direction": "NO_TRADE"}):
+            result = trading_cockpit.historical_replay(
+                "INDEX:BANKNIFTY", rows, horizon_minutes=6)
+        self.assertEqual(result["overall"]["total"], 16)
+        self.assertEqual(result["overall"]["no_trade"], 16)
+        self.assertEqual(result["overall"]["unverifiable"], 0)
+        self.assertEqual(result["overall"]["unscored_after_last_bar"], 0)
+        self.assertEqual(result["overall"]["scored"], 0)
+        self.assertEqual(len(result["latest_signal_events"]), 0)
+        self.assertIsNone(result["overall"]["directional_accuracy"])
+
+    def test_last_observed_bar_and_missing_interior_minute_are_distinct(self):
+        rows = candles(50)
+        # This is a real interior gap: later source timestamps still exist.
+        missing = (START + timedelta(minutes=40)).isoformat()
+        rows = [row for row in rows if row["timestamp_utc"] != missing]
+        with patch.object(trading_cockpit, "snapshot",
+                          return_value={"direction": "UP"}):
+            result = trading_cockpit.historical_replay(
+                "INDEX:BANKNIFTY", rows, horizon_minutes=6)
+        summary = result["overall"]
+        self.assertGreater(summary["unscored_missing_minute"], 0)
+        self.assertEqual(summary["unscored_after_last_bar"], 6)
+        self.assertEqual(summary["unverifiable"],
+                         summary["unscored_after_last_bar"] +
+                         summary["unscored_missing_minute"])
+        self.assertEqual(len(result["latest_signal_events"]), summary["up_signals"])
+        self.assertTrue(any(row["unscored_reason"] == "missing_original_minute"
+                            for row in result["latest_signal_events"]))
+        self.assertTrue(any(row["unscored_reason"] == "after_last_observed_bar"
+                            for row in result["latest_signal_events"]))
+
+    def test_no_trade_prospective_report_remains_no_trade_when_outcome_missing(self):
+        observed = trading_cockpit.snapshot(
+            "NSE_EQ:1001", candles(45), now=START + timedelta(minutes=45))
+        observed["direction"] = "NO_TRADE"
+        event = trading_cockpit.record(observed, 3)
+        source = [row for row in candles(50) if row["timestamp_utc"] !=
+                  (START + timedelta(minutes=47)).isoformat()]
+        scored = trading_cockpit.evaluate("NSE_EQ:1001", source)
+        item = next(row for row in scored["predictions"]
+                    if row["id"] == event["id"])
+        self.assertEqual(item["evaluation"], "NO_TRADE_REVIEWED")
+        self.assertIsNone(item["observed_close"])
 
     def test_session_boundary_suppresses_signal_and_replay_reports_no_trade(self):
         rows = candles(50)
