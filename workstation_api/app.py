@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -766,6 +766,47 @@ def trading_cockpit_replay(
         bad(exc)
 
 
+
+
+class HistoricalOptionsBacktestRequest(BaseModel):
+    """Read-only BANKNIFTY index signals mapped onto historical Dhan CE/PE bars."""
+    model_config = ConfigDict(extra="forbid")
+    limit: Literal[500, 1500, 3000, 5000] = 1500
+    expiry_flag: Literal["MONTH", "WEEK"] = "MONTH"
+    expiry_code: Literal[0, 1, 2] = 0
+    wings: int = Field(default=3, ge=0, le=5)
+    target_ltp: float = Field(default=300, ge=10, le=20000, allow_inf_nan=False)
+    tolerance: float = Field(default=50, ge=0, le=5000, allow_inf_nan=False)
+    lots: int = Field(default=3, ge=1, le=20)
+    lot_size: int = Field(default=30, ge=1, le=100)
+    starting_capital: float = Field(default=50000, ge=1000, le=100000000, allow_inf_nan=False)
+    stop_pct: float = Field(default=2.5, ge=.1, le=50, allow_inf_nan=False)
+    target_pct: float = Field(default=5, ge=.1, le=100, allow_inf_nan=False)
+    slippage_bps: float = Field(default=5, ge=0, le=500, allow_inf_nan=False)
+    fee_per_side: float = Field(default=20, ge=0, le=1000, allow_inf_nan=False)
+    hold_rule: Literal["fixed", "signal_reversal", "signal_reversal_or_cap",
+                       "premium_target_stop", "hybrid"] = "fixed"
+    hold_minutes: Literal[1, 3, 5, 6, 10, 30, 60] = 5
+    reversal_cap_minutes: int = Field(default=10, ge=1, le=120)
+    confirm_readonly: bool = False
+
+
+@app.post("/api/trading-cockpit/options/backtest")
+def trading_cockpit_options_backtest(body: HistoricalOptionsBacktestRequest):
+    """Start one bounded read-only options data acquisition and backtest job.
+
+    Source is original Dhan rolling one-minute CE/PE data, NOT index-proxy
+    returns and NEVER a live or historical order submission.
+    """
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Confirm read-only Dhan expired-options historical data acquisition")
+    try:
+        parameters = body.model_dump(exclude={"confirm_readonly"})
+        expired_options_backtest._validate_params(**parameters)
+        return _spawn("cockpit_dhan_expired_option_backtest",
+                      expired_options_backtest.run_backtest, **parameters)
+    except (ValueError, OSError) as exc:
+        bad(exc)
 
 
 class LiveCopilotRequest(BaseModel):
