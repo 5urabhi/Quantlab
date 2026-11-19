@@ -214,7 +214,7 @@ export default function LiveFeedPanel(){
       <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Check connection</button>
     </div>}
     <div className="lf-cards">
-      <div className="lf-stat"><span>Live index LTP</span><strong>{livePrice?'₹'+fmt(quote?.price):'—'}</strong>
+      <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
         <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':
           'Waiting for fresh Dhan ticker data'}</small></div>
       <div className="lf-stat"><span>Source age</span><strong>{quoteAge===null?'—':fmt(quoteAge,1)+' s'}</strong>
