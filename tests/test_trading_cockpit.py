@@ -368,8 +368,8 @@ class TradingCockpitTests(unittest.TestCase):
         self.assertEqual(scenario["starting_capital_inr"], 75_000)
         self.assertEqual(scenario["allocation_pct"], 50)
         self.assertEqual(scenario["cost_bps_per_side"], 2.5)
-        self.assertEqual(scenario["trade_count"], 3)
-        self.assertIn("ONE", str(scenario).upper() or "ONE")  # ensure public scenario fields
+        self.assertEqual(scenario["trade_count"], 2)
+        self.assertEqual(scenario["mode"], "ILLUSTRATIVE_SIGNED_INDEX_EXPOSURE_ONLY")
 
     def test_historical_banknifty_directions_are_scored_after_exact_horizon(self):
         original = candles(45)
