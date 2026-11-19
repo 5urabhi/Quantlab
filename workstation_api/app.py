@@ -804,7 +804,8 @@ def trading_cockpit_options_backtest(body: HistoricalOptionsBacktestRequest):
         parameters = body.model_dump(exclude={"confirm_readonly"})
         expired_options_backtest._validate_params(**parameters)
         return _spawn("cockpit_dhan_expired_option_backtest",
-                      expired_options_backtest.run_backtest, **parameters)
+                      expired_options_backtest.run_backtest,
+                      master_refresher=_download_master, **parameters)
     except (ValueError, OSError) as exc:
         bad(exc)
 
