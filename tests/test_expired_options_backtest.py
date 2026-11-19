@@ -219,6 +219,44 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertEqual(okay.json()["job_id"], "test_local_id")
         self.assertEqual(mocked.call_args.kwargs["lots"], 3)
 
+    def test_current_active_contract_id_and_lot_override_rolling_assumption(self):
+        master = service.DATA / "dhan" / "instrument_master.csv"
+        master.parent.mkdir(parents=True, exist_ok=True)
+        master.write_text(
+            "SECURITY_ID,EXCH_ID,SEGMENT,INSTRUMENT,TRADING_SYMBOL,LOT_SIZE,SM_EXPIRY_DATE,STRIKE_PRICE,OPTION_TYPE,UNDERLYING_SYMBOL\\n"
+            "41001,NSE,D,OPTIDX,BANKNIFTY-TEST-CE,20,2026-11-25,62000,CE,BANKNIFTY\\n"
+            "41002,NSE,D,OPTIDX,BANKNIFTY-TEST-PE,20,2026-11-25,62000,PE,BANKNIFTY\\n",
+            encoding="utf-8")
+        def active(body):
+            self.assertEqual(body["exchangeSegment"], "NSE_FNO")
+            self.assertEqual(body["instrument"], "OPTIDX")
+            self.assertIn(body["securityId"], {"41001", "41002"})
+            opens = [300 + .5*i for i in range(70)]
+            return {"timestamp": [int((START + timedelta(minutes=i)).timestamp())
+                                  for i in range(70)],
+                    "open": opens, "high": [x+1 for x in opens],
+                    "low": [x-1 for x in opens], "close": opens,
+                    "volume": [50]*70}
+        def expired_not_requested(body):
+            self.fail("Active master-backed options must not require expired rolling history")
+        with patch.object(exp.cockpit_sources, "series",
+                          return_value={"rows": source(), "warning": "fixture",
+                                        "has_more": False}), patch.object(
+                          exp, "_signals", return_value=events((29,"UP"))):
+            result = exp.run_backtest(limit=500, wings=0,
+                                      fetcher=expired_not_requested,
+                                      active_fetcher=active, slippage_bps=0,
+                                      target_ltp=315, tolerance=50,
+                                      hold_rule="fixed", hold_minutes=5)
+        self.assertIn("/charts/intraday", result["data_evidence"]["source"])
+        self.assertEqual(result["selected"]["trade_count"], 1)
+        trade = result["selected"]["trades"][0]
+        self.assertTrue(trade["contract_identity_verified"])
+        self.assertEqual(trade["source_identity"], "NSE_FNO:41001")
+        self.assertEqual(trade["contract_expiry_date"], "2026-11-25")
+        self.assertEqual(trade["lot_size_basis"], "ORIGINAL_CURRENT_DHAN_MASTER")
+        self.assertEqual(trade["units"], 60)
+
     def test_dhan_request_spec_uses_near_monthly_25_security_id(self):
         body = exp._request_body(date(2026, 11, 18),
                                  date(2026, 11, 19), "MONTH", 0,
