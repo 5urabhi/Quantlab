@@ -41,7 +41,7 @@ type Batch = {id:string;selection:string;status:string;from_date:string;to_date:
   failure_examples?:{symbol:string;code:string;diagnostic:string;explanation:string}[];
   historical_unresolved?:{symbol:string;reason:string}[];
   rejected_provider_bars?:number;recovered_checkpoints?:number;
-  preparation_error?:string}
+  preparation_error?:string;index_spot?:{status:string;error?:string;rows?:number}}
 type Job = {id:string;status:string;stage?:string;percent?:number;error?:string;
   result?:Record<string,unknown>}
 type SecondaryPlan = {batch_id:string;status:string;preview_token:string;
@@ -110,7 +110,7 @@ function post<T>(path:string,body:object){
 }
 const errorText=(err:unknown)=>err instanceof Error?err.message:String(err)
 function stateMessage(batch:Batch){
-  if(batch.prepared_dataset_id)return 'Prepared dataset is available for compatible research models.'
+  if(batch.prepared_dataset_id)return 'Original download saved. The verified prices are reusable in the one Market Library; this is a source receipt, not another market database.'
   if(['queued','running'].includes(batch.status))return 'Original candles are downloading; verified progress is saved.'
   if(batch.status==='interrupted')return 'This download stopped unexpectedly. Saved candles are preserved. Resume when ready.'
   if(batch.status==='paused')return 'This download is paused. Check errors or resume remaining instruments.'
@@ -181,7 +181,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
   const [secondaryPlan,setSecondaryPlan]=useState<SecondaryPlan|null>(null)
   const [secondaryBusy,setSecondaryBusy]=useState(false)
   const [secondaryConsent,setSecondaryConsent]=useState(false)
-  const [indexSpot,setIndexSpot]=useState(false)
+  const [indexSpot,setIndexSpot]=useState(true)
   const [showDiagnostics,setShowDiagnostics]=useState(false)
   const [message,setMessage]=useState('')
   const [error,setError]=useState('')
@@ -360,7 +360,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
         confirm_large_history:confirmLarge,
         run_model_after_prepare:Boolean(modelId&&plan.model_followup.eligible&&runModelAfter),
         confirm_secondary_fallback:Boolean(allowAutoFallback&&interval==='daily'&&kite?.token_present),
-        include_index_spot:indexSpot
+        include_index_spot:indexSpot&&['nifty50_pit','banknifty_pit'].includes(selection)
       }),result=>{
         setJob({id:result.job_id,status:result.status})
         setSelectedBatch(result.batch.id)
@@ -424,6 +424,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
   const percent=batch?.total?Math.round(batch.processed/batch.total*100):0
   const active=Boolean(batch&&['running','queued'].includes(batch.status))
   const availableDatasets=datasets.filter(d=>d.kind!=='synthetic')
+  const normalSources=availableDatasets.filter(d=>d.id==='dhan_shared'||d.kind!=='dhan'||d.id===modelDataset)
   const summary = batch?fault(batch):null
 
   return <div className="mdw-root">
@@ -436,8 +437,8 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
       <div className="mdw-safety"><ShieldCheck size={17}/> Read-only market data · No orders</div>
     </div>
     <div className="mdw-tabs" role="tablist" aria-label="Market data views">
-      {([['get','Get Data',Download],['datasets','My Datasets',Database],
-        ['downloads','Downloads & Jobs',Activity]] as const).map(([key,label,Icon])=>
+      {([['get','Get Data',Download],['datasets','Market Library',Database],
+        ['downloads','Download History',Activity]] as const).map(([key,label,Icon])=>
         <button key={key} role="tab" type="button" aria-selected={page===key}
           className={page===key?'active':''} onClick={()=>setPage(key)}>
           <Icon size={17}/>{label}</button>)}
@@ -461,7 +462,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           <p>The existing dataset is selected. Choose a model to calculate exact missing
             observations and reuse the existing original source files.</p></div>
         <button className="mdw-button secondary" type="button"
-          onClick={()=>setModelDataset('')}>Start a new dataset instead</button>
+          onClick={()=>setModelDataset('')}>Return to the shared library</button>
       </div>}
       {stage===0&&<section className="mdw-card">
         <div className="mdw-section-top"><div><span className="mdw-kicker">STEP 1 · WHAT TO COLLECT</span>
@@ -739,7 +740,7 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           <select aria-label="Existing dataset for model acquisition" value={modelDataset}
             onChange={e=>setModelDataset(e.target.value)}>
             <option value="">Choose to extend one</option>
-            {availableDatasets.filter(d=>d.has_prices).map(d=><option value={d.id} key={d.id}>{d.label}</option>)}
+            {normalSources.filter(d=>d.has_prices).map(d=><option value={d.id} key={d.id}>{d.label}</option>)}
           </select>
         </div>}
         {modelId&&selected&&<div id="mdw-model-extension" className="mdw-extension">
@@ -851,11 +852,11 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           <span><strong>{modeNames[b.selection as Selection]||statusLabel(b.selection)}</strong>
             <small>{b.from_date} → {previousDay(b.to_date)} · {b.interval||'Daily'} {b.interval?'min':''}</small></span>
           <span className={'mdw-badge '+(b.prepared_dataset_id?'good':b.errors?'warn':'')}>
-            {b.prepared_dataset_id?'Prepared':statusLabel(b.status)}</span></button>)}</div>
+            {b.prepared_dataset_id?'Saved':statusLabel(b.status)}</span></button>)}</div>
         {batch&&<div className="mdw-batch-detail">
           <div className="mdw-batch-detail-head"><strong>{modeNames[batch.selection as Selection]||batch.selection}</strong>
             <span className={'mdw-badge '+(batch.prepared_dataset_id?'good':'')}>
-              {batch.prepared_dataset_id?'Dataset prepared':statusLabel(batch.status)}</span></div>
+              {batch.prepared_dataset_id?'Sources saved':statusLabel(batch.status)}</span></div>
           <p>{stateMessage(batch)}</p>
           <div className="mdw-progress" role="progressbar" aria-label="Instruments processed"
             aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
@@ -883,10 +884,12 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
               <code>{f.diagnostic}</code></div>)}
           </div>}
           {batch.prepared_dataset_id&&<div className="mdw-callout success">
-            <FileCheck2 size={17}/><span>Dataset: {batch.prepared_dataset_id}.
-              Source pricing can still lack TRI, corporate actions and original delisting observations.</span>
-            <button type="button" onClick={()=>{onSelectDataset(batch.prepared_dataset_id||'');
-              onDataChanged();setPage('datasets')}}>Open dataset <ArrowRight size={14}/></button>
+            <FileCheck2 size={17}/><span>Original observations saved for reuse in
+              <strong> one shared Market Library</strong>. This job is a download receipt,
+              not another market dataset. Historical membership, TRI and corporate-action
+              evidence remain distinct where needed by a model.</span>
+            <button type="button" onClick={()=>{onSelectDataset('dhan_shared');
+              onDataChanged();setPage('datasets')}}>Open one library <ArrowRight size={14}/></button>
           </div>}
           {batch.preparation_error&&<div className="mdw-callout warn">
             <AlertCircle size={17}/> Preparation needs attention: {batch.preparation_error}</div>}
@@ -942,6 +945,8 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
           <details className="mdw-details"><summary>Original download metadata</summary>
             <div className="mdw-diagnostic"><strong>Batch ID</strong><span>{batch.id}</span></div>
             <div className="mdw-diagnostic"><strong>Dates</strong><span>{batch.from_date} – {batch.to_date} (exclusive)</span></div>
+            <div className="mdw-diagnostic"><strong>Original research snapshot</strong><span>{batch.prepared_dataset_id||'Not prepared'}</span></div>
+            <div className="mdw-diagnostic"><strong>Original spot index</strong><span>{batch.index_spot?.status||'Not requested'}</span></div>
             <p className="mdw-help">Original Dhan candles remain cached after deleting a queue.
               Historical membership, adjusted total returns and corporate-action data
               have separate evidence requirements.</p></details>
