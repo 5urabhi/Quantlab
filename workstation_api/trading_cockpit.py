@@ -284,7 +284,11 @@ def evaluate(identity: str, source_rows: list[dict], *,
             actual = later[0]
             observed = _ts(actual["timestamp_utc"])
             if observed != target:
-                result, movement, close = "UNVERIFIABLE_GAP", None, None
+                # A NO_TRADE decision cannot have a directional hit/miss,
+                # regardless of whether its future candle was observed.
+                result = ("NO_TRADE_REVIEWED" if item["direction"] == "NO_TRADE"
+                          else "UNVERIFIABLE_GAP")
+                movement, close = None, None
             else:
                 close = actual["close"]
                 movement = "UP" if close > item["reference_close"] else (
@@ -319,6 +323,10 @@ def _report_summary(records: list[dict]) -> dict:
         "no_trade": sum(row["evaluation"] == "NO_TRADE_REVIEWED" for row in records),
         "flat": sum(row["evaluation"] == "FLAT" for row in records),
         "unverifiable": sum(row["evaluation"] == "UNVERIFIABLE_GAP" for row in records),
+        "unscored_after_last_bar": sum(
+            row.get("unscored_reason") == "after_last_observed_bar" for row in records),
+        "unscored_missing_minute": sum(
+            row.get("unscored_reason") == "missing_original_minute" for row in records),
         "directional_accuracy": correct / (correct + incorrect) if correct + incorrect else None,
         "scored": correct + incorrect,
     }
@@ -387,6 +395,11 @@ def historical_replay(identity: str, source_rows: list[dict],
     if not rows:
         raise ValueError("No observed minute candles")
     times = {_ts(row["timestamp_utc"]): row for row in rows}
+    last_observed_by_session = {
+        day: max(_ts(row["timestamp_utc"]) for row in rows
+                 if row["session_ist"] == day)
+        for day in {row["session_ist"] for row in rows}
+    }
     day_map: dict[str, list[dict]] = {}
     samples = []
     for index in range(29, len(rows)):
@@ -402,7 +415,11 @@ def historical_replay(identity: str, source_rows: list[dict],
         target = _ts(candle["timestamp_utc"]) + timedelta(minutes=horizon_minutes)
         next_row = times.get(target)
         if next_row is None or next_row["session_ist"] != candle["session_ist"]:
-            status, actual, movement = "UNVERIFIABLE_GAP", None, None
+            # No direction was predicted: do NOT fabricate an unscorable
+            # directional signal or call a session end a missing-data gap.
+            status = ("NO_TRADE_REVIEWED" if observation["direction"] == "NO_TRADE"
+                      else "UNVERIFIABLE_GAP")
+            actual, movement = None, None
         else:
             actual = next_row["close"]
             movement = ("UP" if actual > candle["close"] else
@@ -414,6 +431,12 @@ def historical_replay(identity: str, source_rows: list[dict],
             else:
                 status = ("CORRECT" if movement == observation["direction"]
                           else "INCORRECT")
+        unscored_reason = None
+        if status == "UNVERIFIABLE_GAP":
+            unscored_reason = (
+                "after_last_observed_bar"
+                if target > last_observed_by_session[candle["session_ist"]]
+                else "missing_original_minute")
         event = {
             "bar_utc": candle["timestamp_utc"],
             "session_ist": candle["session_ist"],
@@ -424,6 +447,7 @@ def historical_replay(identity: str, source_rows: list[dict],
                              if actual is not None else None),
             "actual_direction": movement,
             "evaluation": status,
+            "unscored_reason": unscored_reason,
         }
         day_map.setdefault(candle["session_ist"], []).append(event)
         samples.append(event)
@@ -435,6 +459,8 @@ def historical_replay(identity: str, source_rows: list[dict],
         "days": [{"session_ist": session, **_report_summary(events)}
                  for session, events in sorted(day_map.items(), reverse=True)],
         "latest_events": samples[-100:],
+        "latest_signal_events": [
+            event for event in samples if event["direction"] != "NO_TRADE"][-100:],
         "disclaimer": ("Mechanical historical baseline only. No model training, "
                        "calibration, out-of-sample certification, executable "
                        "option prices, slippage, or brokerage costs."),
