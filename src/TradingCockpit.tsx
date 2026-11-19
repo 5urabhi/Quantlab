@@ -2,6 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {Clock3, Database, RefreshCw, ShieldCheck, Radio, History, ClipboardList, Settings2, ArrowRight} from 'lucide-react'
 import {nseMarketWindow} from './tradingMarketSession'
 import SavedCaptureReview from './SavedCaptureReview'
+import {marketApi,marketPost,readableError,MarketApiError} from './tradingCockpitApi'
 import './trading-cockpit.css'
 import LiveFeedPanel from './LiveFeedPanel'
 
@@ -27,17 +28,9 @@ type LiveHeaderState = {
 type ManualTrade = {id:string;symbol:string;direction:'CALL'|'PUT';quantity:number;entry_price:number;entry_recorded_utc:string;exit_price:number|null;exit_recorded_utc:string|null;holding_seconds:number;holding_rule_exceeded:boolean;gross_notional_inr:number;net_pnl_inr:number|null;status:'OPEN'|'CLOSED';data_quality:string}
 type TradeJournal = {trades:ManualTrade[];summary:{open:number;closed:number;closed_net_pnl_inr:number;holding_violations:number;days:{exit_session_ist:string;closed:number;net_pnl_inr:number;over_6_min:number}[]};disclaimer:string}
 
-async function api<T>(path:string,init?:RequestInit):Promise<T>{
-  const response=await fetch(path,init)
-  if(!response.ok){
-    let detail='Local analysis unavailable'
-    try{const result=await response.json() as {detail?:string};detail=result.detail||detail}catch{/* no body */}
-    throw new Error(detail)
-  }
-  return response.json() as Promise<T>
-}
+const api = marketApi
 const fmt=(v:number|null|undefined,digits=2)=>v===null||v===undefined?'—':v.toLocaleString('en-IN',{maximumFractionDigits:digits})
-const post=(path:string,body:unknown)=>api<unknown>(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+const post=(path:string,body:unknown)=>marketPost<unknown>(path,body)
 const indiaDate=(offsetDays=0)=>{const d=new Date();d.setUTCDate(d.getUTCDate()+offsetDays);return d.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'})}
 
 function CandleChart({rows}:{rows:Candle[]}){
@@ -155,7 +148,7 @@ export default function TradingCockpit(){
     try{
       const state=await api<DhanCheck>('/api/dhan/credentials/check')
       setDhanCheck(state);setTokenError('')
-    }catch(e){setTokenError(e instanceof Error?e.message:String(e))}
+    }catch(e){setTokenError(readableError(e))}
   },[])
   useEffect(()=>{
     void checkDhan()
@@ -176,12 +169,12 @@ export default function TradingCockpit(){
       setDhanToken('');setDhanClientId('');setTokenForm(false);setTokenConsent(false)
       setTokenMessage(connected.message)
       await checkDhan()
-    }catch(e){setTokenError(e instanceof Error?e.message:String(e))}
+    }catch(e){setTokenError(readableError(e))}
     finally{setTokenBusy(false)}
   }
   const loadJournal=useCallback(async()=>{
     try{setJournal(await api<TradeJournal>('/api/trading-cockpit/trades?limit=80'))}
-    catch(e){setError(e instanceof Error?e.message:String(e))}
+    catch(e){setError(readableError(e))}
   },[])
   useEffect(()=>{void loadJournal()},[loadJournal])
   const recordEntry=async(event:React.FormEvent<HTMLFormElement>)=>{
@@ -195,7 +188,7 @@ export default function TradingCockpit(){
       setOptionEntry('');setTradeNote('');setStartTime(Date.now())
       setRecordMessage('Manual position opened. Six-minute timer started. No broker order submitted.')
       await loadJournal()
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
     finally{setJournalBusy(false)}
   }
   const recordExit=async(event:React.FormEvent<HTMLFormElement>)=>{
@@ -208,7 +201,7 @@ export default function TradingCockpit(){
       setClosingId('');setExitPremium('');setFees('0')
       setRecordMessage('Manual exit recorded. Net P&L computed from entered prices, not verified broker fills.')
       await loadJournal()
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
     finally{setJournalBusy(false)}
   }
   useEffect(()=>{
@@ -232,7 +225,7 @@ export default function TradingCockpit(){
       return data.instruments.find(x=>x.ready&&x.identity==='INDEX:BANKNIFTY')?.identity||''
     })
   },[])
-  useEffect(()=>{void refreshCatalog().catch(e=>setSourceError(String(e)))},[refreshCatalog])
+  useEffect(()=>{void refreshCatalog().catch(e=>setSourceError(readableError(e)))},[refreshCatalog])
   useEffect(()=>{
     if(!sourceJob||!['queued','running'].includes(sourceJob.status))return
     let active=true
@@ -247,11 +240,11 @@ export default function TradingCockpit(){
               :next.result?.rows!==undefined
                 ?'Original index spot history saved: '+next.result.rows+' observed candles.'
                 :'Market data preparation finished.')
-            void refreshCatalog().catch(e=>setSourceError(String(e)))
+            void refreshCatalog().catch(e=>setSourceError(readableError(e)))
           }else if(next.status==='error'||next.status==='cancelled'){
             setSourceError(next.error||'The local source task needs attention.')
           }
-        }).catch(e=>{if(active)setSourceError(String(e))})
+        }).catch(e=>{if(active)setSourceError(readableError(e))})
     },1500)
     return()=>{active=false;window.clearTimeout(timer)}
   },[sourceJob,refreshCatalog])
@@ -265,7 +258,7 @@ export default function TradingCockpit(){
           body:JSON.stringify({confirm_reuse_originals:true})})
       if(result.job_id)setSourceJob({id:result.job_id,status:result.status})
       else setSourceNotice(result.message||'All available minute chart caches are prepared.')
-    }catch(e){setSourceError(e instanceof Error?e.message:String(e))}
+    }catch(e){setSourceError(readableError(e))}
     finally{setSourceBusy(false)}
   }
   const acquireSpot=async(event:React.FormEvent<HTMLFormElement>)=>{
@@ -280,7 +273,7 @@ export default function TradingCockpit(){
           body:JSON.stringify({identity:spotIdentity,from_date:spotFrom,
             to_date:spotTo,confirm_readonly:true})})
       setSourceJob({id:result.job_id,status:result.status})
-    }catch(e){setSourceError(e instanceof Error?e.message:String(e))}
+    }catch(e){setSourceError(readableError(e))}
     finally{setSourceBusy(false)}
   }
   const refresh=useCallback(async()=>{
@@ -293,7 +286,7 @@ export default function TradingCockpit(){
       const observed=await api<Snapshot>('/api/trading-cockpit/snapshot?'+
         new URLSearchParams({identity,limit:'500'}))
       setSnapshot(observed)
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
   },[identity])
   useEffect(()=>{setSnapshot(null);setReplay(null);void refresh()},[refresh])
   useEffect(()=>{
@@ -315,9 +308,9 @@ export default function TradingCockpit(){
   },[journalIdentity])
   useEffect(()=>{
     if(activeTab!=='journal'||journalView!=='accuracy')return
-    void loadPredictionLedger().catch(e=>setError(e instanceof Error?e.message:String(e)))
+    void loadPredictionLedger().catch(e=>setError(readableError(e)))
     const interval=window.setInterval(()=>{
-      void loadPredictionLedger().catch(e=>setError(e instanceof Error?e.message:String(e)))
+      void loadPredictionLedger().catch(e=>setError(readableError(e)))
     },20000)
     return()=>window.clearInterval(interval)
   },[activeTab,journalView,loadPredictionLedger])
@@ -329,7 +322,7 @@ export default function TradingCockpit(){
         identity:journalIdentity,horizon_minutes:6}) as {updated:number}
       setRecordMessage('Evaluated '+data.updated+' recorded calls using observed live index minutes. Historical gaps are not invented.')
       await loadPredictionLedger()
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
     finally{setBusy(false)}
   }
   const runReplay=async()=>{
@@ -339,7 +332,7 @@ export default function TradingCockpit(){
       const result=await api<Replay>('/api/trading-cockpit/replay?'+
         new URLSearchParams({identity,horizon_minutes:String(horizon),limit:replayLimit}))
       setReplay(result)
-    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    }catch(e){setError(readableError(e))}
     finally{setReplayBusy(false)}
   }
   const elapsed=startTime===null?0:Math.floor((now-startTime)/1000)
