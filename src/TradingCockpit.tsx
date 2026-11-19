@@ -359,7 +359,8 @@ export default function TradingCockpit(){
 
     {activeTab==='strategy'&&<section role="tabpanel" id="tc-view-strategy" aria-labelledby="tc-tab-strategy" className="tc-tab-page">
       <StrategyWorkbench instruments={instruments} onOpenData={()=>selectTab('setup')}
-        onOpenReplay={()=>{selectTab('replay');setReplayView('session')}}/>
+        onOpenReplay={()=>{selectTab('replay');setReplayView('session')}}
+        onOpenOptions={()=>selectTab('live')}/>
     </section>}
 
     {activeTab==='journal'&&<section role="tabpanel" id="tc-view-journal" aria-labelledby="tc-tab-journal" className="tc-tab-page">
