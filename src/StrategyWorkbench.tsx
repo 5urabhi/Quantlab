@@ -195,13 +195,13 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
           <span>UP signals <strong>{tested.overall.up_signals}</strong></span>
           <span>DOWN signals <strong>{tested.overall.down_signals}</strong></span>
           <span>Flat outcome <strong>{tested.overall.flat}</strong></span>
-          <span title="Missing source minute or the prediction horizon falls after the last recorded bar."><span>Unscored UP/DOWN</span><strong>{tested.overall.unverifiable}</strong></span>
+          <span title="Missing source minute or the prediction horizon falls after the last recorded bar.">Unscored UP/DOWN<strong>{tested.overall.unverifiable}</strong></span>
         </div>
         {tested.overall.unverifiable>0&&<p className="tc-muted">
           {tested.overall.unscored_after_last_bar||0} horizons beyond the last recorded minute;
           {' '}{tested.overall.unscored_missing_minute||0} missing interior minute observations.
           NO TRADE decisions do not count as missed predictions.
-        </p>
+        </p>}
         <div className="tc-table-scroll tc-signal-event-table">
           <table><thead><tr>
             <th>IST signal time</th><th>Predicted</th><th>Index at signal</th>
