@@ -59,6 +59,15 @@ class TradingCockpitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unique"):
             trading_cockpit.snapshot("NSE_EQ:1001", original)
 
+    def test_late_completed_bar_cannot_be_claimed_as_fresh_prediction(self):
+        original = candles()
+        age_75 = trading_cockpit.snapshot("NSE_EQ:1001", original,
+                   now=START + timedelta(minutes=45, seconds=15))
+        self.assertEqual(age_75["quote_mode"], "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE")
+        age_120 = trading_cockpit.snapshot("NSE_EQ:1001", original,
+                    now=START + timedelta(minutes=46))
+        self.assertEqual(age_120["quote_mode"], "HISTORICAL_ONLY")
+
     def test_immutable_record_and_source_anchored_evaluation(self):
         observed = candles()
         analysis = trading_cockpit.snapshot("NSE_EQ:1001", observed,
