@@ -49,6 +49,10 @@ class DhanAuthTests(TestCase):
         self.assertTrue(result["data_plan_active"])
         self.assertNotIn("SECRET_PRIVATE_ACCOUNT", str(result))
         self.assertNotIn("SECRET_PRIVATE_TOKEN", str(result))
+        self.assertIsInstance(result["seconds_remaining"], int)
+        self.assertGreater(result["seconds_remaining"], 0)
+        self.assertIsNotNone(result["expires_at_utc"])
+        self.assertNotIn("SECRET_PRIVATE_ACCOUNT", result["expires_at_utc"])
 
     def test_expired_token_is_not_truthy_validity(self):
         past = (datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=3))
@@ -59,6 +63,7 @@ class DhanAuthTests(TestCase):
         self.assertEqual(result["code"], "token_expired")
         self.assertFalse(result["token_valid"])
         self.assertFalse(result["ok"])
+        self.assertEqual(result["seconds_remaining"], 0)
 
     def test_data_api_inactive_does_not_pass(self):
         future = datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=1)
