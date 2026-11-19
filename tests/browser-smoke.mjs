@@ -99,7 +99,7 @@ try {
     await nav('Trading Cockpit').click()
     await page.getByText('Intraday trading cockpit',{exact:true}).first().waitFor()
     const modes=page.getByRole('tablist',{name:'Trading cockpit workspaces'})
-    for(const name of ['Live Trading','Market Replay','Signal Backtest','Trade Journal','Connections']){
+    for(const name of ['Live Trading','Market Replay','Options Backtest','Trade Journal','Connections']){
       await modes.getByRole('tab',{name,exact:true}).waitFor()
     }
     // One focused panel at a time. No duplicated Trading Cockpit heading.
@@ -166,8 +166,8 @@ try {
     await page.getByRole('tablist',{name:'Market replay views'})
       .getByRole('tab',{name:'Recorded 20-level books'}).click()
     await page.getByRole('region',{name:'Captured live history'}).waitFor()
-    await modes.getByRole('tab',{name:'Signal Backtest'}).click()
-    await page.getByRole('tabpanel',{name:'Signal Backtest'}).waitFor()
+    await modes.getByRole('tab',{name:'Options Backtest'}).click()
+    await page.getByRole('tabpanel',{name:'Options Backtest'}).waitFor()
     await page.getByRole('heading',{name:'Backtest your BANKNIFTY options strategy'}).waitFor()
     const forwardAudit=page.locator('details.tc-forward-research > summary')
     await forwardAudit.click()
@@ -350,7 +350,7 @@ try {
           has_more_history:false})})
     })
     await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
-      .getByRole('tab',{name:'Signal Backtest'}).click()
+      .getByRole('tab',{name:'Options Backtest'}).click()
     await page.locator('details.tc-optional-research').first().locator('summary').click()
     await page.getByRole('region',{name:'Historical BANKNIFTY signal accuracy'}).waitFor()
     await page.getByRole('combobox',{name:'Trade holding period'}).selectOption('5')
