@@ -26,8 +26,18 @@ type HistoricalResult={
   overall:Counts;days:Day[];latest_events:HistoricalEvent[];
   latest_signal_events:HistoricalEvent[];
   index_exposure_scenario:ScenarioResult;
+  holding_rule_comparison?:HoldingComparison[];
+  selected_holding_rule_id?:string;
   disclaimer:string;source_warning:string;has_more_history:boolean
 }
+type HoldingComparison={
+  rule_id:string;label:string;hold_rule:string;hold_minutes:number;
+  trade_count:number;win_rate:number|null;net_pnl_inr:number;
+  net_return_pct:number;ending_capital_inr:number;
+  max_closed_trade_drawdown_pct:number;average_hold_minutes:number|null;
+  missing_paths:number;
+}
+type HoldingRule='fixed'|'signal_reversal'|'signal_reversal_or_cap'
 type ForwardReport={
   identity:string;horizon_minutes:number|null;
   overall:Counts;days:Day[];source:string;disclaimer:string;truncated:boolean
@@ -66,6 +76,8 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
   const [limit,setLimit]=useState<'500'|'1500'|'3000'|'5000'>('1500')
   const [result,setResult]=useState<HistoricalResult|null>(null)
   const [selected,setSelected]=useState<HistoricalHorizon>(5)
+  const [holdRule,setHoldRule]=useState<HoldingRule>('fixed')
+  const [reversalCap,setReversalCap]=useState(10)
   const [capital,setCapital]=useState(50_000)
   const [allocation,setAllocation]=useState(100)
   const [costBps,setCostBps]=useState(0)
@@ -117,6 +129,8 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
       const scenario=await marketApi<HistoricalResult>(
         '/api/trading-cockpit/replay?'+new URLSearchParams({
           identity:INDEX,horizon_minutes:String(selected),limit,
+          hold_rule:holdRule,hold_minutes:String(selected),
+          reversal_cap_minutes:String(reversalCap),
           starting_capital:String(capital),allocation_pct:String(allocation),
           cost_bps_per_side:String(costBps),
         }))
@@ -172,6 +186,20 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
             {HISTORICAL_HORIZONS.map(h=><option key={h} value={h}>{h===60?'1 hour':h+' minutes'}</option>)}
           </select>
         </label>
+        <label>Exit / hold rule
+          <select aria-label="Exit strategy" value={holdRule}
+            onChange={e=>{setHoldRule(e.target.value as HoldingRule);setResult(null)}}>
+            <option value="fixed">Fixed time</option>
+            <option value="signal_reversal">Until opposite signal or session end</option>
+            <option value="signal_reversal_or_cap">Opposite signal or time cap</option>
+          </select>
+        </label>
+        {holdRule==='signal_reversal_or_cap'&&<label>Maximum hold
+          <select aria-label="Reversal time cap" value={reversalCap}
+            onChange={e=>{setReversalCap(Number(e.target.value));setResult(null)}}>
+            {[3,5,6,10,15,30,60].map(value=><option key={value} value={value}>{value} minutes</option>)}
+          </select>
+        </label>}
         <label>Illustrative capital (₹)
           <input type="number" aria-label="Illustrative starting capital" min="1000" max="100000000"
             step="1000" value={capital} onChange={e=>{setCapital(Number(e.target.value));setResult(null)}}/>
@@ -222,7 +250,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
           <div className="tc-signal-scorecard-title"><span>Illustrative account change · not options P&amp;L</span>
             <strong>{tested!.index_exposure_scenario.net_return_pct>=0?'+':''}{pct(tested!.index_exposure_scenario.net_return_pct)}</strong></div>
           <strong className="tc-signal-scenario-pnl">{tested!.index_exposure_scenario.net_pnl_inr>=0?'+':''}{cash(tested!.index_exposure_scenario.net_pnl_inr)}</strong>
-          <small>{tested!.index_exposure_scenario.trade_count} nonoverlapping positions, next-bar entries and fixed {selected}-minute exits. Zero-cost model unless adjusted above.</small>
+          <small>{tested!.index_exposure_scenario.trade_count} nonoverlapping positions, next-bar entries and {holdRule==='fixed'?'fixed '+selected+'-minute exits':holdRule==='signal_reversal'?'reversal or session-end exits':'reversal or '+reversalCap+'-minute capped exits'}. Assumed costs are configurable above.</small>
         </div>
       </div>:!busy&&ready&&<div className="tc-signal-prompt">
         <TrendingUp size={22}/><div><strong>Select a holding period and run a simulation.</strong>
@@ -232,6 +260,28 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,o
         The current EMA/RSI baseline produced no scored UP/DOWN predictions in this window.
         This is a valid finding, not 100% accuracy; review the NO TRADE count and source coverage.</p>}
       {tested&&<>
+        {tested.holding_rule_comparison&&<section className="tc-panel tc-holding-compare" aria-label="Hold rule comparison">
+          <div className="tc-panel-title"><div>
+            <strong><BarChart3 size={17}/> Compare all exit rules</strong>
+            <p className="tc-muted">Same historical entry signals and starting capital for every rule. Each rule has its own non-overlapping trade sequence; no historical option premium or actual investment return is implied. Missing paths are excluded, not filled.</p>
+          </div></div>
+          <div className="tc-table-scroll"><table><thead><tr>
+            <th>Exit rule</th><th>Trades</th><th>Win rate</th><th>Average hold</th>
+            <th>Illustrative net ₹</th><th>Illustrative return</th><th>Ending balance</th>
+            <th>Closed-trade drawdown</th><th>Missing paths</th></tr></thead><tbody>
+            {tested.holding_rule_comparison.map(rule=><tr key={rule.rule_id}
+              className={rule.rule_id===tested.selected_holding_rule_id?'tc-hold-selected':''}>
+              <td><strong>{rule.label}</strong>{rule.rule_id===tested.selected_holding_rule_id?' · SELECTED':''}</td>
+              <td>{rule.trade_count}</td><td>{rule.win_rate===null?'—':pct(rule.win_rate*100)}</td>
+              <td>{rule.average_hold_minutes===null?'—':fmt(rule.average_hold_minutes,1)+'m'}</td>
+              <td className={rule.net_pnl_inr>=0?'good':'bad'}>{rule.net_pnl_inr>=0?'+':''}{cash(rule.net_pnl_inr)}</td>
+              <td>{rule.net_return_pct>=0?'+':''}{pct(rule.net_return_pct)}</td>
+              <td>{cash(rule.ending_capital_inr)}</td>
+              <td>{pct(rule.max_closed_trade_drawdown_pct)}</td><td>{rule.missing_paths}</td>
+            </tr>)}
+          </tbody></table></div>
+          <p className="tc-muted">A reversal requires a confirmed completed opposite-direction candle; exit is assumed at the next original minute's open. NO TRADE does not reverse a position. Remaining positions close only at an observed 15:29 IST opening price, never overnight.</p>
+        </section>}
         {tested.index_exposure_scenario&&<IndexExposureScenario scenario={tested.index_exposure_scenario}/>}
         <details className="tc-signal-raw-details"><summary>Inspect the underlying signals and daily accuracy</summary>
         <div className="tc-signal-detail">
