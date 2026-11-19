@@ -37,7 +37,8 @@ type BacktestResult={
     empty_requests:number;unique_option_minute_bars:number;conflicted_excluded:number
     source:string;expiry_flag:string;expiry_code:number;strike_wings:number
     active_source?:{reason?:string;next_action?:string;source?:string;requests?:number
-      fresh_requests?:number;cached_requests?:number}
+      fresh_requests?:number;cached_requests?:number
+      failed_contract_requests?:number;failure_reasons?:Record<string,number>}
     routing?:{expired_eligible_sessions:number
       unexpired_or_unavailable_weekly_sessions:number
       active_source_sessions:number;expired_vendor_requests?:number;policy?:string}}
@@ -361,6 +362,16 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
             'Older expired contracts use Dhan rolling history; currently active expiry contracts require the latest original Dhan instrument master and active contract candles.'}</p>
         </div><button type="button" onClick={onOpenData}>Open connections <ArrowRight size={14}/></button>
       </div>}
+      {(result.data_evidence.active_source?.failed_contract_requests??0)>0&&
+        <div className="tc-warning" role="status">
+          <AlertTriangle size={17}/>
+          <div><strong>Some current option contracts had no usable Dhan history</strong>
+            <p>{result.data_evidence.active_source?.failed_contract_requests} contract
+               request(s) were unavailable. Valid original candles from other
+               contracts were retained. Trades without a complete exact-contract
+               price path remain unscored, not zero-profit trades.</p>
+          </div>
+        </div>}
       {result.data_evidence.routing&&<p className="hob-route-summary">
         Dhan source routing: {result.data_evidence.routing.active_source_sessions} session(s)
         with listed-contract observations · {result.data_evidence.routing.expired_vendor_requests??0}
