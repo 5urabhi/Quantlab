@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useMemo,useState} from 'react'
 import {AlertTriangle,ArrowRight,Clock3,Database,RefreshCw,ShieldCheck,TrendingUp} from 'lucide-react'
-import {marketApi,readableError} from './tradingCockpitApi'
+import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './option-chain-live.css'
 
 type Expiries={
@@ -52,6 +52,8 @@ export default function OptionChainLive({feedActive,depthIdentity,
   const [expiryBusy,setExpiryBusy]=useState(false)
   const [error,setError]=useState('')
   const [expiryError,setExpiryError]=useState('')
+  const [masterJobId,setMasterJobId]=useState('')
+  const [masterNotice,setMasterNotice]=useState('')
   const [now,setNow]=useState(Date.now())
   const getExpiries=useCallback(async()=>{
     setExpiryBusy(true);setExpiryError('')
@@ -63,12 +65,14 @@ export default function OptionChainLive({feedActive,depthIdentity,
     finally{setExpiryBusy(false)}
   },[])
   useEffect(()=>{void getExpiries()},[getExpiries])
-  const getChain=useCallback(async()=>{
+  const getChain=useCallback(async(forceRefresh=false)=>{
     if(!expiry)return
     setBusy(true);setError('')
     try{
       const data=await marketApi<Chain>(
-        '/api/trading-cockpit/options/chain?'+new URLSearchParams({expiry}))
+        '/api/trading-cockpit/options/chain?'+new URLSearchParams({
+          expiry,...(forceRefresh?{force_refresh:'true'}:{}),
+        }))
       setChain(data)
       setSelected(previous=>data.contracts.some(c=>c.identity===previous&&c.contract_master_verified)
         ?previous:'')
@@ -83,6 +87,41 @@ export default function OptionChainLive({feedActive,depthIdentity,
     },20_000)
     return()=>window.clearInterval(poll)
   },[expiry,getChain])
+  const refreshMaster=async()=>{
+    if(masterJobId)return
+    setMasterNotice('')
+    try{
+      const response=await marketPost<{job_id:string}>('/api/dhan/instruments/refresh',{})
+      setMasterJobId(response.job_id)
+      setMasterNotice('Refreshing original Dhan instrument master in the local Data Library…')
+    }catch(e){setMasterNotice('Dhan master refresh failed to start: '+readableError(e))}
+  }
+  useEffect(()=>{
+    if(!masterJobId)return
+    let mounted=true
+    let running=false
+    const poll=async()=>{
+      if(running)return
+      running=true
+      try{
+        const job=await marketApi<{status:string;error?:string}>(
+          '/api/jobs/'+encodeURIComponent(masterJobId))
+        if(!mounted)return
+        if(job.status==='complete'){
+          setMasterNotice('Original Dhan instrument master refreshed. Rechecking contract lot sizes and security IDs.')
+          setMasterJobId('')
+          await getChain(true)
+        }else if(['error','cancelled','interrupted'].includes(job.status)){
+          setMasterNotice('Instrument master update failed: '+(job.error||job.status))
+          setMasterJobId('')
+        }
+      }catch(e){if(mounted){setMasterNotice('Could not check instrument master refresh: '+readableError(e));setMasterJobId('')}}
+      finally{running=false}
+    }
+    void poll()
+    const poller=window.setInterval(()=>{void poll()},2000)
+    return()=>{mounted=false;window.clearInterval(poller)}
+  },[masterJobId,getChain])
   useEffect(()=>{
     const clock=window.setInterval(()=>setNow(Date.now()),1000)
     return()=>window.clearInterval(clock)
@@ -126,12 +165,15 @@ export default function OptionChainLive({feedActive,depthIdentity,
           <Database size={15}/>{expiryBusy?'Checking expiries…':'Refresh expiry list'}</button>
         <button type="button" onClick={()=>void getChain()} disabled={!expiry||busy}>
           <RefreshCw size={15}/>{busy?'Refreshing…':'Refresh option chain'}</button>
+        <button type="button" onClick={()=>void refreshMaster()} disabled={Boolean(masterJobId)}>
+          <Database size={15}/>{masterJobId?'Updating master…':'Update contract lot sizes'}</button>
       </div>
       <div className="oc-observed">
         <span>Underlying spot <b>{chain?num(chain.underlying_spot)+' pts':'—'}</b></span>
         <span>Snapshot age <b>{age===null?'—':age+'s'}</b></span>
       </div>
     </div>
+    {masterNotice&&<p className="oc-timestamp" role="status">{masterNotice}</p>}
     {expiryError&&<div className="oc-alert" role="alert"><AlertTriangle size={18}/>
       <div><strong>Option-chain connection requires Dhan credentials.</strong>
         <p>{expiryError}</p></div>
