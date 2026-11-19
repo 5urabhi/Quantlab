@@ -7,6 +7,7 @@ import StrategyWorkbench from './StrategyWorkbench'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './trading-cockpit.css'
 import LiveFeedPanel from './LiveFeedPanel'
+import type {OptionContract} from './OptionChainLive'
 
 type Entry = {id:string;created_utc:string;identity:string;bar_utc:string;direction:string;reference_close:number;horizon_minutes:number;quote_mode:string;evaluation:string;observed_close:number|null;actual_direction:string|null}
 type SourceInstrument = {identity:string;display_name?:string;asset_class?:string;ready:boolean;state:string;needs_preparation?:boolean;needs_download?:boolean}
@@ -77,6 +78,8 @@ export default function TradingCockpit(){
   const [optionSymbol,setOptionSymbol]=useState('')
   const [optionSide,setOptionSide]=useState<'CALL'|'PUT'>('PUT')
   const [optionQty,setOptionQty]=useState('1')
+  const [optionLotSize,setOptionLotSize]=useState<number|null>(null)
+  const [optionDraftNote,setOptionDraftNote]=useState('')
   const [optionEntry,setOptionEntry]=useState('')
   const [tradeNote,setTradeNote]=useState('')
   const [dhanCheck,setDhanCheck]=useState<DhanCheck|null>(null)
@@ -130,10 +133,14 @@ export default function TradingCockpit(){
     if(journalBusy)return
     setJournalBusy(true);setError('')
     try{
+      if(optionLotSize!==null&&
+          (Number(optionQty)<optionLotSize||Number(optionQty)%optionLotSize!==0)){
+        throw new Error('Selected option quantity must be a whole number of '+optionLotSize+'-unit lots')
+      }
       await post('/api/trading-cockpit/trades',{
         symbol:optionSymbol.trim().toUpperCase(),direction:optionSide,
         quantity:Number(optionQty),entry_price:Number(optionEntry),note:tradeNote})
-      setOptionEntry('');setTradeNote('');setStartTime(Date.now())
+      setOptionEntry('');setTradeNote('');setOptionDraftNote('');setStartTime(Date.now())
       setRecordMessage('Manual position opened. Six-minute timer started. No broker order submitted.')
       await loadJournal()
     }catch(e){setError(readableError(e))}
@@ -311,7 +318,20 @@ export default function TradingCockpit(){
       {!marketWindow.regularWindow&&!liveFeedFresh&&<div className="tc-market-note"><Clock3 size={17}/>
         <span>The regular NSE index session is outside its trading window. Feed freshness is determined only by actual Dhan packets; holidays and special sessions are not inferred.</span>
         <button type="button" onClick={()=>{selectTab('replay');setReplayView('session')}}>Open recorded market</button></div>}
-      <LiveFeedPanel onOpenSetup={()=>selectTab('setup')}/>
+      <LiveFeedPanel onOpenSetup={()=>selectTab('setup')}
+        onDraftJournal={(contract:OptionContract,lots:number)=>{
+          if(!contract.lot_size||!contract.identity)return
+          setOptionSymbol(contract.symbol)
+          setOptionSide(contract.option_type==='CE'?'CALL':'PUT')
+          setOptionQty(String(contract.lot_size*lots))
+          setOptionLotSize(contract.lot_size)
+          setOptionEntry('')
+          setOptionDraftNote('Dhan '+contract.expiry+' '+contract.option_type+' '+contract.strike+
+            ' · '+lots+' lot(s) × '+contract.lot_size+' units. The displayed bid/ask is NOT an executed fill.')
+          setRecordMessage('')
+          setJournalView('trades')
+          selectTab('journal')
+        }}/>
       <div className="tc-live-footer">
       <section className="tc-panel tc-timer">
         <div className="tc-panel-title"><strong>Six-minute trade discipline</strong><Clock3 size={16}/></div>
@@ -354,14 +374,22 @@ export default function TradingCockpit(){
       {journalView==='trades'&&<>    <section className="tc-panel tc-ledger" aria-label="Manual options trade journal">
       <div className="tc-panel-title"><strong>Manual options journal · six-minute discipline</strong><span>Read-only research · you type actual prices</span></div>
       <p className="tc-muted">Enter a new trade at the time you actually fill it. QuantLab stores server receipt times and computes P&amp;L only after you report an exit. The app cannot verify your broker fills, enforce a stop, or place orders.</p>
-      <p className="tc-confirm">Signal input: BANKNIFTY spot candles only. You choose the exact CE/PE contract, expiry, strike and actual filled premium in your broker. The signal does not forecast the option premium.</p>
+      <p className="tc-confirm">The underlying signal comes from BANKNIFTY spot candles. Contract selection, lot size and current Dhan option bid/ask can be previewed under Live Trading → Option Chain; they are not verified broker fills.</p>
+      {optionDraftNote&&<p role="status" className="tc-warning">{optionDraftNote} Enter your actual broker fill premium before recording anything.</p>}
+      {optionLotSize!==null&&<p className="tc-muted">Selected contract lot size: <strong>{optionLotSize} units</strong>.
+        Quantity is entered in units (lots × lot size). Current entry quantity:
+        {' '}{Number(optionQty)/optionLotSize} lot(s). Only whole lots are accepted for this draft.</p>}
       <form className="tc-trade-form" onSubmit={event=>void recordEntry(event)}>
         <label>Exact contract symbol<input required maxLength={48} value={optionSymbol} placeholder="BANKNIFTY23NOV61900PE" onChange={event=>setOptionSymbol(event.target.value.toUpperCase())}/></label>
         <label>Type<select value={optionSide} onChange={event=>setOptionSide(event.target.value as 'CALL'|'PUT')}><option value="PUT">Long put</option><option value="CALL">Long call</option></select></label>
-        <label>Quantity<input aria-label="Trade quantity" required type="number" min="1" max="1000000" step="1" value={optionQty} onChange={event=>setOptionQty(event.target.value)}/></label>
+        <label>Quantity (units = lots × lot size)<input aria-label="Trade quantity" required type="number" min="1" max="1000000" step="1" value={optionQty} onChange={event=>setOptionQty(event.target.value)}/></label>
         <label>Entry premium (₹)<input aria-label="Trade entry premium" required type="number" min="0.01" step="0.01" value={optionEntry} onChange={event=>setOptionEntry(event.target.value)}/></label>
         <label>Note (optional)<input maxLength={250} value={tradeNote} onChange={event=>setTradeNote(event.target.value)}/></label>
-        <button className="tc-primary" disabled={journalBusy} type="submit">Record manual entry + start six-minute timer</button>
+        <button className="tc-primary" disabled={journalBusy||
+          (optionLotSize!==null&&(Number(optionQty)<optionLotSize||
+            Number(optionQty)%optionLotSize!==0))} type="submit">
+          Record actual broker fill manually + start six-minute timer
+        </button>
       </form>
       <div className="tc-ledger-summary"><span>Open positions <strong>{journal?.summary.open??0}</strong></span><span>Closed trades <strong>{journal?.summary.closed??0}</strong></span><span>Net realized from entered fills <strong>₹{fmt(journal?.summary.closed_net_pnl_inr)}</strong></span><span>Over six minutes <strong>{journal?.summary.holding_violations??0}</strong></span></div>
       {journal?.trades.some(trade=>trade.status==='OPEN')&&<div className="tc-trade-active"><strong>Currently open (manual records)</strong>
