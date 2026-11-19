@@ -60,8 +60,8 @@ const outcome=(value:string)=>({
   FLAT:'Flat',PENDING:'Awaiting outcome',UNVERIFIABLE_GAP:'Missing observation',
 }[value]||value.replaceAll('_',' '))
 
-export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:{
-  instruments:Source[],onOpenData:()=>void,onOpenReplay:()=>void
+export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay,onOpenOptions}:{
+  instruments:Source[],onOpenData:()=>void,onOpenReplay:()=>void,onOpenOptions?:()=>void
 }){
   const [limit,setLimit]=useState<'500'|'1500'|'3000'|'5000'>('1500')
   const [result,setResult]=useState<HistoricalResult|null>(null)
@@ -332,7 +332,10 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
     <section className="tc-signal-next" aria-label="Options P&L follow-up phase">
       <div><strong>Phase 2 · BANKNIFTY options P&amp;L backtest</strong>
         <p>After assessing signal correctness, we can map each call to a real CE/PE contract and test premium changes, the +5% target, −2.5% stop, six-minute exits, fees, and slippage. Not included in Phase 1 metrics.</p></div>
-      <button type="button" onClick={onOpenReplay}>Review underlying replay <ArrowRight size={15}/></button>
+      <div className="tc-signal-followup-actions">
+        <button type="button" onClick={onOpenReplay}>Review underlying replay <ArrowRight size={15}/></button>
+        {onOpenOptions&&<button type="button" onClick={onOpenOptions}>Inspect actual BANKNIFTY CE/PE chain <ArrowRight size={15}/></button>}
+      </div>
     </section>
   </div>
 }
