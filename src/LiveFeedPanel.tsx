@@ -1,6 +1,7 @@
 import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Activity,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
 import './live-feed.css'
+import OptionChainLive,{type OptionContract} from './OptionChainLive'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 
 type DepthLevel={price:number;quantity:number;orders:number}
@@ -32,7 +33,11 @@ const timeIST=(value?:string)=>value?new Date(value).toLocaleTimeString('en-IN',
   {timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—'
 const isExactDepth=(value:string)=>/^NSE_(?:EQ|FNO):[0-9]{1,12}$/.test(value)
 
-export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
+export default function LiveFeedPanel({onOpenSetup,onDraftJournal}:{
+  onOpenSetup?:()=>void
+  onDraftJournal?:(contract:OptionContract,lots:number)=>void
+}){
+  const [view,setView]=useState<'signals'|'options'>('options')
   const [feed,setFeed]=useState<Feed|null>(null)
   const [connectedToLocal,setConnectedToLocal]=useState(false)
   const [index,setIndex]=useState<'INDEX:BANKNIFTY'|'INDEX:NIFTY50'>('INDEX:BANKNIFTY')
@@ -144,10 +149,26 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
       <span>Stored in <b>dhan_shared</b></span></div>
     {error&&<p role="alert" className="tc-error">{error}</p>}
     {notice&&<p role="status" className="tc-confirm">{notice}</p>}
+    <nav className="lf-view-tabs" role="tablist" aria-label="Live trading views">
+      <button type="button" role="tab" aria-selected={view==='signals'}
+        onClick={()=>setView('signals')}><Activity size={16}/> Index signal monitor</button>
+      <button type="button" role="tab" aria-selected={view==='options'}
+        onClick={()=>setView('options')}><Database size={16}/> BANKNIFTY option chain &amp; 20-level depth</button>
+    </nav>
+    {view==='options'&&<OptionChainLive
+      feedActive={Boolean(feed?.active)} depthIdentity={feed?.active?feed.depth_identity||'':depthIdentity}
+      currentIndexDirection={hasSignal?signal?.direction||null:null}
+      openConnections={()=>onOpenSetup?.()}
+      onSelectDepth={identity=>{
+        setDepthIdentity(identity);setIndex('INDEX:BANKNIFTY');setConfigOpen(true)
+        setNotice('Contract selected. Confirm read-only Dhan 20-level streaming below to start its original order book.')
+      }}
+      onDraftJournal={(contract,lots)=>onDraftJournal?.(contract,lots)}
+    />}
     {feed?.index_packet_note&&!livePrice&&<p className="tc-warning" role="status">
       Broker index packet not supported by the published binary layout · {feed.unsupported_index_packets} observed.
       {' '}{feed.index_packet_note}</p>}
-    <div className="lf-cards">
+    {view==='signals'&&<div className="lf-cards">
       <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
         <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':
           'Waiting for fresh Dhan ticker data'}</small></div>
@@ -159,7 +180,7 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
       <div className="lf-stat"><span>Depth best bid / ask</span><strong>{bookFresh?
         '₹'+fmt(liveBook?.best_bid)+' / ₹'+fmt(liveBook?.best_ask):'—'}</strong>
         <small>{bookFresh?'Original paired 20-level book':'No fresh NSE depth snapshot'}</small></div>
-    </div>
+    </div>}
 
     {!feed?.active&&<div className="lf-connect-block">
       <div><strong>Real-time feed is stopped</strong><p>Index signals and 20-level depth require original broker packets. Historical analysis remains separate and available at any time.</p></div>
@@ -175,7 +196,7 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
         <option value="INDEX:BANKNIFTY">BANKNIFTY · spot index</option>
         <option value="INDEX:NIFTY50">NIFTY 50 · spot index</option>
       </select></label>
-      <div className="lf-contract-search">
+      {view==='signals'&&<div className="lf-contract-search">
         <label>Find a BANKNIFTY option for 20-level depth
           <span className="lf-search-row"><input value={contractSearch}
             onChange={e=>setContractSearch(e.target.value.toUpperCase())}
@@ -187,7 +208,7 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
           <option value="">Choose a real Dhan option contract…</option>
           {contracts.map(c=><option key={c.identity} value={c.identity}>
             {c.display_name||c.symbol} · {c.identity} {c.expiry||''}</option>)}</select>}
-      </div>
+      </div>}
       <label>20-level depth instrument (optional)
         <input aria-label="Exact depth instrument" placeholder="NSE_FNO:12345 or NSE_EQ:1333"
           value={depthIdentity} onChange={e=>setDepthIdentity(e.target.value.toUpperCase())}/>
@@ -208,7 +229,7 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
       <button type="button" onClick={()=>void stop()} disabled={busy}><Square size={15}/> Stop streams</button>
       <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Check connection</button>
     </div>}
-    <div className="lf-depth-summary">
+    {view==='options'&&<div className="lf-depth-summary">
       <div className="tc-panel-title"><strong>20-level market depth · {configuredDepth||'select a stock / option'}</strong>
         <span>20 bids + 20 asks, original NSE equity/derivative packet pairs</span></div>
       {optionQuote&&<div className="lf-meta">
@@ -227,13 +248,13 @@ export default function LiveFeedPanel({onOpenSetup}:{onOpenSetup?:()=>void}){
         <p className="tc-missing"><Database size={17}/> No paired 20-level Dhan packets yet.
           You may need full-market-depth entitlement and an active NSE_EQ or NSE_FNO contract.</p>}
       <p className="tc-muted">20-level depth is NOT available on IDX_I itself. Depth is sampled for storage at up to one observed pair per second, while the live screen uses the newest observed packet. No historical book is inferred from candles.</p>
-    </div>
-    <div className="lf-signal-actions">
+    </div>}
+    {view==='signals'&&<div className="lf-signal-actions">
       <div><strong>Record prospective index call</strong><p>Only available after genuine fresh Dhan index packets and at least 30 consecutive completed one-minute candles. Results are evaluated against observed future candles.</p></div>
       <label>Horizon <select value={replayHorizon} onChange={e=>setReplayHorizon(e.target.value as '3'|'6')}>
         <option value="3">3 minutes</option><option value="6">6 minutes</option></select></label>
       <button type="button" onClick={()=>void record()} disabled={!hasSignal||busy}>Record {replayHorizon}m prediction</button>
-    </div>
+    </div>}
     <div className="tc-warning"><ShieldCheck size={14}/> Read-only research. Real-time data requires valid Dhan Data API plus live market/depth permissions. A connected socket is not proof of fresh trades. Any stale feed, absent market data or missing completed candles disables live directional claims. Closing this tab does not stop the local streaming session; clicking Stop or shutting down QuantLab does.</div>
   </section>
 }
