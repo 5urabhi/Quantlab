@@ -310,9 +310,13 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       <progress max="100" value={job.percent||0}/>
     </div>}
     {error&&<div className="tc-warning" role="alert"><AlertTriangle size={17}/><div>
-      <strong>Historical option backtest needs attention</strong><p>{error}</p>
-      <p>Check your Dhan expired-options Data API entitlement, original index history, expiry selection and cached source integrity.</p>
-    </div><button type="button" onClick={onOpenData}>Connections <ArrowRight size={14}/></button></div>}
+      <strong>{/Dhan expired-options HTTP 400|DH-905|DH-907/.test(error)
+        ?'Dhan rejected this options-history request':'Historical options data needs attention'}</strong>
+      <p>{error}</p>
+      <p>{/Dhan expired-options HTTP 400|DH-905|DH-907/.test(error)
+        ?'Your Dhan profile may be connected successfully. Near/next/far expired-option series use API codes 1/2/3, and the selected dates must contain available expired contracts. For an unexpired monthly contract, QuantLab checks current option history using the Dhan instrument master.'
+        :'Check the original source status or token only if the error specifically reports missing access. No simulated option price replaces a failed vendor request.'}</p>
+    </div><button type="button" onClick={onOpenData}>Open data sources <ArrowRight size={14}/></button></div>}
     {result&&scenario&&<div className="hob-results">
       <header className="hob-results-head"><div>
         <span className="tc-page-kicker"><CheckCircle2 size={15}/> ORIGINAL DHAN OPTION CANDLES · SIMULATED FILLS</span>
