@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
-from math import ceil
 
 EXPLORATORY_SESSIONS = 30
 RESEARCH_SESSIONS = 250
@@ -40,7 +39,6 @@ def audit(events: list[dict], spot_rows: list[dict], quotes: dict, *,
     quote_eligible = 0
     next_open_eligible = 0
     signal_missing_quote = 0
-    candidate_side = Counter()
     per_session: dict[str, Counter] = defaultdict(Counter)
     for event in events:
         side = event["direction"]
@@ -72,7 +70,6 @@ def audit(events: list[dict], spot_rows: list[dict], quotes: dict, *,
             signal_missing_quote += 1
             continue
         quote_eligible += 1
-        candidate_side[option_side] += 1
         selected_strike = min(
             eligible, key=lambda r: (abs(r["close"] - target_ltp),
                                      -r["volume"], r["strike"]))
@@ -150,8 +147,9 @@ def audit(events: list[dict], spot_rows: list[dict], quotes: dict, *,
         "audit_version": "original_option_coverage_v1",
         "status": "PRELIMINARY_RESEARCH_READY" if preliminary else
                   "MORE_HISTORY_REQUIRED",
-        "research_grade_rl_ready": False if not research else
-                  False,  # broker-executable fills unavailable from OHLC
+        # Historical OHLC is not broker-executable bid/ask/depth evidence,
+        # even after sample-size and contract coverage gates pass.
+        "research_grade_rl_ready": False,
         "training_performed": False,
         "training_type": "none",
         "observed_sessions": days,
