@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useState} from 'react'
-import {AlertTriangle,ArrowRight,BarChart3,CheckCircle2,Database,Play,RefreshCw,ShieldCheck} from 'lucide-react'
+import {AlertTriangle,ArrowRight,CheckCircle2,Database,Play,RefreshCw,ShieldCheck} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './historical-options-backtest.css'
 
