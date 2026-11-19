@@ -1,0 +1,45 @@
+.lf-root{display:grid;gap:16px;min-width:0}
+.lf-title strong{display:inline-flex;align-items:center;gap:10px;font-size:17px;color:#d8eeff}
+.lf-title .tc-muted{margin:6px 0 0;max-width:750px}
+.lf-badge{border:1px solid #4c5b72;border-radius:99px;padding:8px 12px;font-weight:800;font-size:11px;letter-spacing:.08em;white-space:nowrap;color:#a7bed3;background:#22344a}
+.lf-badge.live{border-color:#48a48c;color:#73f1cc;background:#164236}
+.lf-badge.connecting{border-color:#a98e4a;color:#ffe2a0;background:#3d3222}
+.lf-meta{display:flex;gap:14px;flex-wrap:wrap;align-items:center;color:#91abc2;font-size:12px}
+.lf-meta>span{display:flex;align-items:center;gap:7px;padding:8px 10px;background:#192e41;border-radius:7px;border:1px solid #304961}
+.lf-meta b{color:#e1f3ff;font-weight:650}
+.lf-start-form{display:flex;gap:15px;align-items:end;flex-wrap:wrap;border:1px solid #2b5363;background:#10283a;border-radius:10px;padding:15px}
+.lf-start-form>label,.lf-contract-search>label{display:grid;gap:7px;color:#b4cbdd;font-size:12px;min-width:185px;flex:1}
+.lf-start-form input:not([type=checkbox]),.lf-start-form select,.lf-replay-actions select{min-height:40px;box-sizing:border-box;width:100%;padding:8px 11px;border:1px solid #48647a;border-radius:8px;background:#172b42;color:#e0efff}
+.lf-start-form small{font-size:11px;line-height:1.5;color:#9ab9cd}
+.lf-contract-search{display:grid;gap:8px;min-width:260px;flex:1.4}
+.lf-search-row{display:flex;gap:7px}
+.lf-search-row button{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.lf-start-form button,.lf-live-actions button,.lf-replay-actions button{border:1px solid #426582;border-radius:8px;padding:10px 12px;background:#1a3952;color:#e3f1ff;cursor:pointer}
+.lf-start-form button:disabled,.lf-live-actions button:disabled,.lf-replay-actions button:disabled{opacity:.4;cursor:not-allowed}
+.lf-start-form .lf-consent{width:100%;flex-basis:100%;flex-direction:row;display:flex;align-items:center;gap:9px}
+.lf-consent input[type=checkbox]{accent-color:#5fd2b1;width:17px;height:17px}
+.lf-start-form .lf-primary{background:#277b6a;border-color:#4ec9aa;color:#fff;display:inline-flex;gap:8px;align-items:center;font-weight:700}
+.lf-live-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px;border:1px solid #316b65;background:#10372f;border-radius:9px;padding:14px}
+.lf-live-actions>div{display:grid;gap:5px;flex:1;min-width:220px}
+.lf-live-actions>div>small{color:#a8d6cc;font-size:12px}
+.lf-live-actions button{display:inline-flex;gap:7px;align-items:center}
+.lf-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.lf-stat{background:#172b40;border:1px solid #284b64;border-radius:11px;padding:16px;display:grid;align-content:start;gap:7px;min-width:0}
+.lf-stat span{color:#97b6cc;font-size:12px}
+.lf-stat strong{color:#e9f8ff;font-size:21px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.lf-stat strong.lf-good{color:#71e9b9}.lf-stat strong.lf-neutral{color:#f4cc88}
+.lf-stat small{color:#a6bacb;font-size:11px;line-height:1.45}
+.lf-depth-summary{padding:16px;border:1px solid #2c415b;background:#101f30;border-radius:10px;display:grid;gap:12px}
+.lf-depth-summary .tc-panel-title{margin:0}
+.lf-depth-summary .tc-table-scroll{max-height:560px;overflow:auto}
+.lf-depth-summary td:nth-child(4){color:#6ce5b6;font-weight:600}
+.lf-depth-summary td:nth-child(5){color:#f7a7ae;font-weight:600}
+.lf-replay{display:grid;gap:12px}
+.lf-replay .tc-panel-title{margin-bottom:0}
+.lf-replay .tc-panel-title strong{display:inline-flex;align-items:center;gap:9px}
+.lf-replay-actions{display:flex;align-items:end;gap:9px;flex-wrap:wrap}
+.lf-replay-actions label{font-size:12px;color:#b2c9db;display:grid;gap:6px}
+.lf-replay-actions select{min-width:120px}
+.lf-root .tc-warning{display:flex;align-items:flex-start;gap:10px}
+@media(max-width:1150px){.lf-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:630px){.lf-cards{grid-template-columns:minmax(0,1fr)}.lf-start-form{display:grid}.lf-start-form>label,.lf-contract-search{min-width:0}.lf-title{gap:7px}.lf-search-row{flex-wrap:wrap}}
