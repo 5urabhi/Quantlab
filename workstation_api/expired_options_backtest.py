@@ -30,6 +30,9 @@ VALID_HOLDS = (1, 3, 5, 6, 10, 30, 60)
 VALID_POLICIES = ("fixed", "signal_reversal", "signal_reversal_or_cap",
                   "premium_target_stop", "hybrid")
 MAX_REQUESTS = 48
+# Current listed options can span several BANKNIFTY index levels across
+# a multi-day window; never reject all of them on the first unavailable ID.
+MAX_ACTIVE_REQUESTS = 96
 REQUIRED = ("open", "high", "low", "close", "volume", "oi", "iv", "strike", "spot")
 
 
@@ -73,6 +76,61 @@ def _validate_params(*, limit: int, expiry_flag: str, expiry_code: int,
 def _offsets(wings: int) -> list[str]:
     return ["ATM"] + [f"ATM{sign}{n}" for n in range(1, wings + 1)
                       for sign in ("+", "-")]
+
+
+def _ist_today() -> date:
+    """Single clock source for source-eligibility checks (testable offline)."""
+    return datetime.now(IST).date()
+
+
+def _calendar_month(year: int, month: int, offset: int = 0) -> tuple[int, int]:
+    absolute = year * 12 + month - 1 + offset
+    return absolute // 12, absolute % 12 + 1
+
+
+def _nominal_monthly_expiry(year: int, month: int) -> date:
+    """Conservative last-Tuesday bound; holiday moves expiries EARLIER.
+
+    This is NOT proof of a particular NSE listed contract/actual expiry.
+    It is only a guard against sending *unexpired* dates to Dhan's
+    expired-options endpoint. Exact live expiries use the Dhan master.
+    """
+    nyear, nmonth = _calendar_month(year, month, 1)
+    last = date(nyear, nmonth, 1) - timedelta(days=1)
+    return last - timedelta(days=(last.weekday() - 1) % 7)
+
+
+def _nominal_selected_expiry(session: date, expiry_code: int) -> date:
+    """Earliest plausible monthly expiry for the near/next/far selector."""
+    this = _nominal_monthly_expiry(session.year, session.month)
+    forward = int(session > this) + expiry_code
+    y, m = _calendar_month(session.year, session.month, forward)
+    return _nominal_monthly_expiry(y, m)
+
+
+def _expired_eligible(session: date, *, expiry_flag: str,
+                      expiry_code: int, today: date) -> bool:
+    """Fail closed: a current contract must never be sent to rollingoption.
+
+    BANKNIFTY is monthly-only for recent dates. Historical weekly requests
+    are outside the active-contract backtest workflow and cannot be guessed.
+    """
+    if expiry_flag != "MONTH":
+        # BANKNIFTY weekly expiries were discontinued in 2024. Historic
+        # eligible weekly sessions are already safely expired in 2026;
+        # current-month weekly contracts must not be synthesized.
+        return session < date(2024, 11, 20) and session < today
+    # Next/far Bank Nifty expiries can skip calendar months because only
+    # quarterly long-dated series are listed. Without archived listing
+    # evidence a nominal next/far month is NOT proof of contract expiry.
+    # The current Dhan master handles recent genuine listed contracts.
+    # For rolling next/far only use substantially aged history rather than
+    # risk asking an unexpired far-dated contract from rollingoption.
+    if expiry_code in (1, 2) and (today - session).days <= 366:
+        return False
+    # Near expiry: require the conservative last Tuesday to be strictly in
+    # the past; holiday shifts move it earlier, never later.
+    return _nominal_selected_expiry(session, expiry_code) < today
 
 
 def _chunks(first: date, last_exclusive: date):
@@ -128,6 +186,19 @@ def _original_response(body: dict, *, opener=None) -> dict:
                 if vendor_code in ("DH-905", "DH-907", "DH-902",
                                    "805", "806", "811", "812", "813", "814"):
                     detail = f" (Dhan {vendor_code})"
+                # Show only short, allowlisted API validation messages.
+                # Never emit raw JSON, account IDs, tokens, URLs or headers.
+                message = str(failure.get("errorMessage", "")).strip()
+                if (0 < len(message) <= 160
+                        and all(ch.isalpha() or ch in
+                                " 0123456789.,:;-_()/+'"
+                                for ch in message)
+                        and not any(secret in message.lower()
+                                    for secret in ("token", "bearer", "secret",
+                                                   "password", "client id", "jwt"))
+                        and not any(len(word) > 32
+                                    for word in message.split())):
+                    detail += f": {message}"
         except (ValueError, TypeError, UnicodeError, OSError):
             pass
         context = (f"{body['expiryFlag'].lower()} {body['drvOptionType']} "
@@ -409,15 +480,16 @@ def load_active_option_market(spot_rows: list[dict], *,
     """
     from . import option_chain_live
     if expiry_flag != "MONTH":
-        return {}, {"reason": "Active contract fallback currently supports monthly expiry"}
+        return {}, {"reason": "BANKNIFTY active options are monthly-only; choose monthly expiry"}
     recent_days = {
         row["session_ist"] for row in spot_rows
-        if date.fromisoformat(row["session_ist"]) >= datetime.now(IST).date() - timedelta(days=30)
+        if date.fromisoformat(row["session_ist"]) >= _ist_today() - timedelta(days=30)
     }
     if not recent_days:
         return {}, {"reason": "Historical sample has no currently listed options; using archived expiry series"}
     master = option_chain_live._contracts()
-    if (not master.get("available") or not master.get("fresh")) and master_refresher is not None:
+    if (not master.get("available") or not master.get("fresh")
+            or not master.get("by_id")) and master_refresher is not None:
         if progress:
             progress(8, "Refreshing Dhan instrument master for current BANKNIFTY option contract IDs")
         try:
@@ -428,9 +500,9 @@ def load_active_option_market(spot_rows: list[dict], *,
                 "reason": "Automatic Dhan instrument-master refresh failed",
                 "next_action": str(exc)[:200],
             }
-    if not master.get("available") or not master.get("fresh"):
-        return {}, {"reason": "Fresh Dhan contract master not present",
-                    "next_action": master.get("message") or "Refresh official Dhan instrument master under Data Library"}
+    if not master.get("available") or not master.get("fresh") or not master.get("by_id"):
+        return {}, {"reason": "Fresh BANKNIFTY options contract data not present in Dhan master",
+                    "next_action": master.get("message") or "Refresh the official Dhan instrument master; verify NSE_FNO OPTIDX records, expiry, strike and lot-size columns"}
     by_day: dict[str, list[dict]] = defaultdict(list)
     for row in spot_rows:
         by_day[row["session_ist"]].append(row)
@@ -439,7 +511,7 @@ def load_active_option_market(spot_rows: list[dict], *,
         return {}, {"reason": "No original BANKNIFTY source days"}
     all_contracts = list(master["by_id"].values())
     choices: dict[str, dict] = {}
-    today = datetime.now(IST).date()
+    today = _ist_today()
     for day in days:
         # Today's active master must not retrospectively select a contract
         # that was not the nearest expiry in an old historical session.
@@ -468,33 +540,56 @@ def load_active_option_market(spot_rows: list[dict], *,
                     "contract": candidate, "days": set(),
                 })
                 state["days"].add(day)
-    if len(choices) > MAX_REQUESTS:
+    if len(choices) > MAX_ACTIVE_REQUESTS:
         return {}, {"reason": "Active contracts exceed bounded request budget",
-                    "candidates": len(choices)}
+                    "candidates": len(choices), "limit": MAX_ACTIVE_REQUESTS,
+                    "next_action": "Select a shorter historical BANKNIFTY window "
+                                   "or reduce ATM strike coverage under Advanced "
+                                   "settings to stay within the Dhan API request limit"}
     if not choices:
         return {}, {"reason": "No source-matched BANKNIFTY listed contracts for the index dates"}
     first = date.fromisoformat(days[0])
     last = date.fromisoformat(days[-1]) + timedelta(days=1)
     lookup: dict[tuple[str, str], dict[float, dict]] = defaultdict(dict)
     cache_count = vendor_count = invalid = 0
+    unavailable: Counter[str] = Counter()
     for i, (identity, item) in enumerate(sorted(choices.items())):
         if progress:
             progress(10 + i * 36 / len(choices), "Checking currently active Dhan option contracts")
         body = _active_body(identity, first, last)
+        # A SHA-invalid cached receipt is a source-integrity failure, NEVER
+        # a reason to silently redownload or manufacture a substitute.
         payload = _get_cached(body)
         if payload is None:
-            if fetcher is None:
-                time.sleep(.45)
-                payload = _active_response(body)
-            else:
-                payload = fetcher(body)
+            try:
+                if fetcher is None:
+                    time.sleep(.45)
+                    payload = _active_response(body)
+                else:
+                    payload = fetcher(body)
+            except ValueError as exc:
+                # A particular NEW strike may not have traded for the whole
+                # requested period. Keep other original listed contracts
+                # rather than aborting the entire backtest. Fail fast for
+                # account-wide entitlement or vendor rate-limit failures.
+                reason = str(exc)[:160]
+                if "access denied" in reason.lower() or "rate-limited" in reason.lower():
+                    raise
+                unavailable[reason] += 1
+                continue
             if not isinstance(payload, dict) or not isinstance(payload.get("timestamp"), list):
-                raise ValueError("Original active option history request failed for a master-listed contract")
+                unavailable["Dhan active contract request returned no timestamped minute candles"] += 1
+                continue
             _save_cache(body, payload)
             vendor_count += 1
         else:
             cache_count += 1
-        for row in _normalize_active(payload, item["contract"], item["days"]):
+        try:
+            parsed = _normalize_active(payload, item["contract"], item["days"])
+        except ValueError:
+            unavailable["Dhan active contract candles were not structurally valid"] += 1
+            continue
+        for row in parsed:
             key = (row["timestamp_utc"], row["side"])
             strike = row["strike"]
             if strike in lookup[key] and lookup[key][strike]["security_id"] != identity:
@@ -502,14 +597,25 @@ def load_active_option_market(spot_rows: list[dict], *,
                 invalid += 1
             else:
                 lookup[key][strike] = row
-    return lookup, {
+    returned = sum(len(v) for v in lookup.values())
+    skipped = sum(unavailable.values())
+    result = {
         "source": "Dhan original active NSE_FNO OPTIDX /charts/intraday",
         "requests": len(choices), "fresh_requests": vendor_count,
-        "cached_requests": cache_count, "unique_option_minute_bars":
-            sum(len(v) for v in lookup.values()),
+        "cached_requests": cache_count, "unique_option_minute_bars": returned,
+        "failed_contract_requests": skipped,
+        "failure_reasons": dict(unavailable.most_common(3)),
         "conflicted_excluded": invalid,
         "identity": "exact current Dhan security_id, expiry date and lot size",
     }
+    if not returned:
+        result["reason"] = "No original current-contract option minute bars matched the selected dates"
+        result["next_action"] = (
+            "Check Dhan's active NSE_FNO option-history entitlement and "
+            "refresh its official instrument master. "
+            "If a specific strike is newly listed, its older minutes "
+            "may be unavailable; narrow the window or adjust strike coverage.")
+    return lookup, result
 
 
 def _signals(source_rows: list[dict]) -> list[dict]:
@@ -829,38 +935,90 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
         # A missing active entitlement must not prevent reuse of already
         # authenticated and SHA-verified expired source receipts.
         active, active_evidence = {}, {"reason": str(exc)[:220]}
-    source_days = {row["session_ist"] for row in rows}
+    source_days = {date.fromisoformat(row["session_ist"]) for row in rows}
+    as_of = _ist_today()
     active_sides = {(row["session_ist"], row["side"])
                     for choices in active.values() for row in choices.values()}
-    all_sides = {(day, side) for day in source_days
+    all_sides = {(day.isoformat(), side) for day in source_days
                  for side in ("CALL", "PUT")}
-    if active and active_sides >= all_sides:
-        candles = active
-        data_evidence = {
-            "request_count": active_evidence.get("requests", 0),
-            "fresh_requests": active_evidence.get("fresh_requests", 0),
-            "cached_requests": active_evidence.get("cached_requests", 0),
-            "empty_requests": 0,
-            "unique_option_minute_bars": active_evidence.get("unique_option_minute_bars", 0),
-            "conflicted_excluded": active_evidence.get("conflicted_excluded", 0),
-            "source": active_evidence["source"], "expiry_flag": expiry_flag,
-            "expiry_code": expiry_code, "strike_wings": wings,
-            "cache": "SHA-256 verified local receipts", "active_source": active_evidence,
-        }
-    else:
-        candles, data_evidence = load_option_market(
-            start, stop, expiry_flag=expiry_flag, expiry_code=expiry_code,
-            wings=wings, progress=progress, fetcher=fetcher, throttle=throttle)
-        # When both exist, exact active security IDs take precedence on their
-        # own date/strike and remain fixed for the entire trade path.
-        for key, entries in active.items():
-            candles.setdefault(key, {}).update(entries)
-        data_evidence["active_source"] = active_evidence
-        data_evidence["unique_option_minute_bars"] = sum(
-            len(choices) for choices in candles.values())
-        data_evidence["fresh_requests"] += active_evidence.get("fresh_requests", 0)
-        data_evidence["cached_requests"] += active_evidence.get("cached_requests", 0)
-        data_evidence["request_count"] += active_evidence.get("requests", 0)
+    eligible_expired_days = sorted(
+        day for day in source_days
+        if _expired_eligible(day, expiry_flag=expiry_flag,
+                             expiry_code=expiry_code, today=as_of))
+    not_yet_expired_days = source_days - set(eligible_expired_days)
+    data_evidence = {
+        "request_count": 0, "fresh_requests": 0, "cached_requests": 0,
+        "empty_requests": 0, "unique_option_minute_bars": 0,
+        "conflicted_excluded": 0,
+        "source": active_evidence.get(
+            "source", "Dhan original active NSE_FNO option contract minute candles"),
+        "expiry_flag": expiry_flag, "expiry_code": expiry_code,
+        "dhan_rolling_expiry_code": expiry_code + 1, "strike_wings": wings,
+        "cache": "SHA-256 verified local receipts",
+        "active_source": active_evidence,
+        "routing": {
+            "expired_eligible_sessions": len(eligible_expired_days),
+            "unexpired_or_unavailable_weekly_sessions": len(not_yet_expired_days),
+            "active_source_sessions": len({date.fromisoformat(day)
+                                           for day, _ in active_sides}),
+            "policy": "Only request rolling expired data for dates whose "
+                      "selected monthly expiry is demonstrably in the past. "
+                      "Never request current-month active contracts from rollingoption.",
+        },
+    }
+    # A missing active contract on November 19 is not evidence that the
+    # November option is EXPIRED. Dhan's /charts/rollingoption cannot serve
+    # an as-yet-unexpired monthly contract. Do not replay the same HTTP 400
+    # by falling back to rolling for the entire index window.
+    #
+    # Exact active security IDs take precedence when they are available.
+    # If all days/sides have genuine active candles, skip unnecessary
+    # rolling requests, even if a few older days could use expired history.
+    candles = {}
+    if eligible_expired_days and not (active and active_sides >= all_sides):
+        # Eligibility is monotonic over time for a fixed expiry rank:
+        # each candidate expiry rolls forward as sessions progress.
+        # Only the prefix ending at the last safely EXPIRED index session
+        # may go to the historical rolling endpoint.
+        rolling_stop = min(stop, eligible_expired_days[-1] + timedelta(days=1))
+        candles, rolling_info = load_option_market(
+            start, rolling_stop, expiry_flag=expiry_flag,
+            expiry_code=expiry_code, wings=wings, progress=progress,
+            fetcher=fetcher, throttle=throttle)
+        data_evidence.update(rolling_info)
+    for key, entries in active.items():
+        candles.setdefault(key, {}).update(entries)
+    data_evidence["active_source"] = active_evidence
+    data_evidence["unique_option_minute_bars"] = sum(
+        len(choices) for choices in candles.values())
+    data_evidence["fresh_requests"] += active_evidence.get("fresh_requests", 0)
+    data_evidence["cached_requests"] += active_evidence.get("cached_requests", 0)
+    data_evidence["request_count"] += active_evidence.get("requests", 0)
+    data_evidence["routing"]["expired_vendor_requests"] = (
+        data_evidence["request_count"] - active_evidence.get("requests", 0))
+    if not candles:
+        if expiry_flag == "WEEK" and not_yet_expired_days:
+            raise ValueError(
+                "BANKNIFTY does not have listed weekly options for this "
+                "recent historical window. Choose monthly expiry (MONTH).")
+        if not_yet_expired_days:
+            detail = str(active_evidence.get("reason") or
+                         active_evidence.get("next_action") or
+                         "The current Dhan instrument master or original option "
+                         "minute history did not provide a matched contract")[:220]
+            raise ValueError(
+                "These BANKNIFTY option sessions refer to a monthly "
+                "contract that has NOT expired as of the requested window. "
+                "Dhan's expired-options API is not valid for this period. "
+                "QuantLab attempted current-contract NSE_FNO minute data, "
+                "but no original CE/PE candles were found. "
+                f"Active data status: {detail}. "
+                "Open Data Library and refresh the official Dhan "
+                "instrument master; no prices or trades were invented.")
+        raise ValueError(
+            "No original Dhan expired-option minute bars were available "
+            "for the eligible historical period. Check the selected "
+            "expiry, dates, coverage and vendor error details.")
     if progress:
         progress(67, "Replaying original completed BANKNIFTY directional signals")
     events = _signals(rows)

@@ -259,7 +259,8 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         with patch.object(exp.cockpit_sources, "series",
                           return_value={"rows": spot, "warning": "fixture",
                                         "has_more": False}), patch.object(
-                          exp, "_signals", return_value=events((29,"UP"))):
+                          exp, "_signals", return_value=events((29,"UP"))), patch.object(
+                          exp, "_ist_today", return_value=date(2026, 12, 2)):
             report = exp.run_backtest(limit=500, wings=1, fetcher=fake_dhan,
                                       slippage_bps=0, target_ltp=315,
                                       tolerance=50, hold_rule="fixed",
@@ -304,7 +305,8 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
                 missing, {"rows": source(), "warning": "fixture", "has_more": False}]), patch.object(
                 exp.cockpit_sources, "download_spot",
                 return_value={"status": "complete", "rows": 70}) as original_batch, patch.object(
-                exp, "_signals", return_value=events((29, "UP"))):
+                exp, "_signals", return_value=events((29, "UP"))), patch.object(
+                exp, "_ist_today", return_value=date(2026, 12, 2)):
             report = exp.run_backtest(
                 limit=500, wings=0, fetcher=fake_dhan,
                 target_ltp=315, tolerance=50, hold_rule="fixed",
@@ -346,7 +348,8 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         with patch.object(exp.cockpit_sources, "series",
                           return_value={"rows": source(), "warning": "fixture",
                                         "has_more": False}), patch.object(
-                          exp, "_signals", return_value=events((29,"UP"))):
+                          exp, "_signals", return_value=events((29,"UP"))), patch.object(
+                          exp, "_ist_today", return_value=date(2026, 11, 19)):
             result = exp.run_backtest(limit=500, wings=0,
                                       fetcher=expired_not_requested,
                                       active_fetcher=active, slippage_bps=0,
@@ -402,9 +405,200 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
                 exp._original_response(body, opener=rejected)
         public_message = str(caught.exception)
         self.assertIn("Dhan DH-905", public_message)
+        self.assertIn("expiryCode is required", public_message)
         self.assertIn("expiry=1", public_message)
         self.assertIn("ATM+1", public_message)
         self.assertNotIn("SECRET-FOR-TEST-ONLY", public_message)
+
+    def test_partial_active_vendor_failure_preserves_other_contract_candles(self):
+        """One Dhan 400 on a newly listed CE must not discard valid PE data."""
+        from workstation_api import option_chain_live
+        listing = {
+            "available": True, "fresh": True,
+            "by_id": {
+                "41001": {"security_id": "41001", "expiry": "2026-11-23",
+                          "strike": 62000.0, "option_type": "CE", "lot_size": 30},
+                "41002": {"security_id": "41002", "expiry": "2026-11-23",
+                          "strike": 62000.0, "option_type": "PE", "lot_size": 30},
+            },
+        }
+        def source_response(body):
+            if body["securityId"] == "41001":
+                raise ValueError("Dhan active NSE_FNO options minute history failed (HTTP 400)")
+            prices = [300. + i * .5 for i in range(70)]
+            return {"timestamp": [
+                        int((START + timedelta(minutes=i)).timestamp())
+                        for i in range(70)],
+                    "open": prices, "high": [p + 1 for p in prices],
+                    "low": [p - 1 for p in prices], "close": prices,
+                    "volume": [100] * 70}
+        with patch.object(exp, "_ist_today",
+                          return_value=date(2026, 11, 19)), patch.object(
+                          option_chain_live, "_contracts", return_value=listing):
+            candles, evidence = exp.load_active_option_market(
+                source(), expiry_flag="MONTH", expiry_code=0,
+                wings=0, fetcher=source_response)
+        self.assertEqual(evidence["failed_contract_requests"], 1)
+        self.assertEqual(evidence["fresh_requests"], 1)
+        self.assertGreater(evidence["unique_option_minute_bars"], 0)
+        self.assertIn((stamp(29), "PUT"), candles)
+        self.assertNotIn((stamp(29), "CALL"), candles)
+
+    def test_master_refreshes_when_file_is_fresh_but_banknifty_ids_empty(self):
+        from unittest.mock import Mock
+        from workstation_api import option_chain_live
+        missing = {"available": True, "fresh": True,
+                   "by_id": {}, "message": "zero BANKNIFTY contracts"}
+        refreshed = {"available": True, "fresh": True, "by_id": {
+            "41001": {"security_id": "41001", "expiry": "2026-11-23",
+                      "strike": 62000., "option_type": "CE", "lot_size": 30},
+        }}
+        hits = Mock(return_value={"path": "original Dhan CSV"})
+        def source_response(body):
+            prices = [300.] * 70
+            return {"timestamp": [
+                        int((START + timedelta(minutes=i)).timestamp())
+                        for i in range(70)],
+                    "open": prices, "high": [301.] * 70,
+                    "low": [299.] * 70, "close": prices,
+                    "volume": [20] * 70}
+        with patch.object(exp, "_ist_today",
+                          return_value=date(2026, 11, 19)), patch.object(
+                          option_chain_live, "_contracts",
+                          side_effect=[missing, refreshed]):
+            candles, evidence = exp.load_active_option_market(
+                source(), expiry_flag="MONTH", expiry_code=0, wings=0,
+                fetcher=source_response, master_refresher=hits)
+        hits.assert_called_once()
+        self.assertGreater(evidence["unique_option_minute_bars"], 0)
+        self.assertIn((stamp(29), "CALL"), candles)
+
+    def test_compact_master_uses_dhan_custom_symbol_when_trading_symbol_blank(self):
+        from workstation_api import option_chain_live
+        path = service.DATA / "dhan" / "instrument_master.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,"
+            "SEM_TRADING_SYMBOL,SEM_CUSTOM_SYMBOL,SM_SYMBOL_NAME,SEM_LOT_UNITS,"
+            "SEM_EXPIRY_DATE,SEM_STRIKE_PRICE,SEM_OPTION_TYPE\n"
+            "NSE,D,41001,OPTIDX,,BANKNIFTY 23 NOV 62000 CALL,NIFTY BANK,30,"
+            "2026-11-23,62000,CE\n"
+            "NSE,D,41002,OPTIDX,,BANKNIFTY 23 NOV 62000 PUT,NIFTY BANK,30,"
+            "2026-11-23,62000,PE\n",
+            encoding="utf-8")
+        with patch.object(option_chain_live, "_clock",
+                          return_value=datetime(2026, 11, 19, 4, 0,
+                                                tzinfo=timezone.utc)):
+            data = option_chain_live._contracts()
+        self.assertTrue(data["available"], data["message"])
+        self.assertEqual(data["matched_banknifty_option_contracts"], 2)
+        self.assertEqual(data["by_id"]["41001"]["option_type"], "CE")
+        self.assertEqual(data["by_id"]["41002"]["option_type"], "PE")
+
+    def test_active_master_with_no_banknifty_options_returns_actionable_gap(self):
+        from workstation_api import option_chain_live
+        path = service.DATA / "dhan" / "instrument_master.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "SECURITY_ID,EXCH_ID,SEGMENT,INSTRUMENT,TRADING_SYMBOL,LOT_SIZE,"
+            "SM_EXPIRY_DATE,STRIKE_PRICE,OPTION_TYPE\n"
+            "12345,NSE,D,OPTIDX,NIFTY-OTHER-CE,65,2026-11-23,26500,CE\n",
+            encoding="utf-8")
+        with patch.object(option_chain_live, "_clock",
+                          return_value=datetime(2026, 11, 19, 4, 0,
+                                                tzinfo=timezone.utc)):
+            data = option_chain_live._contracts()
+        self.assertFalse(data["available"])
+        self.assertIn("ZERO matching", data["message"])
+
+    def test_nominal_expiry_guards_current_november_and_after_october_expiry(self):
+        """November 23 monthly contract cannot be treated as expired on Nov 19."""
+        as_of = date(2026, 11, 19)
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 11, 6), expiry_flag="MONTH", expiry_code=0, today=as_of))
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 11, 18), expiry_flag="MONTH", expiry_code=0, today=as_of))
+        # After the October monthly expiry, near rolled to November,
+        # which has ALSO not expired on November 19.
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 10, 29), expiry_flag="MONTH", expiry_code=0, today=as_of))
+        self.assertTrue(exp._expired_eligible(
+            date(2026, 10, 22), expiry_flag="MONTH", expiry_code=0, today=as_of))
+        # Holiday-shifted Nov 23 expiry is conservatively covered by the
+        # nominal last Tuesday Nov 24: use rolling only after that date.
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 11, 18), expiry_flag="MONTH",
+            expiry_code=0, today=date(2026, 11, 24)))
+        self.assertTrue(exp._expired_eligible(
+            date(2026, 11, 18), expiry_flag="MONTH",
+            expiry_code=0, today=date(2026, 11, 25)))
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 11, 18), expiry_flag="MONTH", expiry_code=1, today=as_of))
+        # The third listed expiry may be a quarterly, not the calendar
+        # month after next; do not misroute it to expired near history.
+        self.assertFalse(exp._expired_eligible(
+            date(2026, 12, 5), expiry_flag="MONTH",
+            expiry_code=2, today=date(2027, 4, 10)))
+        self.assertTrue(exp._expired_eligible(
+            date(2025, 3, 1), expiry_flag="MONTH",
+            expiry_code=2, today=date(2026, 11, 19)))
+
+    def test_missing_live_current_option_never_falls_back_to_expired_request(self):
+        """Exact regression of user's Nov 6-19 Dhan DH-905 failure."""
+        def forbidden(body):
+            self.fail("An unexpired BANKNIFTY monthly option reached /charts/rollingoption")
+        with patch.object(exp, "_ist_today", return_value=date(2026, 11, 19)), patch.object(
+                exp.cockpit_sources, "series",
+                return_value={"rows": source(), "warning": "fixture",
+                              "has_more": False}), patch.object(
+                exp, "load_active_option_market",
+                return_value=({}, {"reason": "No matching current Dhan security IDs"})), patch.object(
+                exp, "_signals", return_value=events((29, "UP"))):
+            with self.assertRaisesRegex(ValueError, "has NOT expired") as caught:
+                exp.run_backtest(limit=500, wings=3, fetcher=forbidden)
+        self.assertIn("current-contract", str(caught.exception))
+        self.assertIn("No matching current Dhan security IDs",
+                      str(caught.exception))
+
+    def test_partial_active_current_quotes_do_not_trigger_expired_fallback(self):
+        """An incomplete live quote path is unscored, not replaced by expiry data."""
+        now = date(2026, 11, 19)
+        partial = {
+            (stamp(29), "CALL"): {
+                62000.: {**quote(29), "security_id": "41001",
+                          "expiry_date": "2026-11-23", "lot_size_verified": 30}},
+            (stamp(29), "PUT"): {
+                62000.: {**quote(29, side="PUT"), "security_id": "41002",
+                          "expiry_date": "2026-11-23", "lot_size_verified": 30}},
+        }
+        def forbidden(_):
+            self.fail("Partial active source must not invoke expired rolling endpoint")
+        with patch.object(exp, "_ist_today", return_value=now), patch.object(
+                exp.cockpit_sources, "series",
+                return_value={"rows": source(), "warning": "fixture",
+                              "has_more": False}), patch.object(
+                exp, "load_active_option_market",
+                return_value=(partial, {"source": "Dhan active NSE_FNO",
+                                        "requests": 2, "fresh_requests": 2})), patch.object(
+                exp, "_signals", return_value=events((29, "UP"))):
+            report = exp.run_backtest(
+                limit=500, wings=3, fetcher=forbidden,
+                target_ltp=300, tolerance=50,
+                hold_rule="fixed", hold_minutes=5)
+        self.assertEqual(report["selected"]["trade_count"], 0)
+        self.assertGreater(report["selected"]["unscored"]["missing_option_entry"], 0)
+        self.assertEqual(report["data_evidence"]["routing"]["expired_vendor_requests"], 0)
+        self.assertEqual(report["orders_placed"], 0)
+
+    def test_offline_banknifty_weekly_is_not_sent_to_recent_expired_api(self):
+        with patch.object(exp, "_ist_today",
+                          return_value=date(2026, 11, 19)), patch.object(
+                exp.cockpit_sources, "series",
+                return_value={"rows": source(), "warning": "fixture",
+                              "has_more": False}):
+            with self.assertRaisesRegex(ValueError, "weekly options"):
+                exp.run_backtest(limit=500, expiry_flag="WEEK", wings=0,
+                                 fetcher=lambda _: self.fail("unexpected rolling"))
 
     def test_no_history_without_confirmed_dhan_access_or_cached_originals(self):
         with patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": ""}):

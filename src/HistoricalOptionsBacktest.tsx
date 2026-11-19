@@ -37,7 +37,11 @@ type BacktestResult={
     empty_requests:number;unique_option_minute_bars:number;conflicted_excluded:number
     source:string;expiry_flag:string;expiry_code:number;strike_wings:number
     active_source?:{reason?:string;next_action?:string;source?:string;requests?:number
-      fresh_requests?:number;cached_requests?:number}}
+      fresh_requests?:number;cached_requests?:number
+      failed_contract_requests?:number;failure_reasons?:Record<string,number>}
+    routing?:{expired_eligible_sessions:number
+      unexpired_or_unavailable_weekly_sessions:number
+      active_source_sessions:number;expired_vendor_requests?:number;policy?:string}}
   selected_rule_id:string;selected:OptionScenario;comparison:CompareRow[]
   assumptions:{premium_target_inr:number;premium_tolerance_inr:number
     lots:number;historical_lot_size_units:number;lot_size_basis:string
@@ -305,6 +309,13 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       Dhan IDX_I candles first, then historical option candles.
       <button type="button" onClick={onOpenData}>Source settings <ArrowRight size={15}/></button>
     </div>}
+    <div className="hob-routing-tip" role="note">
+      <ShieldCheck size={16}/>
+      <span><strong>Automatic data routing:</strong> Currently listed BANKNIFTY
+      contracts use their exact Dhan option security IDs and active-contract candles.
+      Only contracts whose expiry has passed use Dhan rolling expired-option history.
+      Missing live contract history is reported; it is never replaced with invented trades.</span>
+    </div>
     <div className="hob-run">
       <button type="button" onClick={()=>void run()} disabled={running}>
         {running?<RefreshCw size={17}/>:<Play size={17}/>}
@@ -321,9 +332,11 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       <strong>{/Dhan expired-options HTTP 400|DH-905|DH-907/.test(error)
         ?'Dhan rejected this options-history request':'Historical options data needs attention'}</strong>
       <p>{error}</p>
-      <p>{/Dhan expired-options HTTP 400|DH-905|DH-907/.test(error)
-        ?'Your Dhan profile may be connected successfully. Near/next/far expired-option series use API codes 1/2/3, and the selected dates must contain available expired contracts. For an unexpired monthly contract, QuantLab checks current option history using the Dhan instrument master.'
-        :'Check the original source status or token only if the error specifically reports missing access. No simulated option price replaces a failed vendor request.'}</p>
+      <p>{/has NOT expired|not yet expired|current-contract NSE_FNO/.test(error)
+        ?'The selected expiry has not finished. QuantLab needs original Dhan active-contract minute candles and a current instrument master, not the expired-options API. Open Data Library to refresh and inspect which BANKNIFTY contract IDs are available.'
+        :/Dhan expired-options HTTP 400|DH-905|DH-907/.test(error)
+          ?'This failure came from Dhan’s expired-options endpoint. See the returned vendor message and requested expiry/date context above. The profile token may still be valid; do not keep resetting credentials unless authentication explicitly fails.'
+          :'Check the original data source status. Missing observations are not replaced with artificial option premiums.'}</p>
     </div><button type="button" onClick={onOpenData}>Open data sources <ArrowRight size={14}/></button></div>}
     {result&&scenario&&<div className="hob-results">
       <header className="hob-results-head"><div>
@@ -349,6 +362,22 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
             'Older expired contracts use Dhan rolling history; currently active expiry contracts require the latest original Dhan instrument master and active contract candles.'}</p>
         </div><button type="button" onClick={onOpenData}>Open connections <ArrowRight size={14}/></button>
       </div>}
+      {(result.data_evidence.active_source?.failed_contract_requests??0)>0&&
+        <div className="tc-warning" role="status">
+          <AlertTriangle size={17}/>
+          <div><strong>Some current option contracts had no usable Dhan history</strong>
+            <p>{result.data_evidence.active_source?.failed_contract_requests} contract
+               request(s) were unavailable. Valid original candles from other
+               contracts were retained. Trades without a complete exact-contract
+               price path remain unscored, not zero-profit trades.</p>
+          </div>
+        </div>}
+      {result.data_evidence.routing&&<p className="hob-route-summary">
+        Dhan source routing: {result.data_evidence.routing.active_source_sessions} session(s)
+        with listed-contract observations · {result.data_evidence.routing.expired_vendor_requests??0}
+        eligible expired-series request(s) · {result.data_evidence.routing.unexpired_or_unavailable_weekly_sessions}
+        session(s) protected from invalid expired-series requests.
+      </p>}
       {scenario.trade_count===0&&<div className="tc-warning">
         <AlertTriangle size={17}/> No complete historical CE/PE trades were scored for this sample.
         This is not zero-risk profitability or a failed trade signal; inspect the missing-data counts below.
