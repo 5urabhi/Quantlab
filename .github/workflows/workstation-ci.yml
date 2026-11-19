@@ -57,6 +57,9 @@ jobs:
       - name: Reject invalid Python escape sequences in research doctor
         run: python -W error::SyntaxWarning -W error::DeprecationWarning -m py_compile scripts/quantlab_finish.py
 
+      - name: Verify BANKNIFTY index-signal to CE/PE option source and trade accounting
+        run: python -m unittest discover -s tests -p 'test_expired_options_backtest.py' -v
+
       - name: Run existing research regression suite
         run: python -m unittest discover -s tests -v
 
