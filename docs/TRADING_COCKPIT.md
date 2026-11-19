@@ -38,7 +38,7 @@ An explicit manual tab selection is never overwritten by the clock.
 | --- | --- |
 | **Live Trading** | Observe genuine Dhan BANKNIFTY/NIFTY 50 ticks, actual selected option premium, paired 20-level NSE option/stock order book, prospective 3/6-minute decisions, and a six-minute manual discipline timer. A stale or missing socket is visibly **not live**. |
 | **Market Replay** | Select a real recorded IST session, play/pause/step one minute at a time, choose replay speed and move the timeline slider. Each chart shows observations **only up to the replay cursor**, never future bars. Its **Recorded 20-level books** subtab inspects actual previously saved depth samples. |
-| **Signal Backtest (Phase 1)** | Primary scorecards for BANKNIFTY **UP/DOWN signal correctness** at both 3-minute and 6-minute horizons, using a fixed causal historical rule replay. Shows correct, incorrect, NO TRADE, flat, and unscorable observations; daily results; and a per-signal evidence table. Separate prospective scorecards reconcile actually recorded predictions with matching observed-source history. |
+| **Signal Backtest (Phase 1)** | Choose historical 1/3/5/6/10/30/60-minute signal horizons; see directional correctness, a clearly labeled non-executable ₹ index-exposure scenario with next-open entry/fixed exit and an equity curve, plus an entry/exit journal. Recorded forward-signal evidence remains a distinct 3/6-minute ledger. |
 | **Trade Journal** | Manual options trades, actual entered premiums and exit results, plus a separate prospective index prediction accuracy ledger. Journal evaluations are not coupled to whichever historical chart was last opened. |
 | **Connections** | Locally verify/replace Dhan token and client ID, see expiry, review one `dhan_shared` library, and prepare/fetch missing original index/equity minute files. Normal workflow never requires terminal API calls. |
 
@@ -58,42 +58,74 @@ Live recorded source catalog remains
 underlying logical shared market library instead of manufacturing duplicate
 named datasets.
 
-## Evaluation sequence: BANKNIFTY direction first, options P&L second
+## Evaluation workflow: directional skill and illustrative exposure
 
-**Current feature: BANKNIFTY Signal Backtest.** In the primary
-**Signal Backtest** tab choose 500–5,000 original one-minute source candles
-and click **Test 3m and 6m signals**. The software replays the fixed EMA/RSI
-baseline from each historical candle using only information through that
-candle, then checks the genuine BANKNIFTY index level at the **exact**
-3-minute and 6-minute future timestamp. It will not use a nearby candle
-if the expected observation is missing.
+**Current user experience — Signal Backtest.** Choose an original Dhan
+BANKNIFTY spot minute history window of 500, 1,500, 3,000 or 5,000
+observations. Choose **1, 3, 5, 6, 10, 30 or 60 minutes (1 hour)** for the
+historical signal-evaluation horizon and hypothetical holding period. The
+existing live/prospective prediction ledger continues to record and evaluate
+**only 3 and 6 minutes**. Adding historical horizons does not make the live
+recording pipeline automatically support them.
 
-Each horizon has its own scorecard (correct, incorrect, NO TRADE, source
-gaps, flat outcomes). **Directional accuracy** is correct/(correct+incorrect);
-NO TRADE, flat and unscorable outcomes are reported separately rather than
-counted as wins. The event table lists the source timestamp, prediction,
-BANKNIFTY before/after, actual directional movement, and outcome. Daily
-totals and source-specific caveats remain visible. A baseline that emits
-no scored UP/DOWN signals is **insufficient evidence**, not 100% accuracy.
+Press **Run signal + trade simulation**. The first scorecard assesses whether
+the fixed causal EMA/RSI UP/DOWN rule was directionally correct at the exact
+future *index close* of the selected horizon. NO TRADE, flat, and missing
+source observations are reported, never counted as correct hits. Directional
+accuracy uses correct/(correct+incorrect); overlapping one-minute predictions
+are statistically dependent and should not be treated as independent evidence.
 
-The second section, **Recorded forward predictions**, is NOT a restatement
-of this retrospective replay. It reads immutable timestamped prospective
-predictions from the prediction ledger and scores each 3/6-minute
-horizon independently. Local prepared-file predictions can only be scored
-against original prepared-file observations; broker-originated live
-predictions can only be scored against previously captured original live
-observations. On opening/refreshing the tab, QuantLab attempts these
-source-matched local reconciliations without placing orders or downloading
-new data. Missing future candles remain pending or unscorable, and the
-recorded cards explicitly show how many decisions were captured from
-the authenticated broker feed versus the local observed file.
+The second scorecard and expanded **Illustrative Investment** view use the
+*same original candles* to model a **non-executable signed-index-exposure
+scenario** with transparent rules:
 
-**Later feature (not complete): BANKNIFTY options P&L backtesting.**
-A directional hit does not imply a profitable option trade. To test a
-5% profit target / 2.5% stop-loss with 3–6 minute holding, QuantLab
-will need original contract-specific CE/PE minute quotes or trade prices,
-expiry/strike mapping, entry/exit and spread/slippage assumptions, fees and
-risk controls. Nothing in the Phase 1 scorecard estimates those fills.
+1. At the close of an observed source minute, determine UP, DOWN, NO_TRADE
+   using only information from that minute and earlier observations. A
+   completed candle becomes available at the **next minute boundary**.
+2. When flat and UP, assume a hypothetical unleveraged LONG index proxy;
+   when flat and DOWN, assume a hypothetical unleveraged SHORT index proxy;
+   when NO_TRADE, stay flat. These proxies do **not** represent tradable
+   BANKNIFTY index units, calls or puts.
+3. Enter at the next **observed minute's open**, not at the historical signal
+   candle's closing value. Enter only when that exact opening minute exists.
+4. Exit exactly the selected **H minutes after entry**, at the observed open
+   of that future minute. Ignore additional signals while the proxy position
+   remains open. No overnight positions, no trading through the regular
+   end-of-day cutoff, and no synthetic fills if even one source minute on
+   the intended entry-to-exit path is missing.
+5. Each closed trade hypothetically invests a configurable 1–100% of
+   the previous simulated balance. With initial capital `C`, allocation
+   `a`, direction sign `s = +1` for UP or `-1` for DOWN and assumed
+   per-side cost `b` bps, the modeled cash change is:
+   `C * a * [s * (exit_open/entry_open - 1) - 2b/10000]`.
+   Trades are nonoverlapping, returns compound after each closed exit,
+   and the displayed equity curve uses *only completed exits*. The maximum
+   drawdown therefore excludes unrealized/intratrade losses.
+
+The UI defaults to **₹50,000 starting capital**, **100% allocation** and
+**0 bps** illustrative costs. These are adjustable scenario assumptions,
+not a forecast, order-routing estimate, broker-execution model, or proof of
+financial profitability. Fees, taxes, spread, slippage, financing costs,
+intraminute execution, and real option price changes are not reproduced.
+Where a future open is missing, the incomplete trade is excluded and counted;
+the simulated balance must not be mistaken for an investable track record.
+The historical accuracy horizon (measured at a future minute close) is
+distinct from the hypothetical holding period (measured between two future
+minute opens), so their individual outcomes need not match.
+
+**Recorded forward predictions** below remain separate immutable prospective
+evidence (3-minute and 6-minute) and are evaluated only against matching
+broker-observed live or original prepared-file source data, never fabricated
+from retrospective signals.
+
+**Next phase — BANKNIFTY options P&L.** Mapping UP to a CE contract or DOWN
+to a PE contract cannot establish ₹ P&L from underlying index price changes.
+Actual strike/expiry-specific contract historical bid/ask, executable
+premiums, execution times, lot quantities, spreads, fees and stop/target
+behavior are required before any options win rate or option-equity curve
+can be reported. The current scenario intentionally does *not* claim to
+implement those instruments, stops, orders or fills.
+
 
 ## Dual-mode operation: historical + real-time Dhan
 
