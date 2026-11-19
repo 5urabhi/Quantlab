@@ -74,6 +74,14 @@ def _master_lookup(name: str, mtime_ns: int, size: int) -> dict:
         kind = _get_field(c, "INSTRUMENT", "SEM_INSTRUMENT_NAME")
         sym = _get_field(c, "TRADING_SYMBOL", "SEM_TRADING_SYMBOL",
                          "SYMBOL_NAME", "SM_SYMBOL_NAME", "SEM_CUSTOM_SYMBOL", "DISPLAY_NAME")
+        # Compact scrip master has several human-readable columns. A field
+        # may exist in the header but be blank for BANKNIFTY derivatives.
+        # Do not discard a legitimate F&O contract just because the first
+        # preferred field is blank or uses the display alias 'NIFTY BANK'.
+        name_fields = [c[name] for name in (
+            "SEM_TRADING_SYMBOL", "TRADING_SYMBOL", "SM_SYMBOL_NAME",
+            "SYMBOL_NAME", "SEM_CUSTOM_SYMBOL", "DISPLAY_NAME",
+            "UNDERLYING_SYMBOL") if name in c]
         lot = _get_field(c, "LOT_SIZE", "SEM_LOT_UNITS")
         expiry = _get_field(c, "SM_EXPIRY_DATE", "EXPIRY_DATE", "SEM_EXPIRY_DATE")
         strike = _get_field(c, "STRIKE_PRICE", "SEM_STRIKE_PRICE")
@@ -87,9 +95,11 @@ def _master_lookup(name: str, mtime_ns: int, size: int) -> dict:
                     or row[seg].strip().upper() not in ("D", "NSE_FNO", "FNO", "F")
                     or row[kind].strip().upper() != "OPTIDX"):
                 continue
-            label = row[sym].strip()
-            base = row[underlying].strip() if underlying else ""
-            if "BANKNIFTY" not in (label + " " + base).upper():
+            labels = [str(row[field]).strip() for field in name_fields]
+            label = next((value for value in ([str(row[sym]).strip()] + labels)
+                          if value), "")
+            joined = " ".join(labels).upper().replace("-", " ").replace("_", " ")
+            if "BANKNIFTY" not in joined and "NIFTY BANK" not in joined:
                 continue
             identifier = row[sec].strip()
             direction = row[opt].strip().upper()
@@ -109,8 +119,17 @@ def _master_lookup(name: str, mtime_ns: int, size: int) -> dict:
                     "expiry": exp, "lot_size": size}
             entries[identifier] = item
             by_terms.setdefault((exp, round(price, 4), direction), []).append(item)
-    return {"available": True, "by_id": entries, "by_terms": by_terms,
-            "message": "Official local Dhan instrument master."}
+    return {
+        "available": bool(entries), "by_id": entries, "by_terms": by_terms,
+        "matched_banknifty_option_contracts": len(entries),
+        "message": ("Official Dhan instrument master contains verified "
+                    f"BANKNIFTY contract IDs ({len(entries)} records)."
+                    if entries else
+                    "The Dhan instrument master parsed successfully but "
+                    "contained ZERO matching NSE_FNO BANKNIFTY OPTIDX contracts. "
+                    "Check option symbols, expiry, strike, and lot-size columns "
+                    "or refresh the official master."),
+    }
 
 
 def _contracts() -> dict:
