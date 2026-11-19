@@ -99,7 +99,7 @@ try {
     await nav('Trading Cockpit').click()
     await page.getByText('Intraday trading cockpit',{exact:true}).first().waitFor()
     const modes=page.getByRole('tablist',{name:'Trading cockpit workspaces'})
-    for(const name of ['Live Trading','Market Replay','Strategy Testing','Trade Journal','Connections']){
+    for(const name of ['Live Trading','Market Replay','Signal Backtest','Trade Journal','Connections']){
       await modes.getByRole('tab',{name,exact:true}).waitFor()
     }
     // One focused panel at a time. No duplicated Trading Cockpit heading.
@@ -116,13 +116,12 @@ try {
     await page.getByRole('tablist',{name:'Market replay views'})
       .getByRole('tab',{name:'Recorded 20-level books'}).click()
     await page.getByRole('region',{name:'Captured live history'}).waitFor()
-    await modes.getByRole('tab',{name:'Strategy Testing'}).click()
-    await page.getByRole('tabpanel',{name:'Strategy Testing'}).waitFor()
-    await page.getByText('BANKNIFTY options strategy backtest',{exact:false}).waitFor()
-    await page.getByText('Requires actual option history',{exact:true}).waitFor()
-    assert.equal(await page.getByText('Historical BANKNIFTY directional backtest',{exact:false}).count(),0,
-      'Index direction classification must not masquerade as option P&L')
-    await screenshot('01-trading-copilot-strategy-v4')
+    await modes.getByRole('tab',{name:'Signal Backtest'}).click()
+    await page.getByRole('tabpanel',{name:'Signal Backtest'}).waitFor()
+    await page.getByRole('region',{name:'Historical BANKNIFTY signal accuracy'}).waitFor()
+    await page.getByRole('region',{name:'Recorded prospective BANKNIFTY signal accuracy'}).waitFor()
+    await page.getByText('Phase 2 · BANKNIFTY options P&L backtest').waitFor()
+    await screenshot('01-trading-copilot-signal-backtest-v5')
     await modes.getByRole('tab',{name:'Trade Journal'}).click()
     await page.getByRole('tabpanel',{name:'Trade Journal'}).waitFor()
     await page.getByRole('tablist',{name:'Trading journal views'})
@@ -147,6 +146,36 @@ try {
     }))
     await nav('Home').click()
     await nav('Trading Cockpit').click()
+    // UI-only API fixtures: prove the 3/6-minute cards are visibly separate.
+    await page.route('**/api/trading-cockpit/replay?*',async route=>{
+      const url=new URL(route.request().url())
+      const horizon=Number(url.searchParams.get('horizon_minutes'))
+      const three=horizon===3
+      const correct=three?7:6,incorrect=3
+      const total=correct+incorrect
+      const overall={total,scored:total,correct,incorrect,pending:0,no_trade:12,
+        flat:1,unverifiable:2,directional_accuracy:correct/total,up_signals:8,
+        down_signals:4,actual_up:7,actual_down:3,live_observed:0,local_observed:0}
+      await route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify({identity:'INDEX:BANKNIFTY',horizon_minutes:horizon,
+          observed_source_bars:1500,model_version:'ema-rsi-1m-v1',
+          mode:'RETROSPECTIVE_HISTORICAL_RULE_REPLAY',overall,days:[],
+          latest_events:[{bar_utc:'2026-11-18T04:15:00+00:00',
+            session_ist:'2026-11-18',horizon_minutes:horizon,direction:'UP',
+            reference_close:63000,observed_close:63045,movement_bps:7.14,
+            actual_direction:'UP',evaluation:'CORRECT'}],
+          source_warning:'fixture source',disclaimer:'Historical simulation only.',
+          has_more_history:false})})
+    })
+    await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
+      .getByRole('tab',{name:'Signal Backtest'}).click()
+    await page.getByRole('button',{name:'Test 3m and 6m signals'}).click()
+    await page.getByText('70%',{exact:true}).waitFor()
+    await page.getByText('66.7%',{exact:true}).waitFor()
+    await page.getByRole('button',{name:/3-minute horizon/}).click()
+    await page.getByText('+0.071%',{exact:true}).waitFor()
+    await screenshot('01-trading-copilot-directional-scorecards-v5')
+    await page.unroute('**/api/trading-cockpit/replay?*')
     await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
       .getByRole('tab',{name:'Market Replay'}).click()
     await page.getByText('Original index candles failed source validation',{exact:true}).waitFor()
