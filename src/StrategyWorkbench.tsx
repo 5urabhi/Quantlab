@@ -109,7 +109,13 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
     }catch(e){setError(e)}
     finally{setBusy(false)}
   }
-  const detailed=(showAll?tested?.latest_events:tested?.latest_signal_events)||[]
+  // Older API responses and browser-test fixtures expose latest_events only.
+  // Prefer the new last-100-actionable feed, but never render a blank table
+  // while the API/client revision is being upgraded locally.
+  const detailed=showAll
+    ?(tested?.latest_events||[])
+    :(tested?.latest_signal_events||
+      (tested?.latest_events||[]).filter(row=>row.direction!=='NO_TRADE'))
   const recentForward=(ledger?.predictions||[]).filter(row=>row.horizon_minutes===selected)
     .slice(0,25)
 
