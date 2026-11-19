@@ -211,6 +211,33 @@ class TradingCockpitTests(unittest.TestCase):
                 "identity": "INDEX:BANKNIFTY", "horizon_minutes": 4})
             self.assertEqual(invalid.status_code, 422)
 
+    def test_historical_and_live_replay_query_horizons_validate(self):
+        original = candles(45)
+        with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+            with patch("workstation_api.app.cockpit_sources.series",
+                       return_value={"rows": original, "warning": "fixture",
+                                     "has_more": False}):
+                for horizon in (3, 6):
+                    result = client.get("/api/trading-cockpit/replay", params={
+                        "identity": "INDEX:BANKNIFTY", "horizon_minutes": horizon,
+                        "limit": 45})
+                    self.assertEqual(result.status_code, 200, result.text)
+                    self.assertEqual(result.json()["horizon_minutes"], horizon)
+                invalid = client.get("/api/trading-cockpit/replay", params={
+                    "identity": "INDEX:BANKNIFTY", "horizon_minutes": 5})
+                self.assertEqual(invalid.status_code, 422)
+            with patch("workstation_api.app.live_market.minute_series",
+                       return_value={"rows": original, "basis": "Dhan_live_test",
+                                     "source_warning": "fixture", "has_more": False}):
+                for horizon in (3, 6):
+                    result = client.get("/api/trading-cockpit/live/replay", params={
+                        "identity": "INDEX:BANKNIFTY", "horizon_minutes": horizon})
+                    self.assertEqual(result.status_code, 200, result.text)
+                    self.assertEqual(result.json()["horizon_minutes"], horizon)
+                invalid = client.get("/api/trading-cockpit/live/replay", params={
+                    "identity": "INDEX:BANKNIFTY", "horizon_minutes": 7})
+                self.assertEqual(invalid.status_code, 422)
+
     def test_historical_banknifty_directions_are_scored_after_exact_horizon(self):
         original = candles(45)
         timestamps = [row["timestamp_utc"] for row in original]
