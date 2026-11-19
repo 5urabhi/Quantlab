@@ -390,7 +390,13 @@ def load_active_option_market(spot_rows: list[dict], *,
         return {}, {"reason": "No original BANKNIFTY source days"}
     all_contracts = list(master["by_id"].values())
     choices: dict[str, dict] = {}
+    today = datetime.now(IST).date()
     for day in days:
+        # Today's active master must not retrospectively select a contract
+        # that was not the nearest expiry in an old historical session.
+        # Older periods always use Dhan's original rolling expired history.
+        if date.fromisoformat(day) < today - timedelta(days=30):
+            continue
         expiries = sorted({x["expiry"] for x in all_contracts if x["expiry"] >= day})
         if len(expiries) <= expiry_code:
             continue
@@ -639,7 +645,9 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             "entry_premium": round(entry_premium, 4),
             "exit_premium": round(exit_premium, 4),
             "raw_entry_open": entry_quote["open"], "raw_exit_open": exit_quote["open"],
-            "lots": lots, "lot_size_assumed": used_lot_size,
+            "lots": lots, "lot_size_assumed": (
+                None if chosen.get("security_id") else used_lot_size),
+            "lot_size_used": used_lot_size,
             "lot_size_basis": ("ORIGINAL_CURRENT_DHAN_MASTER" if chosen.get("security_id")
                                else "USER_HISTORICAL_ASSUMPTION"),
             "units": units,
@@ -715,9 +723,14 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
     # Most recent monthly options may still be ACTIVE rather than expired.
     # Use an exact current security ID when a fresh original Dhan master and
     # corresponding active option candles exist. Otherwise use rolling data.
-    active, active_evidence = load_active_option_market(
-        rows, expiry_flag=expiry_flag, expiry_code=expiry_code,
-        wings=wings, fetcher=active_fetcher, progress=progress)
+    try:
+        active, active_evidence = load_active_option_market(
+            rows, expiry_flag=expiry_flag, expiry_code=expiry_code,
+            wings=wings, fetcher=active_fetcher, progress=progress)
+    except ValueError as exc:
+        # A missing active entitlement must not prevent reuse of already
+        # authenticated and SHA-verified expired source receipts.
+        active, active_evidence = {}, {"reason": str(exc)[:220]}
     source_days = {row["session_ist"] for row in rows}
     active_sides = {(row["session_ist"], row["side"])
                     for choices in active.values() for row in choices.values()}
