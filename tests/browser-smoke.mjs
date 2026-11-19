@@ -79,23 +79,26 @@ try {
         api500.push(r.status()+' '+r.request().method()+' '+new URL(r.url()).pathname)
     } catch {}
   })
-  await step('backend and nine-destination shell', async()=>{
+  await step('backend and ten-destination shell', async()=>{
     const health=await apiJson('/api/health')
     assert.equal(health.broker_orders_enabled,false,'Broker execution must be off')
     assert.equal(health.dhan_token_configured,false,'CI fixture must have no broker token')
     await page.goto(base,{waitUntil:'domcontentloaded'})
     await page.getByText('ENGINE ONLINE',{exact:true}).waitFor({timeout:25000})
     const buttons = page.locator('aside .ws-nav-item')
-    assert.equal(await buttons.count(),9,'Exactly nine main destinations')
+    assert.equal(await buttons.count(),10,'Exactly ten main destinations including Trading Cockpit')
     await screenshot('01-home-desktop')
   })
   await step('all research destination views and nested navigation',async()=>{
-    for (const section of ['Guided Research','Home','Data Library','Model Laboratory','Experiment Studio',
+    for (const section of ['Trading Cockpit','Guided Research','Home','Data Library','Model Laboratory','Experiment Studio',
       'Compare & Visualize','Results Studio','Research Projects','Help & Settings']) {
       await nav(section).click()
       const header=page.locator('.ws-titlebar h1')
       assert.ok((await header.innerText()).length>2,'Destination must have a visible title: '+section)
     }
+    await nav('Trading Cockpit').click()
+    await page.getByText('Intraday trading cockpit',{exact:true}).first().waitFor()
+    await page.getByText('NO ORIGINAL DATA',{exact:true}).waitFor()
     // The source assistant belongs in the Data Library shown in the UI.
     await nav('Data Library').click()
     const dataTabs=page.getByRole('navigation',{name:'Modules within selected research destination'})
