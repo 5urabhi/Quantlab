@@ -20,7 +20,7 @@ import math
 import os
 import time
 
-from . import service, cockpit_sources, trading_cockpit
+from . import service, cockpit_sources, trading_cockpit, options_research_audit
 
 IST = ZoneInfo("Asia/Kolkata")
 ENDPOINT = "https://api.dhan.co/v2/charts/rollingoption"
@@ -1099,6 +1099,9 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
         })
     if selected_result is None:
         raise ValueError("Selected option policy was not evaluated")
+    research_audit = options_research_audit.audit(
+        events, rows, candles, selected=selected_result,
+        target_ltp=target_ltp, tolerance=tolerance)
     if progress:
         progress(99, "Saving comparable contract-specific options results")
     return {
@@ -1113,6 +1116,7 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
                               "through_exclusive": stop.isoformat(),
                               "observed_index_bars": len(rows)},
         "data_evidence": data_evidence,
+        "research_readiness": research_audit,
         "selected_rule_id": selected_id, "selected": selected_result,
         "comparison": comparison,
         "assumptions": {
