@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -570,6 +570,58 @@ def data_manager_intraday_series(identity: str, start: str = "",
     try:
         return intraday_parquet.series(identity, start, end, limit)
     except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class TradingCockpitRecordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: str
+    horizon_minutes: Literal[3, 6] = 6
+
+
+@app.get("/api/trading-cockpit/instruments")
+def trading_cockpit_instruments():
+    return intraday_parquet.catalog(200)
+
+
+@app.get("/api/trading-cockpit/snapshot")
+def trading_cockpit_snapshot(identity: str, limit: int = 500):
+    try:
+        original = intraday_parquet.series(identity, limit=limit)
+        result = trading_cockpit.snapshot(identity, original["rows"])
+        result["source_warning"] = original["warning"]
+        result["has_more"] = original["has_more"]
+        return result
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/predictions")
+def trading_cockpit_record(body: TradingCockpitRecordRequest):
+    try:
+        original = intraday_parquet.series(body.identity, limit=500)
+        observation = trading_cockpit.snapshot(body.identity, original["rows"])
+        if observation["quote_mode"] != "RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE":
+            raise ValueError("Cannot create a prospective prediction from stale historical bars")
+        return trading_cockpit.record(observation, body.horizon_minutes)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/evaluate")
+def trading_cockpit_evaluate(body: TradingCockpitRecordRequest):
+    try:
+        original = intraday_parquet.series(body.identity, limit=5000)
+        return trading_cockpit.evaluate(body.identity, original["rows"])
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/predictions")
+def trading_cockpit_predictions(identity: str = "", limit: int = 50):
+    try:
+        return trading_cockpit.list_predictions(identity, limit)
+    except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
 
