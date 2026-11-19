@@ -80,3 +80,22 @@
 .tc-signal-run{width:100%}
 .tc-signal-tag,.tc-signal-provenance{white-space:normal}
 }
+
+/* Signal quality and a non-executable index-exposure balance are distinct. */
+.tc-signal-controls input[type=number]{min-height:42px;min-width:145px;max-width:185px;background:#162c41;border:1px solid #41637c;border-radius:8px;color:#e5f1ff;padding:9px 11px;box-sizing:border-box}
+.tc-signal-controls label{flex:0 1 175px}
+.tc-signal-controls .tc-signal-source{flex:1 1 230px}
+.tc-signal-controls .tc-signal-run{flex:1 1 220px}
+.tc-signal-scenario-pnl{font-size:22px;color:#a9edce;font-variant-numeric:tabular-nums}
+.tc-signal-investment-summary{border-color:#83734a;background:linear-gradient(140deg,#2a3440,#1a303d)}
+.tc-signal-investment-summary .tc-signal-scorecard-title strong{color:#b0f0d5}
+.tc-signal-raw-details{border:1px solid #35516b;border-radius:9px;background:#132638;min-width:0}
+.tc-signal-raw-details>summary{display:list-item;cursor:pointer;padding:16px;font-weight:760;color:#c4e8f7;font-size:13px}
+.tc-signal-raw-details>summary:hover{background:#1b364b}
+.tc-signal-raw-details .tc-signal-detail{padding:16px}
+.tc-signal-forward-card{text-align:left;cursor:pointer;color:#e7f3ff;font-family:inherit}
+.tc-signal-forward-card.selected{border-color:#55bb9e;background:linear-gradient(140deg,#184d46,#183443);box-shadow:inset 0 -2px 0 #5ccdaa}
+.tc-signal-forward-card:hover{border-color:#75a8ad}
+.tc-signal-main .tc-index-scenario .tc-muted{line-height:1.6}
+@media(max-width:850px){.tc-signal-controls label{flex:1 1 210px}.tc-signal-controls .tc-signal-run{flex:1 1 100%}}
+@media(max-width:690px){.tc-signal-controls input[type=number]{min-width:0;max-width:none}}
