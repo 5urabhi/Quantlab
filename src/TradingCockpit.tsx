@@ -10,6 +10,8 @@ type History = {predictions:Entry[];summary:{evaluated_directions:number;correct
 type DaySummary = {session_ist:string;total:number;scored:number;correct:number;incorrect:number;pending:number;no_trade:number;flat:number;unverifiable:number;directional_accuracy:number|null}
 type Report = {days:DaySummary[];overall:Omit<DaySummary,'session_ist'>;source:string;disclaimer:string;truncated:boolean}
 type Replay = {mode:string;identity:string;model_version:string;horizon_minutes:number;observed_source_bars:number;overall:Omit<DaySummary,'session_ist'>;days:DaySummary[];has_more_history:boolean;source_warning:string;disclaimer:string}
+type ManualTrade = {id:string;symbol:string;direction:'CALL'|'PUT';quantity:number;entry_price:number;entry_recorded_utc:string;exit_price:number|null;exit_recorded_utc:string|null;holding_seconds:number;holding_rule_exceeded:boolean;gross_notional_inr:number;net_pnl_inr:number|null;status:'OPEN'|'CLOSED';data_quality:string}
+type TradeJournal = {trades:ManualTrade[];summary:{open:number;closed:number;closed_net_pnl_inr:number;holding_violations:number;days:{exit_session_ist:string;closed:number;net_pnl_inr:number;over_6_min:number}[]};disclaimer:string}
 
 async function api<T>(path:string,init?:RequestInit):Promise<T>{
   const response=await fetch(path,init)
@@ -87,7 +89,49 @@ export default function TradingCockpit(){
     }catch{return null}
   })
   const [paused,setPaused]=useState(false)
+  const [journal,setJournal]=useState<TradeJournal|null>(null)
+  const [optionSymbol,setOptionSymbol]=useState('')
+  const [optionSide,setOptionSide]=useState<'CALL'|'PUT'>('PUT')
+  const [optionQty,setOptionQty]=useState('1')
+  const [optionEntry,setOptionEntry]=useState('')
+  const [tradeNote,setTradeNote]=useState('')
+  const [journalBusy,setJournalBusy]=useState(false)
+  const [closingId,setClosingId]=useState('')
+  const [exitPremium,setExitPremium]=useState('')
+  const [fees,setFees]=useState('0')
 
+  const loadJournal=useCallback(async()=>{
+    try{setJournal(await api<TradeJournal>('/api/trading-cockpit/trades?limit=80'))}
+    catch(e){setError(e instanceof Error?e.message:String(e))}
+  },[])
+  useEffect(()=>{void loadJournal()},[loadJournal])
+  const recordEntry=async(event:React.FormEvent<HTMLFormElement>)=>{
+    event.preventDefault()
+    if(journalBusy)return
+    setJournalBusy(true);setError('')
+    try{
+      await post('/api/trading-cockpit/trades',{
+        symbol:optionSymbol.trim().toUpperCase(),direction:optionSide,
+        quantity:Number(optionQty),entry_price:Number(optionEntry),note:tradeNote})
+      setOptionEntry('');setTradeNote('');setStartTime(Date.now())
+      setRecordMessage('Manual position opened. Six-minute timer started. No broker order submitted.')
+      await loadJournal()
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setJournalBusy(false)}
+  }
+  const recordExit=async(event:React.FormEvent<HTMLFormElement>)=>{
+    event.preventDefault()
+    if(journalBusy||!closingId)return
+    setJournalBusy(true);setError('')
+    try{
+      await post('/api/trading-cockpit/trades/'+encodeURIComponent(closingId)+'/exit',{
+        exit_price:Number(exitPremium),fees_inr:Number(fees)})
+      setClosingId('');setExitPremium('');setFees('0')
+      setRecordMessage('Manual exit recorded. Net P&L computed from entered prices, not verified broker fills.')
+      await loadJournal()
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setJournalBusy(false)}
+  }
   useEffect(()=>{
     try{
       if(startTime===null)window.localStorage.removeItem('quantlab:manual-six-minute-timer')
@@ -205,6 +249,34 @@ export default function TradingCockpit(){
       {replay&&<><div className="tc-ledger-summary"><span>Horizon <strong>{replay.horizon_minutes} min</strong></span><span>Source bars <strong>{replay.observed_source_bars}</strong></span><span>Scored signals <strong>{replay.overall.scored}</strong></span><span>Correct <strong>{replay.overall.correct}</strong></span><span>Baseline accuracy <strong>{replay.overall.directional_accuracy===null?'—':(replay.overall.directional_accuracy*100).toFixed(1)+'%'}</strong></span><span>Gaps <strong>{replay.overall.unverifiable}</strong></span></div>
       <div className="tc-table-scroll"><table><thead><tr><th>IST session</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Gaps</th><th>Directional accuracy</th></tr></thead><tbody>{replay.days.map(d=><tr key={d.session_ist}><td>{d.session_ist}</td><td>{d.scored}</td><td>{d.correct}</td><td>{d.incorrect}</td><td>{d.no_trade}</td><td>{d.unverifiable}</td><td>{d.directional_accuracy===null?'—':(d.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}</tbody></table></div>
       <p className="tc-warning">{replay.disclaimer}{replay.has_more_history?' Additional older source data was not evaluated.':''}</p></>}
+    </section>
+    <section className="tc-panel tc-ledger" aria-label="Manual options trade journal">
+      <div className="tc-panel-title"><strong>Manual options journal · six-minute discipline</strong><span>Read-only research · you type actual prices</span></div>
+      <p className="tc-muted">Enter a new trade at the time you actually fill it. QuantLab stores server receipt times and computes P&amp;L only after you report an exit. The app cannot verify your broker fills, enforce a stop, or place orders.</p>
+      <form className="tc-trade-form" onSubmit={event=>void recordEntry(event)}>
+        <label>Exact contract symbol<input required maxLength={48} value={optionSymbol} placeholder="BANKNIFTY23NOV61900PE" onChange={event=>setOptionSymbol(event.target.value.toUpperCase())}/></label>
+        <label>Type<select value={optionSide} onChange={event=>setOptionSide(event.target.value as 'CALL'|'PUT')}><option value="PUT">Long put</option><option value="CALL">Long call</option></select></label>
+        <label>Quantity<input aria-label="Trade quantity" required type="number" min="1" max="1000000" step="1" value={optionQty} onChange={event=>setOptionQty(event.target.value)}/></label>
+        <label>Entry premium (₹)<input aria-label="Trade entry premium" required type="number" min="0.01" step="0.01" value={optionEntry} onChange={event=>setOptionEntry(event.target.value)}/></label>
+        <label>Note (optional)<input maxLength={250} value={tradeNote} onChange={event=>setTradeNote(event.target.value)}/></label>
+        <button className="tc-primary" disabled={journalBusy} type="submit">Record manual entry + start six-minute timer</button>
+      </form>
+      <div className="tc-ledger-summary"><span>Open positions <strong>{journal?.summary.open??0}</strong></span><span>Closed trades <strong>{journal?.summary.closed??0}</strong></span><span>Net realized from entered fills <strong>₹{fmt(journal?.summary.closed_net_pnl_inr)}</strong></span><span>Over six minutes <strong>{journal?.summary.holding_violations??0}</strong></span></div>
+      {journal?.trades.some(trade=>trade.status==='OPEN')&&<div className="tc-trade-active"><strong>Currently open (manual records)</strong>
+        {journal.trades.filter(trade=>trade.status==='OPEN').map(trade=><div className="tc-open-trade" key={trade.id}>
+          <span>{trade.symbol} · {trade.direction} · {trade.quantity} × ₹{fmt(trade.entry_price)}</span>
+          <span className={now-Date.parse(trade.entry_recorded_utc)>360000?'tc-overdue':'tc-muted'}>Elapsed {Math.floor(Math.max(0,now-Date.parse(trade.entry_recorded_utc))/60000)}m</span>
+          <button onClick={()=>{setClosingId(trade.id);setExitPremium('')}} disabled={journalBusy}>Record exit</button></div>)}
+      </div>}
+      {closingId&&<form className="tc-trade-form tc-exit" onSubmit={event=>void recordExit(event)}>
+        <strong>Record exit for {journal?.trades.find(trade=>trade.id===closingId)?.symbol}</strong>
+        <label>Exit premium (₹)<input required aria-label="Exit premium" type="number" min="0" step="0.01" value={exitPremium} onChange={event=>setExitPremium(event.target.value)}/></label>
+        <label>Total charges (₹)<input aria-label="Total charges" required type="number" min="0" step="0.01" value={fees} onChange={event=>setFees(event.target.value)}/></label>
+        <button type="submit" className="tc-primary" disabled={journalBusy}>Close manual record</button>
+        <button type="button" onClick={()=>setClosingId('')}>Cancel</button>
+      </form>}
+      <div className="tc-table-scroll"><table><thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Holding</th><th>Over 6m?</th><th>Net P&amp;L</th></tr></thead><tbody>{journal?.trades.map(trade=><tr key={trade.id}><td>{trade.symbol}</td><td>{trade.status}</td><td>{trade.direction}</td><td>{trade.quantity}</td><td>₹{fmt(trade.entry_price)}</td><td>{fmt(trade.exit_price)}</td><td>{Math.floor(trade.holding_seconds/60)}m</td><td>{trade.holding_rule_exceeded?'YES':'No'}</td><td>{trade.net_pnl_inr===null?'—':'₹'+fmt(trade.net_pnl_inr)}</td></tr>)}{!journal?.trades.length&&<tr><td colSpan={9}>No manual positions recorded.</td></tr>}</tbody></table></div>
+      <p className="tc-warning">Unverified manual entries: the time starts when this local server receives your request, not the broker execution timestamp. This is a discipline journal, not an account reconciliation or evidence of actual fills.</p>
     </section>
   </div>
 }
