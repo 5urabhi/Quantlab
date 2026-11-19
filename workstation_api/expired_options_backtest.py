@@ -708,6 +708,14 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
     max_drawdown = 0.0
     busy_until: datetime | None = None
     missing = Counter()
+    reversal_rejections = Counter()
+    reversal_entry_attempts = 0
+
+    def note_skip(reason: str, *, flip: bool = False) -> None:
+        missing[reason] += 1
+        if flip:
+            reversal_rejections[reason] += 1
+
     trades = []
     equity = [{"timestamp_utc": spot_rows[0]["timestamp_utc"],
                "equity_inr": round(balance, 2)}] if spot_rows else []
@@ -733,17 +741,19 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             and prior["underlying_direction"] != direction
             and at == entry_at - timedelta(minutes=1)
         )
+        if same_open_flip:
+            reversal_entry_attempts += 1
         if busy_until is not None and (
                 entry_at < busy_until or
                 (entry_at == busy_until and not same_open_flip)):
-            missing["position_open"] += 1
+            note_skip("position_open", flip=same_open_flip)
             continue
         if entry_at >= _same_day_close(at):
-            missing["session_cutoff"] += 1
+            note_skip("session_cutoff", flip=same_open_flip)
             continue
         entry_index = spot_map.get(entry_at)
         if entry_index is None or entry_index["session_ist"] != session:
-            missing["missing_underlying_entry"] += 1
+            note_skip("missing_underlying_entry", flip=same_open_flip)
             continue
         side = "CALL" if direction == "UP" else "PUT"
         # Historical contract choice must use only information from the
@@ -754,7 +764,7 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
                     abs(r["close"] - target_ltp) <= tolerance and
                     r["volume"] is not None and r["volume"] > 0]
         if not eligible:
-            missing["no_option_near_target_at_signal"] += 1
+            note_skip("no_option_near_target_at_signal", flip=same_open_flip)
             continue
         chosen = min(eligible, key=lambda r:
                      (abs(r["close"] - target_ltp), -r["volume"], r["strike"]))
@@ -762,14 +772,14 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
         entry_quote = option_rows.get((entry_at.isoformat(), side), {}).get(strike)
         if (entry_quote is None or entry_quote["session_ist"] != session
                 or not entry_quote["volume"] or entry_quote["volume"] <= 0):
-            missing["missing_option_entry"] += 1
+            note_skip("missing_option_entry", flip=same_open_flip)
             continue
         entry_premium = entry_quote["open"] * (1 + slippage_bps / 10_000)
         used_lot_size = int(chosen.get("lot_size_verified") or lot_size)
         units = lots * used_lot_size
         outlay = entry_premium * units
         if outlay + fee_per_side > balance:
-            missing["insufficient_capital"] += 1
+            note_skip("insufficient_capital", flip=same_open_flip)
             continue
         exit_at, reason = _exit_decision(
             policy, entry_at=entry_at, entry_premium=entry_premium,
@@ -777,7 +787,7 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             candles=option_rows, hold=hold, cap=cap, stop_pct=stop_pct,
             target_pct=target_pct)
         if exit_at <= entry_at or exit_at > _same_day_close(entry_at):
-            missing["invalid_exit_time"] += 1
+            note_skip("invalid_exit_time", flip=same_open_flip)
             busy_until = _same_day_close(entry_at)
             continue
         # Verify EVERY observed index minute and EXACT same strike/side
@@ -796,12 +806,12 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
                 path_valid = False
                 break
         if not path_valid:
-            missing["missing_exact_contract_path"] += 1
+            note_skip("missing_exact_contract_path", flip=same_open_flip)
             busy_until = _same_day_close(entry_at)
             continue
         exit_quote = option_rows[(exit_at.isoformat(), side)][strike]
         if not exit_quote["volume"] or exit_quote["volume"] <= 0:
-            missing["zero_exit_volume"] += 1
+            note_skip("zero_exit_volume", flip=same_open_flip)
             busy_until = _same_day_close(entry_at)
             continue
         exit_premium = exit_quote["open"] * (1 - slippage_bps / 10_000)
@@ -842,13 +852,34 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
         trades.append(trade)
         equity.append({"timestamp_utc": exit_at.isoformat(),
                        "equity_inr": round(balance, 2)})
+    opposite_exits = sum(t["exit_reason"] == "opposite_signal" for t in trades)
+    completed_flips = sum(t["entry_reason"] == "opposite_signal_flip"
+                          for t in trades)
+    reversal_audit = {
+        "opposite_signal_exits": opposite_exits,
+        "same_open_reentry_attempts": reversal_entry_attempts,
+        "completed_flips": completed_flips,
+        "opposite_exits_without_completed_reentry": max(0, opposite_exits - completed_flips),
+        "rejected_reentry_reasons": dict(reversal_rejections),
+        "session_end_exits": sum(t["exit_reason"] == "session_end"
+                                 for t in trades),
+        "time_cap_exits": sum(t["exit_reason"] == "time_cap"
+                              for t in trades),
+        "fixed_hold_exits": sum(t["exit_reason"] == "fixed_hold"
+                                for t in trades),
+        "note": (
+            "Signals can repeat on every minute, but a CE/PE switch requires "
+            "a qualifying opposite signal while holding, the next original "
+            "option OPEN, and a complete exact-contract path. An unscored "
+            "entry is not a zero-return trade."),
+    }
     wins = sum(t["net_pnl_inr"] > 0 for t in trades)
     losses = sum(t["net_pnl_inr"] < 0 for t in trades)
     return {
         "policy": policy, "hold_minutes": hold, "time_cap_minutes": cap,
         "trade_count": len(trades),
-        "reversal_switches": sum(
-            t["entry_reason"] == "opposite_signal_flip" for t in trades),
+        "reversal_switches": completed_flips,
+        "reversal_audit": reversal_audit,
         "win_rate": round(wins / (wins + losses), 4) if wins + losses else None,
         "winning_trades": wins, "losing_trades": losses,
         "starting_capital_inr": round(starting_capital, 2),
