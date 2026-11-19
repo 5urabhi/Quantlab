@@ -44,6 +44,9 @@ def _validated(rows: list[dict]) -> list[dict]:
             raise ValueError("Invalid original candle high/low")
         result.append({**row, "open": op, "high": hi, "low": lo,
                        "close": close, "timestamp_utc": stamp.isoformat()})
+        expected_ist = stamp.astimezone(IST).date().isoformat()
+        if row.get("session_ist") != expected_ist:
+            raise ValueError("Original one-minute session does not match Asia/Kolkata date")
         previous = stamp
     return result
 
@@ -105,7 +108,7 @@ def _continuous_session_tail(rows: list[dict]) -> list[dict]:
 
 
 def snapshot(identity: str, source_rows: list[dict], *,
-             now: datetime | None = None) -> dict:
+             now: datetime | None = None, include_chart: bool = True) -> dict:
     rows = _validated(source_rows)
     if not rows:
         raise ValueError("No original minute bars for this instrument")
@@ -135,7 +138,7 @@ def snapshot(identity: str, source_rows: list[dict], *,
     # the previous day's close or an undocumented missing-minute fill.
     chart = []
     segment = []
-    for row in rows[-180:]:
+    for row in (rows[-180:] if include_chart else []):
         if segment and (row["session_ist"] != segment[-1]["session_ist"] or
                 _ts(row["timestamp_utc"]) -
                 _ts(segment[-1]["timestamp_utc"]) != timedelta(minutes=1)):
@@ -265,7 +268,7 @@ def evaluate(identity: str, source_rows: list[dict]) -> dict:
                 continue
             actual = later[0]
             observed = _ts(actual["timestamp_utc"])
-            if observed - target > timedelta(seconds=60) or observed.date() != target.date():
+            if observed != target:
                 result, movement, close = "UNVERIFIABLE_GAP", None, None
             else:
                 close = actual["close"]
@@ -363,7 +366,8 @@ def historical_replay(identity: str, source_rows: list[dict],
         # Use an actual past-anchored window. Never reuse a signal computed
         # on a future window, even when a downloaded session is incomplete.
         observation = snapshot(identity, rows[max(0, index-200):index+1],
-                               now=_ts(candle["timestamp_utc"]) + timedelta(seconds=90))
+                               now=_ts(candle["timestamp_utc"]) + timedelta(seconds=90),
+                               include_chart=False)
         target = _ts(candle["timestamp_utc"]) + timedelta(minutes=horizon_minutes)
         next_row = times.get(target)
         if next_row is None or next_row["session_ist"] != candle["session_ist"]:
