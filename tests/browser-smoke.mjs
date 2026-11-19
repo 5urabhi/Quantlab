@@ -146,16 +146,41 @@ try {
     }))
     await nav('Home').click()
     await nav('Trading Cockpit').click()
-    // UI-only API fixtures: prove the 3/6-minute cards are visibly separate.
+    // Browser fixture asserts historical horizons, money labels and entry/exit
+    // transparency WITHOUT claiming these are real options trades.
     await page.route('**/api/trading-cockpit/replay?*',async route=>{
       const url=new URL(route.request().url())
       const horizon=Number(url.searchParams.get('horizon_minutes'))
-      const three=horizon===3
-      const correct=three?7:6,incorrect=3
-      const total=correct+incorrect
-      const overall={total,scored:total,correct,incorrect,pending:0,no_trade:12,
-        flat:1,unverifiable:2,directional_accuracy:correct/total,up_signals:8,
-        down_signals:4,actual_up:7,actual_down:3,live_observed:0,local_observed:0}
+      assert.ok([1,3,5,6,10,30,60].includes(horizon))
+      const correct=7,incorrect=3
+      const overall={total:30,scored:10,correct,incorrect,pending:0,no_trade:12,
+        flat:1,unverifiable:2,directional_accuracy:.7,up_signals:8,
+        down_signals:4,actual_up:7,actual_down:3,live_observed:0,local_observed:0,
+        unscored_after_last_bar:2,unscored_missing_minute:0}
+      const entry='2026-11-18T04:16:00+00:00'
+      const exit='2026-11-18T04:21:00+00:00'
+      const scenario={
+        mode:'ILLUSTRATIVE_SIGNED_INDEX_EXPOSURE_ONLY',
+        horizon_minutes:horizon,starting_capital_inr:50000,ending_capital_inr:50050.2,
+        net_pnl_inr:50.2,net_return_pct:.1004,max_closed_trade_drawdown_pct:0,
+        cost_bps_per_side:0,allocation_pct:100,trade_count:1,winning_trades:1,
+        losing_trades:0,breakeven_trades:0,win_rate:1,
+        total_illustrative_cost_inr:0,
+        skipped:{no_signal:12,position_open:1,session_cutoff:1,
+          missing_entry:0,missing_exit_or_path:0},
+        equity_curve:[
+          {timestamp_utc:'2026-11-18T04:15:00+00:00',equity_inr:50000},
+          {timestamp_utc:exit,equity_inr:50050.2},
+        ],
+        latest_trades:[{session_ist:'2026-11-18',
+          signal_utc:'2026-11-18T04:15:00+00:00',entry_utc:entry,exit_utc:exit,
+          direction:'UP',side:'HYPOTHETICAL_LONG_INDEX',entry_points:63000,
+          exit_points:63063.25,index_move_pct:.1004,exposure_return_pct:.1004,
+          allocated_inr:50000,gross_pnl_inr:50.2,illustrative_cost_inr:0,
+          net_pnl_inr:50.2,equity_inr:50050.2}],
+        entry_policy:'UP long index scenario next open, DOWN short',exit_policy:'Fixed horizon open',
+        disclaimer:'An illustrative index scenario is not BANKNIFTY CE/PE option P&L.',
+      }
       await route.fulfill({status:200,contentType:'application/json',
         body:JSON.stringify({identity:'INDEX:BANKNIFTY',horizon_minutes:horizon,
           observed_source_bars:1500,model_version:'ema-rsi-1m-v1',
@@ -164,17 +189,27 @@ try {
             session_ist:'2026-11-18',horizon_minutes:horizon,direction:'UP',
             reference_close:63000,observed_close:63045,movement_bps:7.14,
             actual_direction:'UP',evaluation:'CORRECT'}],
-          source_warning:'fixture source',disclaimer:'Historical simulation only.',
+          latest_signal_events:[],index_exposure_scenario:scenario,
+          source_warning:'synthetic UI fixture',disclaimer:'Historical simulation only.',
           has_more_history:false})})
     })
     await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
       .getByRole('tab',{name:'Signal Backtest'}).click()
-    await page.getByRole('button',{name:'Test 3m and 6m signals'}).click()
+    await page.getByRole('combobox',{name:'Trade holding period'}).selectOption('5')
+    await page.getByRole('spinbutton',{name:'Illustrative starting capital'}).fill('50000')
+    await page.getByRole('button',{name:'Run signal + trade simulation'}).click()
+    await page.getByRole('region',{name:'Illustrative BANKNIFTY index-exposure investment simulation'}).waitFor()
     await page.getByText('70%',{exact:true}).waitFor()
-    await page.getByText('66.7%',{exact:true}).waitFor()
-    await page.getByRole('button',{name:/3-minute horizon/}).click()
-    await page.getByText('+0.071%',{exact:true}).waitFor()
-    await screenshot('01-trading-copilot-directional-scorecards-v5')
+    await page.getByText('₹50,050.20',{exact:true}).first().waitFor()
+    await page.getByText('Not an option P&L estimate',{exact:false}).waitFor()
+    await page.getByText(/Hold 5 minutes/).waitFor()
+    await page.getByText(/See 1 latest complete entries and exits/).click()
+    await page.getByText(/Short proxy|Long proxy/).waitFor()
+    await screenshot('01-trading-copilot-index-exposure-v6')
+    await page.getByRole('combobox',{name:'Trade holding period'}).selectOption('60')
+    await page.getByRole('button',{name:'Run signal + trade simulation'}).click()
+    await page.getByText(/Hold 60 minutes/).waitFor()
+    await screenshot('01-trading-copilot-hour-horizon-v6')
     await page.unroute('**/api/trading-cockpit/replay?*')
     await page.getByRole('tablist',{name:'Trading cockpit workspaces'})
       .getByRole('tab',{name:'Market Replay'}).click()
