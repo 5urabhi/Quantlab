@@ -5,7 +5,9 @@ import './trading-cockpit.css'
 type Candle = {timestamp_utc:string;session_ist:string;open:number;high:number;low:number;close:number;volume:number;ema9:number|null;ema21:number|null}
 type Entry = {id:string;created_utc:string;identity:string;bar_utc:string;direction:string;reference_close:number;horizon_minutes:number;quote_mode:string;evaluation:string;observed_close:number|null;actual_direction:string|null}
 type Snapshot = {identity:string;model_version:string;horizon_minutes:number;quote_mode:string;last_observed_utc:string;source_age_seconds:number;direction:'UP'|'DOWN'|'NO_TRADE';confidence:null;validation:string;latest_close:number;rsi14:number|null;atr14:number|null;ema9:number|null;ema21:number|null;rows:Candle[];note:string;source_warning:string;has_more:boolean}
-type Catalog = {instruments:{identity:string;display_name?:string;asset_class?:string;ready:boolean;state:string}[]}
+type SourceInstrument = {identity:string;display_name?:string;asset_class?:string;ready:boolean;state:string;needs_preparation?:boolean;needs_download?:boolean}
+type Catalog = {instruments:SourceInstrument[];prepared_equities:number;downloaded_equities_pending_preparation:number}
+type SourceJob = {id:string;status:string;stage?:string;percent?:number;error?:string;result?:{status?:string;prepared_count?:number;blocked_count?:number;checked?:number;rows?:number;remaining_unselected?:number}}
 type History = {predictions:Entry[];summary:{evaluated_directions:number;correct_directions:number;direction_accuracy:number|null;qualification:string}}
 type DaySummary = {session_ist:string;total:number;scored:number;correct:number;incorrect:number;pending:number;no_trade:number;flat:number;unverifiable:number;directional_accuracy:number|null}
 type Report = {days:DaySummary[];overall:Omit<DaySummary,'session_ist'>;source:string;disclaimer:string;truncated:boolean}
@@ -26,6 +28,7 @@ async function api<T>(path:string,init?:RequestInit):Promise<T>{
 }
 const fmt=(v:number|null|undefined,digits=2)=>v===null||v===undefined?'—':v.toLocaleString('en-IN',{maximumFractionDigits:digits})
 const post=(path:string,body:unknown)=>api<unknown>(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+const indiaDate=(offsetDays=0)=>{const d=new Date();d.setUTCDate(d.getUTCDate()+offsetDays);return d.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'})}
 
 function CandleChart({rows}:{rows:Candle[]}){
   const [hover,setHover]=useState<number|null>(null)
@@ -71,6 +74,13 @@ function CandleChart({rows}:{rows:Candle[]}){
 
 export default function TradingCockpit(){
   const [instruments,setInstruments]=useState<Catalog['instruments']>([])
+  const [catalog,setCatalog]=useState<Catalog|null>(null)
+  const [sourceJob,setSourceJob]=useState<SourceJob|null>(null)
+  const [sourceBusy,setSourceBusy]=useState(false)
+  const [sourceNotice,setSourceNotice]=useState('')
+  const [sourceError,setSourceError]=useState('')
+  const [spotFrom,setSpotFrom]=useState(()=>indiaDate(-45))
+  const [spotTo,setSpotTo]=useState(()=>indiaDate(1))
   const [identity,setIdentity]=useState('')
   const [snapshot,setSnapshot]=useState<Snapshot|null>(null)
   const [history,setHistory]=useState<History|null>(null)
@@ -174,11 +184,66 @@ export default function TradingCockpit(){
       else window.localStorage.setItem('quantlab:manual-six-minute-timer',String(startTime))
     }catch{/* private browsing or disabled storage */}
   },[startTime])
-  useEffect(()=>{let active=true;void api<Catalog>('/api/trading-cockpit/instruments').then(data=>{
-    if(!active)return
-    setInstruments(data.instruments)
-    setIdentity(previous=>data.instruments.some(x=>x.identity===previous)?previous:(data.instruments.find(x=>x.ready)?.identity||''))
-  }).catch(e=>{if(active)setError(String(e))});return()=>{active=false}},[])
+  const refreshCatalog=useCallback(async()=>{
+    const data=await api<Catalog>('/api/trading-cockpit/instruments')
+    setCatalog(data);setInstruments(data.instruments)
+    setIdentity(previous=>{
+      if(data.instruments.some(x=>x.ready&&x.identity===previous))return previous
+      return data.instruments.find(x=>x.ready&&x.identity==='INDEX:BANKNIFTY')?.identity
+        ||data.instruments.find(x=>x.ready)?.identity||''
+    })
+  },[])
+  useEffect(()=>{void refreshCatalog().catch(e=>setSourceError(String(e)))},[refreshCatalog])
+  useEffect(()=>{
+    if(!sourceJob||!['queued','running'].includes(sourceJob.status))return
+    let active=true
+    const timer=window.setTimeout(()=>{
+      void api<SourceJob>('/api/jobs/'+encodeURIComponent(sourceJob.id))
+        .then(next=>{
+          if(!active)return
+          setSourceJob(next)
+          if(next.status==='complete'){
+            setSourceNotice(next.result?.prepared_count!==undefined
+              ?'Prepared '+next.result.prepared_count+' existing one-minute chart sources (no new download).'
+              :next.result?.rows!==undefined
+                ?'Original index spot history saved: '+next.result.rows+' observed candles.'
+                :'Market data preparation finished.')
+            void refreshCatalog().catch(e=>setSourceError(String(e)))
+          }else if(next.status==='error'||next.status==='cancelled'){
+            setSourceError(next.error||'The local source task needs attention.')
+          }
+        }).catch(e=>{if(active)setSourceError(String(e))})
+    },1500)
+    return()=>{active=false;window.clearTimeout(timer)}
+  },[sourceJob,refreshCatalog])
+  const prepareCached=async()=>{
+    if(sourceBusy||['queued','running'].includes(sourceJob?.status||''))return
+    setSourceBusy(true);setSourceError('');setSourceNotice('')
+    try{
+      const result=await api<{job_id:string|null;status:string;message?:string}>(
+        '/api/trading-cockpit/sources/prepare',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({confirm_reuse_originals:true})})
+      if(result.job_id)setSourceJob({id:result.job_id,status:result.status})
+      else setSourceNotice(result.message||'All available minute chart caches are prepared.')
+    }catch(e){setSourceError(e instanceof Error?e.message:String(e))}
+    finally{setSourceBusy(false)}
+  }
+  const acquireSpot=async(event:React.FormEvent<HTMLFormElement>)=>{
+    event.preventDefault()
+    if(sourceBusy||['queued','running'].includes(sourceJob?.status||''))return
+    if(!window.confirm('Download original BANKNIFTY spot index history from Dhan? Existing equities remain in the same shared library, and no order will be placed.'))return
+    setSourceBusy(true);setSourceError('');setSourceNotice('')
+    try{
+      const result=await api<{job_id:string;status:string}>(
+        '/api/trading-cockpit/sources/index-spot',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({identity:'INDEX:BANKNIFTY',from_date:spotFrom,
+            to_date:spotTo,confirm_readonly:true})})
+      setSourceJob({id:result.job_id,status:result.status})
+    }catch(e){setSourceError(e instanceof Error?e.message:String(e))}
+    finally{setSourceBusy(false)}
+  }
   const refresh=useCallback(async()=>{
     if(!identity)return
     setError('')
@@ -239,6 +304,10 @@ export default function TradingCockpit(){
   const tokenState=!dhanCheck?'CHECKING':dhanCheck.token_valid===false?'EXPIRED / REJECTED'
     :dhanCheck.token_valid===null?'UNVERIFIED':tokenRemaining!==null&&tokenRemaining<=3600?'EXPIRING SOON'
     :dhanCheck.ok?'CONNECTED':'NEEDS ATTENTION'
+  const preparedInstruments=instruments.filter(x=>x.ready)
+  const missingBankNifty=!instruments.some(x=>x.identity==='INDEX:BANKNIFTY'&&x.ready)
+  const pendingMinutes=catalog?.downloaded_equities_pending_preparation??0
+  const sourceWorking=sourceBusy||['queued','running'].includes(sourceJob?.status||'')
   const forecast=snapshot?.direction??'NO_TRADE'
   const sourceRecent=snapshot?.quote_mode==='RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE'
   const summary=history?.summary
@@ -271,11 +340,28 @@ export default function TradingCockpit(){
       </form>}
       <p className="tc-muted">This verifies your Dhan session and data entitlement. A valid token alone does not start live market streaming; cockpit candles currently come from prepared historical files.</p>
     </section>
-    <div className="tc-toolbar"><label>Local instrument <select aria-label="Trading cockpit instrument" value={identity} onChange={event=>setIdentity(event.target.value)}><option value="">Select prepared minute candles</option>{instruments.map(s=><option key={s.identity} value={s.identity} disabled={!s.ready}>{s.display_name||s.identity} ({s.identity}){s.ready?'':' · Source unavailable'}</option>)}</select></label><label className="tc-monitor-toggle"><input type="checkbox" checked={monitor} onChange={event=>{
+    <section className="tc-panel tc-source-panel" aria-label="Shared market data library status">
+      <div className="tc-panel-title"><strong>One shared market-data library · dhan_shared</strong><span>Original downloads are reusable source receipts, not separate datasets</span></div>
+      <div className="tc-source-summary"><span>Ready one-minute charts <strong>{catalog?.prepared_equities??0}</strong></span><span>Existing minute sources awaiting chart preparation <strong>{pendingMinutes}</strong></span><span>BANKNIFTY spot index <strong>{missingBankNifty?'Original index not yet available':'Source available'}</strong></span></div>
+      {sourceError&&<p className="tc-error" role="alert">{sourceError}</p>}
+      {sourceNotice&&<p className="tc-confirm" role="status">{sourceNotice}</p>}
+      {sourceJob&&sourceWorking&&<p className="tc-muted" role="status">{sourceJob.stage||'Preparing market data'} {sourceJob.percent!==undefined?'· '+Math.round(sourceJob.percent)+'%':''}</p>}
+      {pendingMinutes>0&&<div className="tc-source-action"><p>Existing Dhan one-minute stock candles have been downloaded, but their analytical chart index has not been built. Reuse those files without downloading anything again.</p><button type="button" disabled={sourceWorking} onClick={()=>void prepareCached()}>Prepare {Math.min(40,pendingMinutes)} cached minute instruments</button></div>}
+      {missingBankNifty&&<form className="tc-source-action" onSubmit={event=>void acquireSpot(event)}>
+        <div><strong>For BANKNIFTY signals, the actual index series is missing.</strong>
+        <p>The 14 constituent stocks are saved, but their prices are not interchangeable with the index. Fetch the original Dhan IDX_I index spot candles into the same shared library.</p></div>
+        <label>From (IST) <input type="date" required value={spotFrom} onChange={e=>setSpotFrom(e.target.value)}/></label>
+        <label>Through (exclusive) <input type="date" required value={spotTo} onChange={e=>setSpotTo(e.target.value)}/></label>
+        <button type="submit" disabled={sourceWorking}>Get missing BANKNIFTY spot candles</button>
+      </form>}
+      {!pendingMinutes&&!missingBankNifty&&<p className="tc-confirm">Existing local sources are prepared. These are historical observations, not a live broker stream.</p>}
+      <p className="tc-muted">All sources remain internally partitioned by instrument, interval and observation time for accuracy; you manage one library. Missing source dates are never invented or backfilled from today's membership.</p>
+    </section>
+    <div className="tc-toolbar"><label>Prepared chart source <select aria-label="Trading cockpit instrument" value={identity} onChange={event=>setIdentity(event.target.value)}><option value="">Choose a ready observed source</option>{preparedInstruments.map(s=><option key={s.identity} value={s.identity}>{s.display_name||s.identity} ({s.identity})</option>)}</select></label><label className="tc-monitor-toggle"><input type="checkbox" checked={monitor} onChange={event=>{
   const enabled=event.target.checked;setMonitor(enabled);monitorRef.current=enabled
   if(enabled)void refresh()
 }}/> Auto-audit while this page is open</label><button onClick={()=>void refresh()} disabled={!identity}><RefreshCw size={16}/> Refresh</button><button onClick={()=>setPaused(v=>!v)}>{paused?'Resume observations':'Pause updates'}</button><span className="tc-muted"><ShieldCheck size={14}/> No broker execution</span></div>
-    {!instruments.some(x=>x.ready)&&<p className="tc-missing"><Database size={17}/> No prepared minute candles found. Use Data Library → Download market data. Bank Nifty and Nifty index analysis requires the original Dhan IDX_I one-minute spot batch. No surrogate or simulated prices are used.</p>}
+    {!preparedInstruments.length&&<p className="tc-missing"><Database size={17}/> The library has no ready one-minute chart source yet. Use the actions above to prepare already-downloaded stocks or fetch the actual BANKNIFTY spot series. The existing daily market library remains intact.</p>}
     <div className="tc-layout">
       <section className="tc-panel tc-main">
         <div className="tc-panel-title"><strong>Price action</strong><span>1-minute original OHLC · EMA 9 / EMA 21</span></div>
