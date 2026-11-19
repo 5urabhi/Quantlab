@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import contextmanager
 from zoneinfo import ZoneInfo
 import math
 import re
@@ -21,6 +22,7 @@ TRADE = re.compile(r"^trade_[a-f0-9]{20}$")
 MAX_ITEMS = 100
 
 
+@contextmanager
 def _conn() -> sqlite3.Connection:
     path = service.DATA / "trading_cockpit" / "manual_trades.sqlite3"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -40,7 +42,11 @@ def _conn() -> sqlite3.Connection:
         note TEXT NOT NULL DEFAULT '',
         source_type TEXT NOT NULL DEFAULT 'USER_ENTERED_UNVERIFIED'
     )""")
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _money(value: float, name: str, zero_ok: bool = False) -> float:
