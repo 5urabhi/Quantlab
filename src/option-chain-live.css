@@ -51,3 +51,12 @@
 .lf-view-tabs button[aria-selected=true]{border-color:#469b8f;background:#20514e;color:#b8ffe2}
 @media(max-width:1050px){.oc-lot-inputs{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:700px){.oc-lot-inputs{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-controls label{flex:1 1 100%}.oc-controls select{width:100%}.oc-observed{margin-left:0}.lf-view-tabs button{font-size:11px}.oc-root{padding:11px}}
+
+
+.oc-preferences{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:11px 12px;border:1px solid #3b6573;border-radius:9px;background:#163341}
+.oc-preferences>strong{font-size:12px;color:#d4f5ef;flex:1 0 100%}
+.oc-preferences label{display:grid;gap:5px;font-size:11px;color:#b4d5dd}
+.oc-preferences input[type=number]{min-width:100px;width:125px;padding:9px;border:1px solid #49788b;border-radius:7px;background:#102638;color:#e7f4ff}
+.oc-preferences label.oc-preference-checkbox{display:flex;align-items:center;gap:7px}
+.oc-preferences input[type=checkbox]{width:16px;height:16px;accent-color:#76e6bc}
+.oc-preferences>span{font-size:11px;color:#9fc9d3}
