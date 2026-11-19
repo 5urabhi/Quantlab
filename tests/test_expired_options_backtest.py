@@ -410,6 +410,44 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertIn("ATM+1", public_message)
         self.assertNotIn("SECRET-FOR-TEST-ONLY", public_message)
 
+    def test_compact_master_uses_dhan_custom_symbol_when_trading_symbol_blank(self):
+        from workstation_api import option_chain_live
+        path = service.DATA / "dhan" / "instrument_master.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,"
+            "SEM_TRADING_SYMBOL,SEM_CUSTOM_SYMBOL,SM_SYMBOL_NAME,SEM_LOT_UNITS,"
+            "SEM_EXPIRY_DATE,SEM_STRIKE_PRICE,SEM_OPTION_TYPE\n"
+            "NSE,D,41001,OPTIDX,,BANKNIFTY 23 NOV 62000 CALL,NIFTY BANK,30,"
+            "2026-11-23,62000,CE\n"
+            "NSE,D,41002,OPTIDX,,BANKNIFTY 23 NOV 62000 PUT,NIFTY BANK,30,"
+            "2026-11-23,62000,PE\n",
+            encoding="utf-8")
+        with patch.object(option_chain_live, "_clock",
+                          return_value=datetime(2026, 11, 19, 4, 0,
+                                                tzinfo=timezone.utc)):
+            data = option_chain_live._contracts()
+        self.assertTrue(data["available"], data["message"])
+        self.assertEqual(data["matched_banknifty_option_contracts"], 2)
+        self.assertEqual(data["by_id"]["41001"]["option_type"], "CE")
+        self.assertEqual(data["by_id"]["41002"]["option_type"], "PE")
+
+    def test_active_master_with_no_banknifty_options_returns_actionable_gap(self):
+        from workstation_api import option_chain_live
+        path = service.DATA / "dhan" / "instrument_master.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "SECURITY_ID,EXCH_ID,SEGMENT,INSTRUMENT,TRADING_SYMBOL,LOT_SIZE,"
+            "SM_EXPIRY_DATE,STRIKE_PRICE,OPTION_TYPE\n"
+            "12345,NSE,D,OPTIDX,NIFTY-OTHER-CE,65,2026-11-23,26500,CE\n",
+            encoding="utf-8")
+        with patch.object(option_chain_live, "_clock",
+                          return_value=datetime(2026, 11, 19, 4, 0,
+                                                tzinfo=timezone.utc)):
+            data = option_chain_live._contracts()
+        self.assertFalse(data["available"])
+        self.assertIn("ZERO matching", data["message"])
+
     def test_nominal_expiry_guards_current_november_and_after_october_expiry(self):
         """November 23 monthly contract cannot be treated as expired on Nov 19."""
         as_of = date(2026, 11, 19)
