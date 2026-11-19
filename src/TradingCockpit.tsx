@@ -195,8 +195,9 @@ export default function TradingCockpit(){
     })
     setIdentity(previous=>{
       if(data.instruments.some(x=>x.ready&&x.identity===previous))return previous
-      return data.instruments.find(x=>x.ready&&x.identity==='INDEX:BANKNIFTY')?.identity
-        ||data.instruments.find(x=>x.ready)?.identity||''
+      // Do not silently switch a BANKNIFTY research user to an unrelated
+      // cash-equity security when the genuine index spot source is absent.
+      return data.instruments.find(x=>x.ready&&x.identity==='INDEX:BANKNIFTY')?.identity||''
     })
   },[])
   useEffect(()=>{void refreshCatalog().catch(e=>setSourceError(String(e)))},[refreshCatalog])
