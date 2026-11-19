@@ -21,7 +21,7 @@ import os
 import re
 import sqlite3
 
-from . import dhan_workspace, pit_index, service, shared_market_data
+from . import dhan_workspace, intraday_parquet, pit_index, service, shared_market_data
 
 SAFE_SECTOR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &/().,_+-]{0,79}$")
 MAX_IMPORT = 2 * 1024 * 1024
@@ -224,7 +224,16 @@ def browse(*, view: str = "all", as_of: str = "", sector: str = "",
                 "ORDER BY effective_date DESC LIMIT 1",(identity,day)).fetchone()
                 if has_sector else None)
             name=cat.get(identity,{})
+            try:
+                minute = intraday_parquet.status(identity)
+            except (OSError, ValueError):
+                minute = {"ready": False, "source_available": False,
+                          "state": "source_unavailable", "observations": 0}
             selected.append({
+                "minute_source_available": bool(minute["source_available"]),
+                "minute_ready": bool(minute["ready"]),
+                "minute_state": minute["state"],
+                "minute_observations": int(minute.get("observations") or 0),
                 "identity":identity,"symbol":name.get("symbol") or row["display_symbol"],
                 "name":name.get("display_name") or row["display_symbol"],
                 "exchange":row["exchange_segment"][:3],
