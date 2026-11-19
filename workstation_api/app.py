@@ -2454,6 +2454,7 @@ class DhanBatchCreate(BaseModel):
 class DhanLocalConnect(BaseModel):
     model_config = ConfigDict(extra="forbid")
     access_token: SecretStr
+    client_id: SecretStr | None = None
     confirm_local_storage: bool = False
 
 
@@ -2462,7 +2463,8 @@ def market_data_connect_dhan(body: DhanLocalConnect):
     """Explicit local-only, no-token-in-response Dhan account preflight."""
     try:
         return market_data_workflow.store_verified_dhan_access_token(
-            body.access_token.get_secret_value(), confirm_local_storage=body.confirm_local_storage)
+            body.access_token.get_secret_value(), confirm_local_storage=body.confirm_local_storage,
+            client_id=body.client_id.get_secret_value() if body.client_id else "")
     except Exception as exc:
         bad(exc)
 
