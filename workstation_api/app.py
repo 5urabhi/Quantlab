@@ -723,9 +723,11 @@ def trading_cockpit_monitor_tick(body: TradingCockpitRecordRequest):
 
 
 @app.get("/api/trading-cockpit/report")
-def trading_cockpit_report(identity: str, date_ist: str = ""):
+def trading_cockpit_report(identity: str, date_ist: str = "",
+                           horizon_minutes: Literal[3, 6] | None = None):
     try:
-        return trading_cockpit.day_report(identity, date_ist)
+        return trading_cockpit.day_report(
+            identity, date_ist, horizon_minutes=horizon_minutes)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
