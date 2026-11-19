@@ -294,7 +294,7 @@ def _valid_expiry(text: str, current: date) -> bool:
         return False
 
 
-def chain(expiry: str, *, sleep=time.sleep) -> dict:
+def chain(expiry: str, *, force_refresh: bool = False, sleep=time.sleep) -> dict:
     global _LAST_VENDOR_CALL
     if not isinstance(expiry, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", expiry):
         raise ValueError("Select an original Dhan expiry in YYYY-MM-DD form")
@@ -304,7 +304,7 @@ def chain(expiry: str, *, sleep=time.sleep) -> dict:
     key = ("BANKNIFTY", expiry, auth)
     with LOCK:
         cached = _CHAIN_CACHE.get(key)
-        if cached and now - cached[0] < CHAIN_TTL_SECONDS:
+        if cached and not force_refresh and now - cached[0] < CHAIN_TTL_SECONDS:
             return {**cached[1], "cache_hit": True}
         if not _valid_expiry(expiry, _clock().astimezone(IST).date()):
             raise ValueError("Selected Dhan BANKNIFTY option has already expired")
