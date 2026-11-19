@@ -87,9 +87,15 @@ def _request_body(start: date, end: date, flag: str, code: int,
                   offset: str, side: str) -> dict:
     if not start < end or (end - start).days > 30:
         raise ValueError("Dhan expired option requests require up to 30 calendar days")
+    # Dhan /charts/rollingoption has its OWN ordinal convention:
+    # 1 = near, 2 = next, 3 = far. Other Dhan endpoints use 0/1/2.
+    # Confirmed by Dhan support on 2026-01-30 (MadeForTrade #60509).
+    # Preserve the 0/1/2 UI value for active-option contract selection.
+    if code not in (0, 1, 2):
+        raise ValueError("Rolling option expiry must be near, next or far")
     return {
         "exchangeSegment": "NSE_FNO", "interval": "1", "securityId": 25,
-        "instrument": "OPTIDX", "expiryFlag": flag, "expiryCode": code,
+        "instrument": "OPTIDX", "expiryFlag": flag, "expiryCode": code + 1,
         "strike": offset, "drvOptionType": side,
         "requiredData": list(REQUIRED),
         "fromDate": start.isoformat(), "toDate": end.isoformat(),
@@ -111,7 +117,28 @@ def _original_response(body: dict, *, opener=None) -> dict:
             raise ValueError("Dhan expired-options data access denied (401/403). Verify your token and expired-options data subscription") from None
         if exc.code == 429:
             raise ValueError("Dhan rate-limited expired-options history (429); retry later using existing cached calls") from None
-        raise ValueError(f"Dhan expired-options request failed (HTTP {exc.code}); confirm underlying security ID and expiry parameters") from None
+        # Never print the access token or the complete provider response.
+        # Dhan can return DH-905 for an invalid expiry code or another
+        # invalid request value, and DH-907 for unavailable source history.
+        detail = ""
+        try:
+            failure = json.loads(exc.read(4096))
+            if isinstance(failure, dict):
+                vendor_code = str(failure.get("errorCode", "")).strip()
+                if vendor_code in ("DH-905", "DH-907", "DH-902",
+                                   "805", "806", "811", "812", "813", "814"):
+                    detail = f" (Dhan {vendor_code})"
+        except (ValueError, TypeError, UnicodeError, OSError):
+            pass
+        context = (f"{body['expiryFlag'].lower()} {body['drvOptionType']} "
+                   f"{body['strike']}, expiry={body['expiryCode']}, "
+                   f"dates={body['fromDate']}..{body['toDate']}")
+        raise ValueError(
+            f"Dhan expired-options HTTP {exc.code}{detail} for {context}. "
+            "This endpoint uses expiryCode 1=near, 2=next, 3=far. "
+            "If the expiry is still active, refresh the Dhan instrument master "
+            "and use the active-contract history; no option prices have been invented."
+        ) from None
     except (URLError, TimeoutError) as exc:
         raise ValueError("Dhan expired-options data connection unavailable; check local network") from None
     if not raw or len(raw) > MAX_RESPONSE_BYTES:
@@ -283,7 +310,9 @@ def load_option_market(start: date, stop: date, *, expiry_flag: str,
         "unique_option_minute_bars": len(prices),
         "conflicted_excluded": invalid,
         "source": "Dhan v2 one-minute rolling expired-options (OHLC, no historical bid/ask)",
-        "expiry_flag": expiry_flag, "expiry_code": expiry_code,
+        "expiry_flag": expiry_flag,
+        "expiry_code": expiry_code,
+        "dhan_rolling_expiry_code": expiry_code + 1,
         "strike_wings": wings, "cache": "SHA-256 verified local receipts",
     }
 
