@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -652,6 +652,48 @@ def trading_cockpit_replay(identity: str, horizon_minutes: Literal[3, 6] = 6,
         result["source_warning"] = original["warning"]
         result["has_more_history"] = original["has_more"]
         return result
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+class ManualScalpEntryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str = Field(min_length=2, max_length=48)
+    direction: Literal["CALL", "PUT"]
+    quantity: int = Field(gt=0, le=1_000_000)
+    entry_price: float = Field(gt=0, le=1_000_000)
+    note: str = Field(default="", max_length=250)
+
+
+class ManualScalpExitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    exit_price: float = Field(ge=0, le=1_000_000)
+    fees_inr: float = Field(default=0, ge=0, le=100_000)
+
+
+@app.get("/api/trading-cockpit/trades")
+def trading_cockpit_trades(limit: int = 50):
+    try:
+        return manual_trade_journal.list_trades(limit)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/trades")
+def trading_cockpit_trade_enter(body: ManualScalpEntryRequest):
+    try:
+        return manual_trade_journal.enter(
+            body.symbol, body.direction, body.quantity, body.entry_price,
+            body.note)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/trades/{trade_id}/exit")
+def trading_cockpit_trade_exit(trade_id: str, body: ManualScalpExitRequest):
+    try:
+        return manual_trade_journal.exit_trade(
+            trade_id, body.exit_price, body.fees_inr)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
