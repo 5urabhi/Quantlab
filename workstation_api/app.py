@@ -23,13 +23,13 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, Response, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response, HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -701,6 +701,122 @@ def trading_cockpit_replay(identity: str, horizon_minutes: Literal[3, 6] = 6,
         result["has_more_history"] = original["has_more"]
         return result
     except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+
+
+class LiveCopilotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    index_identity: Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"] = "INDEX:BANKNIFTY"
+    depth_identity: str = Field(default="",max_length=30)
+    auto_audit: bool = False
+    confirm_live_data: bool = False
+
+
+@app.get("/api/trading-cockpit/live/status")
+def trading_cockpit_live_status():
+    return live_market.status()
+
+
+@app.get("/api/trading-cockpit/live/events")
+def trading_cockpit_live_events():
+    """Same-origin server-sent updates, not repeated full-page reloading."""
+    return StreamingResponse(
+        live_market.events(), media_type="text/event-stream",
+        headers={"Cache-Control":"no-cache, no-transform", "X-Accel-Buffering":"no"})
+
+
+@app.post("/api/trading-cockpit/live/start")
+def trading_cockpit_live_start(body: LiveCopilotRequest):
+    if not body.confirm_live_data:
+        raise HTTPException(400,"Approve read-only Dhan real-time data recording")
+    if body.depth_identity and not market_depth.DEPTH_ID.fullmatch(body.depth_identity):
+        raise HTTPException(400,"20-level depth is supported for exact NSE_EQ/NSE_FNO identities, not IDX_I")
+    if not os.getenv("DHAN_CLIENT_ID","").strip():
+        raise HTTPException(400,"Add your Dhan client ID in the cockpit's secure connection panel")
+    if not os.getenv("DHAN_ACCESS_TOKEN","").strip():
+        raise HTTPException(400,"Add a Dhan access token in the cockpit connection panel")
+    try:
+        verified=dhan_auth.check_profile()
+        if not verified.get("ok"):
+            raise ValueError(verified.get("message") or "Dhan market data access unverified")
+        return live_market.start(body.index_identity,body.depth_identity,body.auto_audit)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/live/stop")
+def trading_cockpit_live_stop():
+    return live_market.stop()
+
+
+@app.get("/api/trading-cockpit/live/minutes")
+def trading_cockpit_live_minutes(identity: str="INDEX:BANKNIFTY",limit:int=500):
+    try:
+        return live_market.minute_series(identity,limit)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/live/signal")
+def trading_cockpit_live_signal(identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY"):
+    """Never substitute stale historical candles for authenticated live data."""
+    try:
+        original=live_market.minute_series(identity,500)
+        state=live_market.status()
+        if not original["rows"]:
+            return {"ready":False,"identity":identity,"source_kind":"Dhan live LTP",
+                    "reason":"No completed observed 1-minute candles yet",
+                    "quote_mode":"NO_LIVE_OBSERVATIONS"}
+        result=trading_cockpit.snapshot(identity,original["rows"])
+        fresh=(state.get("active") and state.get("ticker_connection")=="connected"
+               and state.get("quotes",{}).get(identity,{}).get("fresh",False))
+        recent=(result["quote_mode"]=="RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE")
+        result["source_kind"]="locally_aggregated_Dhan_live_LTP"
+        result["quote_mode"]="LIVE_OBSERVED" if fresh and recent else "HISTORICAL_OR_STALE"
+        result["ready"]=bool(fresh and recent and result["contiguous_session_bars"]>=30)
+        result["source_warning"]=original["source_warning"]
+        result["note"]="Observed Dhan live index LTP; incomplete ticks and missing minutes are not reconstructed. No option premium is predicted."
+        return result
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/live/predictions")
+def trading_cockpit_live_record(body: TradingCockpitRecordRequest):
+    if body.identity not in live_market.INDEX:
+        raise HTTPException(400,"Live directional predictions require genuine IDX_I observations")
+    observation=trading_cockpit_live_signal(body.identity)
+    if not observation.get("ready"):
+        raise HTTPException(400,"Live stream or 30 consecutive completed minute bars are not yet ready")
+    try:
+        return trading_cockpit.record(observation,body.horizon_minutes)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/live/replay")
+def trading_cockpit_live_replay(
+    identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY",
+    horizon_minutes:Literal[3,6]=6,limit:int=1500):
+    """Past live-captured minute bars, not the 20-level stream transformed to prices."""
+    try:
+        source=live_market.minute_series(identity,limit)
+        result=trading_cockpit.historical_replay(identity,source["rows"],horizon_minutes)
+        result["source_kind"]=source["basis"]
+        result["source_warning"]=source["source_warning"]
+        result["has_more_history"]=source["has_more"]
+        return result
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/live/depth-history")
+def trading_cockpit_live_depth_history(identity: str,limit:int=150):
+    try:
+        return live_market.latest_depth_history(identity,limit)
+    except (ValueError,OSError,sqlite3.Error) as exc:
         bad(exc)
 
 
