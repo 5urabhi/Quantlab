@@ -52,3 +52,21 @@
 .tc-trade-form button:disabled,.tc-open-trade button:disabled{opacity:.5;cursor:not-allowed}
 @media(max-width:760px){.tc-trade-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:520px){.tc-trade-form{grid-template-columns:minmax(0,1fr)}}
+
+
+.tc-token-panel{display:grid;gap:10px}
+.tc-token-panel .tc-panel-title{margin-bottom:0}
+.tc-token-status{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px;color:#b8d1e8}
+.tc-token-status button,.tc-token-form button,.tc-backtest-controls button{border:1px solid #44627f;border-radius:8px;background:#223750;color:#e3f1ff;padding:9px 12px;cursor:pointer}
+.tc-token-status button:disabled,.tc-token-form button:disabled{opacity:.45;cursor:not-allowed}
+.tc-token-state{font-weight:700;font-size:11px;letter-spacing:.06em;border-radius:18px;padding:7px 12px;background:#403125;color:#f5c999;border:1px solid #91613a}
+.tc-token-state.good{background:#183d38;color:#8bedd0;border-color:#306457}
+.tc-token-state.soon{background:#42371c;color:#f9db8e;border-color:#947735}
+.tc-token-form{display:grid;gap:12px;max-width:730px;padding:14px;background:#17283b;border:1px solid #38526b;border-radius:10px}
+.tc-token-form label{display:grid;gap:7px;font-size:13px;color:#c6d8e9}
+.tc-token-form input[type=password]{background:#0d1a29;color:#e5f2ff;border:1px solid #496785;padding:10px;border-radius:7px;min-width:0}
+.tc-token-form .tc-token-consent{display:flex;align-items:flex-start;gap:8px}
+.tc-token-form button{justify-self:start}
+.tc-backtest-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tc-backtest-controls label{display:flex;gap:8px;align-items:center;font-size:12px;color:#afc6df}
+.tc-backtest-controls select{border:1px solid #38526b;border-radius:8px;color:#e1edf9;background:#17283b;padding:8px}
