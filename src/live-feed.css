@@ -43,3 +43,17 @@
 .lf-root .tc-warning{display:flex;align-items:flex-start;gap:10px}
 @media(max-width:1150px){.lf-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:630px){.lf-cards{grid-template-columns:minmax(0,1fr)}.lf-start-form{display:grid}.lf-start-form>label,.lf-contract-search{min-width:0}.lf-title{gap:7px}.lf-search-row{flex-wrap:wrap}}
+
+/* Live workspace keeps observed prices prominent; connection controls expand only on request. */
+.lf-connect-block,.lf-connect-warning,.lf-signal-actions{display:flex;align-items:center;flex-wrap:wrap;gap:14px;padding:14px 16px;border:1px solid #33576b;border-radius:10px;background:#142c3b}
+.lf-connect-block>div,.lf-signal-actions>div{flex:1;min-width:260px}
+.lf-connect-block strong,.lf-signal-actions strong{font-size:14px;color:#dceffc}
+.lf-connect-block p,.lf-signal-actions p{font-size:12px;line-height:1.5;color:#aac4d9;margin:5px 0 0}
+.lf-connect-warning{border-color:#7a6040;background:#372b24;font-size:13px;color:#f1ca99}
+.lf-connect-warning span{flex:1;min-width:240px}
+.lf-connect-block button,.lf-connect-warning button,.lf-signal-actions button{border:1px solid #5a8aa4;border-radius:8px;background:#265a71;color:#e6f7ff;padding:10px 13px;cursor:pointer;white-space:normal}
+.lf-signal-actions label{display:grid;gap:5px;color:#b9d4e7;font-size:12px}
+.lf-signal-actions select{border:1px solid #456479;background:#12283d;color:#e4f1fa;padding:8px 10px;border-radius:7px}
+.lf-signal-actions button:disabled{opacity:.45;cursor:not-allowed}
+.lf-root .tc-warning{font-size:11px;line-height:1.5}
+@media(max-width:700px){.lf-connect-block>div,.lf-signal-actions>div{min-width:0;flex-basis:100%}}
