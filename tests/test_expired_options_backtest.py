@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.error import HTTPError
+from io import BytesIO
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -64,7 +66,7 @@ def fake_dhan(body):
     assert body["exchangeSegment"] == "NSE_FNO"
     assert body["interval"] == "1"
     assert body["expiryFlag"] == "MONTH"
-    assert body["expiryCode"] == 0
+    assert body["expiryCode"] == 1
     off = body["strike"]
     index = (int(off[4:]) if off.startswith("ATM+") else
              -int(off[4:]) if off.startswith("ATM-") else 0)
@@ -296,12 +298,43 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertEqual(body["exchangeSegment"], "NSE_FNO")
         self.assertEqual(body["securityId"], 25)
         self.assertEqual(body["instrument"], "OPTIDX")
-        self.assertEqual(body["expiryCode"], 0)
+        self.assertEqual(body["expiryCode"], 1)
         self.assertEqual(body["drvOptionType"], "PUT")
         self.assertIn("strike", body["requiredData"])
         with self.assertRaises(ValueError):
             exp._request_body(date(2026, 11, 1),
                               date(2026, 12, 2), "MONTH", 0, "ATM", "CALL")
+
+    def test_rolling_options_uses_endpoint_specific_expiry_code_one_two_three(self):
+        for choice, vendor in ((0, 1), (1, 2), (2, 3)):
+            request = exp._request_body(
+                date(2026, 11, 12), date(2026, 11, 13),
+                "MONTH", choice, "ATM", "CALL")
+            self.assertEqual(request["expiryCode"], vendor)
+            self.assertEqual(request["securityId"], 25)
+        with self.assertRaises(ValueError):
+            exp._request_body(date(2026, 11, 12), date(2026, 11, 13),
+                              "MONTH", 3, "ATM", "CALL")
+
+    def test_dhan_dh905_http400_reports_contract_context_without_exposing_access_token(self):
+        body = exp._request_body(date(2026, 11, 12), date(2026, 11, 13),
+                                 "MONTH", 0, "ATM+1", "CALL")
+        bad_response = BytesIO(
+            b'{"errorType":"Input_Exception","errorCode":"DH-905",'
+            b'"errorMessage":"expiryCode is required"}')
+        def rejected(request, timeout):
+            self.assertEqual(request.get_method(), "POST")
+            self.assertEqual(body["expiryCode"], 1)
+            raise HTTPError(
+                exp.ENDPOINT, 400, "Bad Request", {}, bad_response)
+        with patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": "SECRET-FOR-TEST-ONLY"}):
+            with self.assertRaisesRegex(ValueError, "Dhan expired-options HTTP 400") as caught:
+                exp._original_response(body, opener=rejected)
+        public_message = str(caught.exception)
+        self.assertIn("Dhan DH-905", public_message)
+        self.assertIn("expiry=1", public_message)
+        self.assertIn("ATM+1", public_message)
+        self.assertNotIn("SECRET-FOR-TEST-ONLY", public_message)
 
     def test_no_history_without_confirmed_dhan_access_or_cached_originals(self):
         with patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": ""}):
