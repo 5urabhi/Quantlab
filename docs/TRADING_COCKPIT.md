@@ -16,7 +16,48 @@ one-minute observations. The Bank Nifty and Nifty 50 spot index entries
 become usable only when an authentic **Dhan IDX_I one-minute historical
 batch with matching SHA-256 manifest** exists in the local source library.
 These are index spot values, **not live quotes or traded option prices**.
-NSE_FNO options contracts are not yet connected to a streaming quote feed.
+Live NSE_FNO option quotes and 20-level books require a separately
+subscribed genuine Dhan option Security ID, a running authorized WebSocket,
+and original observed packets. The market-status UI never presents stale
+historical candle values as live prices.
+
+## New Trading Copilot navigation (focused workspaces)
+
+Trading Copilot is **not one long page**. The top status strip always shows
+(1) Indian Standard Time, (2) whether the **regular NSE weekday session
+window** (09:15–15:30 IST) applies, and separately (3) whether an authenticated
+broker feed contains **fresh market observations**.
+
+The UI chooses **Live Market** by default during the regular NSE session
+window, or when a live recording is already running. Outside the regular
+window with no ongoing live feed, it opens **Historical Research** by default.
+This is *navigation only*: it never starts a WebSocket, renews a token or
+submits orders without explicit user permission. After you select a workspace
+manually, it does not unexpectedly switch screens under your cursor.
+
+**Important:** Regular hours are a *schedule heuristic*, not authoritative
+exchange holiday/special-session status. Only fresh actual broker price packets
+justify the **LIVE** status. NSE holidays or scheduled special trading are not
+silently guessed by the frontend.
+
+| Workspace | What to do |
+| --- | --- |
+| **Live Market** | View fresh BANKNIFTY/NIFTY50 index LTP and the selected NSE equity / option 20-level book; configure a feed only when needed; record prospective 3/6-minute calls; use the manual six-minute discipline timer. |
+| **Historical Research** | Choose **Price chart & signals**, **Directional backtest**, or **Saved live recordings**. Each is a separate screen; saved original 20-level observations remain reviewable after the stream stops. |
+| **Trading Journal** | Switch between **My manual trades** (entered option premiums and outcomes) and **Prediction accuracy** (prospective directional calls, reported independently from P&L). |
+| **Connections & Data** | Add/replace the Dhan access token and numeric client ID, inspect expiry and entitlements, prepare already-downloaded minute files, or fetch original missing IDX_I spot observations. All paths reuse `dhan_shared`. |
+
+Connection controls are no longer shown above every chart. A missing client
+ID in Live Market offers a direct **Open Connections** action; historical
+research stays available without a live account. Live configuration is
+collapsed behind **Configure live feed** until the user opens it, and the
+historical chart's experimental local-file audit is under **Advanced source
+audit** to avoid confusing it with real-time market monitoring.
+
+Stored original minute and depth observation tables are discovered via
+`GET /api/trading-cockpit/live/capture-catalog`, then replayed only when
+chosen by the user. Research views are driven by source identity and timestamp,
+not by maintaining duplicate manually named datasets.
 
 ## Dual-mode operation: historical + real-time Dhan
 
@@ -38,13 +79,13 @@ Market Library (`dhan_shared`)**:
 
 ### In-app live workflow
 
-1. Open **Trading Cockpit**. Enter/replace your Dhan token and **numeric
+1. Open **Trading Cockpit → Connections & Data**. Enter/replace your Dhan token and **numeric
    client ID** in the one-time local connection form. The backend verifies
    that the provided client ID matches the authorized Dhan broker profile
    before storing either in the private, gitignored `.env`. Neither
    credential is sent to user-facing reports, broker logs, GitHub, saved
    market evidence, or frontend localStorage.
-2. Under **Live streaming**, choose BANKNIFTY (default) or NIFTY 50 as
+2. Under **Live Market → Configure live feed**, choose BANKNIFTY (default) or NIFTY 50 as
    your underlying signal source. To add real 20-level data, search a
    currently listed contract in the original Dhan instrument master and
    select its exact `NSE_FNO:<SecurityId>`, or enter an exact
@@ -65,11 +106,10 @@ Market Library (`dhan_shared`)**:
    interrupt the backend capture while the local Python server is running.
    Stopping the QuantLab server stops the capture. Previously recorded
    ticker minute observations and source-backed depth history remain.
-6. Use **Replay saved live minutes** to run the existing source-limited
-   directional backtest against your captured index bars, or
-   **Inspect stored 20-level books** to inspect the locally retained
-   paired bid/ask evidence. The separate **Historical directional
-   backtest** works even with live streaming disabled.
+6. Open **Historical Research → Saved live recordings** to run a source-
+   limited directional replay against captured minute bars or inspect archived
+   paired 20-level depth evidence. **Historical Research → Directional backtest**
+   remains available while streaming is stopped.
 
 ### Real data / execution limitations
 
