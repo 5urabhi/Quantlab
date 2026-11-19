@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, time
 from pathlib import Path
+from contextlib import contextmanager
 from zoneinfo import ZoneInfo
 import json
 import math
@@ -171,6 +172,7 @@ def _db_path() -> Path:
     return service.DATA / "trading_cockpit" / "predictions.sqlite3"
 
 
+@contextmanager
 def _connection() -> sqlite3.Connection:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,7 +196,11 @@ def _connection() -> sqlite3.Connection:
         actual_direction TEXT,
         UNIQUE(identity,bar_utc,horizon_minutes,model_version)
     )""")
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _public(row: sqlite3.Row) -> dict:
