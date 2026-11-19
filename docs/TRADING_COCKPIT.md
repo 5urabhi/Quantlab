@@ -18,6 +18,93 @@ batch with matching SHA-256 manifest** exists in the local source library.
 These are index spot values, **not live quotes or traded option prices**.
 NSE_FNO options contracts are not yet connected to a streaming quote feed.
 
+## Dual-mode operation: historical + real-time Dhan
+
+Trading Copilot now exposes **two independent data paths in one logical
+Market Library (`dhan_shared`)**:
+
+- **Historical:** original, SHA-locked Dhan minute candles, canonical shared
+  stock-price history, deterministic 3/6-minute directional replay.
+- **Live:** original Dhan WebSocket **ticker** updates on BANKNIFTY/NIFTY 50
+  price index (`IDX_I`, identifiers 25/13), optionally together with a
+  separate authenticated WebSocket for **20-level bid/ask order books**
+  on a specific NSE equity or F&O contract. Only the selected contract has
+  a 20-level order book: an INDEX itself is not an order-book instrument.
+- **Persistent capture:** actual received ticker packets are deduplicated,
+  source-labeled, grouped into 1-minute OHLC **without inventing missing
+  observations or traded volume**, and stored alongside sampled original
+  paired 20-level books in the existing `data/dhan/shared_market.sqlite3`.
+  Original historical vendor files remain unchanged.
+
+### In-app live workflow
+
+1. Open **Trading Cockpit**. Enter/replace your Dhan token and **numeric
+   client ID** in the one-time local connection form. The backend verifies
+   that the provided client ID matches the authorized Dhan broker profile
+   before storing either in the private, gitignored `.env`. Neither
+   credential is sent to user-facing reports, broker logs, GitHub, saved
+   market evidence, or frontend localStorage.
+2. Under **Live streaming**, choose BANKNIFTY (default) or NIFTY 50 as
+   your underlying signal source. To add real 20-level data, search a
+   currently listed contract in the original Dhan instrument master and
+   select its exact `NSE_FNO:<SecurityId>`, or enter an exact
+   `NSE_EQ:<SecurityId>`. You may omit the depth identity if you only
+   need the index's live price. The underlying and the option order book
+   are separate subscriptions.
+3. Approve read-only recording and click **Start live feed**. The Python
+   backend opens the sockets and reconnects with bounded backoff. Server
+   Sent Events push latest status/quotes/books to the React panel without
+   refreshing unrelated controls.
+4. The index LTP and market depth display actual packet arrival time and
+   stale badges. A connected socket alone is **not** proof of fresh market
+   data; stale/unavailable or non-market-hour packets do not receive
+   a live-ready label. A 3/6-minute index rule requires **30 consecutive
+   completed** observed 1-minute bars. Automatic predictive audits must be
+   opted into separately. Manual trades remain manual and unverified.
+5. Click **Stop streams** to stop; closing your browser tab does **not**
+   interrupt the backend capture while the local Python server is running.
+   Stopping the QuantLab server stops the capture. Previously recorded
+   ticker minute observations and source-backed depth history remain.
+6. Use **Replay saved live minutes** to run the existing source-limited
+   directional backtest against your captured index bars, or
+   **Inspect stored 20-level books** to inspect the locally retained
+   paired bid/ask evidence. The separate **Historical directional
+   backtest** works even with live streaming disabled.
+
+### Real data / execution limitations
+
+- **Do not** interpret an index-direction signal as a predicted or
+  executable CE/PE premium. You continue selecting your option and
+  entering actual filled prices manually.
+- A historical Dhan minute-candle response does **not** include historical
+  20-level order books. Only live books recorded since the user enabled
+  recording, or separately imported *authorized original* order-book
+  archives, are replayable. The live book is displayed from the newest
+  paired original packets; storage samples at most one per second and
+  retains no more than 30,000 per live session.
+- Live ticker LTP updates are not necessarily every market transaction.
+  Tick-derived OHLC is labeled accordingly, volume is not inferred,
+  gaps are never forward-filled and invalid timestamp/price data is
+  rejected. The Dhan v2 protocol also defines a separate **index
+  response packet (code 1)** without a documented payload layout in
+  the cited live feed reference. The decoder deliberately excludes
+  unknown packet formats rather than interpreting arbitrary bytes as
+  an index price. A broker-session smoke test during market hours is
+  needed to confirm that the subscribed IDX_I ticker sends supported
+  price packets on this account.
+- Capture and replay are **read-only**. No Zerodha/Dhan order placement,
+  automated exit, fill claim, realized option backtest, commission,
+  historical Level 3 order book reconstruction or calibrated probability
+  is implied. Genuine minute and depth market entitlements may differ.
+- Live feed server and credential endpoints are intended **strictly for
+  local loopback**. Never expose the local API through a public tunnel.
+  Tests only use offline fixtures and mocks; they cannot certify account
+  entitlements, current exchange hours or a real broker connection.
+
+Official protocol reference: DhanHQ v2 Live Market Feed and Full Market Depth
+documentation. These establish WebSocket authentication, ticker code 2,
+20-level code 41/51 packet framing, subscription scope and limitations.
+
 ## One shared market library — resolving "source unavailable"
 
 QuantLab's everyday market database is **`dhan_shared`** (canonical
