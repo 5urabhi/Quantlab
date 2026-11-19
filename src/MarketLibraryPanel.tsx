@@ -6,7 +6,8 @@ import './market-library.css'
 type Group={id:string;label:string;source_state:string}
 type Stock={identity:string;symbol:string;name:string;exchange:string;security_id:string;
   observations:number;first_date:string|null;last_date:string|null;
-  sector:string|null;sector_effective_date:string|null;sector_source:string}
+  sector:string|null;sector_effective_date:string|null;sector_source:string;
+  minute_source_available:boolean;minute_ready:boolean;minute_state:string;minute_observations:number}
 type Library={library_id:string;available:boolean;as_of:string;as_of_defaulted?:boolean;
   view:string;sector:string;total:number;items:Stock[];groups:Group[];sectors:string[];
   has_more:boolean;page?:number;source_state:{state:string;reason:string};
@@ -132,8 +133,9 @@ export default function MarketLibraryPanel({onOpenDownloads,onChooseModel,onInsp
     <div className="ml-header">
       <div><div className="ml-kicker"><Database size={16}/> ONE MARKET DATA LIBRARY</div>
         <h3>All your stocks. One source-backed library.</h3>
-        <p>Each exchange/security has one canonical daily-close history. NIFTY indices and
-          sectors are dated views—not separate duplicate downloads.</p>
+        <p>Each exchange/security has one canonical price history with distinct daily
+          and minute resolutions. NIFTY indices and sectors are dated filters, not duplicated
+          databases. Chart preparation reuses the original downloaded candles.</p>
       </div>
       <div className="ml-actions">
         <button type="button" className="ws-button secondary" onClick={refresh}>
@@ -183,13 +185,17 @@ export default function MarketLibraryPanel({onOpenDownloads,onChooseModel,onInsp
     <div className="ml-table-wrap">
       <table className="ml-table">
         <thead><tr><th>Stock</th><th>Exchange / ID</th><th>Sector</th>
-          <th>Observed daily closes</th><th>Observed range</th></tr></thead>
+          <th>Observed daily closes</th><th>Original 1-min candles</th><th>Observed range</th></tr></thead>
         <tbody>{(library?.items||[]).map(stock=><tr key={stock.identity}>
           <td><strong>{stock.symbol}</strong><small>{stock.name}</small></td>
           <td>{stock.exchange} · {stock.security_id}</td>
           <td>{stock.sector||'Unclassified'}{stock.sector&&<small>
             Effective {stock.sector_effective_date} · user source</small>}</td>
           <td>{stock.observations.toLocaleString()}</td>
+          <td>{stock.minute_ready
+            ?'Ready · '+stock.minute_observations.toLocaleString()+' bars'
+            :stock.minute_source_available?'Downloaded · needs chart preparation':'Not downloaded'}
+          </td>
           <td>{stock.first_date||'—'} → {stock.last_date||'—'}</td>
         </tr>)}</tbody>
       </table>
