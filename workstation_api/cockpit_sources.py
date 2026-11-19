@@ -172,8 +172,8 @@ def prepare_local(identities: list[str] | None = None, *, progress=None) -> dict
         candidates = [entry["identity"] for entry in intraday_parquet.catalog(300)["instruments"]]
     else:
         candidates = list(dict.fromkeys(identities))
-    if len(candidates) > 40:
-        raise ValueError("Prepare at most 40 original one-minute instruments per job")
+    total_candidates = len(candidates)
+    candidates = candidates[:40]
     prepared, reused, skipped = [], [], []
     max_file_bytes = 80 * 1024 * 1024
     max_total_bytes = 500 * 1024 * 1024
@@ -209,7 +209,8 @@ def prepare_local(identities: list[str] | None = None, *, progress=None) -> dict
     return {
         "canonical_library_id": "dhan_shared",
         "original_sources_unchanged": True, "external_market_requests": 0,
-        "checked": len(candidates), "prepared_count": len(prepared),
+        "checked": len(candidates), "remaining_unselected": max(0, total_candidates - len(candidates)),
+        "prepared_count": len(prepared),
         "already_ready_count": len(reused), "blocked_count": len(skipped),
         "prepared": prepared, "already_ready": reused, "blocked": skipped,
         "note": ("One shared market-data library with per-instrument source-backed "
