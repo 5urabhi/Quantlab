@@ -584,6 +584,54 @@ def trading_cockpit_instruments():
     return cockpit_sources.catalog(200)
 
 
+
+class TradingCockpitSourceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm_reuse_originals: bool = False
+
+
+@app.post("/api/trading-cockpit/sources/prepare")
+def trading_cockpit_prepare_sources(body: TradingCockpitSourceRequest):
+    """Rebuild missing chart views only from locally verified original files."""
+    if not body.confirm_reuse_originals:
+        raise HTTPException(400, "Confirm reuse of existing original minute candles")
+    try:
+        count = cockpit_sources.catalog(200)["downloaded_equities_pending_preparation"]
+        if not count:
+            return {"status": "already_prepared", "job_id": None,
+                    "message": "No downloaded one-minute sources need preparation."}
+        return _spawn("cockpit_prepare_existing", cockpit_sources.prepare_local)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class TradingCockpitSpotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity: Literal["INDEX:BANKNIFTY", "INDEX:NIFTY50"]
+    from_date: str
+    to_date: str
+    confirm_readonly: bool = False
+
+
+@app.post("/api/trading-cockpit/sources/index-spot")
+def trading_cockpit_acquire_index_spot(body: TradingCockpitSpotRequest):
+    """Explicitly authorized read-only Dhan spot data, not constituent approximation."""
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Approve read-only original Dhan spot history")
+    try:
+        market_data_workflow._dates(body.from_date, body.to_date, 1)
+        if (datetime.fromisoformat(body.to_date).date() -
+                datetime.fromisoformat(body.from_date).date()).days > 90:
+            raise ValueError("Select at most 90 calendar days per index request")
+        access = dhan_auth.check_profile()
+        if not access.get("ok"):
+            raise ValueError(access.get("message") or "Dhan historical Data API unavailable")
+        return _spawn("cockpit_original_index_spot", cockpit_sources.download_spot,
+                      body.identity, body.from_date, body.to_date)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/snapshot")
 def trading_cockpit_snapshot(identity: str, limit: int = 500):
     try:
@@ -2619,6 +2667,31 @@ def _run_bulk(batch_id: str, cancel: Event):
                               "it in the shared market library needs review: "+
                               job_safety.scrub(exc)[:140],
                     "next_action":"Database Manager → Market Library → Index original batches"}
+        # Make newly downloaded one-minute instruments usable immediately in
+        # Trading Cockpit. Only source-backed Parquet views are built; the
+        # canonical shared prices and immutable original Dhan receipts remain.
+        # Limit automatic work to moderate batches; large universes use the
+        # explicit cockpit preparation action to avoid surprise CPU/disk usage.
+        if outcome.get("status") == "completed" and not cancel.is_set():
+            try:
+                batch = dhan_workspace._load_batch(batch_id)
+                if batch.get("interval") == 1:
+                    identities = [row["id"] for row in batch.get("items", [])
+                                  if row.get("status") in ("complete", "cached")
+                                  and shared_market_data.SAFE_IDENTITY.fullmatch(
+                                      str(row.get("id", "")))]
+                    if len(identities) <= 30:
+                        outcome["minute_chart_preparation"] = cockpit_sources.prepare_local(
+                            identities)
+                    else:
+                        outcome["minute_chart_preparation"] = {
+                            "status": "manual_preparation_available",
+                            "source_count": len(identities),
+                            "note": "Open Trading Cockpit to prepare bounded source-backed chart views.",
+                        }
+            except (ValueError, OSError) as exc:
+                outcome["minute_chart_preparation"] = {
+                    "status": "needs_review", "reason": job_safety.scrub(exc)[:160]}
         # If the user previously enabled a small 1-minute cache, refresh
         # it after a successful original Dhan batch. Larger data remains a
         # visible manual action rather than an unexpected CPU/disk spike.
