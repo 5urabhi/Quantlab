@@ -193,6 +193,10 @@ try {
     }).inputValue(),'30','Historic units per lot are a clearly labeled assumption')
     await advancedOptionSettings.click()
     await historicalOptions.getByText('90 option units',{exact:false}).waitFor()
+    assert.equal(await historicalOptions.getByRole('combobox',{
+      name:'Highlighted option exit rule',
+    }).inputValue(),'signal_reversal')
+    await historicalOptions.getByText('UP → buy CE',{exact:false}).waitFor()
 
     // Exercise the actual UI -> read-only job POST -> completed job result
     // without any real vendor access; every returned price is synthetic CI.
@@ -201,7 +205,7 @@ try {
       assert.equal(request.confirm_readonly,true)
       assert.equal(request.lots,3)
       assert.equal(request.target_ltp,300)
-      assert.equal(request.hold_rule,'fixed')
+      assert.equal(request.hold_rule,'signal_reversal')
       return route.fulfill({status:200,contentType:'application/json',
         body:JSON.stringify({job_id:'ci_synthetic_options_fixture',status:'queued'})})
     })
