@@ -93,7 +93,7 @@
 .tc-workspace-head h2{font-size:25px;margin:5px 0}
 .tc-workspace-head p{font-size:13px;line-height:1.5;max-width:800px}
 .tc-workspace-readonly{display:inline-flex;align-items:center;gap:7px;border:1px solid #3a6072;background:#163747;color:#a3dcd8;padding:9px 13px;border-radius:20px;white-space:nowrap;font-size:11px;font-weight:700}
-.tc-market-strip{display:grid;grid-template-columns:1.1fr 1.1fr .75fr;gap:11px}
+.tc-market-strip{display:grid;grid-template-columns:1.1fr 1.1fr .95fr .75fr;gap:11px}
 .tc-status-item{display:flex;align-items:center;gap:11px;background:#15273a;border:1px solid #2b455c;border-radius:11px;padding:13px 16px;min-width:0}
 .tc-status-item>div{display:grid;gap:3px;min-width:0}
 .tc-status-item strong{font-size:13px;color:#e2f2ff;font-weight:700}
