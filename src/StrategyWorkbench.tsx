@@ -8,19 +8,22 @@ type Counts={
   total:number;scored:number;correct:number;incorrect:number;pending:number;
   no_trade:number;flat:number;unverifiable:number;directional_accuracy:number|null;
   up_signals:number;down_signals:number;actual_up:number;actual_down:number;
-  live_observed:number;local_observed:number
+  live_observed:number;local_observed:number;
+  unscored_after_last_bar:number;unscored_missing_minute:number
 }
 type Day=Counts&{session_ist:string}
 type HistoricalEvent={
   bar_utc:string;session_ist:string;horizon_minutes:number;
   direction:'UP'|'DOWN'|'NO_TRADE';reference_close:number;
   observed_close:number|null;movement_bps:number|null;
-  actual_direction:'UP'|'DOWN'|'FLAT'|null;evaluation:string
+  actual_direction:'UP'|'DOWN'|'FLAT'|null;evaluation:string;
+  unscored_reason?:'after_last_observed_bar'|'missing_original_minute'|null
 }
 type HistoricalResult={
   identity:string;horizon_minutes:3|6;observed_source_bars:number;
   model_version:string;mode:'RETROSPECTIVE_HISTORICAL_RULE_REPLAY';
   overall:Counts;days:Day[];latest_events:HistoricalEvent[];
+  latest_signal_events:HistoricalEvent[];
   disclaimer:string;source_warning:string;has_more_history:boolean
 }
 type ForwardReport={
@@ -106,8 +109,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
     }catch(e){setError(e)}
     finally{setBusy(false)}
   }
-  const detailed=(tested?.latest_events||[]).filter(row=>
-    showAll||row.direction!=='NO_TRADE')
+  const detailed=(showAll?tested?.latest_events:tested?.latest_signal_events)||[]
   const recentForward=(ledger?.predictions||[]).filter(row=>row.horizon_minutes===selected)
     .slice(0,25)
 
@@ -169,7 +171,7 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
               <span><b className="good">{data.overall.correct}</b> Correct</span>
               <span><b className="bad">{data.overall.incorrect}</b> Incorrect</span>
               <span><b>{data.overall.no_trade}</b> No trade</span>
-              <span><b>{data.overall.unverifiable}</b> Source gaps</span>
+              <span title="Only UP/DOWN calls with no exact observed outcome. Includes session-end and true missing-minute cases."><b>{data.overall.unverifiable}</b> Unscored</span>
             </div>
             <small>Accuracy = correct ÷ ({data.overall.correct} correct + {data.overall.incorrect} incorrect). Flat outcomes excluded.</small>
           </button>
@@ -193,8 +195,13 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
           <span>UP signals <strong>{tested.overall.up_signals}</strong></span>
           <span>DOWN signals <strong>{tested.overall.down_signals}</strong></span>
           <span>Flat outcome <strong>{tested.overall.flat}</strong></span>
-          <span>Not scorable <strong>{tested.overall.unverifiable}</strong></span>
+          <span title="Missing source minute or the prediction horizon falls after the last recorded bar."><span>Unscored UP/DOWN</span><strong>{tested.overall.unverifiable}</strong></span>
         </div>
+        {tested.overall.unverifiable>0&&<p className="tc-muted">
+          {tested.overall.unscored_after_last_bar||0} horizons beyond the last recorded minute;
+          {' '}{tested.overall.unscored_missing_minute||0} missing interior minute observations.
+          NO TRADE decisions do not count as missed predictions.
+        </p>
         <div className="tc-table-scroll tc-signal-event-table">
           <table><thead><tr>
             <th>IST signal time</th><th>Predicted</th><th>Index at signal</th>
@@ -208,14 +215,17 @@ export default function StrategyWorkbench({instruments,onOpenData,onOpenReplay}:
               <td>{fmt(row.reference_close)}</td><td>{fmt(row.observed_close)}</td>
               <td className={row.movement_bps===null?'':row.movement_bps>=0?'tc-replay-positive':'tc-replay-negative'}>{moveText(row.movement_bps)}</td>
               <td>{row.actual_direction||'—'}</td>
-              <td><span className={'tc-result '+row.evaluation.toLowerCase()}>{outcome(row.evaluation)}</span></td>
+              <td><span className={'tc-result '+row.evaluation.toLowerCase()}
+                title={row.unscored_reason==='after_last_observed_bar'?'No later observed minute in this session':
+                  row.unscored_reason==='missing_original_minute'?'Exact future observed minute missing':undefined}>
+                {outcome(row.evaluation)}</span></td>
             </tr>)}
-            {!detailed.length&&<tr><td colSpan={7}>No UP/DOWN signals among the latest 100 historical decisions. Enable NO TRADE decisions to see why this window was skipped.</td></tr>}
+            {!detailed.length&&<tr><td colSpan={7}>No UP/DOWN signals were produced in this historical window. Enable NO TRADE decisions to inspect recent skipped minutes.</td></tr>}
             </tbody></table>
         </div>
-        <p className="tc-muted">Table shows the latest 100 historical decisions for the selected horizon; scores cover the full selected historical window. Past candles are not permanently logged real-time predictions.</p>
+        <p className="tc-muted">Table shows the latest 100 {showAll?'historical decisions, including NO TRADE':'UP/DOWN signals'} for this horizon. Scorecards cover the complete selected window. Historical decisions are never presented as predictions recorded live.</p>
         <h4 className="tc-signal-subtitle">Accuracy by Indian trading session</h4>
-        <div className="tc-table-scroll"><table><thead><tr><th>IST date</th><th>Correct</th><th>Incorrect</th><th>Accuracy</th><th>No trade</th><th>Flat</th><th>Gaps</th></tr></thead>
+        <div className="tc-table-scroll"><table><thead><tr><th>IST date</th><th>Correct</th><th>Incorrect</th><th>Accuracy</th><th>No trade</th><th>Flat</th><th>Unscored UP/DOWN</th></tr></thead>
           <tbody>{tested.days.map(day=><tr key={day.session_ist}>
             <td>{day.session_ist}</td><td>{day.correct}</td><td>{day.incorrect}</td>
             <td>{score(day.directional_accuracy)}</td><td>{day.no_trade}</td><td>{day.flat}</td><td>{day.unverifiable}</td>
