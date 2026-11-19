@@ -32,7 +32,16 @@ function CandleChart({rows}:{rows:Candle[]}){
   const height=310, width=970, left=54,right=16,top=18,bottom=27,chartW=width-left-right,chartH=height-top-bottom
   const x=(i:number)=>left+(i+.5)*chartW/data.length
   const y=(p:number)=>top+(max-p)/range*chartH
-  const line=(key:'ema9'|'ema21')=>data.map((r,i)=>r[key]===null?'':`${i===0?'M':'L'}${x(i).toFixed(1)},${y(r[key]!).toFixed(1)}`).join(' ')
+  const line=(key:'ema9'|'ema21')=>{
+    let started=false
+    return data.map((row,i)=>{
+      const value=row[key]
+      if(value===null){started=false;return ''}
+      const command=started?'L':'M'
+      started=true
+      return `${command}${x(i).toFixed(1)},${y(value).toFixed(1)}`
+    }).join(' ')
+  }
   const step=chartW/data.length
   const selected=hover===null?data[data.length-1]:data[hover]
   return <div className="tc-chart">
