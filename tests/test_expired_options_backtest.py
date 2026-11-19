@@ -153,9 +153,18 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
 
     def test_full_up_down_up_flips_ce_pe_ce_at_identical_next_open(self):
         """Reverse long CE -> long PE -> long CE, no overlapping execution."""
+        # Calls/puts can require different actual strikes to reach ~INR300.
+        # The chosen PE must be re-selected from PUT prices, never inherit
+        # the previous CE's strike.
+        quotes = market()
+        for i in range(70):
+            premium = 300 + .25 * i
+            quotes[(stamp(i), "PUT")] = {
+                62100.: quote(i, strike=62100, side="PUT",
+                              open_price=premium, close_price=premium)}
         outcome = exp.simulate_options(
             events((29, "UP"), (32, "NO_TRADE"), (35, "DOWN"), (40, "UP")),
-            source(), market(), policy="signal_reversal_or_cap",
+            source(), quotes, policy="signal_reversal_or_cap",
             hold=5, cap=10, slippage_bps=0)
         self.assertEqual(outcome["trade_count"], 3)
         self.assertEqual(outcome["reversal_switches"], 2)
@@ -169,6 +178,8 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertEqual(
             [t["entry_reason"] for t in outcome["trades"]],
             ["signal_entry", "opposite_signal_flip", "opposite_signal_flip"])
+        self.assertEqual([first["strike"], second["strike"], third["strike"]],
+                         [62000., 62100., 62000.])
         self.assertEqual(first["exit_reason"], "opposite_signal")
         self.assertEqual(second["exit_reason"], "opposite_signal")
         self.assertEqual(second["flipped_from_option_side"], "CE")
