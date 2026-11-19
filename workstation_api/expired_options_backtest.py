@@ -120,8 +120,16 @@ def _expired_eligible(session: date, *, expiry_flag: str,
         # eligible weekly sessions are already safely expired in 2026;
         # current-month weekly contracts must not be synthesized.
         return session < date(2024, 11, 20) and session < today
-    # An expiry must be STRICTLY in the past, using a conservative calendar
-    # bound (which may be one day later than holiday-shifted actual expiry).
+    # Next/far Bank Nifty expiries can skip calendar months because only
+    # quarterly long-dated series are listed. Without archived listing
+    # evidence a nominal next/far month is NOT proof of contract expiry.
+    # The current Dhan master handles recent genuine listed contracts.
+    # For rolling next/far only use substantially aged history rather than
+    # risk asking an unexpired far-dated contract from rollingoption.
+    if expiry_code in (1, 2) and (today - session).days <= 366:
+        return False
+    # Near expiry: require the conservative last Tuesday to be strictly in
+    # the past; holiday shifts move it earlier, never later.
     return _nominal_selected_expiry(session, expiry_code) < today
 
 
