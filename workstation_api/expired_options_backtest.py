@@ -585,8 +585,11 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
                      slippage_bps: float = 5, fee_per_side: float = 20) -> dict:
     """Select a contract at completed SIGNAL candle close; trade next open.
 
-    One position at a time. A skipped open position with missing option
-    price history blocks that *entire session* to avoid survivorship bias.
+    One position at a time. On a confirmed opposite BANKNIFTY signal,
+    close the existing long CE/PE and allow the opposite long PE/CE to open
+    at that SAME next observed minute's OPEN, using distinct actual contract
+    candles. This is a paper fill model, never an actual broker order.
+    An unscorable opened position blocks the entire session to avoid bias.
     """
     if policy not in VALID_POLICIES:
         raise ValueError("Unsupported option exit policy")
@@ -609,7 +612,24 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
         at = _stamp(event["bar_utc"])
         entry_at = at + timedelta(minutes=1)
         session = event["session_ist"]
-        if busy_until is not None and entry_at <= busy_until:
+        prior = trades[-1] if trades else None
+        # On a completed DOWN/UP candle at time t, the held CE/PE is
+        # closed at (t+1) OPEN. Only that SAME opposite signal may buy the
+        # new PE/CE at (t+1) OPEN. A fixed/target/stop/time-cap exit must
+        # not accidentally be treated as an opposite-signal switch.
+        same_open_flip = bool(
+            busy_until is not None
+            and entry_at == busy_until
+            and prior is not None
+            and prior["exit_utc"] == entry_at.isoformat()
+            and prior["exit_reason"] == "opposite_signal"
+            and prior["session_ist"] == session
+            and prior["underlying_direction"] != direction
+            and at == entry_at - timedelta(minutes=1)
+        )
+        if busy_until is not None and (
+                entry_at < busy_until or
+                (entry_at == busy_until and not same_open_flip)):
             missing["position_open"] += 1
             continue
         if entry_at >= _same_day_close(at):
@@ -690,6 +710,9 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             "signal_utc": event["bar_utc"], "entry_utc": entry_at.isoformat(),
             "exit_utc": exit_at.isoformat(), "session_ist": session,
             "underlying_direction": direction, "option_side": "CE" if side == "CALL" else "PE",
+            "entry_reason": "opposite_signal_flip" if same_open_flip else "signal_entry",
+            "flipped_from_option_side": prior["option_side"] if same_open_flip else None,
+            "flipped_from_strike": prior["strike"] if same_open_flip else None,
             "strike": strike, "selection_ltp": chosen["close"],
             "entry_premium": round(entry_premium, 4),
             "exit_premium": round(exit_premium, 4),
@@ -718,6 +741,8 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
     return {
         "policy": policy, "hold_minutes": hold, "time_cap_minutes": cap,
         "trade_count": len(trades),
+        "reversal_switches": sum(
+            t["entry_reason"] == "opposite_signal_flip" for t in trades),
         "win_rate": round(wins / (wins + losses), 4) if wins + losses else None,
         "winning_trades": wins, "losing_trades": losses,
         "starting_capital_inr": round(starting_capital, 2),
@@ -874,12 +899,12 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
         comparison.append({
             "rule_id": rid,
             "label": (f"Fixed {h}m" if policy == "fixed" else
-                      "Until opposite BANKNIFTY signal" if policy == "signal_reversal" else
+                      "Exit and flip CE/PE on opposite BANKNIFTY signal" if policy == "signal_reversal" else
                       f"Opposite signal or {cap}m" if policy == "signal_reversal_or_cap" else
                       "Option +target/-stop (close-triggered)" if policy == "premium_target_stop" else
                       f"Opposite signal / {cap}m / option stop-target"),
             **{key: val for key, val in scenario.items()
-               if key in ("trade_count", "win_rate", "net_pnl_inr", "return_pct",
+               if key in ("trade_count", "reversal_switches", "win_rate", "net_pnl_inr", "return_pct",
                           "ending_capital_inr", "max_closed_trade_drawdown_pct",
                           "average_hold_minutes", "unscored")},
         })
@@ -921,6 +946,10 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
             "and bought next minute OPEN with assumed slippage. Profit targets "
             "and stops are detected only on completed option CLOSE and exited "
             "at the NEXT OPEN, never guaranteed trigger prices. "
+            "Opposite-direction signals close the prior long option and may "
+            "open a newly selected opposite option at that same NEXT OPEN "
+            "only when the second contract's complete source data and "
+            "purchasing power exist. No actual broker orders are placed. "
             "Historical option taxes and other levies are not included. "
             "A missing quote path excludes the position and blocks further "
             "trading that session; no fabricated option prices or rollover."),
