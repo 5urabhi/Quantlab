@@ -38,7 +38,7 @@ An explicit manual tab selection is never overwritten by the clock.
 | --- | --- |
 | **Live Trading** | Separate **Index Signal Monitor** and **BANKNIFTY Option Chain & 20-Level Depth** views. Select genuine expiry/CE/PE/strike, official master-based lot size and contract ID, preview premium outlay for lots, and connect the selected option to the existing 20-level feed. Actual freshness is independently checked; no broker order is placed. |
 | **Market Replay** | Select a real recorded IST session, play/pause/step one minute at a time, choose replay speed and move the timeline slider. Each chart shows observations **only up to the replay cursor**, never future bars. Its **Recorded 20-level books** subtab inspects actual previously saved depth samples. |
-| **Signal Backtest (Phase 1)** | Choose historical 1/3/5/6/10/30/60-minute signal horizons; see directional correctness, a clearly labeled non-executable ₹ index-exposure scenario with next-open entry/fixed exit and an equity curve, plus an entry/exit journal. Recorded forward-signal evidence remains a distinct 3/6-minute ledger. |
+| **Signal Backtest — one options workflow** | Primary screen: choose historical BANKNIFTY minutes, preferred CE/PE premium (~₹300), three lots, starting account, exit strategy and holding period; click **Run options backtest** to compare option P&L. Open **Advanced contract and cost settings** only when needed. Historical index-only directional validation and the recorded forward-signal ledger remain optional collapsed research panels. |
 | **Trade Journal** | Manual options trades, actual entered premiums and exit results, plus a separate prospective index prediction accuracy ledger. Journal evaluations are not coupled to whichever historical chart was last opened. |
 | **Connections** | Locally verify/replace Dhan token and client ID, see expiry, review one `dhan_shared` library, and prepare/fetch missing original index/equity minute files. Normal workflow never requires terminal API calls. |
 
@@ -169,9 +169,12 @@ Broker fill, historical option fills, slippage and real options P&L
 are not inferred from the spot index replay. The existing 20-level depth
 selection stays read-only and requires a live Dhan F&O subscription.
 
-## Phase 2 implemented: BANKNIFTY spot signals buy historical CE/PE contracts
+## One-screen options backtest: BANKNIFTY signals buy historical CE/PE contracts
 
-**Open Trading Copilot → Signal Backtest → BANKNIFTY Signal → Historical CE/PE Backtest.**
+**Open Trading Cockpit → Signal Backtest → Run options backtest.**
+The CE/PE simulation is the primary workflow. Index-only directional
+accuracy and recorded prospective signal audits remain available under
+optional expandable sections, but never have to be run first.
 The workflow is now:
 
 1. Use the same **original Dhan BANKNIFTY index 1-minute candle** sequence
@@ -186,12 +189,23 @@ The workflow is now:
    Missing Dhan authorization is reported as an actionable error.
 3. The app automatically reads prior Dhan `POST /v2/charts/rollingoption`
    receipts from the local market-data library and fetches missing calls using
-   the local Dhan token when you press **Run ... auto-fetch missing data**.
+   the local Dhan token when you press **Run options backtest · compare exit rules**.
    Default request: `securityId:25`, `exchangeSegment:NSE_FNO`,
-   `instrument:OPTIDX`, `expiryFlag:MONTH`, `expiryCode:0`,
+   `instrument:OPTIDX`, `expiryFlag:MONTH`, **`expiryCode:1` for near expiry**,
    `interval:1`, `drvOptionType:CALL/PUT`, ATM±3. Each Dhan request
    covers at most 30 calendar days; limits protect against request floods.
-   Monthly and near expiry are defaults. Optional weekly/next/far series
+   Important: Dhan uses **1=near, 2=next, 3=far** for the expired-options
+   `/charts/rollingoption` endpoint, even though its generic API annexure
+   uses **0=near, 1=next, 2=far**. QuantLab retains the same 0/1/2 UI
+   choices for active contracts, translating them to 1/2/3 only when
+   requesting rolling expired options. Dhan support explicitly confirmed
+   this endpoint-specific distinction in January 2026. Invalid code zero
+   returned HTTP 400/DH-905 on a real connected account.
+   The backtest attempts to refresh an absent or stale original Dhan
+   instrument master automatically before fetching recently active
+   contracts. If Dhan rejects a request, the UI shows a safe vendor error
+   code and requested expiry/strike/date context; credentials are never
+   exposed. Monthly and near expiry are defaults. Optional weekly/next/far series
    are exposed only as Dhan request selections; absence of vendor data is
    reported, never filled. The endpoint requires the user's own Data API
    entitlement; no credential is sent back to the browser.
@@ -345,9 +359,9 @@ book: only actually received observations are saved. The live depth
 capture continues to use the pre-existing binary bid/ask packet pairing
 and per-second bounded book recorder.
 
-**Future historical options P&L** must use original options price
-observations for the exact selected expiry/strike at each entry
-and exit (ideally bid/ask and relevant book liquidity). A profitable
+**Historical options P&L research now uses Dhan option-minute OHLC**
+for the same selected strike and CE/PE side across each simulated
+trade; improving historical bid/ask and book-liquidity modeling remains future work. A profitable
 underlying-index prediction alone cannot establish a profitable CE/PE
 trade. The historical index-exposure cash illustration in Signal
 Backtest remains explicitly non-executable and separate.
@@ -508,11 +522,14 @@ source candles. It reports original-index direction accuracy by day,
 counts skipped/no-trade and unverifiable bars, and never mixes
 retrospective results with the prospective real-time prediction ledger.
 
-This is **not yet an options P&L backtest**. A credible executable
-options backtest would require time-aligned historical contract symbols,
-expiry, bid/ask or realistic fill assumptions, spreads, fees, actual lot
-sizes, and contract turnover. Do not apply BANKNIFTY spot point changes
-to the manually entered option premium as if they were equivalent.
+The **separate historical options backtest is now implemented above the
+index-only research panel**. It maps the same original BANKNIFTY signals
+to time-aligned Dhan historical option-premium OHLC observations, models
+three-lot CE/PE trades with explicit fill and cost assumptions, and
+compares exit policies. This is a *paper trading proxy*, not verified
+executable broker P&L: historical bid/ask/20-level depth, fill priority,
+taxes, exact expired contract identifiers and historical lot sizes remain
+limited or unavailable. Never substitute index points for option premiums.
 
 ## What works now
 
