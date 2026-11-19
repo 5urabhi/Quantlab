@@ -710,7 +710,29 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
                      reversal_cap_minutes=reversal_cap_minutes)
     if progress:
         progress(2, "Verifying original BANKNIFTY index minute candles")
-    spot = cockpit_sources.series("INDEX:BANKNIFTY", limit=limit)
+    acquired_spot = False
+    try:
+        spot = cockpit_sources.series("INDEX:BANKNIFTY", limit=limit)
+    except ValueError as exc:
+        # Only auto-recover a genuinely ABSENT source. Never replace a
+        # corrupted manifest, SHA mismatch or intentionally selected history.
+        if "Download an original Dhan IDX_I one-minute" not in str(exc):
+            raise
+        # The user already confirmed this read-only source acquisition when
+        # starting the options backtest. One bounded source batch is enough
+        # for the requested 500-5000 latest minute bars.
+        last = date.today() + timedelta(days=1)
+        first = last - timedelta(days=36)
+        if progress:
+            progress(3, "Missing BANKNIFTY index candles; downloading original Dhan IDX_I source")
+        def index_progress(pct: float, stage: str):
+            if progress:
+                progress(3 + max(0, min(100, float(pct))) * .025, stage)
+        cockpit_sources.download_spot(
+            "INDEX:BANKNIFTY", first.isoformat(), last.isoformat(),
+            progress=index_progress)
+        acquired_spot = True
+        spot = cockpit_sources.series("INDEX:BANKNIFTY", limit=limit)
     rows = trading_cockpit._validated(spot["rows"])
     if len(rows) < 40:
         raise ValueError("Need at least 40 original one-minute BANKNIFTY candles for signal warmup")
@@ -818,6 +840,7 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
         "mode": "HISTORICAL_DHAN_OPTION_OHLC_NEXT_OPEN_PROXY",
         "underlying": "INDEX:BANKNIFTY",
         "signal_source": "Original Dhan one-minute BANKNIFTY spot",
+        "auto_downloaded_missing_spot": acquired_spot,
         "signal_model": trading_cockpit.VERSION,
         "signal_events": len(events),
         "actionable_signals": sum(e["direction"] in ("UP", "DOWN") for e in events),
