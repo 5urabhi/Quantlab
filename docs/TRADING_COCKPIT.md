@@ -178,6 +178,12 @@ The workflow is now:
    and causal EMA9/EMA21 + RSI signal to decide UP/DOWN/NO_TRADE.
 2. An **UP signal means search historical CALL (CE)**; a **DOWN signal
    means search historical PUT (PE)**. NO_TRADE means stay flat.
+   **If original BANKNIFTY index minute history is entirely absent**, the
+   same authorized one-click run first downloads up to the latest 36 calendar
+   days of original Dhan IDX_I candles and prepares the shared library view.
+   This is only a missing-source recovery: a SHA-256 mismatch, corrupt
+   source or an intentionally selected older series is never overwritten.
+   Missing Dhan authorization is reported as an actionable error.
 3. The app automatically reads prior Dhan `POST /v2/charts/rollingoption`
    receipts from the local market-data library and fetches missing calls using
    the local Dhan token when you press **Run ... auto-fetch missing data**.
