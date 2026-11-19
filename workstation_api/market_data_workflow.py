@@ -274,7 +274,8 @@ def approve(expected_token: str, selection: str, from_date: str, to_date: str,
 
 
 
-def store_verified_dhan_access_token(token: str, *, confirm_local_storage: bool) -> dict:
+def store_verified_dhan_access_token(token: str, *, confirm_local_storage: bool,
+                                     client_id: str = "") -> dict:
     """Persist *verified* read-only Dhan access into ignored local .env only.
 
     The UI's one-time password field never persists in browser state or reports.
@@ -289,7 +290,10 @@ def store_verified_dhan_access_token(token: str, *, confirm_local_storage: bool)
         any(ord(ch) < 33 or ord(ch) > 126 for ch in token)
     ):
         raise ValueError("Enter the exact, nonempty one-line Dhan access token.")
-    checked = dhan_auth.check_profile(token_override=token)
+    if client_id and (not client_id.isdigit() or not 4<=len(client_id)<=20):
+        raise ValueError("Use your exact numeric Dhan client ID.")
+    checked = dhan_auth.check_profile(
+        token_override=token, **({"client_id_override":client_id} if client_id else {}))
     if not checked.get("ok"):
         raise ValueError(str(checked.get("message") or
                              "Dhan credentials could not be verified."))
@@ -312,10 +316,14 @@ def store_verified_dhan_access_token(token: str, *, confirm_local_storage: bool)
     os.chmod(target, 0o600)
     try:
         set_key(str(target), "DHAN_ACCESS_TOKEN", token, quote_mode="always")
+        if client_id:
+            set_key(str(target), "DHAN_CLIENT_ID", client_id, quote_mode="always")
         os.chmod(target, 0o600)
     except (OSError, ValueError) as exc:
         raise ValueError("Could not save Dhan access to the private local configuration.") from None
     os.environ["DHAN_ACCESS_TOKEN"] = token
+    if client_id:
+        os.environ["DHAN_CLIENT_ID"] = client_id
     return {"connected": True, "data_plan_active": True,
             "message": "Dhan Data API verified and saved in the ignored local .env.",
-            "token_present": True}
+            "token_present": True, "client_id_configured":bool(os.getenv("DHAN_CLIENT_ID","").strip())}
