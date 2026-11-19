@@ -219,6 +219,32 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertEqual(okay.json()["job_id"], "test_local_id")
         self.assertEqual(mocked.call_args.kwargs["lots"], 3)
 
+    def test_one_click_backtest_recovers_only_absent_index_source(self):
+        missing = ValueError(
+            "Download an original Dhan IDX_I one-minute Bank Nifty/Nifty index spot batch first")
+        with patch.object(exp.cockpit_sources, "series", side_effect=[
+                missing, {"rows": source(), "warning": "fixture", "has_more": False}]), patch.object(
+                exp.cockpit_sources, "download_spot",
+                return_value={"status": "complete", "rows": 70}) as original_batch, patch.object(
+                exp, "_signals", return_value=events((29, "UP"))):
+            report = exp.run_backtest(
+                limit=500, wings=0, fetcher=fake_dhan,
+                target_ltp=315, tolerance=50, hold_rule="fixed",
+                hold_minutes=5, slippage_bps=0)
+        self.assertTrue(report["auto_downloaded_missing_spot"])
+        self.assertEqual(original_batch.call_count, 1)
+        self.assertEqual(original_batch.call_args.args[0], "INDEX:BANKNIFTY")
+        self.assertEqual(report["orders_placed"], 0)
+        self.assertEqual(report["selected"]["trade_count"], 1)
+
+    def test_do_not_replace_damaged_original_index_history(self):
+        with patch.object(exp.cockpit_sources, "series",
+                          side_effect=ValueError("Original index spot SHA-256 mismatch")), patch.object(
+                          exp.cockpit_sources, "download_spot") as download:
+            with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                exp.run_backtest(limit=500, wings=0)
+        download.assert_not_called()
+
     def test_current_active_contract_id_and_lot_override_rolling_assumption(self):
         master = service.DATA / "dhan" / "instrument_master.csv"
         master.parent.mkdir(parents=True, exist_ok=True)
