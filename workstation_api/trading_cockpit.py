@@ -380,8 +380,149 @@ def day_report(identity: str, date_ist: str = "", *, limit: int = 2500,
     }
 
 
+
+HISTORICAL_HORIZONS = (1, 3, 5, 6, 10, 30, 60)
+
+
+def hypothetical_index_exposure(
+    source_rows: list[dict], signal_events: list[dict], *,
+    hold_minutes: int, starting_capital: float = 50_000.0,
+    cost_bps_per_side: float = 0.0, allocation_pct: float = 100.0,
+) -> dict:
+    """Non-executable long/short index EXPOSURE SCENARIO, never option P&L.
+
+    Entries use the next observed candle's OPEN after a completed signal bar.
+    Exits use the OPEN exactly 'hold_minutes' after entry; never a future
+    close available at signal time. A single hypothetical position at a time,
+    no overnight positions, no synthetic missing candles or inferred fills.
+    Short exposure means sign-flipped price return, not an NSE option or a
+    borrowable/index-tradable security.
+    """
+    if hold_minutes not in HISTORICAL_HORIZONS:
+        raise ValueError("Choose a supported historical holding period")
+    inputs = (starting_capital, cost_bps_per_side, allocation_pct)
+    if any(not math.isfinite(float(v)) for v in inputs):
+        raise ValueError("Simulation inputs must be finite numbers")
+    if not 1_000 <= starting_capital <= 100_000_000:
+        raise ValueError("Starting capital must be from INR 1,000 to 100,000,000")
+    if not 0 <= cost_bps_per_side <= 100:
+        raise ValueError("Hypothetical cost must be from 0 to 100 bps per side")
+    if not 1 <= allocation_pct <= 100:
+        raise ValueError("Capital allocation must be between 1% and 100%")
+    rows = _validated(source_rows)
+    times = {_ts(bar["timestamp_utc"]): bar for bar in rows}
+    balance = float(starting_capital)
+    peak = balance
+    max_drawdown = 0.0
+    busy_until = None
+    points = [{"timestamp_utc": rows[0]["timestamp_utc"], "equity_inr": round(balance, 2)}] if rows else []
+    trades: list[dict] = []
+    skipped = {"no_signal": 0, "position_open": 0,
+               "session_cutoff": 0, "missing_entry": 0,
+               "missing_exit_or_path": 0}
+    for event in signal_events:
+        direction = event["direction"]
+        if direction == "NO_TRADE":
+            skipped["no_signal"] += 1
+            continue
+        signal_at = _ts(event["bar_utc"])
+        entry_at = signal_at + timedelta(minutes=1)
+        exit_at = entry_at + timedelta(minutes=hold_minutes)
+        if busy_until is not None and entry_at <= busy_until:
+            skipped["position_open"] += 1
+            continue
+        # Exit must be an observed opening minute inside the same regular
+        # index session, not the following morning or an assumed close.
+        entry_local, exit_local = entry_at.astimezone(IST), exit_at.astimezone(IST)
+        if (entry_local.date() != exit_local.date()
+                or not time(9, 15) <= entry_local.time().replace(tzinfo=None) <= time(15, 29)
+                or not time(9, 15) <= exit_local.time().replace(tzinfo=None) <= time(15, 29)):
+            skipped["session_cutoff"] += 1
+            continue
+        entry = times.get(entry_at)
+        if entry is None or entry["session_ist"] != event["session_ist"]:
+            skipped["missing_entry"] += 1
+            continue
+        # Do not count a simulated fill when any one-minute source in the
+        # holding interval is absent: its path cannot be verified.
+        path = [times.get(entry_at + timedelta(minutes=m))
+                for m in range(hold_minutes + 1)]
+        if (any(bar is None or bar["session_ist"] != event["session_ist"]
+                for bar in path)):
+            skipped["missing_exit_or_path"] += 1
+            continue
+        exit_bar = path[-1]
+        entry_price, exit_price = entry["open"], exit_bar["open"]
+        side = 1 if direction == "UP" else -1
+        index_move = (exit_price / entry_price - 1)
+        signed_move = side * index_move
+        allocation = balance * allocation_pct / 100.0
+        gross_pnl = allocation * signed_move
+        illustrative_cost = allocation * 2 * cost_bps_per_side / 10_000.0
+        net_pnl = gross_pnl - illustrative_cost
+        balance += net_pnl
+        peak = max(peak, balance)
+        max_drawdown = max(max_drawdown, (peak - balance) / peak * 100.0)
+        busy_until = exit_at
+        trade = {
+            "session_ist": event["session_ist"],
+            "signal_utc": event["bar_utc"],
+            "entry_utc": entry["timestamp_utc"],
+            "exit_utc": exit_bar["timestamp_utc"],
+            "direction": direction,
+            "side": "HYPOTHETICAL_LONG_INDEX" if side > 0 else "HYPOTHETICAL_SHORT_INDEX",
+            "entry_points": round(entry_price, 3),
+            "exit_points": round(exit_price, 3),
+            "index_move_pct": round(index_move * 100, 5),
+            "exposure_return_pct": round(signed_move * 100, 5),
+            "allocated_inr": round(allocation, 2),
+            "gross_pnl_inr": round(gross_pnl, 2),
+            "illustrative_cost_inr": round(illustrative_cost, 2),
+            "net_pnl_inr": round(net_pnl, 2),
+            "equity_inr": round(balance, 2),
+        }
+        trades.append(trade)
+        points.append({"timestamp_utc": exit_bar["timestamp_utc"],
+                       "equity_inr": round(balance, 2)})
+    wins = sum(trade["net_pnl_inr"] > 0 for trade in trades)
+    losses = sum(trade["net_pnl_inr"] < 0 for trade in trades)
+    flats = len(trades) - wins - losses
+    return {
+        "mode": "ILLUSTRATIVE_SIGNED_INDEX_EXPOSURE_ONLY",
+        "horizon_minutes": hold_minutes,
+        "starting_capital_inr": round(starting_capital, 2),
+        "ending_capital_inr": round(balance, 2),
+        "net_pnl_inr": round(balance - starting_capital, 2),
+        "net_return_pct": round((balance / starting_capital - 1) * 100, 4),
+        "max_closed_trade_drawdown_pct": round(max_drawdown, 4),
+        "cost_bps_per_side": cost_bps_per_side,
+        "allocation_pct": allocation_pct,
+        "trade_count": len(trades), "winning_trades": wins,
+        "losing_trades": losses, "breakeven_trades": flats,
+        "win_rate": (wins / (wins + losses) if wins + losses else None),
+        "total_illustrative_cost_inr": round(
+            sum(trade["illustrative_cost_inr"] for trade in trades), 2),
+        "skipped": skipped,
+        "equity_curve": points,
+        "latest_trades": trades[-100:],
+        "entry_policy": "UP = hypothetical long, DOWN = hypothetical short, NO_TRADE = stay flat; enter at next ORIGINAL one-minute OPEN when flat",
+        "exit_policy": "Exit at ORIGINAL one-minute OPEN exactly H minutes after entry; one position at a time; never carry overnight or fill source gaps",
+        "disclaimer": (
+            "Illustrative signed index exposure at 1x and 100%-or-configured "
+            "capital allocation; BANKNIFTY is not directly tradable. NO "
+            "historical CE/PE premiums, option fills, order-book spreads, "
+            "brokerage or executable P&L are implied. Slippage, taxes, "
+            "financing and intratrade drawdown are excluded. Configured "
+            "bps costs are user assumptions, not Dhan-confirmed charges."
+        ),
+    }
+
+
 def historical_replay(identity: str, source_rows: list[dict],
-                      horizon_minutes: int = 6) -> dict:
+                      horizon_minutes: int = 6, *,
+                      starting_capital: float = 50_000.0,
+                      cost_bps_per_side: float = 0.0,
+                      allocation_pct: float = 100.0) -> dict:
     """Historical one-minute walk-forward mechanical replay, not live predictions.
 
     The baseline is not fitted to the replay sample. Source candles must be
@@ -389,8 +530,8 @@ def historical_replay(identity: str, source_rows: list[dict],
     close is inspected only *after* the signal label is frozen in memory.
     Results have NO option price assumptions, spreads or fees.
     """
-    if horizon_minutes not in (3, 6):
-        raise ValueError("Select a 3- or 6-minute replay horizon")
+    if horizon_minutes not in HISTORICAL_HORIZONS:
+        raise ValueError("Select one of 1, 3, 5, 6, 10, 30 or 60 historical minutes")
     rows = _validated(source_rows)
     if not rows:
         raise ValueError("No observed minute candles")
@@ -461,6 +602,11 @@ def historical_replay(identity: str, source_rows: list[dict],
         "latest_events": samples[-100:],
         "latest_signal_events": [
             event for event in samples if event["direction"] != "NO_TRADE"][-100:],
+        "index_exposure_scenario": hypothetical_index_exposure(
+            rows, samples, hold_minutes=horizon_minutes,
+            starting_capital=starting_capital,
+            cost_bps_per_side=cost_bps_per_side,
+            allocation_pct=allocation_pct),
         "disclaimer": ("Mechanical historical baseline only. No model training, "
                        "calibration, out-of-sample certification, executable "
                        "option prices, slippage, or brokerage costs."),
