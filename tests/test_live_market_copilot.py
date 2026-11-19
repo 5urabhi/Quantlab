@@ -80,6 +80,13 @@ class LiveCopilotOfflineTests(TestCase):
             status=live_market.status()
         self.assertTrue(status["read_only"])
         self.assertEqual(status["shared_library"],"dhan_shared")
+        catalog=self.client.get("/api/trading-cockpit/live/capture-catalog")
+        self.assertEqual(catalog.status_code,200,catalog.text)
+        minutes=catalog.json()["minute_sources"]
+        self.assertEqual(len(minutes),1)
+        self.assertEqual(minutes[0]["identity"],"INDEX:BANKNIFTY")
+        self.assertEqual(minutes[0]["observations"],2)
+        self.assertEqual(catalog.json()["shared_library"],"dhan_shared")
 
     def test_original_full_depth_is_sampled_and_remains_reviewable(self):
         bids=[{"price":100-i*0.05,"quantity":10+i,"orders":2} for i in range(20)]
@@ -102,6 +109,11 @@ class LiveCopilotOfflineTests(TestCase):
         self.assertGreater(history["snapshots"][0]["spread_bps"],0)
         self.assertEqual(live_market.status()["saved_books"],1)
         self.assertFalse(history["historical_download_supported"])
+        saved=self.client.get("/api/trading-cockpit/live/capture-catalog")
+        self.assertEqual(saved.status_code,200,saved.text)
+        depth=saved.json()["depth_sources"]
+        self.assertEqual(depth[0]["identity"],"NSE_FNO:333")
+        self.assertEqual(depth[0]["observations"],1)
         self.assertNotIn("access_token",json.dumps(live_market.status()))
 
     def test_read_only_start_guard_rejects_missing_consent_and_index_depth(self):
