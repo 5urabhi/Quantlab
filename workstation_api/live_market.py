@@ -14,15 +14,17 @@ from hashlib import sha256
 from threading import Event, RLock, Thread, Condition
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
+import csv
 import json
 import math
 import os
+import re
 import sqlite3
 import struct
 import time
 import uuid
 
-from . import index_spot, market_depth, service, shared_market_data
+from . import dhan_workspace, index_spot, market_depth, service, shared_market_data
 
 IST = ZoneInfo("Asia/Kolkata")
 LOCK = RLock()
@@ -522,6 +524,68 @@ def latest_depth_history(identity: str, limit: int = 150) -> dict:
             "historical_download_supported":False,
             "note":"These order books were recorded from live Dhan packets on this computer. "
                    "Missing historical depth cannot be reconstructed from 1-minute candles."}
+
+
+
+
+def search_contracts(query: str = "BANKNIFTY", limit: int = 30) -> dict:
+    """Map Dhan's current official master to an exact NSE_FNO Security ID.
+
+    Index and company names cannot be used as synthetic derivative IDs.
+    This stream scans the downloaded local master, never scrapes exchanges.
+    """
+    term=query.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9 _.-]{2,35}",term) or not 1<=limit<=50:
+        raise ValueError("Search 2–35 letters/digits for a Dhan F&O contract")
+    path=dhan_workspace._master()
+    if not path.is_file() or path.is_symlink() or path.stat().st_size > 100_000_000:
+        return {"contracts":[],"catalog_available":False,
+                "message":"Download Dhan's instrument master in Data Library first."}
+    result=[]
+    with path.open("r",encoding="utf-8-sig",newline="") as fd:
+        reader=csv.DictReader(fd)
+        columns={c.strip().upper():c for c in reader.fieldnames or []}
+        def col(*names):
+            return next((columns[n] for n in names if n in columns),"")
+        sec=col("SECURITY_ID","SEM_SMST_SECURITY_ID")
+        exch=col("EXCH_ID","SEM_EXM_EXCH_ID")
+        segment=col("SEGMENT","SEM_SEGMENT")
+        kind=col("INSTRUMENT","SEM_INSTRUMENT_NAME")
+        symbol=col("SEM_TRADING_SYMBOL","TRADING_SYMBOL","DISPLAY_NAME")
+        display=col("SEM_CUSTOM_SYMBOL","SYMBOL_NAME","SM_SYMBOL_NAME")
+        expiry=col("SEM_EXPIRY_DATE","EXPIRY_DATE")
+        strike=col("SEM_STRIKE_PRICE","STRIKE_PRICE")
+        side=col("SEM_OPTION_TYPE","OPTION_TYPE")
+        if not all((sec,exch,segment,kind)) or not (symbol or display):
+            return {"contracts":[],"catalog_available":False,
+                    "message":"Current Dhan master does not expose derivative Security IDs."}
+        for row in reader:
+            if row[exch].strip().upper()!="NSE":
+                continue
+            if row[segment].strip().upper() not in ("D","NSE_FNO","FNO","F"):
+                continue
+            if row[kind].strip().upper() not in ("OPTIDX","FUTIDX"):
+                continue
+            identifier=row[sec].strip()
+            label=(row[symbol].strip() if symbol else "")
+            shown=(row[display].strip() if display else "")
+            if not identifier.isdigit() or not 1<=len(identifier)<=12:
+                continue
+            if term not in (label+" "+shown).upper():
+                continue
+            result.append({
+                "identity":"NSE_FNO:"+identifier,
+                "symbol":(label or shown)[:90],
+                "display_name":(shown or label)[:120],
+                "instrument":row[kind].strip().upper(),
+                "expiry":row[expiry].strip()[:25] if expiry else None,
+                "strike":row[strike].strip()[:18] if strike else None,
+                "option_type":row[side].strip()[:8] if side else None,
+            })
+            if len(result)>=limit:
+                break
+    return {"contracts":result,"catalog_available":True,
+            "message":"Current official Dhan instrument master; not an options price quote."}
 
 
 def _reset_for_tests() -> None:
