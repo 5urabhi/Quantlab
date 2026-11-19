@@ -644,6 +644,46 @@ def trading_cockpit_snapshot(identity: str, limit: int = 500):
         bad(exc)
 
 
+@app.get("/api/trading-cockpit/historical/series")
+def trading_cockpit_historical_series(identity: str = "INDEX:BANKNIFTY",
+                                      limit: int = 5000):
+    """Original observed 1-minute candles for user-controlled session replay.
+
+    The browser never sees future bars until the replay cursor reaches them.
+    Only the existing shared-source adapters supply prices, never synthesized
+    index levels, historical option premiums or missing minute fills.
+    """
+    if not 1 <= limit <= 5000:
+        raise HTTPException(400, "Select between 1 and 5,000 original minute bars")
+    try:
+        original = cockpit_sources.series(identity, limit=limit)
+        rows = original["rows"]
+        by_session = {}
+        for row in rows:
+            day = row["session_ist"]
+            entry = by_session.setdefault(day, {
+                "date_ist": day, "observed_bars": 0,
+                "first_utc": row["timestamp_utc"],
+                "last_utc": row["timestamp_utc"],
+            })
+            entry["observed_bars"] += 1
+            entry["last_utc"] = row["timestamp_utc"]
+        return {
+            "identity": identity, "interval_minutes": 1, "rows": rows,
+            "sessions": sorted(by_session.values(),
+                               key=lambda item: item["date_ist"], reverse=True),
+            "has_more": bool(original.get("has_more")),
+            "source": original.get("basis", "verified_original_local_minute_candles"),
+            "source_warning": original.get("warning", ""),
+            "kind": "historical_not_streaming",
+            "note": "Replay exposes only already observed original one-minute bars. "
+                    "Missing timestamps are never synthesized; original index "
+                    "candles are not options quotes, option P&L or a live feed.",
+        }
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.post("/api/trading-cockpit/predictions")
 def trading_cockpit_record(body: TradingCockpitRecordRequest):
     try:
