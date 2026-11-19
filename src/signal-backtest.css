@@ -99,3 +99,5 @@
 .tc-signal-main .tc-index-scenario .tc-muted{line-height:1.6}
 @media(max-width:850px){.tc-signal-controls label{flex:1 1 210px}.tc-signal-controls .tc-signal-run{flex:1 1 100%}}
 @media(max-width:690px){.tc-signal-controls input[type=number]{min-width:0;max-width:none}}
+
+.tc-signal-followup-actions{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
