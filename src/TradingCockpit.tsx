@@ -1,5 +1,7 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
-import {Clock3, Database, RefreshCw, ShieldCheck} from 'lucide-react'
+import {Clock3, Database, RefreshCw, ShieldCheck, Radio, History, ClipboardList, Settings2, ArrowRight} from 'lucide-react'
+import {nseMarketWindow} from './tradingMarketSession'
+import SavedCaptureReview from './SavedCaptureReview'
 import './trading-cockpit.css'
 import LiveFeedPanel from './LiveFeedPanel'
 
@@ -15,6 +17,13 @@ type Report = {days:DaySummary[];overall:Omit<DaySummary,'session_ist'>;source:s
 type Replay = {mode:string;identity:string;model_version:string;horizon_minutes:number;observed_source_bars:number;overall:Omit<DaySummary,'session_ist'>;days:DaySummary[];has_more_history:boolean;source_warning:string;disclaimer:string}
 type DhanCheck = {ok:boolean;code:string;message:string;token_present:boolean;token_valid:boolean|null;data_plan_active:boolean|null;client_id_configured?:boolean;expires_at_utc?:string|null;seconds_remaining?:number|null}
 type DhanConnect = {connected:boolean;message:string}
+type CockpitView = 'live'|'historical'|'journal'|'setup'
+type HistoricalView = 'chart'|'backtest'|'captures'
+type JournalView = 'trades'|'accuracy'
+type LiveHeaderState = {
+  active?:boolean;index_identity?:string;ticker_connection?:string;
+  quotes?:Record<string,{received_utc:string;fresh:boolean;price:number}>;
+}
 type ManualTrade = {id:string;symbol:string;direction:'CALL'|'PUT';quantity:number;entry_price:number;entry_recorded_utc:string;exit_price:number|null;exit_recorded_utc:string|null;holding_seconds:number;holding_rule_exceeded:boolean;gross_notional_inr:number;net_pnl_inr:number|null;status:'OPEN'|'CLOSED';data_quality:string}
 type TradeJournal = {trades:ManualTrade[];summary:{open:number;closed:number;closed_net_pnl_inr:number;holding_violations:number;days:{exit_session_ist:string;closed:number;net_pnl_inr:number;over_6_min:number}[]};disclaimer:string}
 
@@ -74,6 +83,24 @@ function CandleChart({rows}:{rows:Candle[]}){
 }
 
 export default function TradingCockpit(){
+  const [activeTab,setActiveTab]=useState<CockpitView>(()=>
+    nseMarketWindow(Date.now()).regularWindow?'live':'historical')
+  const [historicalView,setHistoricalView]=useState<HistoricalView>('chart')
+  const [journalView,setJournalView]=useState<JournalView>('trades')
+  const selectedTab=useRef(false)
+  const [liveHeader,setLiveHeader]=useState<LiveHeaderState|null>(null)
+  const selectTab=(view:CockpitView)=>{selectedTab.current=true;setActiveTab(view)}
+  useEffect(()=>{
+    let mounted=true
+    const check=()=>{
+      void api<LiveHeaderState>('/api/trading-cockpit/live/status')
+        .then(status=>{if(mounted)setLiveHeader(status)})
+        .catch(()=>{if(mounted)setLiveHeader(null)})
+    }
+    check()
+    const timer=window.setInterval(check,10000)
+    return()=>{mounted=false;window.clearInterval(timer)}
+  },[])
   const [instruments,setInstruments]=useState<Catalog['instruments']>([])
   const [catalog,setCatalog]=useState<Catalog|null>(null)
   const [sourceJob,setSourceJob]=useState<SourceJob|null>(null)
@@ -276,10 +303,10 @@ export default function TradingCockpit(){
     return()=>window.clearInterval(timer)
   },[])
   useEffect(()=>{
-    if(!identity||paused)return
+    if(!identity||paused||activeTab==='live'||activeTab==='setup')return
     const timer=window.setInterval(()=>{void refresh()},15000)
     return()=>window.clearInterval(timer)
-  },[identity,refresh,paused])
+  },[identity,refresh,paused,activeTab])
   const action=async(kind:'record'|'evaluate')=>{
     if(!identity||busy)return
     setBusy(true);setRecordMessage('');setError('')
@@ -323,64 +350,117 @@ export default function TradingCockpit(){
   const forecast=snapshot?.direction??'NO_TRADE'
   const sourceRecent=snapshot?.quote_mode==='RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE'
   const summary=history?.summary
+  const marketWindow=nseMarketWindow(now)
+  const activeQuote=liveHeader?.index_identity?liveHeader.quotes?.[liveHeader.index_identity]:undefined
+  const liveFeedFresh=Boolean(liveHeader?.active&&liveHeader.ticker_connection==='connected'
+    &&activeQuote?.fresh&&Date.now()-Date.parse(activeQuote.received_utc)<=8000)
+  useEffect(()=>{
+    if(!selectedTab.current){
+      setActiveTab(liveHeader?.active||marketWindow.regularWindow?'live':'historical')
+    }
+  },[liveHeader?.active,marketWindow.regularWindow])
   const dataStatus=useMemo(()=>{
     if(!snapshot)return 'NO ORIGINAL DATA'
     return sourceRecent?'RECENT CANDLE · NOT LIVE QUOTE':'HISTORICAL · NOT LIVE'
   },[snapshot,sourceRecent])
-  return <div className="tc-shell">
-    <header className="tc-header"><div><div className="tc-eyebrow">QUANTLAB / READ-ONLY MARKET RESEARCH</div><h2>Intraday trading cockpit</h2><p>One-minute observed candles · 3/6-minute forecasts · permanent outcome audit</p></div><span className={'tc-data-badge '+(sourceRecent?'tc-recent':'')}>{dataStatus}</span></header>
-    {error&&<div className="tc-error" role="alert">{error}</div>}
-    <section className="tc-panel tc-token-panel" aria-label="Dhan data API connection">
-      <div className="tc-panel-title"><strong>Dhan market data connection</strong><span>Local-only token · read-only verification</span></div>
-      <div className="tc-token-status">
-        <span className={'tc-token-state '+(tokenState==='CONNECTED'?'good':tokenState==='EXPIRING SOON'?'soon':'attention')}>{tokenState}</span>
-        <span>{tokenRemaining!==null?(tokenRemaining>0?
-          `Expires in ${tokenHours}h ${tokenMinutes}m`:'Token expired'):
-          'Expiry time unavailable until broker verification succeeds'}</span>
-        <button type="button" onClick={()=>void checkDhan()} disabled={tokenBusy}>Check now</button>
-        <button type="button" onClick={()=>{setTokenForm(v=>!v);setTokenError('');setTokenMessage('')}}>
-          {tokenForm?'Cancel':'Add / replace Dhan token'}</button>
+  return <div className="tc-shell tc-workspace">
+    <header className="tc-header tc-workspace-head">
+      <div>
+        <div className="tc-eyebrow">QUANTLAB / MARKET RESEARCH WORKSTATION</div>
+        <h2>Intraday trading cockpit</h2>
+        <p>One research workspace with separate live monitoring, historical studies, trade records, and connections.</p>
       </div>
-      {dhanCheck?.expires_at_utc&&<p className="tc-muted">Dhan-reported token expiry: {new Date(dhanCheck.expires_at_utc).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} IST · historical Data API {dhanCheck.data_plan_active?'active':'not confirmed active'}.</p>}
-      {dhanCheck&&!dhanCheck.ok&&<p className="tc-warning">{dhanCheck.message}</p>}
-      {tokenError&&<div className="tc-error" role="alert">{tokenError}</div>}
-      {tokenMessage&&<p className="tc-confirm" role="status">{tokenMessage}</p>}
-      {tokenForm&&<form className="tc-token-form" onSubmit={event=>void connectDhan(event)}>
-        <label>New token from Dhan Web<input type="password" autoComplete="off" value={dhanToken} onChange={event=>setDhanToken(event.target.value)} placeholder="Paste Dhan access token"/></label>
-        <label>Dhan client ID for live streaming (numeric; verified against your broker profile)
-          <input type="password" autoComplete="off" value={dhanClientId}
-            onChange={event=>setDhanClientId(event.target.value)}
-            placeholder="Your Dhan client ID · leave blank to keep existing"/>
-        </label>
-        <label className="tc-token-consent"><input type="checkbox" checked={tokenConsent} onChange={event=>setTokenConsent(event.target.checked)}/> Store this verified token in the local, gitignored .env file. Do not send it to GitHub or the browser's storage.</label>
-        <button type="submit" disabled={tokenBusy||!tokenConsent||!dhanToken.trim()}>{tokenBusy?'Verifying…':'Verify and save token'}</button>
-      </form>}
-      <p className="tc-muted">This verifies your Dhan session and Data API entitlement. Live WebSockets also need your Dhan client ID {dhanCheck?.client_id_configured?'(configured)':'(not configured or not yet checked)'}. This connection alone does not start market streaming.</p>
-    </section>
-    <LiveFeedPanel/>
-    <section className="tc-panel tc-source-panel" aria-label="Shared market data library status">
-      <div className="tc-panel-title"><strong>One shared market-data library · dhan_shared</strong><span>Original downloads are reusable source receipts, not separate datasets</span></div>
-      <div className="tc-source-summary"><span>Ready one-minute charts <strong>{catalog?.prepared_equities??0}</strong></span><span>Existing minute sources awaiting chart preparation <strong>{pendingMinutes}</strong></span><span>BANKNIFTY spot index <strong>{missingBankNifty?'Original index not yet available':'Source available'}</strong></span></div>
-      {sourceError&&<p className="tc-error" role="alert">{sourceError}</p>}
-      {sourceNotice&&<p className="tc-confirm" role="status">{sourceNotice}</p>}
-      {sourceJob&&sourceWorking&&<p className="tc-muted" role="status">{sourceJob.stage||'Preparing market data'} {sourceJob.percent!==undefined?'· '+Math.round(sourceJob.percent)+'%':''}</p>}
-      {pendingMinutes>0&&<div className="tc-source-action"><p>Existing Dhan one-minute stock candles have been downloaded, but their analytical chart index has not been built. Reuse those files without downloading anything again.</p><button type="button" disabled={sourceWorking} onClick={()=>void prepareCached()}>Prepare {Math.min(40,pendingMinutes)} cached minute instruments</button></div>}
-      {missingIndexSources.length>0&&<form className="tc-source-action" onSubmit={event=>void acquireSpot(event)}>
-        <div><strong>The real index series needs its own original observations.</strong>
-        <p>The downloaded constituent stocks are preserved, but they cannot substitute for BANKNIFTY or NIFTY 50 spot candles. Fetch missing IDX_I observations into the same shared library.</p></div>
-        <label>Spot index <select aria-label="Missing index spot series" value={spotIdentity} onChange={e=>setSpotIdentity(e.target.value as 'INDEX:BANKNIFTY'|'INDEX:NIFTY50')}>{missingIndexSources.map(x=><option value={x.identity} key={x.identity}>{x.display_name}</option>)}</select></label>
-        <label>From (IST) <input type="date" required value={spotFrom} onChange={e=>setSpotFrom(e.target.value)}/></label>
-        <label>Through (exclusive) <input type="date" required value={spotTo} onChange={e=>setSpotTo(e.target.value)}/></label>
-        <button type="submit" disabled={sourceWorking}>Get missing index spot candles</button>
-      </form>}
-      {!pendingMinutes&&!missingIndexSources.length&&<p className="tc-confirm">Existing local sources are prepared. These are historical observations, not a live broker stream.</p>}
-      <p className="tc-muted">All sources remain internally partitioned by instrument, interval and observation time for accuracy; you manage one library. Missing source dates are never invented or backfilled from today's membership.</p>
-    </section>
+      <span className="tc-workspace-readonly"><ShieldCheck size={15}/> Read-only · no broker orders</span>
+    </header>
+    <div className="tc-market-strip" role="status" aria-label="NSE session and live market feed status">
+      <div className={'tc-status-item '+(marketWindow.regularWindow?'is-scheduled':'is-idle')}>
+        <span className="tc-status-dot"/>
+        <div><strong>{marketWindow.regularWindow?'Regular session window':'Outside regular session'}</strong>
+          <small>NSE · 09:15–15:30 IST, Mon–Fri · holidays not verified</small></div>
+      </div>
+      <div className={'tc-status-item '+(liveFeedFresh?'is-live':liveHeader?.active?'is-scheduled':'is-idle')}>
+        <span className="tc-status-dot"/>
+        <div><strong>{liveFeedFresh?'LIVE · observed broker price':liveHeader?.active?'Connecting / no fresh price':'Live feed stopped'}</strong>
+          <small>{liveFeedFresh?'Fresh Dhan observations':liveHeader?.active?'Awaiting valid market packets':'Start it from Live Market during an authorized session'}</small></div>
+      </div>
+      <div className="tc-status-item tc-clock-item"><Clock3 size={17}/>
+        <div><strong>{marketWindow.istClock}</strong><small>Indian market clock</small></div></div>
+    </div>
+    <nav className="tc-mode-nav" role="tablist" aria-label="Trading cockpit workspaces">
+      <button type="button" role="tab" id="tc-tab-live" aria-controls="tc-view-live"
+        aria-selected={activeTab==='live'} className={activeTab==='live'?'active':''}
+        onClick={()=>selectTab('live')}>
+        <Radio size={19}/><span><strong>Live Market</strong><small>Signals · 20-level depth</small></span>
+      </button>
+      <button type="button" role="tab" id="tc-tab-historical" aria-controls="tc-view-historical"
+        aria-selected={activeTab==='historical'} className={activeTab==='historical'?'active':''}
+        onClick={()=>selectTab('historical')}>
+        <History size={19}/><span><strong>Historical Research</strong><small>Charts · backtests · recordings</small></span>
+      </button>
+      <button type="button" role="tab" id="tc-tab-journal" aria-controls="tc-view-journal"
+        aria-selected={activeTab==='journal'} className={activeTab==='journal'?'active':''}
+        onClick={()=>selectTab('journal')}>
+        <ClipboardList size={19}/><span><strong>Trading Journal</strong><small>Manual trades · accuracy</small></span>
+      </button>
+      <button type="button" role="tab" id="tc-tab-setup" aria-controls="tc-view-setup"
+        aria-selected={activeTab==='setup'} className={activeTab==='setup'?'active':''}
+        onClick={()=>selectTab('setup')}>
+        <Settings2 size={19}/><span><strong>Connections &amp; Data</strong><small>Dhan token · shared library</small></span>
+      </button>
+    </nav>
+    {activeTab==='live'&&<section role="tabpanel" id="tc-view-live" aria-labelledby="tc-tab-live" className="tc-tab-page">
+      <div className="tc-page-intro">
+        <div><span className="tc-page-kicker">LIVE MARKET</span><h3>Monitor BANKNIFTY in real time</h3>
+          <p>Live index direction and your chosen option's 20-level book. Genuine fresh broker observations are required.</p></div>
+        {!liveFeedFresh&&<button className="tc-link-button" type="button" onClick={()=>selectTab('setup')}>Check Dhan connection <ArrowRight size={15}/></button>}
+      </div>
+      {!marketWindow.regularWindow&&!liveFeedFresh&&<div className="tc-market-note">
+        <Clock3 size={18}/><span>Outside the normal NSE session window. No live price is assumed. You can check connectivity here or explore recorded history.</span>
+        <button type="button" onClick={()=>selectTab('historical')}>Open Historical Research</button>
+      </div>}
+      <LiveFeedPanel onOpenSetup={()=>selectTab('setup')}/>
+      <div className="tc-live-footer">
+      <section className="tc-panel tc-timer">
+        <div className="tc-panel-title"><strong>Six-minute trade discipline</strong><Clock3 size={16}/></div>
+        <div className={'tc-clock '+(elapsed>=360?'tc-overdue':'')}>{countdown}</div>
+        <p className="tc-muted">Local manual reminder. No order placement, automatic stop or guaranteed exit.</p>
+        <div className="tc-actions"><button onClick={()=>setStartTime(Date.now())}>Start on fill</button><button onClick={()=>setStartTime(null)}>Reset</button></div>
+        {startTime!==null&&<p className={elapsed>=360?'tc-warning':'tc-muted'}>{elapsed>=360?'Planned holding period exceeded — reassess or exit manually.':elapsed>=300?'Final minute — check exit plan.':'Timer running from your manual start.'}</p>}
+      </section>
+        <section className="tc-panel tc-live-next">
+          <div><span className="tc-page-kicker">YOUR TRADE WORKFLOW</span><h3>Manual options and outcomes</h3>
+            <p>Choose the option in your broker. Record actual entry and exit premiums separately; index signals do not predict option profit.</p></div>
+          <button type="button" onClick={()=>{selectTab('journal');setJournalView('trades')}}>
+            Open trading journal <ArrowRight size={16}/>
+          </button>
+        </section>
+      </div>
+    </section>}
+    {activeTab==='historical'&&<section role="tabpanel" id="tc-view-historical" aria-labelledby="tc-tab-historical" className="tc-tab-page">
+      <div className="tc-page-intro"><div><span className="tc-page-kicker">HISTORICAL RESEARCH</span>
+        <h3>Study observed prices and test your rules</h3>
+        <p>Historical data stays historical, even during market hours. Saved live recordings can be replayed independently.</p></div>
+        <span className="tc-data-badge">{dataStatus}</span>
+      </div>
+      <div className="tc-subnav" role="tablist" aria-label="Historical research views">
+        <button role="tab" type="button" aria-selected={historicalView==='chart'}
+          onClick={()=>setHistoricalView('chart')}>Price chart &amp; signals</button>
+        <button role="tab" type="button" aria-selected={historicalView==='backtest'}
+          onClick={()=>setHistoricalView('backtest')}>Directional backtest</button>
+        <button role="tab" type="button" aria-selected={historicalView==='captures'}
+          onClick={()=>setHistoricalView('captures')}>Saved live recordings</button>
+      </div>
+      {historicalView!=='captures'&&<>
     <div className="tc-toolbar"><label>Prepared chart source <select aria-label="Trading cockpit instrument" value={identity} onChange={event=>setIdentity(event.target.value)}><option value="">Choose a ready observed source</option>{preparedInstruments.map(s=><option key={s.identity} value={s.identity}>{s.display_name||s.identity} ({s.identity})</option>)}</select></label><label className="tc-monitor-toggle"><input type="checkbox" checked={monitor} onChange={event=>{
   const enabled=event.target.checked;setMonitor(enabled);monitorRef.current=enabled
   if(enabled)void refresh()
 }}/> Auto-audit while this page is open</label><button onClick={()=>void refresh()} disabled={!identity}><RefreshCw size={16}/> Refresh</button><button onClick={()=>setPaused(v=>!v)}>{paused?'Resume observations':'Pause updates'}</button><span className="tc-muted"><ShieldCheck size={14}/> No broker execution</span></div>
     {!preparedInstruments.length&&<p className="tc-missing"><Database size={17}/> The library has no ready one-minute chart source yet. Use the actions above to prepare already-downloaded stocks or fetch the actual BANKNIFTY spot series. The existing daily market library remains intact.</p>}
+
+        {!preparedInstruments.length&&<p className="tc-missing"><Database size={17}/> No prepared one-minute chart. The same shared Market Library can prepare already downloaded candles. <button type="button" onClick={()=>selectTab('setup')}>Open data tools</button></p>}
+      </>}
+      {error&&<div className="tc-error" role="alert">{error}</div>}
+      {historicalView==='chart'&&<div className="tc-historical-chart">
     <div className="tc-layout">
       <section className="tc-panel tc-main">
         <div className="tc-panel-title"><strong>Historical price action</strong><span>Prepared original Dhan 1-minute OHLC · EMA 9 / EMA 21</span></div>
@@ -395,24 +475,11 @@ export default function TradingCockpit(){
         <button className="tc-primary" disabled={!snapshot||busy||!sourceRecent} onClick={()=>void action('record')}>Record prospective prediction</button>
         {!sourceRecent&&<p className="tc-warning">Prediction recording is disabled for historical or stale candles. This prevents retroactively claiming a past observation as a live prediction.</p>}
       </section>
-      <section className="tc-panel tc-timer">
-        <div className="tc-panel-title"><strong>Six-minute trade discipline</strong><Clock3 size={16}/></div>
-        <div className={'tc-clock '+(elapsed>=360?'tc-overdue':'')}>{countdown}</div>
-        <p className="tc-muted">Local manual reminder. No order placement, automatic stop or guaranteed exit.</p>
-        <div className="tc-actions"><button onClick={()=>setStartTime(Date.now())}>Start on fill</button><button onClick={()=>setStartTime(null)}>Reset</button></div>
-        {startTime!==null&&<p className={elapsed>=360?'tc-warning':'tc-muted'}>{elapsed>=360?'Planned holding period exceeded — reassess or exit manually.':elapsed>=300?'Final minute — check exit plan.':'Timer running from your manual start.'}</p>}
-      </section>
+
     </div>
-    <section className="tc-panel tc-ledger"><div className="tc-panel-title"><strong>Permanent prediction ledger</strong><button onClick={()=>void action('evaluate')} disabled={!identity||busy}>Evaluate recorded outcomes</button></div>
-      <div className="tc-ledger-summary"><span>Scored directions <strong>{summary?.evaluated_directions??0}</strong></span><span>Correct directions <strong>{summary?.correct_directions??0}</strong></span><span>Directional accuracy <strong>{summary?.direction_accuracy===null||summary?.direction_accuracy===undefined?'Not enough observations':(summary.direction_accuracy*100).toFixed(1)+'%'}</strong></span></div>
-      {recordMessage&&<p role="status" className="tc-confirm">{recordMessage}</p>}
-      <p className="tc-muted">Directional accuracy excludes no-trade decisions, flat moves and unverifiable source gaps. No historical option P&L is inferred from spot candles.</p>
-      {monitor&&<p className="tc-confirm">Auto-audit enabled in this browser tab. Every 15 seconds QuantLab records both 3/6-minute calls only from freshly completed original source bars and scores due outcomes. Closing the page stops monitoring. A current local candle alone is not evidence of a streaming broker connection.</p>}
-      <div className="tc-report-title"><h3>End-of-day accuracy · prospective ledger only</h3><span className="tc-muted">No option trade P&amp;L or validated alpha</span></div>
-      <div className="tc-ledger-summary"><span>Logged decisions <strong>{report?.overall.total??0}</strong></span><span>Direction score <strong>{report?.overall.directional_accuracy===null||report?.overall.directional_accuracy===undefined?'—':(report.overall.directional_accuracy*100).toFixed(1)+'%'}</strong></span><span>Pending <strong>{report?.overall.pending??0}</strong></span><span>Source gaps <strong>{report?.overall.unverifiable??0}</strong></span></div>
-      <div className="tc-table-scroll"><table><thead><tr><th>Session IST</th><th>Calls</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Pending</th><th>Gaps</th><th>Accuracy</th></tr></thead><tbody>{report?.days.map(day=><tr key={day.session_ist}><td>{day.session_ist}</td><td>{day.total}</td><td>{day.scored}</td><td>{day.correct}</td><td>{day.incorrect}</td><td>{day.no_trade}</td><td>{day.pending}</td><td>{day.unverifiable}</td><td>{day.directional_accuracy===null?'—':(day.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}{!report?.days.length&&<tr><td colSpan={9}>No prospective logged decisions yet.</td></tr>}</tbody></table></div>
-      <div className="tc-table-scroll"><table><thead><tr><th>Recorded UTC</th><th>Source bar UTC</th><th>Signal</th><th>Horizon</th><th>Reference</th><th>Observed</th><th>Outcome</th></tr></thead><tbody>{history?.predictions.map(x=><tr key={x.id}><td>{x.created_utc.slice(0,19)}</td><td>{x.bar_utc.slice(0,19)}</td><td>{x.direction}</td><td>{x.horizon_minutes}m</td><td>{fmt(x.reference_close)}</td><td>{fmt(x.observed_close)}</td><td>{x.evaluation.replaceAll('_',' ')}</td></tr>)}{!history?.predictions.length&&<tr><td colSpan={7}>No prospective predictions logged for this instrument yet.</td></tr>}</tbody></table></div>
-    </section>
+
+      </div>}
+      {historicalView==='backtest'&&<>
     <section className="tc-panel tc-ledger">
       <div className="tc-panel-title"><strong>Historical BANKNIFTY directional backtest · no option P&amp;L</strong><div className="tc-backtest-controls"><label>History window <select value={replayLimit} onChange={event=>setReplayLimit(event.target.value)}><option value="500">Last 500 minutes</option><option value="1500">Last 1,500 minutes</option><option value="3000">Last 3,000 minutes</option><option value="5000">Last 5,000 minutes</option></select></label><button disabled={!identity||replayBusy} onClick={()=>void runReplay()}>{replayBusy?'Evaluating source history…':'Run directional backtest'}</button></div></div>
       <p className="tc-muted">Runs the fixed untrained rule separately at each historical minute using only information available up to that minute. Checks actual 3/6-minute direction where observed; does not claim executable option fills, costs or out-of-sample trading skill.</p>
@@ -420,6 +487,22 @@ export default function TradingCockpit(){
       <div className="tc-table-scroll"><table><thead><tr><th>IST session</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Gaps</th><th>Directional accuracy</th></tr></thead><tbody>{replay.days.map(d=><tr key={d.session_ist}><td>{d.session_ist}</td><td>{d.scored}</td><td>{d.correct}</td><td>{d.incorrect}</td><td>{d.no_trade}</td><td>{d.unverifiable}</td><td>{d.directional_accuracy===null?'—':(d.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}</tbody></table></div>
       <p className="tc-warning">{replay.disclaimer}{replay.has_more_history?' Additional older source data was not evaluated.':''}</p></>}
     </section>
+
+      </>}
+      {historicalView==='captures'&&<SavedCaptureReview/>}
+    </section>}
+    {activeTab==='journal'&&<section role="tabpanel" id="tc-view-journal" aria-labelledby="tc-tab-journal" className="tc-tab-page">
+      <div className="tc-page-intro"><div><span className="tc-page-kicker">TRADING JOURNAL</span>
+        <h3>Record actual trades and audit predictions</h3>
+        <p>Keep manually entered options P&amp;L separate from BANKNIFTY directional accuracy.</p></div></div>
+      <div className="tc-subnav" role="tablist" aria-label="Trading journal views">
+        <button type="button" role="tab" aria-selected={journalView==='trades'}
+          onClick={()=>setJournalView('trades')}>My manual trades</button>
+        <button type="button" role="tab" aria-selected={journalView==='accuracy'}
+          onClick={()=>setJournalView('accuracy')}>Prediction accuracy</button>
+      </div>
+      {error&&<div className="tc-error" role="alert">{error}</div>}
+      {journalView==='trades'&&<>
     <section className="tc-panel tc-ledger" aria-label="Manual options trade journal">
       <div className="tc-panel-title"><strong>Manual options journal · six-minute discipline</strong><span>Read-only research · you type actual prices</span></div>
       <p className="tc-muted">Enter a new trade at the time you actually fill it. QuantLab stores server receipt times and computes P&amp;L only after you report an exit. The app cannot verify your broker fills, enforce a stop, or place orders.</p>
@@ -449,5 +532,75 @@ export default function TradingCockpit(){
       <div className="tc-table-scroll"><table><thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Holding</th><th>Over 6m?</th><th>Net P&amp;L</th></tr></thead><tbody>{journal?.trades.map(trade=><tr key={trade.id}><td>{trade.symbol}</td><td>{trade.status}</td><td>{trade.direction}</td><td>{trade.quantity}</td><td>₹{fmt(trade.entry_price)}</td><td>{fmt(trade.exit_price)}</td><td>{Math.floor(trade.holding_seconds/60)}m</td><td>{trade.holding_rule_exceeded?'YES':'No'}</td><td>{trade.net_pnl_inr===null?'—':'₹'+fmt(trade.net_pnl_inr)}</td></tr>)}{!journal?.trades.length&&<tr><td colSpan={9}>No manual positions recorded.</td></tr>}</tbody></table></div>
       <p className="tc-warning">Unverified manual entries: the time starts when this local server receives your request, not the broker execution timestamp. This is a discipline journal, not an account reconciliation or evidence of actual fills.</p>
     </section>
+
+      </>}
+      {journalView==='accuracy'&&<>
+    <section className="tc-panel tc-ledger"><div className="tc-panel-title"><strong>Permanent prediction ledger</strong><button onClick={()=>void action('evaluate')} disabled={!identity||busy}>Evaluate recorded outcomes</button></div>
+      <div className="tc-ledger-summary"><span>Scored directions <strong>{summary?.evaluated_directions??0}</strong></span><span>Correct directions <strong>{summary?.correct_directions??0}</strong></span><span>Directional accuracy <strong>{summary?.direction_accuracy===null||summary?.direction_accuracy===undefined?'Not enough observations':(summary.direction_accuracy*100).toFixed(1)+'%'}</strong></span></div>
+      {recordMessage&&<p role="status" className="tc-confirm">{recordMessage}</p>}
+      <p className="tc-muted">Directional accuracy excludes no-trade decisions, flat moves and unverifiable source gaps. No historical option P&L is inferred from spot candles.</p>
+      {monitor&&<p className="tc-confirm">Auto-audit enabled in this browser tab. Every 15 seconds QuantLab records both 3/6-minute calls only from freshly completed original source bars and scores due outcomes. Closing the page stops monitoring. A current local candle alone is not evidence of a streaming broker connection.</p>}
+      <div className="tc-report-title"><h3>End-of-day accuracy · prospective ledger only</h3><span className="tc-muted">No option trade P&amp;L or validated alpha</span></div>
+      <div className="tc-ledger-summary"><span>Logged decisions <strong>{report?.overall.total??0}</strong></span><span>Direction score <strong>{report?.overall.directional_accuracy===null||report?.overall.directional_accuracy===undefined?'—':(report.overall.directional_accuracy*100).toFixed(1)+'%'}</strong></span><span>Pending <strong>{report?.overall.pending??0}</strong></span><span>Source gaps <strong>{report?.overall.unverifiable??0}</strong></span></div>
+      <div className="tc-table-scroll"><table><thead><tr><th>Session IST</th><th>Calls</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Pending</th><th>Gaps</th><th>Accuracy</th></tr></thead><tbody>{report?.days.map(day=><tr key={day.session_ist}><td>{day.session_ist}</td><td>{day.total}</td><td>{day.scored}</td><td>{day.correct}</td><td>{day.incorrect}</td><td>{day.no_trade}</td><td>{day.pending}</td><td>{day.unverifiable}</td><td>{day.directional_accuracy===null?'—':(day.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}{!report?.days.length&&<tr><td colSpan={9}>No prospective logged decisions yet.</td></tr>}</tbody></table></div>
+      <div className="tc-table-scroll"><table><thead><tr><th>Recorded UTC</th><th>Source bar UTC</th><th>Signal</th><th>Horizon</th><th>Reference</th><th>Observed</th><th>Outcome</th></tr></thead><tbody>{history?.predictions.map(x=><tr key={x.id}><td>{x.created_utc.slice(0,19)}</td><td>{x.bar_utc.slice(0,19)}</td><td>{x.direction}</td><td>{x.horizon_minutes}m</td><td>{fmt(x.reference_close)}</td><td>{fmt(x.observed_close)}</td><td>{x.evaluation.replaceAll('_',' ')}</td></tr>)}{!history?.predictions.length&&<tr><td colSpan={7}>No prospective predictions logged for this instrument yet.</td></tr>}</tbody></table></div>
+    </section>
+
+      </>}
+    </section>}
+    {activeTab==='setup'&&<section role="tabpanel" id="tc-view-setup" aria-labelledby="tc-tab-setup" className="tc-tab-page">
+      <div className="tc-page-intro"><div><span className="tc-page-kicker">CONNECTIONS &amp; DATA</span>
+        <h3>Set up once, reuse everywhere</h3>
+        <p>Connect the broker, prepare missing observations, and manage one shared market-data library.</p></div>
+        <button type="button" className="tc-link-button" onClick={()=>selectTab('live')}>Return to Live Market <ArrowRight size={15}/></button>
+      </div>
+    <section className="tc-panel tc-token-panel" aria-label="Dhan data API connection">
+      <div className="tc-panel-title"><strong>Dhan market data connection</strong><span>Local-only token · read-only verification</span></div>
+      <div className="tc-token-status">
+        <span className={'tc-token-state '+(tokenState==='CONNECTED'?'good':tokenState==='EXPIRING SOON'?'soon':'attention')}>{tokenState}</span>
+        <span>{tokenRemaining!==null?(tokenRemaining>0?
+          `Expires in ${tokenHours}h ${tokenMinutes}m`:'Token expired'):
+          'Expiry time unavailable until broker verification succeeds'}</span>
+        <button type="button" onClick={()=>void checkDhan()} disabled={tokenBusy}>Check now</button>
+        <button type="button" onClick={()=>{setTokenForm(v=>!v);setTokenError('');setTokenMessage('')}}>
+          {tokenForm?'Cancel':'Add / replace Dhan token'}</button>
+      </div>
+      {dhanCheck?.expires_at_utc&&<p className="tc-muted">Dhan-reported token expiry: {new Date(dhanCheck.expires_at_utc).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})} IST · historical Data API {dhanCheck.data_plan_active?'active':'not confirmed active'}.</p>}
+      {dhanCheck&&!dhanCheck.ok&&<p className="tc-warning">{dhanCheck.message}</p>}
+      {tokenError&&<div className="tc-error" role="alert">{tokenError}</div>}
+      {tokenMessage&&<p className="tc-confirm" role="status">{tokenMessage}</p>}
+      {tokenForm&&<form className="tc-token-form" onSubmit={event=>void connectDhan(event)}>
+        <label>New token from Dhan Web<input type="password" autoComplete="off" value={dhanToken} onChange={event=>setDhanToken(event.target.value)} placeholder="Paste Dhan access token"/></label>
+        <label>Dhan client ID for live streaming (numeric; verified against your broker profile)
+          <input type="password" autoComplete="off" value={dhanClientId}
+            onChange={event=>setDhanClientId(event.target.value)}
+            placeholder="Your Dhan client ID · leave blank to keep existing"/>
+        </label>
+        <label className="tc-token-consent"><input type="checkbox" checked={tokenConsent} onChange={event=>setTokenConsent(event.target.checked)}/> Store this verified token in the local, gitignored .env file. Do not send it to GitHub or the browser's storage.</label>
+        <button type="submit" disabled={tokenBusy||!tokenConsent||!dhanToken.trim()}>{tokenBusy?'Verifying…':'Verify and save token'}</button>
+      </form>}
+      <p className="tc-muted">This verifies your Dhan session and Data API entitlement. Live WebSockets also need your Dhan client ID {dhanCheck?.client_id_configured?'(configured)':'(not configured or not yet checked)'}. This connection alone does not start market streaming.</p>
+    </section>
+
+    <section className="tc-panel tc-source-panel" aria-label="Shared market data library status">
+      <div className="tc-panel-title"><strong>One shared market-data library · dhan_shared</strong><span>Original downloads are reusable source receipts, not separate datasets</span></div>
+      <div className="tc-source-summary"><span>Ready one-minute charts <strong>{catalog?.prepared_equities??0}</strong></span><span>Existing minute sources awaiting chart preparation <strong>{pendingMinutes}</strong></span><span>BANKNIFTY spot index <strong>{missingBankNifty?'Original index not yet available':'Source available'}</strong></span></div>
+      {sourceError&&<p className="tc-error" role="alert">{sourceError}</p>}
+      {sourceNotice&&<p className="tc-confirm" role="status">{sourceNotice}</p>}
+      {sourceJob&&sourceWorking&&<p className="tc-muted" role="status">{sourceJob.stage||'Preparing market data'} {sourceJob.percent!==undefined?'· '+Math.round(sourceJob.percent)+'%':''}</p>}
+      {pendingMinutes>0&&<div className="tc-source-action"><p>Existing Dhan one-minute stock candles have been downloaded, but their analytical chart index has not been built. Reuse those files without downloading anything again.</p><button type="button" disabled={sourceWorking} onClick={()=>void prepareCached()}>Prepare {Math.min(40,pendingMinutes)} cached minute instruments</button></div>}
+      {missingIndexSources.length>0&&<form className="tc-source-action" onSubmit={event=>void acquireSpot(event)}>
+        <div><strong>The real index series needs its own original observations.</strong>
+        <p>The downloaded constituent stocks are preserved, but they cannot substitute for BANKNIFTY or NIFTY 50 spot candles. Fetch missing IDX_I observations into the same shared library.</p></div>
+        <label>Spot index <select aria-label="Missing index spot series" value={spotIdentity} onChange={e=>setSpotIdentity(e.target.value as 'INDEX:BANKNIFTY'|'INDEX:NIFTY50')}>{missingIndexSources.map(x=><option value={x.identity} key={x.identity}>{x.display_name}</option>)}</select></label>
+        <label>From (IST) <input type="date" required value={spotFrom} onChange={e=>setSpotFrom(e.target.value)}/></label>
+        <label>Through (exclusive) <input type="date" required value={spotTo} onChange={e=>setSpotTo(e.target.value)}/></label>
+        <button type="submit" disabled={sourceWorking}>Get missing index spot candles</button>
+      </form>}
+      {!pendingMinutes&&!missingIndexSources.length&&<p className="tc-confirm">Existing local sources are prepared. These are historical observations, not a live broker stream.</p>}
+      <p className="tc-muted">All sources remain internally partitioned by instrument, interval and observation time for accuracy; you manage one library. Missing source dates are never invented or backfilled from today's membership.</p>
+    </section>
+
+    </section>}
   </div>
 }
