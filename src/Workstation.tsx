@@ -875,7 +875,7 @@ function App(){
               notify('Single-use frozen experiment queued; its result receipt will be checked.') }}/>
           {job&&<Card title="Current job"><div className="ws-job-row"><Tag tone={job.status==='error'?'bad':job.status==='complete'?'good':'blue'}>{job.status.toUpperCase()}</Tag><span>{job.kind}</span><small>{job.error||job.id}</small></div></Card>}
         </>}
-        {tab==='history'&&<ResultsStudio
+        {tab==='history'&&<ResultsStudio integrated
           selectedIndexRunId={selectedRun}
           onSelectIndexRun={setSelectedRun}
           onModels={()=>begin('models')}
