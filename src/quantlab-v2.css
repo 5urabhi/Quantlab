@@ -165,3 +165,16 @@
 .v2-search-info{padding:15px;color:#afc9d8;font-size:13px}
 .v2-search-error{padding:13px;background:#442a32;color:#ffc6c9;border-radius:8px;font-size:13px}
 .v2-search-dialog footer{border-top:1px solid #334f64;color:#91b2c5;font-size:12px;padding:12px 19px}
+
+/* V2 result and notebook screens: one page title, not nested promotional headers. */
+.ws-v2 .v2-results-integrated .rs-hero{display:flex;align-items:center;justify-content:flex-end;min-height:0;padding:0;margin:0 0 10px;border:0;background:transparent}
+.ws-v2 .v2-results-integrated .rs-hero>div:first-child{display:none}
+.ws-v2 .v2-results-integrated .rs-step{display:none}
+.ws-v2 .v2-results-integrated .rs-tabs{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.ws-v2 .v2-results-integrated .rs-tabs button{font-size:13px;min-height:40px;white-space:nowrap}
+.v2-result-more{display:flex;gap:8px;align-items:center;color:#b1cadd;font-size:12px}
+.v2-result-more select{min-height:40px;color:#d3e8f4;background:#19364a;border:1px solid #3e6175;border-radius:8px;padding:8px;max-width:220px}
+.ws-v2 .v2-integrated .rw-top{display:flex;align-items:center;justify-content:flex-end;background:transparent;border:0;padding:0 0 8px}
+.ws-v2 .v2-integrated .rw-top>div:first-child{display:none}
+.ws-v2 .v2-integrated .rw-top-actions button{font-size:12px;min-height:38px}
+.ws-v2 .v2-integrated .rw-navigation{display:none}
