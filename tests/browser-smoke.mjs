@@ -105,6 +105,55 @@ try {
     // One focused panel at a time. No duplicated Trading Cockpit heading.
     await modes.getByRole('tab',{name:'Live Trading'}).click()
     await page.getByRole('tabpanel',{name:'Live Trading'}).waitFor()
+    const autoDepth=page.getByRole('region',{
+      name:'Automatic BANKNIFTY 20-level order-book recorder',
+    })
+    await autoDepth.waitFor()
+    const armDepth=autoDepth.getByRole('button',{
+      name:'Arm automatic 20-level recording',
+    })
+    assert.equal(await armDepth.isDisabled(),true,
+      'Automatic recording must require explicit consent')
+    assert.equal(await autoDepth.getByRole('spinbutton',{
+      name:'Auto depth target premium',
+    }).inputValue(),'300')
+    await autoDepth.getByRole('checkbox').check()
+    assert.equal(await armDepth.isEnabled(),true,
+      'Opt-in consent allows arming the local recorder')
+    let armedRequest=null
+    await page.route('**/api/trading-cockpit/auto-depth/arm',async route=>{
+      armedRequest=JSON.parse(route.request().postData()||'{}')
+      await route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify({
+          armed:true,state:'armed_waiting_for_nse_hours',connected:false,
+          settings:{...armedRequest,enabled:true},
+          contracts:[],latest:{},snapshots_saved:0,received_pairs:0,
+          selection_events:0,invalid_pairs:0,session_id:null,
+          last_packet_utc:null,last_chain_utc:null,last_error:null,
+          market_regular_hours:false,read_only:true,
+          historical_depth_download_supported:false,
+        })})
+    })
+    await page.route('**/api/trading-cockpit/auto-depth/disarm',route=>route.fulfill({
+      status:200,contentType:'application/json',body:JSON.stringify({
+        armed:false,state:'disabled',connected:false,
+        settings:{...armedRequest,enabled:false},contracts:[],latest:{},
+        snapshots_saved:0,received_pairs:0,selection_events:0,
+        invalid_pairs:0,session_id:null,last_packet_utc:null,
+        last_chain_utc:null,last_error:null,market_regular_hours:false,
+        read_only:true,historical_depth_download_supported:false,
+      }),
+    }))
+    await armDepth.click()
+    await autoDepth.getByRole('button',{name:'Stop and disarm recording'}).waitFor()
+    assert.equal(armedRequest?.target_premium,300)
+    assert.equal(armedRequest?.per_side,2)
+    assert.equal(armedRequest?.lots,3)
+    assert.equal(armedRequest?.confirm_live_data,true)
+    await autoDepth.getByRole('button',{name:'Stop and disarm recording'}).click()
+    await armDepth.waitFor()
+    await page.unroute('**/api/trading-cockpit/auto-depth/arm')
+    await page.unroute('**/api/trading-cockpit/auto-depth/disarm')
     await screenshot('01-trading-copilot-live-v4')
     assert.equal(await page.locator('.tc-cockpit-v4>section[role="tabpanel"]').count(),1)
     // The option chain is always a read-only snapshot, never an assumed
