@@ -234,6 +234,8 @@ def _read_socket(index: int, group: list[dict], url: str,
                 now = auto._now()
                 books = auto._paired_books(raw, chosen, pending, now)
                 if not books:
+                    if _stalled_socket(time.monotonic(), last_pair):
+                        raise TimeoutError("No original book pairs on Dhan socket")
                     continue
                 last_pair = time.monotonic()
                 _record_original_pairs(index, books, now)
