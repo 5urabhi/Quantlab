@@ -127,3 +127,10 @@
   padding:5px 9px;border-radius:5px}
 @media(max-width:1050px){.hob-audit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:550px){.hob-audit-grid{grid-template-columns:1fr}}
+
+
+.hob-hold-note{font-size:11px;line-height:1.65;color:#aecbd8;
+  margin:0;padding:10px 12px;border:1px solid #35566b;
+  border-radius:7px;background:#142c3d}
+.hob-controls-primary select:disabled{opacity:.55;cursor:not-allowed;
+  background:#132537;color:#b1bec8}
