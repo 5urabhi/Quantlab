@@ -113,6 +113,54 @@ If a model is blocked, use:
 missing original observations → explicitly authorize the missing-data
 append with the extra 20% buffer → rerun this audit.
 
+## Resolving the November 20 Dhan audit blockers
+
+The first successful local audit produced 20/26 observed-model passes in four
+usable datasets and six source blockers in the shared Dhan library:
+`heston_proxy` plus the five observed-quote models. This is **not** evidence
+of a broken model implementation.
+
+For Heston, the daily historical model needs at least **252** observed stock
+returns and prefers **303** (+20%). The sample's best extendable ticker was
+224 returns, short by **28 to the minimum** and **79 to the preferred target**.
+After updating `main`, the audit reports both thresholds, the exact source
+ticker, and the action. In the UI choose **Models → Stochastic Processes →
+Heston · Historical Variance Proxy → Choose stock → Complete recommended
+stock (+20%)**. The existing Dhan workflow reuses locally cached candles
+first and requests only uncovered authorized intervals after your click.
+A download may still be blocked by missing provider entitlements or
+unavailable historical periods. Do not manufacture additional returns.
+
+For the five quote-based models: their model input catalog is separate from
+the automatic BANKNIFTY recorder's SQLite chain observations, so the previous
+audit reported no quotes even when you may have saved chain observations.
+There is now a model-page action:
+
+**Models → Derivatives & Options → one of the observed-quote models →
+"Reuse existing BANKNIFTY recording · no new Dhan request".**
+
+The selector lists only SHA-checked original-source normalized snapshots
+with positive uncrossed original bid/ask. Clicking "Use this saved
+observation" creates a source-bound saved quote for `dhan_shared`; it
+does not fetch from Dhan, modify the continuous recorder, or place an order.
+The same saved quote can be selected for all five quote-based models.
+
+**Provenance limits:** Automatic BANKNIFTY chain snapshots retain normalized
+Dhan bid/ask and a SHA checksum in the shared SQLite library, not the raw
+Dhan REST vendor JSON. The quote's local receive time is not the exchange
+timestamp. The expiry **date** is original, but the 15:30 IST expiry time is
+an explicit model assumption. Saved historical quotes are not current
+executable quotes. Source and assumptions are recorded in the model manifest.
+If no saved chain is available, use the existing authorized read-only
+"Fetch current Dhan quotes" action in the model page (or import an original
+provider CSV).
+
+The empty `dhan_monthly` legacy parent folder is no longer counted as a
+fifth independent **usable** market dataset by the default audit when it
+has neither daily nor monthly prices. It remains available for explicit
+diagnosis with `--dataset dhan_monthly`; this does not delete files or hide
+incomplete actual prepared datasets.
+
 ## Option models
 
 The five observed-quote models need dated, original option bid/ask, index
