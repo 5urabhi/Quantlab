@@ -250,7 +250,7 @@ try {
     }).inputValue(),'signal_reversal')
     assert.equal(await historicalOptions.getByRole('combobox',{
       name:'Options backtest holding period',
-    }).isDisabled(),true,'Fixed-time input must be inactive under signal reversal')
+    }).count(),0,'Fixed-time input must not appear under an uncapped reversal rule')
     await historicalOptions.getByText('Fixed holding time does not control',{exact:false}).waitFor()
     await historicalOptions.getByText('UP → buy CE',{exact:false}).waitFor()
     // EMA crossover is a separate explicit model, never silently replace
