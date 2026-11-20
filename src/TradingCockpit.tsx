@@ -1,9 +1,10 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
-import {Clock3, RefreshCw, ShieldCheck, Radio, History, ClipboardList, Settings2, ArrowRight, BarChart3} from 'lucide-react'
+import {Clock3, RefreshCw, ShieldCheck, Radio, History, ClipboardList, Settings2, ArrowRight, BarChart3, Code2} from 'lucide-react'
 import {nseMarketWindow} from './tradingMarketSession'
 import SavedCaptureReview from './SavedCaptureReview'
 import MarketReplayPanel from './MarketReplayPanel'
 import StrategyWorkbench from './StrategyWorkbench'
+import ResearchPythonLab from './ResearchPythonLab'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './trading-cockpit.css'
 import LiveFeedPanel from './LiveFeedPanel'
@@ -19,7 +20,7 @@ type DaySummary = {session_ist:string;total:number;scored:number;correct:number;
 type Report = {days:DaySummary[];overall:Omit<DaySummary,'session_ist'>;source:string;disclaimer:string;truncated:boolean}
 type DhanCheck = {ok:boolean;code:string;message:string;token_present:boolean;token_valid:boolean|null;data_plan_active:boolean|null;client_id_configured?:boolean;client_id_auto_available?:boolean;expires_at_utc?:string|null;seconds_remaining?:number|null}
 type DhanConnect = {connected:boolean;message:string}
-type CockpitView = 'live'|'replay'|'strategy'|'journal'|'setup'
+type CockpitView = 'live'|'replay'|'strategy'|'research'|'journal'|'setup'
 type ReplayView = 'session'|'recordings'
 type JournalView = 'trades'|'accuracy'
 type LiveHeaderState = {
@@ -305,6 +306,8 @@ export default function TradingCockpit(){
         onClick={()=>selectTab('replay')}><History size={17}/><span>Market Replay</span></button>
       <button type="button" role="tab" id="tc-tab-strategy" aria-controls="tc-view-strategy" aria-selected={activeTab==='strategy'}
         onClick={()=>selectTab('strategy')}><BarChart3 size={17}/><span>Options Backtest</span></button>
+      <button type="button" role="tab" id="tc-tab-research" aria-controls="tc-view-research" aria-selected={activeTab==='research'}
+        onClick={()=>selectTab('research')}><Code2 size={17}/><span>Python Research Lab</span></button>
       <button type="button" role="tab" id="tc-tab-journal" aria-controls="tc-view-journal" aria-selected={activeTab==='journal'}
         onClick={()=>selectTab('journal')}><ClipboardList size={17}/><span>Trade Journal</span></button>
       <button type="button" role="tab" id="tc-tab-setup" aria-controls="tc-view-setup" aria-selected={activeTab==='setup'}
@@ -363,6 +366,10 @@ export default function TradingCockpit(){
       <StrategyWorkbench instruments={instruments} onOpenData={()=>selectTab('setup')}
         onOpenReplay={()=>{selectTab('replay');setReplayView('session')}}
         onOpenOptions={()=>selectTab('live')}/>
+    </section>}
+
+    {activeTab==='research'&&<section role="tabpanel" id="tc-view-research" aria-labelledby="tc-tab-research" className="tc-tab-page">
+      <ResearchPythonLab/>
     </section>}
 
     {activeTab==='journal'&&<section role="tabpanel" id="tc-view-journal" aria-labelledby="tc-tab-journal" className="tc-tab-page">
