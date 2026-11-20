@@ -105,6 +105,54 @@ class ModelAuditAllDatasetsTests(unittest.TestCase):
                          ["upload_original"])
         self.assertEqual(result["blocked_input"], 26)
 
+    def test_unprepared_legacy_monthly_container_is_not_a_fifth_dataset(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            legacy = {"id": "dhan_monthly", "kind": "dhan",
+                      "has_prices": False, "has_daily_prices": False}
+            prepared = {"id": "dhan_shared", "kind": "dhan",
+                        "has_prices": False, "has_daily_prices": True,
+                        "label": "TEST only"}
+            with patch.object(service, "datasets",
+                              return_value=[legacy, prepared]), \
+                 patch.object(service, "dataset_path",
+                              return_value=(root, prepared)):
+                report = audit_all_models.audit(
+                    datasets=None, execute=False, output=root / "report"
+                )
+        self.assertEqual([d["dataset_id"] for d in report["datasets"]],
+                         ["dhan_shared"])
+        self.assertEqual(report["excluded_unprepared_legacy_containers"],
+                         ["dhan_monthly"])
+
+    def test_heston_shortfall_names_exact_ticker_and_two_thresholds(self):
+        best = {
+            "ticker": "NSE_EQ_12345", "display_name": "TEST_STOCK",
+            "returns": 224, "extendable": True,
+            "missing_minimum": 28, "missing_to_target": 79,
+        }
+        with patch.object(model_input_selector, "inspect", return_value={
+            "candidates": [best], "tri": {"runnable": False}
+        }):
+            with self.assertRaisesRegex(ValueError, "28 short"):
+                audit_all_models.historical_input(
+                    model_registry.CATALOG["heston_proxy"], "dhan_shared",
+                    {"has_daily_prices": True})
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(model_input_selector, "inspect", return_value={
+                 "candidates": [best], "tri": {"runnable": False}
+             }):
+            row = audit_all_models.run_observed(
+                model_registry.CATALOG["heston_proxy"], "dhan_shared",
+                {"kind": "dhan", "has_daily_prices": True},
+                Path(temp), {}, execute=True,
+            )
+        self.assertEqual(row["status"], "blocked_input")
+        self.assertEqual(row["selected_ticker"], "NSE_EQ_12345")
+        self.assertEqual(row["observed_returns"], 224)
+        self.assertEqual(row["missing_minimum"], 28)
+        self.assertEqual(row["missing_to_target"], 79)
+
     def test_math_models_only_claim_assumptions(self):
         theory = model_registry.CATALOG["black_scholes"]
         with patch.object(model_lab, "run_model", return_value={
