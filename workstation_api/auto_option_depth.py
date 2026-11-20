@@ -43,6 +43,7 @@ STATE: dict = {
 DEFAULTS = {
     "enabled": False, "target_premium": 300.0, "tolerance": 75.0,
     "per_side": 2, "lots": 3, "sample_seconds": 3,
+    "allow_token_renewal": False,
 }
 MAX_INSTRUMENTS = 6
 MAX_DAILY_SNAPSHOTS = 100_000
@@ -89,6 +90,9 @@ def _validate_config(raw: dict) -> dict:
     if not isinstance(raw.get("enabled", False), bool):
         raise ValueError("Automatic depth consent must be boolean")
     result["enabled"] = raw.get("enabled", False)
+    if not isinstance(raw.get("allow_token_renewal", False), bool):
+        raise ValueError("Dhan token-renewal consent must be boolean")
+    result["allow_token_renewal"] = raw.get("allow_token_renewal", False)
     for key in ("target_premium", "tolerance"):
         value = raw.get(key, DEFAULTS[key])
         if (isinstance(value, bool) or not isinstance(value, (int, float))
