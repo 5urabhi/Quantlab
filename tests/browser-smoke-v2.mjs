@@ -128,7 +128,7 @@ try{
    await page.getByRole('heading',{name:'Database Manager',exact:true}).waitFor()
    await shot('05-explorer')
    await sub('Quality & Coverage')
-   await page.getByText('Data Quality',{exact:false}).first().waitFor()
+   await page.getByText('Market-data evidence audit',{exact:true}).first().waitFor()
    await sub('Downloads')
    await page.getByRole('heading',{name:/See exactly what's happening/}).waitFor()
    await shot('05-downloads')
