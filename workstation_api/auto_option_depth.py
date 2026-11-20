@@ -153,15 +153,41 @@ def status() -> dict:
         state = dict(STATE)
         state["contracts"] = [dict(row) for row in STATE.get("contracts", [])]
         state["latest"] = {k: dict(v) for k, v in STATE.get("latest", {}).items()}
+        state["observed_by_contract"] = dict(STATE.get("observed_by_contract", {}))
+        state["socket_last_paired_utc"] = dict(STATE.get("socket_last_paired_utc", {}))
     now = _now()
-    for info in state["latest"].values():
+    market_open = _market_open(now)
+    def _age(stamp) -> float:
         try:
-            age = max(0, (now - datetime.fromisoformat(info["received_utc"])).total_seconds())
+            return max(0., (now - datetime.fromisoformat(stamp)).total_seconds())
         except (ValueError, TypeError, KeyError):
-            age = 999999
+            return 999999.
+    subscribed = {c["identity"] for c in state["contracts"]}
+    observed = state["observed_by_contract"]
+    wide = cfg["selection_mode"] == "atm_contracts_100_each"
+    for identity, info in state["latest"].items():
+        # The stored sample may be deliberately 30s old even when fresh
+        # original packet pairs are arriving. Never confuse those clocks.
+        age = _age(info.get("received_utc"))
+        feed_age = _age(observed.get(identity)) if wide else age
+        source_fresh = (state.get("connected", False) and market_open
+                        and feed_age <= 10)
         info["age_seconds"] = round(age, 1)
-        info["fresh"] = (state.get("connected", False) and age <= 10
-                         and _market_open(now))
+        info["feed_age_seconds"] = round(feed_age, 1) if feed_age < 999999 else None
+        info["feed_fresh"] = source_fresh
+        info["fresh"] = source_fresh if wide else (
+            state.get("connected", False) and market_open and age <= 10)
+    state["contracts_with_saved_books"] = len(subscribed & set(state["latest"]))
+    state["contracts_with_recent_packets"] = sum(
+        1 for identity in subscribed
+        if _age(observed.get(identity)) <= 10 and state.get("connected")
+        and market_open) if wide else state["contracts_with_saved_books"]
+    state["sockets_with_recent_pairs"] = sum(
+        1 for ts in state["socket_last_paired_utc"].values()
+        if _age(ts) <= 60 and state.get("connected") and market_open)
+    # Aggregate only; no broker credentials or raw packet data are exposed.
+    state.pop("observed_by_contract", None)
+    state.pop("socket_last_paired_utc", None)
     return {
         **state, "settings": cfg, "armed": cfg["enabled"],
         "requested_contracts_above": (100 if cfg["selection_mode"] == "atm_contracts_100_each" else None),
