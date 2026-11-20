@@ -215,7 +215,9 @@ class AutomaticDepthRecorderTests(unittest.TestCase):
 
     def test_routes_require_explicit_consent_and_are_read_only(self):
         with patch.object(auto, "status", return_value={"armed": False}),              patch.object(auto, "arm", return_value={"armed": True}),              patch.object(auto, "disarm", return_value={"armed": False}):
-            with TestClient(app) as client:
+            # QuantLab deliberately rejects TestClient's default "testserver"
+            # Host; exercise the real loopback-only API policy instead.
+            with TestClient(app, base_url="http://localhost") as client:
                 current = client.get("/api/trading-cockpit/auto-depth/status")
                 self.assertEqual(current.status_code, 200)
                 body = client.post("/api/trading-cockpit/auto-depth/arm",
