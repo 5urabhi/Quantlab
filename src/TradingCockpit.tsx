@@ -36,11 +36,13 @@ const post=(path:string,body:unknown)=>marketPost<unknown>(path,body)
 const indiaDate=(offsetDays=0)=>{const d=new Date();d.setUTCDate(d.getUTCDate()+offsetDays);return d.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'})}
 
 export type TradingCockpitView=CockpitView
-export default function TradingCockpit({selectedView,focusLive,integrated=false,onNavigateView}:{
+export default function TradingCockpit({selectedView,focusLive,integrated=false,
+  onNavigateView,onNavigateLiveView}:{
   selectedView?:CockpitView
   focusLive?:'signals'|'options'|'depth'
   integrated?:boolean
   onNavigateView?:(view:CockpitView)=>void
+  onNavigateLiveView?:(view:'signals'|'options'|'depth')=>void
 }={}){
   const [activeTab,setActiveTab]=useState<CockpitView>(()=>
     nseMarketWindow(Date.now()).regularWindow?'live':'replay')
@@ -335,6 +337,7 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
         <span>The regular NSE index session is outside its trading window. Feed freshness is determined only by actual Dhan packets; holidays and special sessions are not inferred.</span>
         <button type="button" onClick={()=>{selectTab('replay');setReplayView('session')}}>Open recorded market</button></div>}
       <LiveFeedPanel focusedView={focusLive} hideNavigation={integrated}
+        onViewChange={onNavigateLiveView}
         onOpenSetup={()=>selectTab('setup')}
         onOpenSaved={()=>{selectTab('replay');setReplayView('recordings')}}
         onDraftJournal={(contract:OptionContract,lots:number)=>{
