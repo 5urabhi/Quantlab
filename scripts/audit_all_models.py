@@ -502,6 +502,11 @@ def write_report(output: Path, body: dict, rows: list[dict]) -> None:
 
 def audit(*, datasets: list[str] | None, execute: bool, output: Path) -> dict:
     entries = service.datasets()
+    # The built-in synthetic demonstration is not an original market-data
+    # source. Do not make normal real-data totals look blocked by this fixture.
+    # Users may still explicitly request --dataset synthetic for diagnostics.
+    if not datasets:
+        entries = [e for e in entries if e.get("kind") != "synthetic"]
     if datasets:
         missing = sorted(set(datasets) - {entry["id"] for entry in entries})
         if missing:
