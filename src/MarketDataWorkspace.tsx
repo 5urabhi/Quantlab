@@ -53,7 +53,8 @@ type DhanCheck = {ok:boolean;code:string;message:string;token_valid:boolean|null
   data_plan_active:boolean|null}
 type KiteStatus = {api_key_configured:boolean;api_secret_configured:boolean;
   token_present:boolean;master_current:boolean;note?:string}
-type Props = {initialPage?:Page;datasets:Datum[];onDataChanged:()=>void;
+type Props = {initialPage?:Page;activePage?:Page;integrated?:boolean;
+  datasets:Datum[];onDataChanged:()=>void;
   onSelectDataset:(id:string)=>void;onOpenModels:()=>void;
   onRequestDelete:(datasetId:string)=>void}
 
@@ -139,9 +140,10 @@ const fault=(batch:Batch)=>{
     action:'Open the failure details and retry only unresolved work.'}
 }
 
-export default function MarketDataWorkspace({initialPage='get',datasets,onDataChanged,
-  onSelectDataset,onOpenModels,onRequestDelete}:Props){
-  const [page,setPage]=useState<Page>(initialPage)
+export default function MarketDataWorkspace({initialPage='get',activePage,integrated=false,
+  datasets,onDataChanged,onSelectDataset,onOpenModels,onRequestDelete}:Props){
+  const [page,setPage]=useState<Page>(activePage||initialPage)
+  useEffect(()=>{if(activePage)setPage(activePage)},[activePage])
   const [stage,setStage]=useState<0|1|2>(0)
   const [advanced,setAdvanced]=useState<Advanced>(null)
   const [selection,setSelection]=useState<Selection>('nifty50_pit')
@@ -436,13 +438,13 @@ export default function MarketDataWorkspace({initialPage='get',datasets,onDataCh
       </div>
       <div className="mdw-safety"><ShieldCheck size={17}/> Read-only market data · No orders</div>
     </div>
-    <div className="mdw-tabs" role="tablist" aria-label="Market data views">
+    {!integrated&&<div className="mdw-tabs" role="tablist" aria-label="Market data views">
       {([['get','Get Data',Download],['datasets','Market Library',Database],
         ['downloads','Download History',Activity]] as const).map(([key,label,Icon])=>
         <button key={key} role="tab" type="button" aria-selected={page===key}
           className={page===key?'active':''} onClick={()=>setPage(key)}>
           <Icon size={17}/>{label}</button>)}
-    </div>
+    </div>}
     {error&&<div className="mdw-alert error" role="alert"><AlertCircle size={17}/>
       <span>{error}</span><button type="button" aria-label="Dismiss error"
         onClick={()=>setError('')}><X size={15}/></button></div>}
