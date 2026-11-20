@@ -148,6 +148,27 @@ def _checked(row: dict) -> dict:
             "expiry_time_is_assumed": True}
 
 
+def _session_context(received_utc: str) -> dict:
+    """Classify local receive clock against SCHEDULED NSE hours, not holidays.
+
+    This is not the exchange's event timestamp and does not certify a
+    trading session, quote age at exchange, or market availability.
+    """
+    received = datetime.fromisoformat(received_utc)
+    if received.tzinfo is None:
+        raise ValueError("Saved chain receive time must have timezone")
+    observed_ist = received.astimezone(IST)
+    during = (
+        observed_ist.weekday() < 5 and
+        time(9, 15) <= observed_ist.time() < time(15, 30)
+    )
+    return {
+        "received_ist": observed_ist.isoformat(),
+        "received_during_scheduled_nse_hours": during,
+        "regular_session_clock_only_not_exchange_verified": True,
+    }
+
+
 def available(*, limit: int = 12) -> dict:
     """Summaries only; no broker call and no option price payload to the UI."""
     found = []
@@ -156,17 +177,35 @@ def available(*, limit: int = 12) -> dict:
             item = _checked(row)
             if item["valid_contracts"] < 1:
                 continue
-            found.append({key: item[key] for key in (
-                "captured_at", "expiry", "original_contracts",
-                "valid_contracts", "snapshot_sha256", "expiry_time_is_assumed")})
+            found.append({
+                **{key: item[key] for key in (
+                    "captured_at", "expiry", "original_contracts",
+                    "valid_contracts", "snapshot_sha256", "expiry_time_is_assumed")},
+                **_session_context(item["captured_at"]),
+            })
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             # Ignore unusable observations; never count them as available quotes.
             continue
-    return {"dataset_id": shared_market_data.SHARED_ID, "snapshots": found,
-            "read_only_inventory": True, "vendor_request_performed": False,
-            "warning": "Saved normalized Dhan observations, not raw vendor JSON. "
-                       "The expiry time is a 15:30 IST model assumption. "
-                       "A historical quote is not an executable live quote."}
+    preferred = next(
+        (item for item in found
+         if item["received_during_scheduled_nse_hours"]), None
+    )
+    if preferred is None and found:
+        preferred = found[0]
+    return {
+        "dataset_id": shared_market_data.SHARED_ID, "snapshots": found,
+        "recommended_snapshot_sha256": (
+            preferred["snapshot_sha256"] if preferred else None
+        ),
+        "preference": "Newest valid locally received snapshot within scheduled "
+                      "weekday 09:15-15:30 IST window; falls back to newest "
+                      "available snapshot if none exist in that window.",
+        "read_only_inventory": True, "vendor_request_performed": False,
+        "warning": "Scheduled-hours test is only a clock check, not an NSE "
+                   "holiday-calendar or exchange-event-time verification. "
+                   "The source has normalized Dhan observations, not raw vendor JSON. "
+                   "Expiry time assumes 15:30 IST. This is not an executable live quote.",
+    }
 
 
 def use_saved(dataset_id: str, snapshot_sha256: str, *,
