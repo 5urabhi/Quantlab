@@ -297,11 +297,20 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
       setActiveTab(liveHeader?.active||marketWindow.regularWindow?'live':'replay')
     }
   },[liveHeader?.active,marketWindow.regularWindow])
+  const manualTimer=(
+      <section className="tc-panel tc-timer">
+        <div className="tc-panel-title"><strong>Six-minute trade discipline</strong><Clock3 size={16}/></div>
+        <div className={'tc-clock '+(elapsed>=360?'tc-overdue':'')}>{countdown}</div>
+        <p className="tc-muted">Local manual reminder. No order placement, automatic stop or guaranteed exit.</p>
+        <div className="tc-actions"><button onClick={()=>setStartTime(Date.now())}>Start on fill</button><button onClick={()=>setStartTime(null)}>Reset</button></div>
+        {startTime!==null&&<p className={elapsed>=360?'tc-warning':'tc-muted'}>{elapsed>=360?'Planned holding period exceeded — reassess or exit manually.':elapsed>=300?'Final minute — check exit plan.':'Timer running from your manual start.'}</p>}
+      </section>
+  )
   return <div className="tc-shell tc-cockpit-v4">
-    <div className="tc-cockpit-intro">
+    {!integrated&&<div className="tc-cockpit-intro">
       <span className="tc-page-kicker">TRADING COPILOT · BANKNIFTY / NIFTY 50</span>
       <span className="tc-workspace-readonly"><ShieldCheck size={15}/> Read-only · no orders</span>
-    </div>
+    </div>}
     <div className="tc-v4-status" role="status" aria-label="Exchange schedule and real feed status">
       <span className={marketWindow.regularWindow?'regular':'idle'}>
         <span className="tc-status-dot"/>{marketWindow.regularWindow?'Regular NSE index hours':'Outside regular NSE index hours'}</span>
@@ -329,10 +338,10 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
     </nav>}
 
     {activeTab==='live'&&<section role="tabpanel" id="tc-view-live" aria-labelledby="tc-tab-live" className="tc-tab-page">
-      <div className="tc-v4-intro"><div><span className="tc-page-kicker">LIVE TRADING RESEARCH</span>
+      {!integrated&&<div className="tc-v4-intro"><div><span className="tc-page-kicker">LIVE TRADING RESEARCH</span>
         <h3>BANKNIFTY live monitor</h3><p>Real index ticks, selected option premium, and a source-backed 20-level book. No automatic broker orders.</p></div>
         {!liveFeedFresh&&<button className="tc-link-button" type="button" onClick={()=>selectTab('setup')}>
-          Check connection <ArrowRight size={15}/></button>}</div>
+          Check connection <ArrowRight size={15}/></button>}</div>}
       {!marketWindow.regularWindow&&!liveFeedFresh&&<div className="tc-market-note"><Clock3 size={17}/>
         <span>The regular NSE index session is outside its trading window. Feed freshness is determined only by actual Dhan packets; holidays and special sessions are not inferred.</span>
         <button type="button" onClick={()=>{selectTab('replay');setReplayView('session')}}>Open recorded market</button></div>}
@@ -354,13 +363,10 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
           selectTab('journal')
         }}/>
       <div className="tc-live-footer">
-      <section className="tc-panel tc-timer">
-        <div className="tc-panel-title"><strong>Six-minute trade discipline</strong><Clock3 size={16}/></div>
-        <div className={'tc-clock '+(elapsed>=360?'tc-overdue':'')}>{countdown}</div>
-        <p className="tc-muted">Local manual reminder. No order placement, automatic stop or guaranteed exit.</p>
-        <div className="tc-actions"><button onClick={()=>setStartTime(Date.now())}>Start on fill</button><button onClick={()=>setStartTime(null)}>Reset</button></div>
-        {startTime!==null&&<p className={elapsed>=360?'tc-warning':'tc-muted'}>{elapsed>=360?'Planned holding period exceeded — reassess or exit manually.':elapsed>=300?'Final minute — check exit plan.':'Timer running from your manual start.'}</p>}
-      </section>
+      {integrated?<details className="v2-manual-timer">
+        <summary>Optional six-minute manual reminder · not a strategy exit rule</summary>
+        {manualTimer}
+      </details>:manualTimer}
         <section className="tc-panel tc-live-next"><div><span className="tc-page-kicker">OPTIONS TRADE LOG</span>
           <h3>Manual fills &amp; outcomes</h3>
           <p>Use actual option fill prices; entering a trade here will not place a broker order.</p></div>
