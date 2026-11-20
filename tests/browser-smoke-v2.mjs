@@ -97,7 +97,7 @@ try{
    await page.getByRole('button',{name:/EMA Crossover/}).waitFor()
    await shot('03-strategy-library')
    await sub('EMA Explorer')
-   await page.getByRole('radio',{name:/Test all supported pairs/}).waitFor()
+   await page.getByRole('radio',{name:/Test all supported pairs/}).check()
    await page.getByRole('button',{name:/Test all 11,026 EMA combinations/}).waitFor()
    await shot('03-ema-explorer')
    await sub('Python Editor')
