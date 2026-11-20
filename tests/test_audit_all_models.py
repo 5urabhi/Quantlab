@@ -34,7 +34,7 @@ class ModelAuditAllDatasetsTests(unittest.TestCase):
                  patch.object(service, "dataset_path", return_value=(folder, dataset)), \
                  patch.object(model_lab, "run_model") as run:
                 result = audit_all_models.audit(
-                    datasets=None, execute=False, output=output
+                    datasets=["synthetic"], execute=False, output=output
                 )
             run.assert_not_called()
             self.assertEqual(result["registered_models"], len(model_registry.MODELS))
@@ -50,6 +50,26 @@ class ModelAuditAllDatasetsTests(unittest.TestCase):
                 sum(r["status"] == "blocked_input" for r in rows), 26
             )
             self.assertTrue((output / "MODEL_AUDIT.md").is_file())
+
+    def test_default_skips_builtin_synthetic_when_real_dataset_exists(self):
+        with tempfile.TemporaryDirectory() as temp:
+            synthetic = {"id": "synthetic", "kind": "synthetic"}
+            genuine = {
+                "id": "upload_original", "kind": "uploaded",
+                "has_prices": False, "has_daily_prices": False,
+                "label": "Test original source (no price panel)",
+            }
+            folder = Path(temp)
+            with patch.object(service, "datasets",
+                              return_value=[synthetic, genuine]), \
+                 patch.object(service, "dataset_path",
+                              return_value=(folder, genuine)):
+                result = audit_all_models.audit(
+                    datasets=None, execute=False, output=folder / "audit"
+                )
+        self.assertEqual([x["dataset_id"] for x in result["datasets"]],
+                         ["upload_original"])
+        self.assertEqual(result["blocked_input"], 26)
 
     def test_math_models_only_claim_assumptions(self):
         theory = model_registry.CATALOG["black_scholes"]
