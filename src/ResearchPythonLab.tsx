@@ -1,5 +1,5 @@
 import {useEffect,useMemo,useRef,useState} from 'react'
-import {Activity,BarChart3,Code2,Database,Download,Play,Save,ShieldCheck,SlidersHorizontal} from 'lucide-react'
+import {Activity,Code2,Database,Download,Play,Save,ShieldCheck,SlidersHorizontal} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './research-python-lab.css'
 
