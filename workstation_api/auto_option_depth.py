@@ -24,10 +24,12 @@ import time
 import uuid
 
 from index_research.dhan_data import MASTER_URL
-from . import dhan_workspace, live_market, market_depth, option_chain_live
+from . import dhan_workspace, live_market, market_depth, option_chain_live, shared_market_data
 
 IST = ZoneInfo("Asia/Kolkata")
 LOCK = RLock()
+STORAGE_LOCK = RLock()
+STORAGE_READY: Path | None = None
 STOP = Event()
 WORKER: Thread | None = None
 STATE: dict = {
@@ -262,9 +264,14 @@ def _features(book: dict, contract: dict, lots: int) -> dict:
 
 
 def _storage() -> None:
-    live_market._init_db()
-    with live_market._database() as db:
-        db.executescript("""
+    global STORAGE_READY
+    current = shared_market_data.database_path()
+    with STORAGE_LOCK:
+        if STORAGE_READY == current and current.is_file():
+            return
+        live_market._init_db()
+        with live_market._database() as db:
+            db.executescript("""
             CREATE TABLE IF NOT EXISTS auto_banknifty_depth_selections(
                 session_id TEXT NOT NULL, changed_utc TEXT NOT NULL,
                 identity TEXT NOT NULL, option_side TEXT NOT NULL,
@@ -283,7 +290,8 @@ def _storage() -> None:
             );
             CREATE INDEX IF NOT EXISTS auto_depth_features_recent
                 ON auto_banknifty_depth_features(identity, received_utc);
-        """)
+            """)
+        STORAGE_READY = current
 
 
 def _selection_receipt(session_id: str, choices: list[dict]) -> None:
