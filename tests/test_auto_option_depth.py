@@ -147,6 +147,33 @@ class AutomaticDepthRecorderTests(unittest.TestCase):
         self.assertIsNone(auto._depth_vwap(scarce, 90))
         self.assertNotIn("fill_price", features)
 
+    def test_auto_starts_with_local_token_and_respects_persisted_stop(self):
+        """BANKNIFTY CE and PE are recorded without an Arm click."""
+        with patch.dict(os.environ, {"DHAN_ACCESS_TOKEN": "LOCAL-READONLY-TOKEN"}):
+            self.assertFalse(auto._settings_path().exists())
+            self.assertTrue(auto._config()["enabled"])
+            self.assertEqual(auto._config()["per_side"], 2)
+            self.assertFalse(auto._config()["allow_token_renewal"])
+            with patch.object(auto, "_ensure_worker") as run:
+                auto.resume_if_armed()
+                run.assert_called_once()
+            # Stopping explicitly persists across subsequent server startups.
+            with patch.object(auto, "_ensure_worker") as run:
+                disabled = auto.disarm()
+                self.assertFalse(disabled["armed"])
+                self.assertFalse(auto._config()["enabled"])
+                auto.resume_if_armed()
+                run.assert_not_called()
+        auto.STOP = Event()
+
+    def test_missing_token_never_auto_arms_and_malformed_settings_are_safe(self):
+        with patch.dict(os.environ, {"DHAN_ACCESS_TOKEN": ""}):
+            self.assertFalse(auto._config()["enabled"])
+        auto._settings_path().write_text(
+            '{"enabled":true,"target_premium":"invalid"}', encoding="utf-8")
+        with patch.dict(os.environ, {"DHAN_ACCESS_TOKEN": "TOKEN_PRESENT"}):
+            self.assertFalse(auto._config()["enabled"])
+
     def test_settings_require_consent_save_locally_and_disarm(self):
         cfg = {**auto.DEFAULTS, "target_premium": 310}
         with patch.dict(os.environ, {"DHAN_ACCESS_TOKEN": "LOCAL-TEST-SECRET"}):
