@@ -6,7 +6,7 @@ declared. No broker order endpoint, authentication token or remote request.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 import hashlib
@@ -69,7 +69,7 @@ def _validate(raw: bytes) -> list[dict]:
             if captured.tzinfo is None:
                 raise ValueError("Capture time needs explicit UTC offset")
             captured=captured.tz_convert("UTC")
-            if captured>pd.Timestamp.now(tz="UTC")+pd.Timedelta(minutes=10):
+            if captured > datetime.now(timezone.utc) + timedelta(minutes=10):
                 raise ValueError("Source quote timestamp lies in the future")
             if expiry.tzinfo is None:
                 raise ValueError("Option expiry needs an exact timezone-aware timestamp")
