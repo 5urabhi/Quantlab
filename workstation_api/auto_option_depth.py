@@ -322,7 +322,7 @@ def _storage() -> None:
                 session_id TEXT NOT NULL, changed_utc TEXT NOT NULL,
                 identity TEXT NOT NULL, option_side TEXT NOT NULL,
                 expiry TEXT NOT NULL, strike REAL NOT NULL,
-                lot_size INTEGER NOT NULL, selected_ltp REAL NOT NULL,
+                lot_size INTEGER NOT NULL, selected_ltp REAL,
                 chain_received_utc TEXT NOT NULL,
                 PRIMARY KEY(session_id, changed_utc, identity)
             );
