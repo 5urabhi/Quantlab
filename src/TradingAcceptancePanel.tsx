@@ -23,7 +23,7 @@ type Report={
 }
 type DhanCheck={
   ok:boolean;token_valid:boolean|null;data_plan_active:boolean|null
-  client_id_configured?:boolean
+  client_id_configured?:boolean;client_id_auto_available?:boolean
 }
 type Props={
   onOpenLive:()=>void;onOpenBacktest:()=>void;onOpenReplay:()=>void
@@ -45,6 +45,7 @@ const toJSON=(input:Report,credentials:DhanCheck|null)=>({
     verified:credentials?.ok===true&&credentials.token_valid===true,
     historical_data_plan:credentials?.data_plan_active===true,
     client_id_configured:credentials?.client_id_configured===true,
+    client_id_auto_available:credentials?.client_id_auto_available===true,
     // This does NOT establish Dhan's separate 20-level entitlement.
     twenty_level_entitlement:'not_verifiable_from_profile_response',
   },
@@ -130,7 +131,7 @@ export default function TradingAcceptancePanel({onOpenLive,onOpenBacktest,onOpen
             {credentials?.ok&&credentials.token_valid?'Profile verified':'Profile not verified'}</span></div>
         <p>Token: {credentials?.token_valid===true?'valid':credentials?.token_valid===false?'not valid':'not verified'}
           {' '}· Data API: {credentials?.data_plan_active===true?'active':'not confirmed'}
-          {' '}· WebSocket client ID: {credentials?.client_id_configured?'configured':'not confirmed'}</p>
+          {' '}· WebSocket client ID: {credentials?.client_id_configured?'saved':credentials?.client_id_auto_available?'auto-detected from profile':'not yet verified'}</p>
         <small>The 20-level entitlement requires an actual successful Dhan packet reception.</small>
       </article>
       <div className="tac-grid">
