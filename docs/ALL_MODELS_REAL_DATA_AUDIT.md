@@ -43,7 +43,7 @@ bash run.sh audit-models --output-dir results/my_first_model_audit
 
 `--dataset` can be repeated to audit multiple named source datasets. Unless
 a dataset is explicitly selected, **all active datasets** are checked.
-Archived/deleted sources are not silently included.
+Archived/deleted sources and the built-in synthetic demonstration are not silently included. For an explicit fixture-only diagnostic, use `bash run.sh audit-models --dataset synthetic`; its results never count as original market evidence.
 
 The command requires the existing Python virtual environment. If it is absent,
 run `bash run.sh setup` first. It never restarts the running FastAPI,
