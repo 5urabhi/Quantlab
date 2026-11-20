@@ -1,7 +1,7 @@
 """Offline BANKNIFTY option chain, master lot size, quotes and no-order regressions."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
@@ -198,3 +198,14 @@ class BankNiftyOptionChainTests(TestCase):
         self.assertIn(59000, {c["strike"] for c in normalized["contracts"]})
         self.assertIn(66400, {c["strike"] for c in normalized["contracts"]})
         self.assertTrue(all(not c["contract_master_verified"] for c in normalized["contracts"]))
+
+    def test_all_listed_expiries_are_kept_without_40_date_cap(self):
+        dates = [(date(2026, 11, 20) + timedelta(days=7*i)).isoformat()
+                 for i in range(55)]
+        def original(url, *, token, client_id="", body=None):
+            self.assertEqual(url, dhan_option_chain.EXPIRY_ENDPOINT)
+            return {"status": "success", "data": dates}, b"{}"
+        with patch.object(dhan_option_chain, "_json_http", side_effect=original):
+            result = option_chain_live.expiries(sleep=lambda _: None)
+        self.assertEqual(len(result["expiries"]), 55)
+        self.assertEqual(result["expiries"][-1], dates[-1])
