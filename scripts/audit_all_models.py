@@ -148,7 +148,7 @@ def historical_input(spec: dict, dataset_id: str, record: dict) -> tuple[dict, i
     minimum = required_count(spec)
     # A genuine, source-linked NIFTY TRI can be a valid single-series
     # input even if the folder has no separate multi-stock price panel.
-    if not record.get("has_prices") and key not in {"gbm_fit", "merton_fit"}:
+    if not (record.get("has_prices") or record.get("has_daily_prices")) and key not in {"gbm_fit", "merton_fit"}:
         raise ValueError("No usable prepared source price panel; open Data Center to prepare original prices")
     if key in model_input_selector.MINIMUM:
         suggestions = model_input_selector.inspect(dataset_id, key)
