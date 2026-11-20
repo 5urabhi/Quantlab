@@ -508,6 +508,9 @@ def _run(stop: Event) -> None:
                             next_refresh = time.monotonic() + CHAIN_REFRESH_SECONDS
                             for candidate in updated:
                                 ids[candidate["security_id"]].update(candidate)
+                            selected = updated
+                            with LOCK:
+                                STATE["contracts"] = updated
                         try:
                             payload = socket.recv(timeout=1)
                         except TimeoutError:
@@ -547,6 +550,7 @@ def _run(stop: Event) -> None:
                                         "source": "original_dhan_twentydepth",
                                     }
                                     STATE["state"] = "recording_original_depth"
+                                    STATE["last_error"] = None
                         if daily_saved >= MAX_DAILY_SNAPSHOTS:
                             _status_update(state="daily_storage_limit_reached")
                             break
