@@ -182,3 +182,14 @@
 .v2-advanced-links{border:1px solid #345264;border-radius:10px;margin:14px 0;padding:14px 16px;background:#112b3a}
 .v2-advanced-links summary{cursor:pointer;color:#d3e8f6;font-size:13px;font-weight:700}
 .v2-advanced-links .v2-action-row{padding-top:17px}
+
+/* Keep legacy manual timing available without implying the EMA strategy exits after six minutes. */
+.v2-manual-timer{border:1px solid #38546a;border-radius:11px;background:#102537;padding:12px;min-width:0;align-self:start}
+.v2-manual-timer summary{cursor:pointer;font-size:13px;font-weight:700;color:#bcd8e8;padding:7px 4px;line-height:1.5}
+.v2-manual-timer[open] summary{margin-bottom:10px}
+.v2-manual-timer>.tc-timer{margin:0;max-width:none}
+.ws-v2 .tc-live-footer{display:flex;align-items:stretch;gap:12px;flex-wrap:wrap;margin:14px 0}
+.ws-v2 .tc-live-footer .tc-live-next{flex:1;min-width:245px;padding:14px}
+.ws-v2 .tc-live-footer .tc-live-next h3{font-size:15px}
+.ws-v2 .tc-live-footer .tc-live-next p{font-size:13px}
+@media(max-width:600px){.ws-v2 .tc-live-footer{flex-direction:column}}
