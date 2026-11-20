@@ -19,11 +19,17 @@ case "${1:-workstation}" in
     case " $* " in
       *" --preflight-only "*) ;;
       *)
-        nice -n 10 .venv/bin/python -m unittest -q \
-          tests.test_every_registered_model_runs \
-          tests.test_math_acceptance \
-          tests.test_model_validation \
-          tests.test_audit_all_models
+        # Test files are intentionally not a Python package, so use
+        # discovery rather than the fragile tests.test_name import path.
+        for case_file in \
+          test_every_registered_model_runs.py \
+          test_math_acceptance.py \
+          test_model_validation.py \
+          test_audit_all_models.py
+        do
+          nice -n 10 .venv/bin/python -m unittest discover \
+            -s tests -p "$case_file" -q
+        done
         ;;
     esac
     exec nice -n 10 .venv/bin/python scripts/audit_all_models.py "$@"
