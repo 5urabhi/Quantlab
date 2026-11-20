@@ -5,10 +5,12 @@ import './auto-depth-recorder.css'
 
 type Settings={
   enabled:boolean;target_premium:number;tolerance:number
+  selection_mode?:string
   per_side:number;lots:number;sample_seconds:number;allow_token_renewal:boolean
 }
 type Candidate={
   identity:string;side:'CE'|'PE';strike:number;expiry:string
+  wing?:'above'|'below';atm_strike?:number
   lot_size:number;ltp:number;chain_received_utc:string;volume:number
 }
 type Latest={
@@ -25,7 +27,10 @@ type Recorder={
   snapshots_saved:number;received_pairs:number;invalid_pairs:number
   selection_events:number;last_error:string|null
   last_packet_utc:string|null;last_chain_utc:string|null
-  current_expiry?:string;chain_spot?:number
+  current_expiry?:string;chain_spot?:number;atm_strike?:number
+  contracts_above?:number;contracts_below?:number
+  sockets_connected?:number;sockets_requested?:number
+  dropped_depth_samples?:number
   selection_warning?:string|null;contracts:Candidate[]
   latest:Record<string,Latest>;read_only:boolean
   historical_depth_download_supported:boolean
@@ -41,7 +46,8 @@ type AutomaticChainCapture={
   capture_schedule_seconds:{nearest_two:number;next_four:number;remaining:number}
 }
 const DEFAULT_SETTINGS:Settings={
-  enabled:false,target_premium:300,tolerance:75,per_side:2,lots:3,sample_seconds:3,
+  enabled:false,target_premium:300,tolerance:75,per_side:2,lots:3,sample_seconds:30,
+  selection_mode:"atm_contracts_100_each",
   allow_token_renewal:false,
 }
 const inr=(value:number|null|undefined, digits=2)=>value===null||value===undefined
@@ -57,7 +63,7 @@ const STATE_NAME:Record<string,string>={
   stopping:'Stopping feed',
   armed_waiting_for_nse_hours:'Armed · waiting for NSE session',
   selecting_verified_ce_pe:'Selecting CE/PE from Dhan',
-  no_eligible_option_contracts:'No verified options near target',
+  no_eligible_option_contracts:'No verified CE/PE ATM-wing contracts',
   connected_waiting_for_packets:'Subscribed · awaiting original depth',
   recording_original_depth:'Recording original 20-level books',
   connected_no_depth_packets:'Connected · no fresh depth packets',
@@ -105,6 +111,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         '/api/trading-cockpit/auto-depth/arm',
         {
           target_premium:settings.target_premium,tolerance:settings.tolerance,
+          selection_mode:"atm_contracts_100_each",
           per_side:settings.per_side,lots:settings.lots,
           sample_seconds:settings.sample_seconds,
           allow_token_renewal:settings.allow_token_renewal,
@@ -135,11 +142,10 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <div>
         <span className="tc-page-kicker">AUTOMATIC LIVE DATA COLLECTION</span>
         <h3><Activity size={19}/> Record BANKNIFTY CE &amp; PE order books</h3>
-        <p>Select real Dhan contracts near {inr(settings.target_premium,0)}, follow
-          changes during market hours, and store original 20-bid/20-ask snapshots
-          for later liquidity and RL research. With a local Dhan token, this
-          recorder and complete CE/PE option-chain capture start automatically
-          on QuantLab startup. No orders are sent.</p>
+        <p>Automatically follow 100 verified option contracts above BANKNIFTY's
+          nearest listed ATM strike and 100 below it: 50 CE and 50 PE on each
+          side. Four Dhan depth sockets capture up to 200 live 20-level books.
+          The full CE/PE option chain is archived separately. No orders are sent.</p>
       </div>
       <span className={'ad-status '+(connected?'active':armed?'armed':'stopped')}>
         <Radio size={15}/>{STATE_NAME[state?.state||'disabled']||state?.state||'Stopped'}
@@ -147,43 +153,29 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     </header>
 
     <div className="ad-controls" aria-label="Automatic order-book recording configuration">
-      <label>Preferred premium ₹
-        <input aria-label="Auto depth target premium" type="number" min={50} max={10000} step={5}
-          disabled={armed} value={settings.target_premium}
-          onChange={e=>setSettings(x=>({...x,target_premium:Number(e.target.value)}))}/>
-      </label>
-      <label>Premium tolerance ±₹
-        <input aria-label="Auto depth premium tolerance" type="number" min={5} max={500}
-          disabled={armed} value={settings.tolerance}
-          onChange={e=>setSettings(x=>({...x,tolerance:Number(e.target.value)}))}/>
-      </label>
-      <label>Contracts per side
-        <select aria-label="Auto depth contracts per side" disabled={armed}
-          value={settings.per_side}
-          onChange={e=>setSettings(x=>({...x,per_side:Number(e.target.value)}))}>
-          <option value={1}>1 CE + 1 PE</option>
-          <option value={2}>2 CE + 2 PE</option>
-          <option value={3}>3 CE + 3 PE</option>
-        </select>
-      </label>
+      <div className="ad-armed-note" role="note">
+        <strong>Automatic coverage: 100 contracts above + 100 below ATM</strong>
+        <div>50 listed strikes per direction × CE and PE = 200 contracts total.
+          Missing verified contracts are reported rather than simulated.</div>
+      </div>
       <label>Lots to evaluate
         <input aria-label="Auto depth lots" type="number" min={1} max={20} step={1}
           disabled={armed} value={settings.lots}
           onChange={e=>setSettings(x=>({...x,lots:Number(e.target.value)}))}/>
       </label>
-      <label>Sample every
+      <label>Broad depth save interval
         <select aria-label="Auto depth sample interval" disabled={armed}
           value={settings.sample_seconds}
           onChange={e=>setSettings(x=>({...x,sample_seconds:Number(e.target.value)}))}>
-          <option value={1}>1 second / contract</option>
-          <option value={2}>2 seconds / contract</option>
-          <option value={3}>3 seconds / contract</option>
-          <option value={5}>5 seconds / contract</option>
-          <option value={10}>10 seconds / contract</option>
+          <option value={30}>30 seconds per contract</option>
+          <option value={45}>45 seconds per contract</option>
+          <option value={60}>60 seconds per contract</option>
         </select>
       </label>
+      <small>Nearest above-ATM and below-ATM CE/PE contracts are sampled every 3 seconds.
+        Every other selected contract is sampled at the broad interval. All
+        selected contracts stay subscribed while the NSE market is open.</small>
     </div>
-
     <div className="ad-actions">
       {!armed?<label className="ad-consent">
         <input type="checkbox" checked={settings.allow_token_renewal}
@@ -195,7 +187,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         <input type="checkbox" checked={armedConsent}
           onChange={e=>setArmedConsent(e.target.checked)}/>
         Allow my local QuantLab server to automatically subscribe to and record original
-        Dhan market-depth data for selected CE/PE contracts and archive the complete
+        Dhan market-depth data for 100 contracts above and 100 below ATM and archive the complete
         returned BANKNIFTY option chains for listed expiries during future regular
         NSE sessions, until I stop it.
       </label>:<p className="ad-armed-note"><ShieldCheck size={16}/>
@@ -221,7 +213,9 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     <div className="ad-summary">
       <span><strong>{n(state?.snapshots_saved)}</strong> books stored this session</span>
       <span><strong>{n(state?.received_pairs)}</strong> observed source packet pairs</span>
-      <span><strong>{state?.contracts.length??0}</strong> verified contracts selected</span>
+      <span><strong>{state?.contracts.length??0}/200</strong> verified contracts selected</span>
+      <span><strong>{state?.contracts_above??0} / {state?.contracts_below??0}</strong> above / below ATM</span>
+      <span><strong>{state?.sockets_connected??0} / {state?.sockets_requested??0}</strong> live Dhan depth sockets</span>
       <span><strong>{state?.current_expiry||'—'}</strong> Dhan-listed expiry</span>
       <span><strong>{clock(state?.last_packet_utc)}</strong> most recent paired packet (IST)</span>
     </div>
@@ -237,12 +231,20 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       {chainCapture?.token_renewal_opted_in&&<span> Token maintenance: {chainCapture.token_maintenance_message||"checking"}.</span>}
     </p>
     <div className="ad-contracts">
-      {state?.contracts.length?state.contracts.map(contract=>{
+      {state?.contracts.length?<><p className="ad-armed-note">
+        Showing the eight nearest subscribed CE/PE contracts. All {state.contracts.length}
+        selected contracts are recorded in the shared Market Library; open
+        Market Replay to review their saved 20-level depth.
+        {Boolean(state.dropped_depth_samples)&&
+          <> {n(state.dropped_depth_samples)} samples were skipped because
+          local storage could not keep up.</>}
+      </p>{[...state.contracts.filter(x=>x.wing==='above').slice(0,4),
+        ...state.contracts.filter(x=>x.wing==='below').slice(0,4)].map(contract=>{
         const live=state.latest[contract.identity]
         return <article className="ad-contract" key={contract.identity}>
           <div className="ad-contract-title">
             <strong className={contract.side==='CE'?'ce':'pe'}>{contract.side}</strong>
-            <strong>{n(contract.strike,0)} strike</strong>
+            <strong>{n(contract.strike,0)} strike{contract.wing?' · '+contract.wing+' ATM':''}</strong>
             <span>{contract.identity} · {contract.expiry}</span>
             <small>Chain LTP {inr(contract.ltp)}</small>
           </div>
@@ -260,7 +262,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
           <small className="ad-lot-note">{settings.lots} lots × verified {contract.lot_size}
             {' '}units = {settings.lots*contract.lot_size} units · local receive clock</small>
         </article>
-      }):<div className="ad-empty-contract">
+      })}</>:<div className="ad-empty-contract">
         <Database size={16}/> No current verified CE/PE subscriptions.
         {!armed?' Arm the recorder to begin when the NSE market is open.':
           ' QuantLab will select contracts automatically from the official Dhan chain.'}

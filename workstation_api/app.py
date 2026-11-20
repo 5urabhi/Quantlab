@@ -1018,9 +1018,10 @@ class BankNiftyAutoDepthRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target_premium: float = Field(default=300, ge=50, le=10_000)
     tolerance: float = Field(default=75, ge=5, le=500)
+    selection_mode: Literal["atm_contracts_100_each", "premium"] = "atm_contracts_100_each"
     per_side: Literal[1, 2, 3] = 2
     lots: int = Field(default=3, ge=1, le=20)
-    sample_seconds: int = Field(default=3, ge=1, le=10)
+    sample_seconds: int = Field(default=30, ge=1, le=60)
     allow_token_renewal: bool = False
     confirm_live_data: bool = False
 

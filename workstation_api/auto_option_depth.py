@@ -1,7 +1,7 @@
 """Opt-in BANKNIFTY CE/PE 20-level recorder; no broker trading operations.
 
 The local QuantLab process, if armed, selects verified live Dhan contracts
-near an indicated premium, subscribes to their original NSE_FNO depth packets,
+around the actual BANKNIFTY ATM strike, subscribing to original NSE_FNO depth,
 and adds timestamped original snapshots to the existing shared Market Library.
 Only market-hours packets are recorded. Historical depth is NEVER backfilled
 from OHLC, and sample VWAPs are not broker fills or executable guarantees.
@@ -42,11 +42,12 @@ STATE: dict = {
 }
 DEFAULTS = {
     "enabled": False, "target_premium": 300.0, "tolerance": 75.0,
-    "per_side": 2, "lots": 3, "sample_seconds": 3,
+    "per_side": 2, "lots": 3, "sample_seconds": 30,
+    "selection_mode": "atm_contracts_100_each",
     "allow_token_renewal": False,
 }
 MAX_INSTRUMENTS = 6
-MAX_DAILY_SNAPSHOTS = 100_000
+MAX_DAILY_SNAPSHOTS = 200_000
 CHAIN_REFRESH_SECONDS = 75
 MAX_RECONNECT_DELAY_SECONDS = 60
 MAX_MASTER_BYTES = 100 * 1024 * 1024
@@ -93,6 +94,10 @@ def _validate_config(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("Automatic depth settings must be a JSON object")
     result = dict(DEFAULTS)
+    mode = raw.get("selection_mode", DEFAULTS["selection_mode"])
+    if mode not in ("atm_contracts_100_each", "premium"):
+        raise ValueError("Unknown automatic depth selection mode")
+    result["selection_mode"] = mode
     if not isinstance(raw.get("enabled", False), bool):
         raise ValueError("Automatic depth consent must be boolean")
     result["enabled"] = raw.get("enabled", False)
@@ -111,11 +116,12 @@ def _validate_config(raw: dict) -> dict:
             raise ValueError("Choose a tolerance from INR 5 to 500")
         result[key] = value
     for key, smallest, largest in (("per_side", 1, 3), ("lots", 1, 20),
-                                   ("sample_seconds", 1, 10)):
+                                   ("sample_seconds", 1, 60)):
         value = raw.get(key, DEFAULTS[key])
         if isinstance(value, bool) or not isinstance(value, int) or not smallest <= value <= largest:
             raise ValueError("Invalid automatic depth lot, contract or sampling limit")
-        result[key] = value
+        result[key] = (max(30, value) if key == "sample_seconds" and
+                       mode == "atm_contracts_100_each" else value)
     return result
 
 
@@ -158,6 +164,8 @@ def status() -> dict:
                          and _market_open(now))
     return {
         **state, "settings": cfg, "armed": cfg["enabled"],
+        "requested_contracts_above": (100 if cfg["selection_mode"] == "atm_contracts_100_each" else None),
+        "requested_contracts_below": (100 if cfg["selection_mode"] == "atm_contracts_100_each" else None),
         "market_regular_hours": _market_open(now),
         "read_only": True, "historical_depth_download_supported": False,
         "shared_library": "dhan_shared",
@@ -445,6 +453,12 @@ def _run(stop: Event) -> None:
         except BlockingIOError:
             _status_update(state="other_local_worker", connected=False,
                            last_error="Another local QuantLab process already owns the recorder")
+            return
+        if _config()["selection_mode"] == "atm_contracts_100_each":
+            # The wide collector uses four bounded WebSockets and a single
+            # SQLite writer. The legacy premium collector stays available.
+            from . import wide_option_depth
+            wide_option_depth.run(stop)
             return
         failures = 0
         selection: list[dict] = []
