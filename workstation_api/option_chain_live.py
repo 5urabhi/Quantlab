@@ -297,7 +297,7 @@ def expiries(*, sleep=time.sleep) -> dict:
         })
         if not expirations:
             raise ValueError("Dhan provided no current BANKNIFTY expiries")
-        result = {"underlying": "BANKNIFTY", "expiries": expirations[:40],
+        result = {"underlying": "BANKNIFTY", "expiries": expirations,
                   "nearest_expiry": expirations[0],
                   "received_utc": _clock().isoformat(),
                   "source": "Dhan v2 original expirylist",
