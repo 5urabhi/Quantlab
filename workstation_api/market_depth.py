@@ -223,7 +223,10 @@ def start_live(identity: str, depth: int = 20, duration_seconds: int = 120,
     if not REC_ID.fullmatch(session_id):
         raise ValueError("Invalid capture session ID")
     token=os.getenv("DHAN_ACCESS_TOKEN","").strip()
-    client=os.getenv("DHAN_CLIENT_ID","").strip()
+    if not token:
+        raise ValueError("Connect Dhan access token in the local Trading Cockpit")
+    from . import dhan_option_chain
+    client=dhan_option_chain._client_id(token)
     url=_live_endpoint(depth,client,token)
     try:
         from websockets.sync.client import connect
