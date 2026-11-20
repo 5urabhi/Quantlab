@@ -56,8 +56,10 @@ type ModelSourceOptions={
   auto_download_supported?:boolean;
   tri:{runnable:boolean;returns:number;reason:string;index_name?:string}
 }
-type RecordedChainSummary={captured_at:string;expiry:string;original_contracts:number;
-  valid_contracts:number;snapshot_sha256:string;expiry_time_is_assumed:boolean}
+type RecordedChainSummary={captured_at:string;expiry:string;received_ist:string;
+  received_during_scheduled_nse_hours:boolean;
+  original_contracts:number;valid_contracts:number;
+  snapshot_sha256:string;expiry_time_is_assumed:boolean}
 type MarketQuoteSnapshot={id:string;dataset_id:string;captured_at:string;source_sha256:string;
   contracts:{provider:string;underlying:string;strike:number;option_type:string;
     captured_at:string;expiry_at:string;row_index:number;bid:number;ask:number;quote_age_days:number}[]}
@@ -247,12 +249,14 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
   const refreshRecordedChains=useCallback(async()=>{
     if(selectedDataset!=='dhan_shared'){setRecordedChains([]);setRecordedChainSha('');return}
     try{
-      const data=await getJSON<{snapshots:RecordedChainSummary[]}>(
-        '/lab/option-quotes/recorded-chains')
+      const data=await getJSON<{
+        snapshots:RecordedChainSummary[];
+        recommended_snapshot_sha256:string|null
+      }>('/lab/option-quotes/recorded-chains')
       setRecordedChains(data.snapshots)
       setRecordedChainSha(previous=>data.snapshots.some(
         snap=>snap.snapshot_sha256===previous)?previous:
-        data.snapshots[0]?.snapshot_sha256||'')
+        data.recommended_snapshot_sha256||data.snapshots[0]?.snapshot_sha256||'')
     }catch(e){
       setRecordedError(e instanceof Error?e.message:String(e))
     }
@@ -1143,7 +1147,9 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
                     {recordedChains.map(chain=><option key={chain.snapshot_sha256}
                       value={chain.snapshot_sha256}>
                       {chain.captured_at.slice(0,16).replace('T',' ')} UTC ·
-                      {chain.expiry} expiry · {chain.valid_contracts} valid quotes
+                      {chain.expiry} expiry · {chain.valid_contracts} valid quotes ·
+                      {chain.received_during_scheduled_nse_hours?
+                        'received during scheduled NSE hours':'off-hours receive time'}
                     </option>)}
                   </select></label>
                 <button type="button" onClick={()=>void reuseRecordedChain()}
@@ -1156,7 +1162,10 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
                   <Activity size={14}/> Recheck saved chains
                 </button>
               </div>
-              <p className="ql-note">Historical source observations are not executable live
+              <p className="ql-note">QuantLab preselects the newest snapshot whose
+                local receive clock falls within scheduled weekday NSE hours
+                (09:15–15:30 IST). This is a clock check, NOT a verified trading-session
+                or exchange quote timestamp. Historical observations are not executable live
                 prices. Dhan's original vendor JSON was not retained by this recorder;
                 quote receive time is local, and expiry time assumes 15:30 IST.
                 A saved observation is never reconstructed from BANKNIFTY spot candles.</p>
