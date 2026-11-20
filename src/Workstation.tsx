@@ -703,13 +703,16 @@ function App(){
           <div className="ws-grid two-thirds"><Card title="Portfolio research performance" extra={classification}>{chart??<Empty title="No historical run selected" onAction={()=>begin('research')} action="Configure experiment">Run the research engine to generate actual saved series and metrics.</Empty>}</Card><Card title="Latest research snapshot">{detail?<><div className="ws-overview-stat"><span>Strategy CAGR</span><strong>{percent(weighted(metric,'strategy_cagr'))}</strong></div><div className="ws-overview-stat"><span>Max drawdown</span><strong>{percent(weighted(metric,'max_drawdown'))}</strong></div><div className="ws-overview-stat"><span>Tracking error</span><strong>{percent(weighted(metric,'tracking_error'))}</strong></div><div className="ws-overview-stat"><span>Sample window</span><strong>{detail.meta.first_price_date?.slice(0,7)}–{detail.meta.last_price_date?.slice(0,7)}</strong></div><button className="ws-textlink" onClick={()=>begin('history')}>Inspect full run <ArrowRight size={15}/></button></>:<Empty title="Nothing to report">No metrics will appear until a Python experiment completes.</Empty>}</Card></div>
           <div className="ws-grid halves"><Card title="Market library & research inputs" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{everydaySources.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{everydaySources.length===0&&<p className="ws-caption">No market sources found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
         </>}
-        {tab==='data'&&<>
-          <MarketDataWorkspace key="v2-market-library" initialPage="datasets"
-            activePage="datasets" integrated datasets={datasets}
+        {(['data','dhan','datadownloads'].includes(tab))&&
+          <MarketDataWorkspace key="v2-one-canonical-market-library"
+            initialPage="datasets"
+            activePage={tab==='data'?'datasets':tab==='dhan'?'get':'downloads'}
+            integrated datasets={datasets}
             onDataChanged={refresh} onSelectDataset={setSelectedDataset}
             onOpenModels={()=>begin('mathematics')}
             onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
-              if(d)inspectDatasetDeletion(d)}}/>
+              if(d)inspectDatasetDeletion(d)}}/>}
+        {tab==='data'&&<>
           <details className="ws-tri-advanced ws-data-advanced"><summary>Advanced datasets · TRI import, ZIPs, archived items and source audits</summary>
           <Card title="Your datasets" className="ws-data-library-card">
             <p className="ws-caption">Choose a dataset to use, or delete an old one.
@@ -828,13 +831,6 @@ function App(){
           </details>
 
         </details></>}
-        {(['dhan','datadownloads'].includes(tab))&&
-          <MarketDataWorkspace key="v2-market-acquire" initialPage="get"
-            activePage={tab==='dhan'?'get':'downloads'} integrated datasets={datasets}
-          onDataChanged={refresh} onSelectDataset={setSelectedDataset}
-          onOpenModels={()=>begin('mathematics')}
-          onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
-            if(d)inspectDatasetDeletion(d)}}/>}
         {tab==='dataexplorer'&&<DataManager initialSection="explorer" integrated
           onSelectDataset={setSelectedDataset} onChanged={refresh}
           onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
