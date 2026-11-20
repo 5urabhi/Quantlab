@@ -13,7 +13,19 @@ case "${1:-workstation}" in
       exit 2
     fi
     shift
-    # Keep broker capture favored when the audit is used during market hours.
+    # The same single command must verify mathematical correctness AND test
+    # every registered code path before inspecting original local sources.
+    # Reduced CPU priority favors independent live market recording.
+    case " $* " in
+      *" --preflight-only "*) ;;
+      *)
+        nice -n 10 .venv/bin/python -m unittest -q \
+          tests.test_every_registered_model_runs \
+          tests.test_math_acceptance \
+          tests.test_model_validation \
+          tests.test_audit_all_models
+        ;;
+    esac
     exec nice -n 10 .venv/bin/python scripts/audit_all_models.py "$@"
     ;;
   legacy-streamlit)
