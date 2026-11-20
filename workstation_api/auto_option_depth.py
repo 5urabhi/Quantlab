@@ -32,6 +32,8 @@ STORAGE_LOCK = RLock()
 STORAGE_READY: Path | None = None
 STOP = Event()
 WORKER: Thread | None = None
+RESTART_PENDING = False
+SHUTTING_DOWN = False
 STATE: dict = {
     "state": "disabled", "connected": False, "session_id": None,
     "snapshots_saved": 0, "received_pairs": 0, "invalid_pairs": 0,
@@ -561,10 +563,27 @@ def _run(stop: Event) -> None:
         os.close(fd)
 
 
-def _ensure_worker() -> None:
-    global WORKER, STOP
+def _restart_after_stopped(previous: Thread) -> None:
+    global RESTART_PENDING
+    # A quick Stop->Arm click cannot leave a persistent enabled setting
+    # with no running worker. Wait for the old socket to release its lock.
+    previous.join()
     with LOCK:
+        RESTART_PENDING = False
+    if not SHUTTING_DOWN and _config()["enabled"]:
+        _ensure_worker()
+
+
+def _ensure_worker() -> None:
+    global WORKER, STOP, RESTART_PENDING
+    with LOCK:
+        if SHUTTING_DOWN:
+            return
         if WORKER is not None and WORKER.is_alive():
+            if STOP.is_set() and not RESTART_PENDING:
+                RESTART_PENDING = True
+                Thread(target=_restart_after_stopped, args=(WORKER,),
+                       daemon=True, name="quantlab-auto-depth-rearm").start()
             return
         STOP = Event()
         WORKER = Thread(target=_run, args=(STOP,), daemon=True,
@@ -594,6 +613,8 @@ def disarm() -> dict:
 
 
 def resume_if_armed() -> None:
+    global SHUTTING_DOWN
+    SHUTTING_DOWN = False
     # Only previously consented settings may start any future broker feed.
     if _config()["enabled"]:
         _ensure_worker()
@@ -601,6 +622,8 @@ def resume_if_armed() -> None:
 
 def suspend_for_shutdown() -> None:
     """Stop sockets on local server shutdown without removing user consent."""
+    global SHUTTING_DOWN
+    SHUTTING_DOWN = True
     STOP.set()
     with LOCK:
         if STATE.get("connected"):
