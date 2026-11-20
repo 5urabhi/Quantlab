@@ -45,7 +45,8 @@ type Paired={baseline:string;challengers:string[];paired_months:number;start:str
   evidence_class:string;rows:Row[];plot:ResearchPlotData;method:string;warning:string}
 type View='brief'|'assistant'|'figures'|'diagnostics'|'validation'|'robustness'|'evidence'|'compare'|'selection'
 type Props={selectedIndexRunId:string;selectedModelRunId?:string;onSelectIndexRun:(run:string)=>void;
-  onModels:()=>void;onExperiments:()=>void;onWorkspace:()=>void;onData:()=>void;onReports:()=>void}
+  onModels:()=>void;onExperiments:()=>void;onWorkspace:()=>void;onData:()=>void;
+  onReports:()=>void;integrated?:boolean}
 const VIEWS:{id:View;label:string}[]=[
   {id:'brief',label:'Research brief'},{id:'assistant',label:'Ask QuantLab'},{id:'figures',label:'Interactive figures'},
   {id:'diagnostics',label:'Diagnostics'},{id:'validation',label:'Evidence audit'},{id:'robustness',label:'Robustness'},
@@ -220,7 +221,7 @@ function FigureCard({figure,mode,runKey}:{figure:Figure;mode:string;runKey:strin
   </article>
 }
 export default function ResultsStudio({selectedIndexRunId,selectedModelRunId,onSelectIndexRun,onModels,
-  onExperiments,onWorkspace,onData,onReports}:Props){
+  onExperiments,onWorkspace,onData,onReports,integrated=false}:Props){
   const [runs,setRuns]=useState<Saved[]>([])
   const [selectedKey,setSelectedKey]=useState('')
   const [loadingList,setLoadingList]=useState(true)
@@ -392,7 +393,7 @@ export default function ResultsStudio({selectedIndexRunId,selectedModelRunId,onS
     setSelection(old=>old.includes(key)?old.filter(x=>x!==key):old.length>=8?old:[...old,key])
   }
   const runList=runs.filter(r=>(r.title+' '+r.group+' '+r.id).toLowerCase().includes(search.toLowerCase()))
-  return <div className="rs-root">
+  return <div className={'rs-root '+(integrated?'v2-results-integrated':'')}>
     <section className="rs-hero">
       <div><span className="rs-kicker"><Layers3 size={13}/> QUANTLAB / RESULTS INTELLIGENCE</span>
         <h2>Every result, explained.<br/><em>Every claim, traceable.</em></h2>
@@ -440,9 +441,28 @@ export default function ResultsStudio({selectedIndexRunId,selectedModelRunId,onS
               href={'/api/workspace/evidence-bundles/'+active.kind+'/'+
                 encodeURIComponent(active.id)+'.zip'}>
               <Download size={14}/> Reproducible evidence ZIP</a></div></section>
-          <nav className="rs-tabs" aria-label="Research results sections">{VIEWS.map(v=>
-            <button key={v.id} className={tab===v.id?'active':''}
-              aria-current={tab===v.id?'page':undefined} onClick={()=>setTab(v.id)}>{v.label}</button>)}</nav>
+          <nav className="rs-tabs" aria-label="Research results sections">
+            {(integrated?VIEWS.filter(v=>
+              ['brief','figures','compare','validation','assistant'].includes(v.id)):VIEWS
+            ).map(v=><button key={v.id} className={tab===v.id?'active':''}
+              aria-current={tab===v.id?'page':undefined} onClick={()=>setTab(v.id)}>
+              {integrated?({
+                brief:'Summary',figures:'Charts',compare:'Compare',
+                validation:'Evidence',assistant:'Ask QuantLab',
+              } as Record<string,string>)[v.id]||v.label:v.label}</button>)}
+            {integrated&&<label className="v2-result-more">
+              More analysis
+              <select aria-label="More saved-run analysis" value={
+                ['diagnostics','robustness','evidence','selection'].includes(tab)?tab:''}
+                onChange={event=>setTab(event.target.value as View)}>
+                <option value="">Choose additional analysis…</option>
+                <option value="diagnostics">Statistical diagnostics</option>
+                <option value="robustness">Robustness</option>
+                <option value="evidence">Sources & methods</option>
+                <option value="selection">Overfitting & regimes</option>
+              </select>
+            </label>}
+          </nav>
           <div style={{display:tab==='assistant'?'block':'none'}} aria-hidden={tab!=='assistant'}>
             <ResearchAssistant key={active.key}
               run={{id:active.id,kind:active.kind,title:active.title}}
