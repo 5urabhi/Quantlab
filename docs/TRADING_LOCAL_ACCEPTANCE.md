@@ -39,14 +39,25 @@ Confirm:
 proved from the current market window. Missing original market observations
 must never be replaced with guessed values.
 
-## Step 2 — Arm the automatic genuine 20-level recorder
+## Step 2 — Automatic genuine BANKNIFTY CE + PE recording on startup
 
-Select **Live Trading → BANKNIFTY option chain & 20-level depth**.
+**No Arm click is needed on a new installation.** When a locally configured
+Dhan access token exists, QuantLab automatically starts the read-only BANKNIFTY
+CE + PE recorder on local backend startup. Connecting or replacing the Dhan
+token inside **Trading Cockpit → Connections** starts both background collectors
+immediately, without restarting the workstation.
 
-Defaults: ₹300 desired option LTP, ±₹75 tolerance, 2 CE and 2 PE, 3 lots
-and one saved 20-level book every 3 seconds per contract. You can adjust
-these before arming. Explicitly check the consent box and click
-**Arm automatic 20-level recording**.
+Open **Live Trading → BANKNIFTY option chain & 20-level depth** only to inspect
+status or stop recording. Defaults: target option LTP ₹300 ±₹75, 2 CE and
+2 PE real verified contracts, 3 lots, and at most one genuine 20-level book
+every 3 seconds per contract. The complete option-chain snapshot collector
+automatically stores every returned CE/PE strike for every Dhan-listed expiry.
+
+**Stop and disarm recording** remains a persistent opt-out. If you intentionally
+stopped recording before, re-enable it once using **Arm automatic 20-level
+recording**; QuantLab will then resume automatically on subsequent startups.
+Automatic renewal of an eligible Dhan-Web token is a *separate* optional
+permission and is disabled unless explicitly opted in.
 
 During a **regular NSE trading session 09:15–15:30 IST**, leave the local
 QuantLab backend running. If your time zone is different, use the IST clock
@@ -69,8 +80,8 @@ depth is unavailable. The UI does not authorize any trade or order.
 
 ### Additional automatic option-chain archive
 
-The same **Arm automatic 20-level recording** consent now starts a second
-read-only worker; there is no separate downloader to run. While QuantLab is
+With a local Dhan token, QuantLab starts the 20-level and complete option-chain
+recorders together on startup; there is no manual Arm step or separate downloader. While QuantLab is
 running during regular NSE sessions it discovers all Dhan-listed active
 BANKNIFTY expiries, saves *every strike Dhan returns* for each expiry and
 records the provider quote timestamp, source and per-expiry counts in the
