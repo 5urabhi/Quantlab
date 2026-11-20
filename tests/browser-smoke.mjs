@@ -196,6 +196,10 @@ try {
     assert.equal(await historicalOptions.getByRole('combobox',{
       name:'Highlighted option exit rule',
     }).inputValue(),'signal_reversal')
+    assert.equal(await historicalOptions.getByRole('combobox',{
+      name:'Options backtest holding period',
+    }).isDisabled(),true,'Fixed-time input must be inactive under signal reversal')
+    await historicalOptions.getByText('Fixed holding time does not control',{exact:false}).waitFor()
     await historicalOptions.getByText('UP → buy CE',{exact:false}).waitFor()
 
     // Exercise the actual UI -> read-only job POST -> completed job result
