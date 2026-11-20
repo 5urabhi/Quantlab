@@ -88,7 +88,7 @@ const IST=(value:string)=>new Date(value).toLocaleString('en-IN',{
 const OPTIONS_JOB_KEY='quantlab_banknifty_historical_options_job'
 const MODE_LABEL:Record<Rule,string>={
   fixed:'Fixed-time exit',
-  signal_reversal:'Flip CE ↔ PE on opposite signal',
+  signal_reversal:'Hold until opposite signal (no time cap)',
   signal_reversal_or_cap:'Flip on opposite signal or time cap',
   premium_target_stop:'Option premium target/stop',
   hybrid:'Flip, time cap or option stop/target',
@@ -156,7 +156,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
   const [slippage,setSlippage]=useState(5)
   const [feePerSide,setFeePerSide]=useState(20)
   const [selectedRule,setSelectedRule]=useState<Rule>('signal_reversal')
-  const [signalModel,setSignalModel]=useState<SignalModel>('ema_rsi')
+  const [signalModel,setSignalModel]=useState<SignalModel>('ema_crossover')
 
   const refreshJob=useCallback(async(id:string)=>{
     const status=await marketApi<Job>('/api/jobs/'+encodeURIComponent(id))
@@ -327,6 +327,10 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       <strong>Pure 9/21 EMA crossover:</strong> 9 EMA (red) crosses above
       21 EMA (green) → buy CE; crosses below → close CE and buy PE.
       Only a confirmed completed one-minute candle triggers a change.
+      <strong> No fixed time limit:</strong> under the selected
+      &quot;Hold until opposite signal&quot; rule, keep the existing CE/PE
+      until the next opposite crossover, even after 5, 6 or 30 minutes.
+      Close remaining options at the end of the intraday session.
       No crossover means hold, not a new trade. EMA calculations reset
       on new trading sessions or missing minutes. The Live Trading
       monitor still uses the separate EMA/RSI baseline; this is a
@@ -336,7 +340,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       Fixed holding time does not control this selected rule. The options backtester
       still compares fixed 1–60-minute policies separately in the results table.
       {selectedRule==='signal_reversal'
-        ?' Reversal-only positions exit on an opposite BANKNIFTY signal or at the intraday session boundary.'
+        ?' No 5–6-minute cap: positions exit only when the opposite BANKNIFTY signal is confirmed or the intraday session ends.'
         :' Time caps and premium stop/target settings are configured in Advanced settings.'}
     </p>}
     <details className="hob-advanced-settings" aria-label="Advanced backtest data and cost settings">
@@ -404,8 +408,12 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       </div>
     </details>
     <div className="hob-flip-note" role="note">
-      <strong>Default reversal:</strong> UP → buy CE · DOWN → sell CE and buy PE · UP → sell PE and buy CE.
-      An opposite signal is known only after its candle completes; both hypothetical transactions use the following minute's OPEN, with separately selected actual strikes.
+      <strong>Default: hold until the opposite confirmed crossover, with no maximum duration.</strong>
+      UP → buy CE · DOWN → close CE and buy PE · UP → close PE and buy CE.
+      Keep the existing long option while the EMA lines remain on the same side;
+      exit any remaining position at the intraday session end. Each opposite
+      signal is known only after its candle completes, and both hypothetical
+      transactions use the following minute's OPEN, with separately selected actual strikes.
       If the replacement contract lacks original quotes or cash is insufficient, remain flat and record why.
     </div>
     <div className="hob-description">
