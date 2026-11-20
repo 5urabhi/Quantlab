@@ -7,6 +7,10 @@ import {
   ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X
 } from 'lucide-react'
 import './workstation.css'
+import {RecorderBadge,JobsDrawer,V2HomeLaunchers,StrategyLibraryV2,SettingsPreferencesV2,DiagnosticsV2,QuickPageNote} from './QuantLabV2Components'
+import ResearchPythonLab from './ResearchPythonLab'
+import AutoDepthRecorder from './AutoDepthRecorder'
+import DataManager from './DataManager'
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
 const ModelLaboratory = lazy(() => import('./ModelLaboratory'))
@@ -39,24 +43,107 @@ type RunConfig = {
   validation_start:string;final_test_start:string;sector_cap:number|null
 }
 const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momentum:1,low_volatility:0,value:0,quality:0,size:0},top_n:10,weighting:'equal',max_weight:.2,rebalance_every:3,cost_bps:10,execution_lag:1,momentum_formation:12,momentum_skip:1,volatility_lookback:12,validation_start:'',final_test_start:'',sector_cap:null}
-type Tab = 'trading'|'journey'|'overview'|'workspace'|'projects'|'data'|'dhan'|'nse'|'research'|'factors'|'construction'|'comparisons'|'mathematics'|'rolling'|'models'|'risk'|'robustness'|'visual'|'reports'|'history'|'settings'|'guide'
-const primarySections:{id:Tab;label:string;icon:typeof Activity;tabs:Tab[]}[]=[
- {id:'trading',label:'Trading Cockpit',icon:Activity,tabs:['trading']},
- {id:'journey',label:'Guided Research',icon:Play,tabs:['journey']},
- {id:'overview',label:'Home',icon:Gauge,tabs:['overview']},
- {id:'data',label:'Data Library',icon:Database,tabs:['data','dhan','nse']},
- {id:'mathematics',label:'Model Laboratory',icon:Sigma,
-   tabs:['mathematics','models','risk','factors','construction']},
- {id:'research',label:'Experiment Studio',icon:FlaskConical,
-   tabs:['research','rolling','robustness']},
- {id:'workspace',label:'Compare & Visualize',icon:BarChart3,
-   tabs:['workspace','comparisons','visual']},
- {id:'history',label:'Results Studio',icon:Clock3,tabs:['history']},
- {id:'projects',label:'Research Projects',icon:BookOpen,tabs:['projects','reports']},
- {id:'guide',label:'Help & Settings',icon:Settings2,tabs:['guide','settings']},
+type Tab =
+  'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingreplay'|'tradingjournal'|
+  'strategies'|'strategyema'|'strategypython'|'strategybacktest'|
+  'mathematics'|'models'|'research'|'factors'|'construction'|'risk'|'rolling'|'robustness'|
+  'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|
+  'history'|'workspace'|'chartstudio'|'comparisons'|'visual'|'workspacejobs'|
+  'projects'|'reports'|'settings'|'connections'|'recordingsettings'|
+  'storage'|'preferences'|'diagnostics'|'guide'|'journey'
+type PrimarySection={id:Tab;label:string;icon:typeof Activity;tabs:Tab[];navTabs:Tab[]}
+const primarySections:PrimarySection[]=[
+  {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
+  {id:'trading',label:'Trading',icon:Activity,
+    tabs:['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal'],
+    navTabs:['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal']},
+  {id:'strategies',label:'Strategies',icon:TrendingUp,
+    tabs:['strategies','strategyema','strategypython','strategybacktest'],
+    navTabs:['strategies','strategyema','strategypython','strategybacktest']},
+  {id:'mathematics',label:'Models',icon:Sigma,
+    tabs:['mathematics','models','research','factors','construction','risk','rolling','robustness','journey'],
+    navTabs:['mathematics','research','models']},
+  {id:'data',label:'Data Center',icon:Database,
+    tabs:['data','dhan','dataexplorer','dataquality','datadownloads','nse'],
+    navTabs:['data','dhan','dataexplorer','dataquality','datadownloads']},
+  {id:'history',label:'Results & Charts',icon:BarChart3,
+    tabs:['history','workspace','chartstudio','comparisons','visual','workspacejobs'],
+    navTabs:['history','workspace','chartstudio']},
+  {id:'projects',label:'Projects',icon:BookOpen,
+    tabs:['projects','reports'],navTabs:['projects','reports']},
+  {id:'connections',label:'Settings',icon:Settings2,
+    tabs:['connections','recordingsettings','storage','preferences','diagnostics','settings','guide'],
+    navTabs:['connections','recordingsettings','storage','preferences','diagnostics']},
 ]
-
-const titles:Record<Tab,string>={trading:'Intraday trading cockpit',journey:'Guided Research · Five steps',overview:'Research command center',workspace:'Research workspace',projects:'Projects and notebooks',data:'Data manager',dhan:'Download market data',nse:'NSE Sources',research:'Index research engine',factors:'Factor laboratory',construction:'Index construction',comparisons:'Index comparisons',mathematics:'Advanced mathematics',rolling:'Rolling validation',models:'Quantitative models',risk:'Risk attribution',robustness:'Robustness & sensitivity',visual:'Visual validation',reports:'Research reports',history:'Results Studio · Research Intelligence',settings:'Workstation settings',guide:'How to use QuantLab'}
+const titles:Record<Tab,string>={
+  overview:'Home',trading:'Live Market',tradingchain:'Option Chain',
+  tradingdepth:'20-Level Order Book',tradingreplay:'Market Replay',
+  tradingjournal:'Trade Journal',strategies:'Strategy Library',
+  strategyema:'EMA Explorer',strategypython:'Python Editor',
+  strategybacktest:'BANKNIFTY Backtests',
+  mathematics:'Model Catalog',models:'Advanced Mathematical Models',
+  research:'Index Builder',factors:'Factor Research',
+  construction:'Portfolio Construction',risk:'Risk Attribution',
+  rolling:'Rolling Validation',robustness:'Robustness & Sensitivity',
+  data:'Market Library',dhan:'Get Market Data',
+  dataexplorer:'Data Explorer',dataquality:'Quality & Coverage',
+  datadownloads:'Downloads',nse:'NSE Source Evidence',
+  history:'All Research Results',workspace:'Compare Runs',
+  chartstudio:'Chart Studio',comparisons:'Index Comparison',
+  visual:'Historical Charts',workspacejobs:'Research Job History',
+  projects:'My Projects & Notebooks',reports:'Research Reports',
+  connections:'Connections',recordingsettings:'Automatic Recording',
+  storage:'Storage & Data Management',preferences:'Preferences',
+  diagnostics:'System Diagnostics',settings:'Backend & Privacy',
+  guide:'Help & How It Works',journey:'New Guided Study',
+}
+const descriptions:Record<Tab,string>={
+  overview:'Monitor your data and resume research. Nothing shown here is a simulated profit claim.',
+  trading:'Monitor real BANKNIFTY index packets and signals without submitting broker orders.',
+  tradingchain:'Inspect source-backed BANKNIFTY CE/PE strikes, expiries, premium and lot sizes.',
+  tradingdepth:'Inspect original Dhan 20-bid/20-ask books and actual recorded source packets.',
+  tradingreplay:'Explore recorded BANKNIFTY, option quotes and original market-depth observations.',
+  tradingjournal:'Review manually entered fills and prospective signal accuracy separately.',
+  strategies:'Choose a strategy, test real index signals, then study historical CE/PE contracts.',
+  strategyema:'Test one EMA pair, chosen combinations or all 11,026 valid pairs.',
+  strategypython:'Paste, run and save isolated Python research without interrupting Dhan capture.',
+  strategybacktest:'Compare directional signal timing and original-contract CE/PE paper P&L.',
+  mathematics:'Choose stochastic, volatility, options, risk and portfolio mathematical models.',
+  models:'Explore advanced source-backed and theoretical model families.',
+  research:'Construct, backtest and validate factor-based equity indices.',
+  factors:'Inspect real saved factor ranking and exposure output.',
+  construction:'Inspect constituent weights, concentration and rebalance consequences.',
+  risk:'Measure portfolio concentration and rolling risk on archived runs.',
+  rolling:'Use rolling time windows on saved historical index results.',
+  robustness:'Study parameter stability and sensitivity in saved experiments.',
+  data:'Browse one canonical library of market instruments and downloaded observations.',
+  dhan:'Choose instruments and acquire only missing source-backed history.',
+  dataexplorer:'Inspect market data rows, original vendor files and source fields.',
+  dataquality:'Check completeness, duplicate data and market-data provenance.',
+  datadownloads:'Review downloads and source-repair progress.',
+  nse:'Inspect official NSE evidence and source provenance.',
+  history:'Search and interpret saved mathematical and strategy research results.',
+  workspace:'Overlay comparable saved runs and inspect differences.',
+  chartstudio:'Build interactive two- and three-dimensional research figures.',
+  comparisons:'Review historical methodology and transaction-cost comparisons.',
+  visual:'Inspect saved source-backed historical return and factor charts.',
+  workspacejobs:'Inspect research and acquisition job history.',
+  projects:'Save reproducible research in projects, notebooks and linked run references.',
+  reports:'Generate and export reports from actually saved research evidence.',
+  connections:'Check local data-provider access and permissions safely.',
+  recordingsettings:'Configure automatic read-only CE/PE recording and inspect source coverage.',
+  storage:'Manage source files, cache, archival status and recoverable data.',
+  preferences:'Choose comfortable or compact workspace settings and reduced motion.',
+  diagnostics:'Inspect API health, source errors and actual next-step repair tools.',
+  settings:'Local-only backend, broker permissions and data privacy.',
+  guide:'Help for market data, model readiness, results and backtests.',
+  journey:'Follow one five-step research workflow using the same existing models.',
+}
+const validTabs=new Set<Tab>(Object.keys(titles) as Tab[])
+function hashTab():Tab{
+  const value=decodeURIComponent(window.location.hash.replace(/^#\/?/,''))
+  return validTabs.has(value as Tab)?value as Tab:'overview'
+}
 const factors=[['momentum','Momentum'],['low_volatility','Low volatility'],['value','Value'],['quality','Quality'],['size','Size']] as const
 const number=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? v.toLocaleString('en-US',{maximumFractionDigits:d,minimumFractionDigits:d}) : '—'
 const percent=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? (v*100).toFixed(d)+'%' : '—'
@@ -244,7 +331,8 @@ function Select({label:caption,value,options,onChange}:{label:string;value:strin
 }
 const weighted=(metric:Dict|undefined,key:string)=>metric?.[key]
 function App(){
-  const [tab,setTab]=useState<Tab>('journey')
+  const [tab,setTab]=useState<Tab>(hashTab)
+  const [jobsOpen,setJobsOpen]=useState(false)
   const [menu,setMenu]=useState(false)
   const [health,setHealth]=useState<Health|null>(null)
   const [datasets,setDatasets]=useState<Dataset[]>([])
@@ -326,14 +414,32 @@ function App(){
     setBusy(true)
     try {const value=await f();callback?.(value)}catch(e){notify(errorMessage(e),true)}finally{setBusy(false)}
   }
-  const begin=(id:Tab)=>{setTab(id);setMenu(false);window.scrollTo(0,0)}
+  const begin=(id:Tab)=>{
+    setTab(id);setMenu(false)
+    window.history.pushState({quantlab_view:id},'',window.location.pathname+
+      window.location.search+'#/'+id)
+    window.scrollTo({top:0,behavior:'instant'})
+  }
+  useEffect(()=>{
+    const navigateHistory=()=>{setTab(hashTab());setMenu(false)}
+    window.addEventListener('popstate',navigateHistory)
+    window.addEventListener('hashchange',navigateHistory)
+    return()=>{
+      window.removeEventListener('popstate',navigateHistory)
+      window.removeEventListener('hashchange',navigateHistory)
+    }
+  },[])
   useEffect(()=>{
     const navigate=(event:KeyboardEvent)=>{
       if((event.ctrlKey||event.metaKey)&&event.altKey&&
          !event.shiftKey&&/^[1-9]$/.test(event.key)){
         event.preventDefault()
         const target=primarySections[Number(event.key)-1]
-        if(target){setTab(target.id);setMenu(false);window.scrollTo(0,0)}
+        if(target){
+          setTab(target.id);setMenu(false)
+          window.history.pushState({quantlab_view:target.id},'','#/'+target.id)
+          window.scrollTo(0,0)
+        }
       }
     }
     window.addEventListener('keydown',navigate)
