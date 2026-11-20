@@ -24,7 +24,7 @@ import struct
 import time
 import uuid
 
-from . import dhan_workspace, market_depth, shared_market_data
+from . import dhan_option_chain, dhan_workspace, market_depth, shared_market_data
 
 IST = ZoneInfo("Asia/Kolkata")
 LOCK = RLock()
@@ -472,10 +472,10 @@ def start(index_identity: str, depth_identity: str = "", auto_audit: bool = Fals
         raise ValueError("Choose BANKNIFTY or NIFTY 50 index")
     if depth_identity and not market_depth.DEPTH_ID.fullmatch(depth_identity):
         raise ValueError("20-level depth requires an exact NSE_EQ/NSE_FNO Security ID")
-    client=os.getenv("DHAN_CLIENT_ID","").strip()
     token=os.getenv("DHAN_ACCESS_TOKEN","").strip()
-    if not client or not token:
-        raise ValueError("Configure Dhan client ID and access token in the cockpit connection form")
+    if not token:
+        raise ValueError("Configure a Dhan access token in Trading Cockpit > Connections")
+    client=dhan_option_chain._client_id(token)
     if not client.isdigit() or not 4<=len(client)<=20 or len(token)>4096:
         raise ValueError("Invalid locally stored Dhan live market credentials")
     with LOCK:
