@@ -3,6 +3,22 @@
 This module is a **local-only, read-only, explicitly unvalidated** intraday
 research feature on the `feature/intraday-trading-cockpit-20261119` branch.
 
+## Run the current trading acceptance check (implemented)
+
+Open **Trading Cockpit → Connections → Check my trading system → Run local
+checks**. This single read-only check reports whether original BANKNIFTY
+minute observations exist, whether Dhan's official CE/PE contract master is
+fresh, whether the automatic 20-level feed is receiving full books, and
+whether original CE/PE sampled book pairs in `dhan_shared` match their
+source SHA-256 receipts. The Dhan profile check is a separate authorized
+verification call; neither operation places orders. It does **not**
+claim 20-level entitlement from a historical Data API subscription.
+
+After running the options backtest, use **Download safe backtest diagnostic**
+to share actual signal/reversal causes without sharing raw candles or
+account credentials. See [Local trading acceptance — five steps]
+(TRADING_LOCAL_ACCEPTANCE.md) for what to click and what each state means.
+
 ## Open the module
 
 Run `bash run.sh`, browse to http://127.0.0.1:5173, then select
