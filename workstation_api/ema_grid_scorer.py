@@ -134,10 +134,14 @@ class FastSweep:
             high = max(high, cash)
             drawdown = max(drawdown,
                            (high-cash)/high*100 if high > 0 else 0.)
-            profit.append(pnl)
-            points_seen.append(points)
-            holdings.append((self.timestamps[index] -
-                             self.timestamps[from_idx]).total_seconds()/60)
+            # The canonical engine records *rounded* trade returns and
+            # index point changes before computing profit factor/Sharpe.
+            # Keep the ranking identical to its audited report, while
+            # preserving unrounded capital for subsequent position sizing.
+            profit.append(round(pnl, 2))
+            points_seen.append(round(points, 4))
+            holdings.append(round((self.timestamps[index] -
+                                   self.timestamps[from_idx]).total_seconds()/60, 2))
             position = None
 
         # Only event times (not every minute for each EMA pair) are needed.
