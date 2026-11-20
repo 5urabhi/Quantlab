@@ -15,7 +15,7 @@ import pandas as pd
 
 from scripts import audit_all_models
 from workstation_api import (
-    model_lab, model_registry, option_market, option_quotes, service,
+    model_lab, model_registry, option_market, option_quotes, research_acceptance, service,
 )
 
 
@@ -127,6 +127,40 @@ class ModelAuditAllDatasetsTests(unittest.TestCase):
             (path / "prices.csv").symlink_to(path / "daily_prices.csv")
             with self.assertRaisesRegex(ValueError, "unsafe"):
                 audit_all_models.dataset_digests(path)
+
+
+
+class ExistingResearchVerifierTests(unittest.TestCase):
+    def test_original_quote_is_selected_and_bound_to_effective_dataset(self):
+        matrix = {
+            "dataset_id": "dhan_shared", "total_models": 35,
+            "blocked": 0, "models": [{
+                "id": "implied_vol_quote",
+                "mode": "market", "status": "source_available"
+            }]
+        }
+        quote = [{
+            "id": "oq_0123456789abcdef0123",
+            "contracts": [{"row_index": 0}]
+        }]
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(research_acceptance, "overview", return_value=matrix), \
+             patch.object(research_acceptance, "_audit_root",
+                          return_value=Path(temp)), \
+             patch.object(option_quotes, "list_for", return_value=quote), \
+             patch.object(option_market, "inspect",
+                          return_value={"runnable": True}), \
+             patch.object(model_lab, "run_model",
+                          return_value={"model_id": "implied_vol_quote"}) as run:
+            report = research_acceptance.verify(None, include_historical=True)
+        run.assert_called_once_with(
+            "implied_vol_quote", "dhan_shared",
+            {"quote": "oq_0123456789abcdef0123:0"},
+        )
+        self.assertEqual(report["software_pass"], 1)
+        self.assertEqual(report["checks"][0]["qa_only_option_quote_selection"],
+                         "oq_0123456789abcdef0123:0")
+        self.assertTrue(report["checks"][0]["uses_original_market_data"])
 
 
 if __name__ == "__main__":
