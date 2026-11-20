@@ -1075,7 +1075,7 @@ def data_manager_depth_catalog(limit: int = 50):
         return {**market_depth.catalog(limit),
                 "dhan_live_credential_present":bool(
                     os.getenv("DHAN_ACCESS_TOKEN","").strip()),
-                "client_id_discovered_from_profile_at_connect": True}
+                "client_id_auto_lookup_supported": True}
     except (ValueError, OSError) as exc:
         bad(exc)
 
