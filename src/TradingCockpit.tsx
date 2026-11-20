@@ -17,7 +17,7 @@ type SourceJob = {id:string;status:string;stage?:string;percent?:number;error?:s
 type History = {predictions:Entry[];summary:{evaluated_directions:number;correct_directions:number;direction_accuracy:number|null;qualification:string}}
 type DaySummary = {session_ist:string;total:number;scored:number;correct:number;incorrect:number;pending:number;no_trade:number;flat:number;unverifiable:number;directional_accuracy:number|null}
 type Report = {days:DaySummary[];overall:Omit<DaySummary,'session_ist'>;source:string;disclaimer:string;truncated:boolean}
-type DhanCheck = {ok:boolean;code:string;message:string;token_present:boolean;token_valid:boolean|null;data_plan_active:boolean|null;client_id_configured?:boolean;expires_at_utc?:string|null;seconds_remaining?:number|null}
+type DhanCheck = {ok:boolean;code:string;message:string;token_present:boolean;token_valid:boolean|null;data_plan_active:boolean|null;client_id_configured?:boolean;client_id_auto_available?:boolean;expires_at_utc?:string|null;seconds_remaining?:number|null}
 type DhanConnect = {connected:boolean;message:string}
 type CockpitView = 'live'|'replay'|'strategy'|'journal'|'setup'
 type ReplayView = 'session'|'recordings'
@@ -460,15 +460,15 @@ export default function TradingCockpit(){
       {tokenMessage&&<p className="tc-confirm" role="status">{tokenMessage}</p>}
       {tokenForm&&<form className="tc-token-form" onSubmit={event=>void connectDhan(event)}>
         <label>New token from Dhan Web<input type="password" autoComplete="off" value={dhanToken} onChange={event=>setDhanToken(event.target.value)} placeholder="Paste Dhan access token"/></label>
-        <label>Dhan client ID for live streaming (numeric; verified against your broker profile)
+        <label>Optional Dhan client ID (normally discovered automatically from your broker profile)
           <input type="password" autoComplete="off" value={dhanClientId}
             onChange={event=>setDhanClientId(event.target.value)}
-            placeholder="Your Dhan client ID · leave blank to keep existing"/>
+            placeholder="Leave blank to auto-detect from Dhan"/>
         </label>
         <label className="tc-token-consent"><input type="checkbox" checked={tokenConsent} onChange={event=>setTokenConsent(event.target.checked)}/> Store this verified token in the local, gitignored .env file. Do not send it to GitHub or the browser's storage.</label>
         <button type="submit" disabled={tokenBusy||!tokenConsent||!dhanToken.trim()}>{tokenBusy?'Verifying…':'Verify and save token'}</button>
       </form>}
-      <p className="tc-muted">This verifies your Dhan session and Data API entitlement. Live WebSockets also need your Dhan client ID {dhanCheck?.client_id_configured?'(configured)':'(not configured or not yet checked)'}. This connection alone does not start market streaming.</p>
+      <p className="tc-muted">This verifies your Dhan session and Data API entitlement. The Dhan client ID is {dhanCheck?.client_id_configured?'already saved':dhanCheck?.client_id_auto_available?'available from your authenticated profile':'not yet verified'}; QuantLab automatically looks it up when needed. This connection alone does not start market streaming.</p>
     </section>
           <section className="tc-panel tc-source-panel" aria-label="Shared market data library status">
       <div className="tc-panel-title"><strong>One shared market-data library · dhan_shared</strong><span>Original downloads are reusable source receipts, not separate datasets</span></div>
