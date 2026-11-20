@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, auto_option_chain, trading_acceptance
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, auto_option_chain, trading_acceptance, strategy_lab, python_strategy_sandbox
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -807,6 +807,104 @@ def trading_cockpit_options_backtest(body: HistoricalOptionsBacktestRequest):
         return _spawn("cockpit_dhan_expired_option_backtest",
                       expired_options_backtest.run_backtest,
                       master_refresher=_download_master, **parameters)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+class StrategyLabBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: Literal[500, 1500, 3000, 5000] = 1500
+    source_mode: Literal["historical", "recorded_live"] = "historical"
+    starting_capital: float = Field(default=50000, ge=1000, le=100000000,
+                                    allow_inf_nan=False)
+    cost_bps: float = Field(default=5, ge=0, le=500,
+                            allow_inf_nan=False)
+    confirm_readonly: bool = False
+
+
+class EmaSweepRequest(StrategyLabBase):
+    fast_periods: list[int] = Field(
+        default_factory=lambda: [3, 5, 7, 9, 12, 15, 21],
+        min_length=1, max_length=32)
+    slow_periods: list[int] = Field(
+        default_factory=lambda: [13, 21, 26, 34, 50, 55, 89],
+        min_length=1, max_length=32)
+
+
+class EmaPairRequest(StrategyLabBase):
+    fast: int = Field(default=9, ge=2, le=149)
+    slow: int = Field(default=21, ge=3, le=150)
+
+
+class PythonStrategyRequest(StrategyLabBase):
+    limit: Literal[500, 1500] = 1500
+    code: str = Field(min_length=1, max_length=20000)
+
+
+@app.get("/api/trading-cockpit/research-lab/status")
+def strategy_research_lab_status():
+    """Readiness only; never execute code or contact Dhan."""
+    return {
+        "python_sandbox": python_strategy_sandbox.availability(),
+        "original_candles": "BANKNIFTY Dhan historical IDX_I or "
+                            "locally recorded completed live index minutes",
+        "source_mode_options": ["historical", "recorded_live"],
+        "live_capture_isolated": True, "broker_orders_enabled": False,
+        "execution_mode": "separate Python process when bwrap is supported",
+        "note": "All historical index returns are directional paper "
+                "proxies; the cash BANKNIFTY index is not directly tradable.",
+    }
+
+
+@app.post("/api/trading-cockpit/research-lab/ema-sweep")
+def strategy_lab_ema_sweep(body: EmaSweepRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Confirm read-only BANKNIFTY index research")
+    try:
+        strategy_lab._periods(body.fast_periods, body.slow_periods)
+        return _spawn("banknifty_index_ema_parameter_sweep", strategy_lab.run_sweep,
+                      **body.model_dump(exclude={"confirm_readonly"}))
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/research-lab/ema-pair")
+def strategy_lab_ema_pair(body: EmaPairRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Confirm read-only BANKNIFTY EMA pair research")
+    try:
+        strategy_lab._periods([body.fast], [body.slow])
+        return _spawn("banknifty_index_ema_pair", strategy_lab.run_pair,
+                      **body.model_dump(exclude={"confirm_readonly"}))
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/research-lab/python")
+def strategy_lab_python(body: PythonStrategyRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Confirm read-only isolated custom Python research")
+    sandbox = python_strategy_sandbox.availability()
+    if not sandbox["available"]:
+        raise HTTPException(409, "Isolated Python sandbox unavailable. "
+                            "Install Ubuntu bubblewrap and util-linux prlimit "
+                            "before running pasted code. No unsafe fallback.")
+    return _spawn("banknifty_isolated_pasted_python", strategy_lab.run_custom,
+                  **body.model_dump(exclude={"confirm_readonly"}))
+
+
+@app.get("/api/trading-cockpit/research-lab/runs")
+def strategy_lab_saved_runs():
+    try:
+        return strategy_lab.saved_runs(limit=25)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/research-lab/runs/{run_id}")
+def strategy_lab_saved_run(run_id: str):
+    try:
+        return strategy_lab.read_run(run_id)
     except (ValueError, OSError) as exc:
         bad(exc)
 
