@@ -52,7 +52,7 @@ def inspect(model_id: str, dataset_id: str | None,
 
     source = "daily_prices.csv" if record.get("has_daily_prices") else "prices.csv"
     frequency = "daily" if source == "daily_prices.csv" else "monthly"
-    has_prices = bool(record.get("has_prices")) and (folder/source).is_file()
+    has_prices = bool(record.get("has_prices") or record.get("has_daily_prices")) and (folder/source).is_file()
     if not has_prices:
         return {**result, "status": "missing_prices", "runnable": False,
                 "common_returns": None, "missing_minimum": None,

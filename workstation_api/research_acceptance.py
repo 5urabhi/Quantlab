@@ -16,8 +16,8 @@ import os
 import uuid
 
 from . import (data_acquisition, model_data_manager, model_input_selector,
-               model_lab, model_readiness, model_registry, pit_index,
-               service, source_completion)
+               model_lab, model_readiness, model_registry, option_market,
+               option_quotes, pit_index, service, source_completion)
 
 LOCK=RLock()
 MAX_MODELS=80
@@ -143,6 +143,9 @@ def verify(dataset_id: str | None=None, *,
     User-selected tickers remain mandatory for publishing a new research run.
     """
     matrix=overview(dataset_id)
+    # Use the dataset actually selected by readiness (including shared Dhan),
+    # not a possibly empty caller ID.
+    dataset_id=matrix.get('dataset_id', dataset_id)
     candidates=[x for x in matrix["models"] if
                 x["status"] in ("math_ready","source_available")]
     if not include_historical:
@@ -155,23 +158,49 @@ def verify(dataset_id: str | None=None, *,
         config={}
         if item["mode"]=="historical":
             if not dataset_id:
+                checks.append({"model_id":key,"state":"blocked",
+                               "reason":"No effective observed dataset selected."})
                 continue
             if key in model_input_selector.MINIMUM:
                 selection=model_input_selector.inspect(dataset_id,key)
                 eligible=next((x for x in selection["candidates"] if x["runnable"]),None)
-                if not eligible:
+                if eligible:
+                    config={"target":"stock","ticker":eligible["ticker"]}
+                elif (key in {"gbm_fit","merton_fit"} and
+                      selection.get("tri",{}).get("runnable")):
+                    config={"target":"benchmark_tri"}
+                else:
                     checks.append({"model_id":key,"state":"blocked",
-                                   "reason":"No original stock passes the exact fitting checks."})
+                                   "reason":"No original stock or TRI passes the exact fitting checks."})
                     continue
-                config={"target":"stock","ticker":eligible["ticker"]}
+        elif item["mode"]=="market":
+            if not dataset_id:
+                checks.append({"model_id":key,"state":"blocked",
+                               "reason":"No dataset selected to bind an original quote."})
+                continue
+            # Source availability is not selection; bind the exact quote row.
+            reference=next((
+                snapshot["id"]+":"+str(row["row_index"])
+                for snapshot in option_quotes.list_for(dataset_id)
+                for row in snapshot.get("contracts",[])
+                if option_market.inspect(
+                    dataset_id, snapshot["id"]+":"+str(row["row_index"])
+                ).get("runnable")
+            ),None)
+            if reference is None:
+                checks.append({"model_id":key,"state":"blocked",
+                               "reason":"No selectable original provider quote row."})
+                continue
+            config={"quote":reference}
         try:
             result=model_lab.run_model(key,dataset_id,config)
             if not isinstance(result,dict):
                 raise ValueError("Algorithm did not return a structured result")
             checks.append({
                 "model_id":key,"state":"software_pass",
-                "uses_original_market_data":item["mode"]=="historical",
+                "uses_original_market_data":item["mode"] in {"historical","market"},
                 "qa_only_stock_selection":config.get("ticker"),
+                "qa_only_option_quote_selection":config.get("quote"),
                 "result_kind":str(result.get("model_id",key))[:70],
                 "not_an_empirical_certification":True,
             })

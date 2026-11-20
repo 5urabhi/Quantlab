@@ -91,7 +91,7 @@ def _historical_input(dataset_id: str, required: int, assets: int) -> tuple[pd.D
         raise ValueError("Choose an observed research dataset for this model")
     folder,record=service.dataset_path(dataset_id)
     selected_file="daily_prices.csv" if record.get("has_daily_prices") else "prices.csv"
-    if not record.get("has_prices"):
+    if not (record.get("has_prices") or record.get("has_daily_prices")):
         raise ValueError("Selected dataset has no verified local prices")
     prices,matrix_engine=model_matrix.load(dataset_id,folder,selected_file)
     if len(prices.columns)<2:
@@ -138,7 +138,7 @@ def _historical_input(dataset_id: str, required: int, assets: int) -> tuple[pd.D
 def readiness(dataset_id: str) -> dict:
     folder,record=service.dataset_path(dataset_id)
     source_file="daily_prices.csv" if record.get("has_daily_prices") else "prices.csv"
-    if not record.get("has_prices"):
+    if not (record.get("has_prices") or record.get("has_daily_prices")):
         return {"dataset_id":dataset_id,"has_prices":False,"message":"Dataset lacks prices",
                 "frequency":None,"observed_dates":0,"eligible_assets":0}
     prices,engine=model_matrix.load(dataset_id,folder,source_file)

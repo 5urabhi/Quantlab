@@ -73,7 +73,7 @@ def requirement(model_id: str, params: dict | None = None) -> dict:
 def _observed(dataset_id: str, assets: int, required: int) -> dict:
     folder, record = service.dataset_path(dataset_id)
     source = "daily_prices.csv" if record.get("has_daily_prices") else "prices.csv"
-    if not record.get("has_prices"):
+    if not (record.get("has_prices") or record.get("has_daily_prices")):
         return {"has_prices": False, "common_returns": 0,
                 "frequency": None, "assets_found": 0, "selected_assets": []}
     prices, matrix_engine = model_matrix.load(dataset_id, folder, source)

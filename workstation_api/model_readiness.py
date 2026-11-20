@@ -103,7 +103,7 @@ def overview(dataset_id: str | None = None) -> dict:
         try:
             dataset_id=next((row["id"] for row in service.datasets()
                              if row["id"]=="dhan_shared" and
-                             row.get("has_prices") and row.get("kind")=="dhan"),None)
+                             (row.get("has_prices") or row.get("has_daily_prices")) and row.get("kind")=="dhan"),None)
         except (ValueError,OSError,KeyError):
             dataset_id=None
     prices: pd.DataFrame | None=None
@@ -121,7 +121,7 @@ def overview(dataset_id: str | None = None) -> dict:
             synthetic_fixture=info.get("kind")=="synthetic" or (folder/"DO_NOT_CITE.txt").exists()
             file="daily_prices.csv" if info.get("has_daily_prices") else "prices.csv"
             daily=file=="daily_prices.csv"
-            if info.get("has_prices"):
+            if info.get("has_prices") or info.get("has_daily_prices"):
                 prices=read_matrix(folder/file,positive=True)
             benchmark=folder/"benchmark.csv"
             proof=folder/"BENCHMARK_SOURCE.json"

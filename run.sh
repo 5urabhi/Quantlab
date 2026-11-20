@@ -7,6 +7,33 @@ case "${1:-workstation}" in
   workstation|research|web|both)
     exec bash scripts/run_workstation.sh
     ;;
+  audit-models|check-models)
+    if [ ! -x .venv/bin/python ]; then
+      printf 'Python environment missing. First run: bash run.sh setup\n' >&2
+      exit 2
+    fi
+    shift
+    # The same single command must verify mathematical correctness AND test
+    # every registered code path before inspecting original local sources.
+    # Reduced CPU priority favors independent live market recording.
+    case " $* " in
+      *" --preflight-only "*) ;;
+      *)
+        # Test files are intentionally not a Python package, so use
+        # discovery rather than the fragile tests.test_name import path.
+        for case_file in \
+          test_every_registered_model_runs.py \
+          test_math_acceptance.py \
+          test_model_validation.py \
+          test_audit_all_models.py
+        do
+          nice -n 10 .venv/bin/python -m unittest discover \
+            -s tests -p "$case_file" -q
+        done
+        ;;
+    esac
+    exec nice -n 10 .venv/bin/python scripts/audit_all_models.py "$@"
+    ;;
   legacy-streamlit)
     exec bash scripts/start.sh research
     ;;
@@ -23,6 +50,9 @@ bash run.sh both             Same workstation (API + React)
 bash run.sh setup            Install local Python and Node dependencies
 bash run.sh check            Existing research acceptance checks
 bash run.sh evaluate         Existing synthetic evaluation and reports
+bash run.sh audit-models     Read-only audit of every model and active dataset
+bash run.sh audit-models --dataset dhan_shared  Audit shared Dhan only
+bash run.sh audit-models --preflight-only  Check inputs without running models
 bash run.sh legacy-streamlit Launch preserved legacy Streamlit UI if needed
 HELP
     ;;
