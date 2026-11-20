@@ -642,7 +642,31 @@ function App(){
         <Suspense fallback={<div className="ws-empty" role="status" aria-live="polite">
           <LoaderCircle size={18}/> Loading {titles[tab]}…
         </div>}>
-        {tab==='trading'&&<TradingCockpit/>}
+        {(['trading','tradingchain','tradingdepth','tradingreplay',
+            'tradingjournal','strategybacktest','connections'].includes(tab))&&
+          <TradingCockpit
+            integrated
+            selectedView={tab==='tradingreplay'?'replay':
+              tab==='tradingjournal'?'journal':
+              tab==='strategybacktest'?'strategy':
+              tab==='connections'?'setup':'live'}
+            focusLive={tab==='trading'?'signals':
+              tab==='tradingchain'?'options':
+              tab==='tradingdepth'?'depth':undefined}
+            onNavigateView={view=>begin(({
+              live:'trading',replay:'tradingreplay',
+              strategy:'strategybacktest',research:'strategypython',
+              journal:'tradingjournal',setup:'connections',
+            } as const)[view])}
+          />}
+        {tab==='strategies'&&<StrategyLibraryV2
+          onEMA={()=>begin('strategyema')}
+          onPython={()=>begin('strategypython')}
+          onOptions={()=>begin('strategybacktest')}
+          onData={()=>begin('data')}/>}
+        {(['strategyema','strategypython'].includes(tab))&&
+          <ResearchPythonLab integrated
+            displayMode={tab==='strategyema'?'sweep':'python'}/>}
         {tab==='journey'&&<ResearchJourney datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
           onDataChanged={refresh} onOpenData={()=>begin('data')}
@@ -650,7 +674,14 @@ function App(){
           onOpenGuide={()=>begin('guide')} onOpenExperiments={()=>begin('research')}
           onOpenModels={()=>begin('mathematics')} onOpenResults={()=>begin('history')}/>}
         {tab==='overview'&&<>
-          <div className="ws-overview-banner"><div><Tag tone="blue">RESEARCH CONTROL DESK / MODEL LAB V1</Tag><h2>One workstation.<br/><em>Every model, traceable.</em></h2><p>Keep datasets, factor experiments, risk calculations and generated evidence in one reproducible local research environment.</p><div className="ws-banner-actions"><button className="ws-button primary" onClick={()=>begin('journey')}><Play size={16}/> Start guided research</button><button className="ws-button secondary" onClick={()=>begin('dhan')}><Database size={16}/> Connect market data</button></div></div><div className="ws-banner-graphic"><div className="ws-orbit one"/><div className="ws-orbit two"/><div className="ws-orbit three"/><span className="ws-center-glow"><Activity size={45}/></span><span className="ws-orbit-label a">MOMENTUM</span><span className="ws-orbit-label b">RISK</span><span className="ws-orbit-label c">FACTOR</span></div></div>
+          <V2HomeLaunchers
+            onStrategy={()=>begin('strategyema')}
+            onModel={()=>begin('mathematics')}
+            onData={()=>begin('dhan')}/>
+          <QuickPageNote title="Read-only market intelligence"
+            description="Market collection continues in the local backend. No broker orders or unobserved price series are generated."
+            ><button className="v2-secondary" type="button" onClick={()=>begin('trading')}>
+              Open live market <ArrowRight size={15}/></button></QuickPageNote>
           <div className="ws-metrics-grid"><Metric label="Market data library" value={datasets.some(d=>d.id==='dhan_shared')?'1':'—'} caption="One canonical set of downloaded stock prices"/><Metric label="Completed runs" value={String(runs.length)} caption="Stored locally on disk"/><Metric label="DhanHQ data access" value={dhan?.token_configured?'SET':'NOT SET'} caption="Read-only market data"/><Metric label="Python computation" value={health?.ok?'ONLINE':'OFFLINE'} caption="127.0.0.1:8765" highlight/></div>
           <div className="ws-grid two-thirds"><Card title="Portfolio research performance" extra={classification}>{chart??<Empty title="No historical run selected" onAction={()=>begin('research')} action="Configure experiment">Run the research engine to generate actual saved series and metrics.</Empty>}</Card><Card title="Latest research snapshot">{detail?<><div className="ws-overview-stat"><span>Strategy CAGR</span><strong>{percent(weighted(metric,'strategy_cagr'))}</strong></div><div className="ws-overview-stat"><span>Max drawdown</span><strong>{percent(weighted(metric,'max_drawdown'))}</strong></div><div className="ws-overview-stat"><span>Tracking error</span><strong>{percent(weighted(metric,'tracking_error'))}</strong></div><div className="ws-overview-stat"><span>Sample window</span><strong>{detail.meta.first_price_date?.slice(0,7)}–{detail.meta.last_price_date?.slice(0,7)}</strong></div><button className="ws-textlink" onClick={()=>begin('history')}>Inspect full run <ArrowRight size={15}/></button></>:<Empty title="Nothing to report">No metrics will appear until a Python experiment completes.</Empty>}</Card></div>
           <div className="ws-grid halves"><Card title="Market library & research inputs" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{everydaySources.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{everydaySources.length===0&&<p className="ws-caption">No market sources found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
@@ -779,15 +810,28 @@ function App(){
           </details>
 
         </details></>}
-        {tab==='dhan'&&<MarketDataWorkspace key="download" initialPage="get" datasets={datasets}
+        {(['dhan','datadownloads'].includes(tab))&&
+          <MarketDataWorkspace key="v2-market-acquire" initialPage="get"
+            activePage={tab==='dhan'?'get':'downloads'} integrated datasets={datasets}
           onDataChanged={refresh} onSelectDataset={setSelectedDataset}
           onOpenModels={()=>begin('mathematics')}
           onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
             if(d)inspectDatasetDeletion(d)}}/>}
+        {tab==='dataexplorer'&&<DataManager initialSection="explorer" integrated
+          onSelectDataset={setSelectedDataset} onChanged={refresh}
+          onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
+        {tab==='dataquality'&&<ResearchWorkspace key="v2-data-quality"
+          initialPage="quality" integrated datasets={datasets}
+          selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
+          onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
+          onOpenModels={()=>begin('mathematics')}/>}
         {tab==='nse'&&<NSESourceAssistant datasetId={selectedDataset}
           onOpenDhan={()=>begin('dhan')} onOpenData={()=>begin('data')}/>}
-        {(tab==='workspace'||tab==='projects')&&<ResearchWorkspace key={tab}
-          initialPage={tab==='projects'?'projects':'home'} datasets={datasets}
+        {(tab==='workspace'||tab==='chartstudio'||tab==='workspacejobs'||
+          tab==='projects')&&<ResearchWorkspace key={tab} integrated
+          initialPage={tab==='projects'?'projects':
+            tab==='chartstudio'?'plots':
+            tab==='workspacejobs'?'jobs':'compare'} datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
           onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
           onOpenModels={()=>begin('models')}/>}
@@ -834,6 +878,17 @@ function App(){
           onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}/>}
         {tab==='guide'&&<ResearchGuide onNavigate={route=>begin(route as Tab)}/>}
         {tab==='reports'&&<>{withRun(<Card title="Generate reproducible research report"><p className="ws-caption">Generate an offline HTML report and PDF draft from selected saved Python run artifacts. Synthetic demonstrations are explicitly labeled.</p><div className="ws-actions"><button className="ws-button primary" disabled={!selectedRun||busy} onClick={downloadReport}><FileText size={15}/> Build HTML + PDF</button></div><div className="ws-artifact-list">{(detail?.artifacts||[]).map(name=><a key={name} href={'/api/runs/'+encodeURIComponent(selectedRun)+'/files/'+encodeURIComponent(name)} download><FileArchive size={16}/><span>{name}</span><ArrowDownToLine size={14}/></a>)}</div></Card>)}</>}
+        {tab==='recordingsettings'&&<div className="v2-layout-section">
+          <QuickPageNote title="Automatic BANKNIFTY CE/PE recording"
+            description="Configure read-only original 20-level capture. Collector processes remain active regardless of which QuantLab page is open."/>
+          <AutoDepthRecorder onOpenSaved={()=>begin('tradingreplay')}/>
+        </div>}
+        {tab==='storage'&&<DataManager initialSection="database" integrated
+          onSelectDataset={setSelectedDataset} onChanged={refresh}
+          onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
+        {tab==='preferences'&&<SettingsPreferencesV2/>}
+        {tab==='diagnostics'&&<DiagnosticsV2 onRepair={()=>begin('settings')}
+          onData={()=>begin('dataquality')}/>}
         {tab==='settings'&&<div className="ws-grid halves"><Card title="Backend and privacy"><div className="ws-data-audit"><div><span>API address</span><strong>127.0.0.1:8765</strong></div><div><span>Frontend address</span><strong>127.0.0.1:5173</strong></div><div><span>Data directory</span><strong>data/ (Git-ignored)</strong></div><div><span>Run artifacts</span><strong>results/workstation_runs/</strong></div><div><span>Authentication</span><strong>Loopback-only; not for public exposure</strong></div><div><span>Broker trading</span><strong>DISABLED</strong></div><div><span>Dhan token</span><strong>{health?.dhan_token_configured?'CONFIGURED (HIDDEN)':'MISSING'}</strong></div></div></Card><Card title="Integrity controls"><div className="ws-rule"><ShieldCheck size={18}/> Local data import, explicit dataset status, safe path allowlists, no broker order operations, no credential output, and no historical-performance fabrication.</div><p className="ws-caption">This is a local research environment, not an authenticated public server. Do not expose port 8765 on a network or deploy it as-is.</p><button className="ws-button secondary" onClick={()=>void refresh()}><RefreshCw size={16}/> Refresh engine status</button></Card></div>}
         </Suspense>
         <footer className="ws-footer"><span>QUANTLAB / RESEARCH WORKSTATION</span><span>LOCAL ENGINE · HISTORICAL CLAIMS REQUIRE EXTERNAL VALIDATION</span><span>© PERSONAL RESEARCH</span></footer>
