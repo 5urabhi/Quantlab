@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta, time
+from pathlib import Path
+from uuid import uuid4
+import json
+import os
 from math import isfinite, sqrt
 from statistics import mean, stdev
 
@@ -233,8 +237,34 @@ def backtest_index(rows: list[dict], signals: list[str], *,
     }
 
 
+def _rsi14(rows: list[dict]) -> list[float | None]:
+    """Source-only 14-bar Wilder RSI with session and missing-minute resets."""
+    out = [None] * len(rows)
+    start = 0
+    while start < len(rows):
+        end = start + 1
+        while end < len(rows) and _contiguous(rows[end - 1], rows[end]):
+            end += 1
+        closes = [r["close"] for r in rows[start:end]]
+        if len(closes) > 14:
+            changes = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+            gains = sum(max(0, x) for x in changes[:14]) / 14
+            losses = sum(max(0, -x) for x in changes[:14]) / 14
+            for local in range(14, len(closes)):
+                if local > 14:
+                    change = changes[local - 1]
+                    gains = (gains * 13 + max(0, change)) / 14
+                    losses = (losses * 13 + max(0, -change)) / 14
+                out[start + local] = round(
+                    100 - 100 / (1 + gains / losses), 2) if losses else (
+                    100. if gains else 50.)
+        start = end
+    return out
+
+
 def _overlay(rows: list[dict], signals: list[str], indicators: dict) -> list[dict]:
     result = []
+    rsi = _rsi14(rows)
     for i, row in enumerate(rows):
         f = indicators["fast"][i]
         s = indicators["slow"][i]
@@ -245,6 +275,7 @@ def _overlay(rows: list[dict], signals: list[str], indicators: dict) -> list[dic
             "fast_ema": f, "slow_ema": s,
             "ema_spread_bps": _round(spread, 3) if spread is not None else None,
             "momentum_roc5_pct": indicators["momentum_roc5_pct"][i],
+            "rsi14": rsi[i],
             "signal": signals[i],
         })
     return result
@@ -303,7 +334,7 @@ def run_sweep(*, limit: int = 1500, fast_periods: list[int],
     selected = backtest_index(rows, actual_signals,
                               starting_capital=starting_capital,
                               cost_bps=cost_bps, include_chart=True)
-    return {
+    return save_run({
         "kind": "ema_sweep", "identity": IDENTITY,
         "model": INDICATOR_VERSION,
         "combinations_tested": len(combinations),
@@ -324,7 +355,83 @@ def run_sweep(*, limit: int = 1500, fast_periods: list[int],
         },
         "bid_ask_spread_source": "unavailable_for_cash_index_ohlc",
         "read_only": True, "orders_placed": 0,
-    }
+    })
+
+
+def run_pair(*, fast: int, slow: int, limit: int = 1500,
+             starting_capital: float = 50000,
+             cost_bps: float = 5) -> dict:
+    rows, evidence = load_index(limit)
+    signals, indicators = crossover_events(rows, fast, slow)
+    selected = backtest_index(rows, signals, starting_capital=starting_capital,
+                              cost_bps=cost_bps, include_chart=True)
+    output = {
+        "kind": "ema_pair", "identity": IDENTITY, "model": INDICATOR_VERSION,
+        "best_pair": {"fast": fast, "slow": slow},
+        "selected": selected, "overlays": _overlay(rows, signals, indicators),
+        "evidence": evidence,
+        "bid_ask_spread_source": "unavailable_for_cash_index_ohlc",
+        "read_only": True, "orders_placed": 0,
+    })
+    return save_run(output)
+
+
+def _run_root() -> Path:
+    root = service.DATA / "research_lab" / "runs"
+    if root.is_symlink() or root.parent.is_symlink():
+        raise ValueError("Unsafe local strategy results directory")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def save_run(payload: dict) -> dict:
+    """Save exact local model/chart evidence without touching Dhan source files."""
+    run_id = "banknifty_" + uuid4().hex[:20]
+    data = {**payload, "run_id": run_id}
+    encoded = json.dumps(data, allow_nan=False, ensure_ascii=False,
+                         separators=(",", ":")).encode("utf-8")
+    if len(encoded) > 5_000_000:
+        raise ValueError("Research result exceeds local save limit")
+    path = _run_root() / (run_id + ".json")
+    temp = path.with_suffix(".tmp")
+    descriptor = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as file:
+            file.write(encoded)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp, path)
+    finally:
+        if temp.exists():
+            temp.unlink()
+    return data
+
+
+def saved_runs(limit: int = 25) -> dict:
+    if not 1 <= limit <= 50:
+        raise ValueError("Saved run limit must be 1-50")
+    results = []
+    root = _run_root()
+    for path in sorted(root.glob("banknifty_*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
+        if path.is_symlink():
+            continue
+        results.append({"run_id": path.stem,
+                        "file_bytes": path.stat().st_size,
+                        "modified_utc": datetime.fromtimestamp(
+                            path.stat().st_mtime,
+                            tz=trading_cockpit.timezone.utc).isoformat()})
+    return {"runs": results, "source": "local_read_only_research_archive"}
+
+
+def read_run(run_id: str) -> dict:
+    import re
+    if not re.fullmatch(r"banknifty_[0-9a-f]{20}", run_id):
+        raise ValueError("Unknown saved research ID")
+    path = _run_root() / (run_id + ".json")
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 5_000_000:
+        raise ValueError("Saved research result unavailable")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def run_custom(*, code: str, limit: int = 1500,
@@ -343,7 +450,7 @@ def run_custom(*, code: str, limit: int = 1500,
     # Always label the reference 9/21 EMA overlay as independent of custom
     # strategy. It can explain the spread, not claim authorship of signals.
     _, indicators = crossover_events(rows, 9, 21)
-    return {
+    return save_run({
         "kind": "python_strategy", "identity": IDENTITY,
         "strategy_origin": "user_entered_python_isolated_no_broker_access",
         "selected": selected,
