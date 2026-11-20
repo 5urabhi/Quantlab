@@ -35,14 +35,26 @@ const fmt=(v:number|null|undefined,digits=2)=>v===null||v===undefined?'—':v.to
 const post=(path:string,body:unknown)=>marketPost<unknown>(path,body)
 const indiaDate=(offsetDays=0)=>{const d=new Date();d.setUTCDate(d.getUTCDate()+offsetDays);return d.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'})}
 
-export default function TradingCockpit(){
+export type TradingCockpitView=CockpitView
+export default function TradingCockpit({selectedView,focusLive,integrated=false,onNavigateView}:{
+  selectedView?:CockpitView
+  focusLive?:'signals'|'options'|'depth'
+  integrated?:boolean
+  onNavigateView?:(view:CockpitView)=>void
+}={}){
   const [activeTab,setActiveTab]=useState<CockpitView>(()=>
     nseMarketWindow(Date.now()).regularWindow?'live':'replay')
   const [replayView,setReplayView]=useState<ReplayView>('session')
   const [journalView,setJournalView]=useState<JournalView>('trades')
   const selectedTab=useRef(false)
   const [liveHeader,setLiveHeader]=useState<LiveHeaderState|null>(null)
-  const selectTab=(view:CockpitView)=>{selectedTab.current=true;setActiveTab(view)}
+  const selectTab=(view:CockpitView)=>{
+    selectedTab.current=true;setActiveTab(view)
+    onNavigateView?.(view)
+  }
+  useEffect(()=>{
+    if(selectedView){selectedTab.current=true;setActiveTab(selectedView)}
+  },[selectedView])
   useEffect(()=>{
     let mounted=true
     const check=()=>{
@@ -279,7 +291,7 @@ export default function TradingCockpit(){
   const liveFeedFresh=Boolean(liveHeader?.active&&liveHeader.ticker_connection==='connected'
     &&activeQuote?.fresh&&Date.now()-Date.parse(activeQuote.received_utc)<=8000)
   useEffect(()=>{
-    if(!selectedTab.current){
+    if(!selectedTab.current&&!selectedView){
       setActiveTab(liveHeader?.active||marketWindow.regularWindow?'live':'replay')
     }
   },[liveHeader?.active,marketWindow.regularWindow])
@@ -299,7 +311,7 @@ export default function TradingCockpit(){
       </span>
       <span className="tc-v4-time"><Clock3 size={14}/>{marketWindow.istClock}</span>
     </div>
-    <nav className="tc-v4-tabs" role="tablist" aria-label="Trading cockpit workspaces">
+    {!integrated&&<nav className="tc-v4-tabs" role="tablist" aria-label="Trading cockpit workspaces">
       <button type="button" role="tab" id="tc-tab-live" aria-controls="tc-view-live" aria-selected={activeTab==='live'}
         onClick={()=>selectTab('live')}><Radio size={17}/><span>Live Trading</span></button>
       <button type="button" role="tab" id="tc-tab-replay" aria-controls="tc-view-replay" aria-selected={activeTab==='replay'}
@@ -312,7 +324,7 @@ export default function TradingCockpit(){
         onClick={()=>selectTab('journal')}><ClipboardList size={17}/><span>Trade Journal</span></button>
       <button type="button" role="tab" id="tc-tab-setup" aria-controls="tc-view-setup" aria-selected={activeTab==='setup'}
         onClick={()=>selectTab('setup')}><Settings2 size={17}/><span>Connections</span></button>
-    </nav>
+    </nav>}
 
     {activeTab==='live'&&<section role="tabpanel" id="tc-view-live" aria-labelledby="tc-tab-live" className="tc-tab-page">
       <div className="tc-v4-intro"><div><span className="tc-page-kicker">LIVE TRADING RESEARCH</span>
@@ -322,7 +334,8 @@ export default function TradingCockpit(){
       {!marketWindow.regularWindow&&!liveFeedFresh&&<div className="tc-market-note"><Clock3 size={17}/>
         <span>The regular NSE index session is outside its trading window. Feed freshness is determined only by actual Dhan packets; holidays and special sessions are not inferred.</span>
         <button type="button" onClick={()=>{selectTab('replay');setReplayView('session')}}>Open recorded market</button></div>}
-      <LiveFeedPanel onOpenSetup={()=>selectTab('setup')}
+      <LiveFeedPanel focusedView={focusLive} hideNavigation={integrated}
+        onOpenSetup={()=>selectTab('setup')}
         onOpenSaved={()=>{selectTab('replay');setReplayView('recordings')}}
         onDraftJournal={(contract:OptionContract,lots:number)=>{
           if(!contract.lot_size||!contract.identity)return
