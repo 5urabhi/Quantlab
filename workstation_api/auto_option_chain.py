@@ -26,7 +26,6 @@ STOP = Event()
 WORKER: Thread | None = None
 RESTART_PENDING = False
 SHUTTING_DOWN = False
-MAX_EXPIRIES = 40
 MAX_DAILY_SNAPSHOTS = 2500
 DISCOVERY_INTERVAL_SECONDS = 300
 STATE = {
@@ -175,7 +174,7 @@ def _run(stop: Event) -> None:
             now = time.monotonic()
             if now >= next_discovery or not expiries:
                 try:
-                    found = option_chain_live.expiries()["expiries"][:MAX_EXPIRIES]
+                    found = option_chain_live.expiries()["expiries"]
                     if not found:
                         raise ValueError("Empty Dhan BANKNIFTY expiry list")
                     expiries = found
