@@ -137,9 +137,9 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         <h3><Activity size={19}/> Record BANKNIFTY CE &amp; PE order books</h3>
         <p>Select real Dhan contracts near {inr(settings.target_premium,0)}, follow
           changes during market hours, and store original 20-bid/20-ask snapshots
-          for later liquidity and RL research. The same authorization also saves
-          complete returned Dhan option-chain snapshots for all available expiries.
-          No orders are sent.</p>
+          for later liquidity and RL research. With a local Dhan token, this
+          recorder and complete CE/PE option-chain capture start automatically
+          on QuantLab startup. No orders are sent.</p>
       </div>
       <span className={'ad-status '+(connected?'active':armed?'armed':'stopped')}>
         <Radio size={15}/>{STATE_NAME[state?.state||'disabled']||state?.state||'Stopped'}
@@ -199,8 +199,8 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         returned BANKNIFTY option chains for listed expiries during future regular
         NSE sessions, until I stop it.
       </label>:<p className="ad-armed-note"><ShieldCheck size={16}/>
-        Consent is saved locally. Recording resumes automatically while the local server
-        is running during regular NSE hours. Stopping disarms future sessions.</p>}
+        Read-only BANKNIFTY CE/PE recording runs automatically during NSE hours
+        while the local server is running. Stop and disarm to disable future sessions.</p>}
       <div className="ad-buttons">
         {!armed?<button type="button" className="ad-start"
           onClick={()=>void arm()} disabled={busy||!armedConsent}>
