@@ -467,6 +467,7 @@ def _run(stop: Event) -> None:
                     continue
                 ids = {c["security_id"]: c for c in selected}
                 _selection_receipt(session_id, selected)
+                selection = selected
                 with LOCK:
                     STATE["contracts"] = selected
                     STATE["selection_events"] += 1
@@ -588,3 +589,12 @@ def resume_if_armed() -> None:
     # Only previously consented settings may start any future broker feed.
     if _config()["enabled"]:
         _ensure_worker()
+
+
+def suspend_for_shutdown() -> None:
+    """Stop sockets on local server shutdown without removing user consent."""
+    STOP.set()
+    with LOCK:
+        if STATE.get("connected"):
+            STATE["state"] = "local_server_stopping"
+        STATE["connected"] = False
