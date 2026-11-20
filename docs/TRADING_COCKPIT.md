@@ -270,11 +270,14 @@ Pure crossover rules:
 - All EMAs are seeded from original index closes. Reset at each new NSE
   session and any missing one-minute index candle. No lookahead, overnight
   indicator stitching, synthetic contract candles, or same-close fills.
-- **Exit rule:** choose *Flip CE ↔ PE on opposite signal* for crossing-only
-  reversals; use *Flip on opposite signal or time cap* (maximum 6 minutes)
-  to compare with the user's brief holding style; *Hybrid* additionally
-  evaluates completed option premium stop/target conditions under
-  explicit next-open proxies.
+- **Default exit rule: hold until opposite crossover, with NO fixed time cap.**
+  Hold the existing long CE or PE for as many minutes as necessary, until a
+  subsequent confirmed opposite EMA crossing. Close any remaining position
+  at the observed intraday session boundary (no overnight exposure).
+  Fixed 1/3/5/6/10/30/60-minute exits and capped/hybrid policies remain
+  available only as optional benchmark comparisons, not the strategy default.
+  Pure crossover mode does not apply the premium stop/target unless an
+  explicitly different exit policy is selected.
 - Underlying crossover signals and historical **option premiums** remain
   separate. Dhan original exact-strike CE/PE contract minute bars drive
   simulated option P&L, subject to source gaps, lot/expiry provenance,
