@@ -358,6 +358,21 @@ try {
       name:'Signal reversal diagnostics and RL training readiness',
     }).waitFor()
     await historicalOptions.getByText('RL: more history required').waitFor()
+    const auditDownloadPromise=page.waitForEvent('download')
+    await historicalOptions.getByRole('button',{
+      name:'Download safe backtest diagnostic',
+    }).click()
+    const auditFile=await auditDownloadPromise
+    assert.equal(auditFile.suggestedFilename(),
+      'quantlab-banknifty-options-safe-diagnostics.json')
+    const auditJson=JSON.parse(await fs.readFile(await auditFile.path(),'utf8'))
+    assert.equal(auditJson.research_only,true)
+    assert.equal(auditJson.orders_placed,0)
+    assert.equal(auditJson.trade_summary.trade_count,1)
+    assert.equal(auditJson.research_readiness.training_performed,false)
+    assert.ok(!JSON.stringify(auditJson).includes('DHAN_ACCESS_TOKEN'))
+    assert.ok(!Object.hasOwn(auditJson,'trades'),
+      'Safe report must not export individual actual positions')
     await historicalOptions.getByRole('img',{
       name:'Cumulative paper account balance with interactive trade timestamps',
     }).waitFor()
@@ -375,6 +390,52 @@ try {
     await page.getByRole('button',{name:'Evaluate saved live outcomes'}).waitFor()
     await modes.getByRole('tab',{name:'Connections'}).click()
     await page.getByRole('tabpanel',{name:'Connections'}).waitFor()
+    const acceptance=page.getByRole('region',{
+      name:'Trading system local acceptance checklist',
+    })
+    await acceptance.waitFor()
+    await page.route('**/api/trading-cockpit/acceptance',route=>route.fulfill({
+      status:200,contentType:'application/json',
+      body:JSON.stringify({
+        version:'banknifty_local_acceptance_v1',
+        checked_utc:'2026-11-19T05:00:00+00:00',
+        safe_to_share:true,read_only:true,external_api_requests:0,
+        orders_placed:0,market_regular_hours_ist:false,
+        recorder_armed:true,recorder_state:'armed_waiting_for_nse_hours',
+        saved_books:{
+          status:'verified_sample',total_automatic_books:2,
+          latest_book_utc:'2026-11-18T08:15:00+00:00',
+          sample_checked:2,valid_sample_books:2,invalid_sample_books:0,
+          valid_ce_books:1,valid_pe_books:1,
+          observed_trading_dates_in_sample:1,
+          note:'Synthetic CI source integrity fixture, not real Dhan receipt.',
+        },
+        checks:[
+          {code:'banknifty_history',title:'BANKNIFTY one-minute history',
+           status:'pass',detail:'Synthetic source prepared',
+           next_action:'Open Options Backtest',screen:'backtest'},
+          {code:'live_depth',title:'Live 20-level CE/PE capture',
+           status:'waiting',detail:'Outside NSE hours',
+           next_action:'Arm at the next session',screen:'live'},
+          {code:'stored_depth',title:'Saved original 20-level evidence',
+           status:'pass',detail:'Two synthetic source samples',
+           next_action:'Open saved replay',screen:'replay'},
+        ],
+      }),
+    }))
+    await acceptance.getByRole('button',{name:'Run local checks'}).click()
+    await acceptance.getByText('2 / 3 source/research checks verified').waitFor()
+    await acceptance.getByText('Original automatic depth evidence').waitFor()
+    const doctorDownloadPromise=page.waitForEvent('download')
+    await acceptance.getByRole('button',{name:'Download safe report'}).click()
+    const doctorFile=await doctorDownloadPromise
+    assert.equal(doctorFile.suggestedFilename(),'quantlab-trading-acceptance-safe.json')
+    const doctorJson=JSON.parse(await fs.readFile(await doctorFile.path(),'utf8'))
+    assert.equal(doctorJson.orders_placed,0)
+    assert.equal(doctorJson.saved_books.valid_ce_books,1)
+    assert.equal(doctorJson.saved_books.valid_pe_books,1)
+    assert.ok(!Object.hasOwn(doctorJson,'dhan_token'))
+    await page.unroute('**/api/trading-cockpit/acceptance')
     await screenshot('01-trading-copilot-connections-v4')
     // Regression: a structured FastAPI 400/422 is readable, not [object Object].
     await page.route('**/api/trading-cockpit/instruments',route=>route.fulfill({
