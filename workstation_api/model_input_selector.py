@@ -150,7 +150,7 @@ def inspect(dataset_id: str, model_id: str) -> dict:
     file = "daily_prices.csv" if record.get("has_daily_prices") else "prices.csv"
     frequency = "daily" if file == "daily_prices.csv" else "monthly"
     prices = None
-    if record.get("has_prices") and (folder / file).is_file():
+    if (record.get("has_prices") or record.get("has_daily_prices")) and (folder / file).is_file():
         prices = read_matrix(folder / file, positive=True)
     candidates = rank_stocks(prices, frequency, MINIMUM[model_id],
                              daily_only=model_id in DAILY_ONLY)
