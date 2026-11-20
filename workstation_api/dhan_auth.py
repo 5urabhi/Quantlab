@@ -67,9 +67,10 @@ def check_profile(opener=urlopen, *, token_override: str | None = None,
         remaining_seconds = None
         expires_at_utc = None
     plan_active = state == "active"
-    client_matches = (client_id_override is None or
-                      str(payload.get("dhanClientId","")).strip() ==
-                      client_id_override)
+    broker_client_id = str(payload.get("dhanClientId", "")).strip()
+    client_id_auto_available = broker_client_id.isdigit() and 4 <= len(broker_client_id) <= 20
+    configured_client_id = os.getenv("DHAN_CLIENT_ID", "").strip()
+    client_matches = (client_id_override is None or broker_client_id == client_id_override)
     if not client_matches:
         code, message = "client_id_mismatch", "Dhan profile does not match the provided client ID. Check your account credentials."
     elif token_valid is False:
@@ -85,7 +86,11 @@ def check_profile(opener=urlopen, *, token_override: str | None = None,
             code, token_valid, plan_active)
     return {"ok": bool(token_valid and plan_active and client_matches), "token_present": True,
             "client_id_matches":client_matches if client_id_override is not None else None,
-            "client_id_configured":bool(os.getenv("DHAN_CLIENT_ID","").strip()),
+            "client_id_configured":bool(configured_client_id),
+            "client_id_auto_available":client_id_auto_available,
+            "client_id_ready":bool(configured_client_id or client_id_auto_available),
+            "client_id_source":("local_setting" if configured_client_id else
+                                "authenticated_profile" if client_id_auto_available else "missing"),
             "token_valid": token_valid, "data_plan_active": plan_active,
             "code": code, "message": message,
             "token_validity": expiry[:40],
