@@ -518,6 +518,9 @@ def _run(stop: Event) -> None:
                             continue
                         if not isinstance(payload, bytes):
                             continue
+                        if daily_saved >= MAX_DAILY_SNAPSHOTS:
+                            _status_update(state="daily_storage_limit_reached")
+                            break
                         now = _now()
                         for book, candidate in _paired_books(payload, ids, pending, now):
                             last_packet_monotonic = time.monotonic()
@@ -544,6 +547,9 @@ def _run(stop: Event) -> None:
                                         "source": "original_dhan_twentydepth",
                                     }
                                     STATE["state"] = "recording_original_depth"
+                        if daily_saved >= MAX_DAILY_SNAPSHOTS:
+                            _status_update(state="daily_storage_limit_reached")
+                            break
                     _status_update(connected=False)
             except Exception as exc:
                 failures += 1
