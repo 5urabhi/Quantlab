@@ -11,6 +11,7 @@ import {RecorderBadge,JobsDrawer,V2HomeLaunchers,StrategyLibraryV2,SettingsPrefe
 import ResearchPythonLab from './ResearchPythonLab'
 import AutoDepthRecorder from './AutoDepthRecorder'
 import DataManager from './DataManager'
+import GlobalSearchV2 from './GlobalSearchV2'
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
 const ModelLaboratory = lazy(() => import('./ModelLaboratory'))
@@ -333,6 +334,7 @@ const weighted=(metric:Dict|undefined,key:string)=>metric?.[key]
 function App(){
   const [tab,setTab]=useState<Tab>(hashTab)
   const [jobsOpen,setJobsOpen]=useState(false)
+  const [searchOpen,setSearchOpen]=useState(false)
   const [menu,setMenu]=useState(false)
   const [health,setHealth]=useState<Health|null>(null)
   const [datasets,setDatasets]=useState<Dataset[]>([])
@@ -428,6 +430,15 @@ function App(){
       window.removeEventListener('popstate',navigateHistory)
       window.removeEventListener('hashchange',navigateHistory)
     }
+  },[])
+  useEffect(()=>{
+    const searchShortcut=(event:KeyboardEvent)=>{
+      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){
+        event.preventDefault();setSearchOpen(open=>!open)
+      }
+    }
+    window.addEventListener('keydown',searchShortcut)
+    return()=>window.removeEventListener('keydown',searchShortcut)
   },[])
   useEffect(()=>{
     const navigate=(event:KeyboardEvent)=>{
@@ -544,6 +555,9 @@ function App(){
             <><ChevronRight size={14}/><strong>{titles[tab]}</strong></>}
         </div>
         <div className="v2-top-actions">
+          <button type="button" className="v2-top-btn" onClick={()=>setSearchOpen(true)}
+            aria-label="Search QuantLab" title="Search QuantLab · Ctrl K">
+            <Search size={16}/><span>Search</span></button>
           <RecorderBadge onOpen={()=>begin('recordingsettings')}/>
           <button type="button" className="v2-top-btn" onClick={()=>setJobsOpen(true)}
             aria-label="Open Jobs and downloads" title="Jobs and downloads">
@@ -559,6 +573,8 @@ function App(){
       </header>
       <JobsDrawer open={jobsOpen} onClose={()=>setJobsOpen(false)}
         onOpenFull={()=>begin('workspacejobs')}/>
+      <GlobalSearchV2 open={searchOpen} onClose={()=>setSearchOpen(false)}
+        onOpen={destination=>begin(destination)}/>
       <main className="ws-content">
         <div className="ws-titlebar">
           <div><div className="ws-overline">LOCAL QUANTITATIVE RESEARCH WORKSTATION</div>
