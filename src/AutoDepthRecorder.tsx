@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useState} from 'react'
+import {useCallback,useEffect,useRef,useState} from 'react'
 import {Activity,AlertTriangle,Database,History,PauseCircle,Radio,ShieldCheck} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './auto-depth-recorder.css'
@@ -61,6 +61,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
 }){
   const [state,setState]=useState<Recorder|null>(null)
   const [settings,setSettings]=useState<Settings>(DEFAULT_SETTINGS)
+  const settingsInitialized=useRef(false)
   const [armedConsent,setArmedConsent]=useState(false)
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
@@ -69,9 +70,12 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     try{
       const updated=await marketApi<Recorder>('/api/trading-cockpit/auto-depth/status')
       setState(updated)
-      if(!busy)setSettings(updated.settings)
+      if(!settingsInitialized.current){
+        setSettings(updated.settings)
+        settingsInitialized.current=true
+      }
     }catch(e){setError(readableError(e))}
-  },[busy])
+  },[])
   useEffect(()=>{
     void refresh()
     const timer=window.setInterval(()=>{void refresh()},7000)
