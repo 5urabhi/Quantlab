@@ -17,6 +17,11 @@ The command runs under reduced CPU scheduling priority (`nice -n 10`)
 to favor live recording. It may still consume CPU, RAM, and disk; running
 after NSE hours is safest for a heavily loaded recorder.
 
+The launcher invokes `python -m scripts.audit_all_models` from the
+repository root. Running `python scripts/audit_all_models.py` directly
+may omit the project root from Python's import search path and fail to import
+`workstation_api`; the supported module entrypoint avoids that failure.
+
 The command scans **every active non-synthetic local dataset**, including the shared Dhan
 library when present, and covers **all registered 35 models**. It executes the
 nine assumption-based mathematical models once without market history. For
