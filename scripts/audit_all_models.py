@@ -514,7 +514,7 @@ def audit(*, datasets: list[str] | None, execute: bool, output: Path) -> dict:
         entries = [entry for entry in entries if entry["id"] in datasets]
     if not entries:
         raise ValueError(
-            "No active datasets found. Open Data Center and add original sources, "
+            "No active non-synthetic datasets found. Open Data Center and add original sources, "
             "then rerun. Mathematical software tests can still be run using "
             "python -m unittest tests.test_every_registered_model_runs"
         )
