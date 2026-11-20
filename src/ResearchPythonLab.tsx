@@ -431,9 +431,10 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
   return <section className="rpl-shell" role="region" aria-label="BANKNIFTY Python strategy research lab">
     <header className="rpl-intro">
       <div><span className="tc-page-kicker">QUANTLAB · ISOLATED BANKNIFTY RESEARCH</span>
-        <h2>Python Strategy Lab</h2>
-        <p>Paste Python, sweep all selected EMA pairs, backtest BANKNIFTY index
-          direction, and inspect crossover charts. No restart, no broker orders.</p></div>
+        <h2>{integrated?(tab==='sweep'?'EMA Crossover Explorer':'Python Strategy Editor'):'Python Strategy Lab'}</h2>
+        <p>{tab==='sweep'?
+          'Test chosen EMA values or every supported combination, inspect the top five and verify crossover timing on original BANKNIFTY index candles.':
+          'Paste or type Python, backtest BANKNIFTY index direction and inspect charts. No restart, no broker orders.'}</p></div>
       <div className="rpl-safety"><ShieldCheck size={17}/> Live Dhan recording stays separate
         <small>Read-only snapshots · no changes to depth subscriptions</small></div>
     </header>
