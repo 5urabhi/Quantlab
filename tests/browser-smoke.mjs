@@ -258,9 +258,15 @@ try {
     const signalSelector=historicalOptions.getByRole('combobox',{
       name:'Options backtest signal model',
     })
+    assert.equal(await signalSelector.inputValue(),'ema_crossover')
+    await signalSelector.selectOption('ema_rsi')
     assert.equal(await signalSelector.inputValue(),'ema_rsi')
     await signalSelector.selectOption('ema_crossover')
     await historicalOptions.getByText('Pure 9/21 EMA crossover:',{exact:false}).waitFor()
+    await historicalOptions.getByText('No fixed time limit:',{exact:false}).waitFor()
+    assert.equal(await historicalOptions.getByRole('combobox',{
+      name:'Highlighted option exit rule',
+    }).inputValue(),'signal_reversal')
 
     // Exercise the actual UI -> read-only job POST -> completed job result
     // without any real vendor access; every returned price is synthetic CI.
