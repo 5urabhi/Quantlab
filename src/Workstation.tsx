@@ -2,11 +2,16 @@ import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {
   Activity, ArrowDownToLine, ArrowRight, BarChart3, Beaker, BookOpen, Check,
   CheckCircle2, ChevronRight, CircleAlert, Clock3, Database, FileArchive,
-  FileText, FlaskConical, Gauge, LoaderCircle,
+  FileText, Gauge, LoaderCircle,
   LockKeyhole, Menu, Play, RefreshCw, Settings2,
-  ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X
+  ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp
 } from 'lucide-react'
 import './workstation.css'
+import {RecorderBadge,JobsDrawer,V2HomeLaunchers,StrategyLibraryV2,SettingsPreferencesV2,DiagnosticsV2,QuickPageNote} from './QuantLabV2Components'
+import ResearchPythonLab from './ResearchPythonLab'
+import AutoDepthRecorder from './AutoDepthRecorder'
+import DataManager from './DataManager'
+import GlobalSearchV2 from './GlobalSearchV2'
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
 const ModelLaboratory = lazy(() => import('./ModelLaboratory'))
@@ -39,24 +44,114 @@ type RunConfig = {
   validation_start:string;final_test_start:string;sector_cap:number|null
 }
 const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momentum:1,low_volatility:0,value:0,quality:0,size:0},top_n:10,weighting:'equal',max_weight:.2,rebalance_every:3,cost_bps:10,execution_lag:1,momentum_formation:12,momentum_skip:1,volatility_lookback:12,validation_start:'',final_test_start:'',sector_cap:null}
-type Tab = 'trading'|'journey'|'overview'|'workspace'|'projects'|'data'|'dhan'|'nse'|'research'|'factors'|'construction'|'comparisons'|'mathematics'|'rolling'|'models'|'risk'|'robustness'|'visual'|'reports'|'history'|'settings'|'guide'
-const primarySections:{id:Tab;label:string;icon:typeof Activity;tabs:Tab[]}[]=[
- {id:'trading',label:'Trading Cockpit',icon:Activity,tabs:['trading']},
- {id:'journey',label:'Guided Research',icon:Play,tabs:['journey']},
- {id:'overview',label:'Home',icon:Gauge,tabs:['overview']},
- {id:'data',label:'Data Library',icon:Database,tabs:['data','dhan','nse']},
- {id:'mathematics',label:'Model Laboratory',icon:Sigma,
-   tabs:['mathematics','models','risk','factors','construction']},
- {id:'research',label:'Experiment Studio',icon:FlaskConical,
-   tabs:['research','rolling','robustness']},
- {id:'workspace',label:'Compare & Visualize',icon:BarChart3,
-   tabs:['workspace','comparisons','visual']},
- {id:'history',label:'Results Studio',icon:Clock3,tabs:['history']},
- {id:'projects',label:'Research Projects',icon:BookOpen,tabs:['projects','reports']},
- {id:'guide',label:'Help & Settings',icon:Settings2,tabs:['guide','settings']},
+type Tab =
+  'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingreplay'|'tradingjournal'|
+  'strategies'|'strategyema'|'strategypython'|'strategybacktest'|
+  'mathematics'|'models'|'research'|'factors'|'construction'|'risk'|'rolling'|'robustness'|'modelgrids'|'indexstudio'|
+  'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|'evidence'|
+  'history'|'workspace'|'chartstudio'|'comparisons'|'visual'|'workspacejobs'|
+  'projects'|'reports'|'resourcebrowser'|'settings'|'connections'|'recordingsettings'|
+  'storage'|'preferences'|'diagnostics'|'guide'|'journey'
+type PrimarySection={id:Tab;label:string;icon:typeof Activity;tabs:Tab[];navTabs:Tab[]}
+const primarySections:PrimarySection[]=[
+  {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
+  {id:'trading',label:'Trading',icon:Activity,
+    tabs:['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal'],
+    navTabs:['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal']},
+  {id:'strategies',label:'Strategies',icon:TrendingUp,
+    tabs:['strategies','strategyema','strategypython','strategybacktest'],
+    navTabs:['strategies','strategyema','strategypython','strategybacktest']},
+  {id:'mathematics',label:'Models',icon:Sigma,
+    tabs:['mathematics','models','research','factors','construction','risk','rolling','robustness','modelgrids','indexstudio','journey'],
+    navTabs:['mathematics','research','models']},
+  {id:'data',label:'Data Center',icon:Database,
+    tabs:['data','dhan','dataexplorer','dataquality','datadownloads','nse','evidence'],
+    navTabs:['data','dhan','dataexplorer','dataquality','datadownloads']},
+  {id:'history',label:'Results & Charts',icon:BarChart3,
+    tabs:['history','workspace','chartstudio','comparisons','visual','workspacejobs'],
+    navTabs:['history','workspace','chartstudio']},
+  {id:'projects',label:'Projects',icon:BookOpen,
+    tabs:['projects','reports','resourcebrowser'],navTabs:['projects','reports']},
+  {id:'connections',label:'Settings',icon:Settings2,
+    tabs:['connections','recordingsettings','storage','preferences','diagnostics','settings','guide'],
+    navTabs:['connections','recordingsettings','storage','preferences','diagnostics']},
 ]
-
-const titles:Record<Tab,string>={trading:'Intraday trading cockpit',journey:'Guided Research · Five steps',overview:'Research command center',workspace:'Research workspace',projects:'Projects and notebooks',data:'Data manager',dhan:'Download market data',nse:'NSE Sources',research:'Index research engine',factors:'Factor laboratory',construction:'Index construction',comparisons:'Index comparisons',mathematics:'Advanced mathematics',rolling:'Rolling validation',models:'Quantitative models',risk:'Risk attribution',robustness:'Robustness & sensitivity',visual:'Visual validation',reports:'Research reports',history:'Results Studio · Research Intelligence',settings:'Workstation settings',guide:'How to use QuantLab'}
+const titles:Record<Tab,string>={
+  overview:'Home',trading:'Live Market',tradingchain:'Option Chain',
+  tradingdepth:'20-Level Order Book',tradingreplay:'Market Replay',
+  tradingjournal:'Trade Journal',strategies:'Strategy Library',
+  strategyema:'EMA Explorer',strategypython:'Python Editor',
+  strategybacktest:'BANKNIFTY Backtests',
+  mathematics:'Model Catalog',models:'Advanced Research Tools',
+  research:'Index Builder',factors:'Factor Research',
+  construction:'Portfolio Construction',risk:'Risk Attribution',
+  rolling:'Rolling Validation',robustness:'Robustness & Sensitivity',
+  modelgrids:'Guided Model Grids',indexstudio:'Index Research Studio',
+  data:'Market Library',dhan:'Get Market Data',
+  dataexplorer:'Data Explorer',dataquality:'Quality & Coverage',
+  datadownloads:'Downloads',nse:'NSE Source Evidence',
+  evidence:'Evidence & Machine Learning',
+  history:'All Research Results',workspace:'Compare Runs',
+  chartstudio:'Chart Studio',comparisons:'Index Comparison',
+  visual:'Historical Charts',workspacejobs:'Research Job History',
+  projects:'My Projects & Notebooks',reports:'Research Reports',
+  resourcebrowser:'Saved Resource Library',
+  connections:'Connections',recordingsettings:'Automatic Recording',
+  storage:'Storage & Data Management',preferences:'Preferences',
+  diagnostics:'System Diagnostics',settings:'Backend & Privacy',
+  guide:'Help & How It Works',journey:'New Guided Study',
+}
+const descriptions:Record<Tab,string>={
+  overview:'Monitor your data and resume research. Nothing shown here is a simulated profit claim.',
+  trading:'Monitor real BANKNIFTY index packets and signals without submitting broker orders.',
+  tradingchain:'Inspect source-backed BANKNIFTY CE/PE strikes, expiries, premium and lot sizes.',
+  tradingdepth:'Inspect original Dhan 20-bid/20-ask books and actual recorded source packets.',
+  tradingreplay:'Explore recorded BANKNIFTY, option quotes and original market-depth observations.',
+  tradingjournal:'Review manually entered fills and prospective signal accuracy separately.',
+  strategies:'Choose a strategy, test real index signals, then study historical CE/PE contracts.',
+  strategyema:'Test one EMA pair, chosen combinations or all 11,026 valid pairs.',
+  strategypython:'Paste, run and save isolated Python research without interrupting Dhan capture.',
+  strategybacktest:'Compare directional signal timing and original-contract CE/PE paper P&L.',
+  mathematics:'Choose stochastic, volatility, options, risk and portfolio mathematical models.',
+  models:'Sweep parameters, test walk-forward stability, study shocks and inspect advanced research tools.',
+  research:'Construct, backtest and validate factor-based equity indices.',
+  factors:'Inspect real saved factor ranking and exposure output.',
+  construction:'Inspect constituent weights, concentration and rebalance consequences.',
+  risk:'Measure portfolio concentration and rolling risk on archived runs.',
+  rolling:'Use rolling time windows on saved historical index results.',
+  robustness:'Study parameter stability and sensitivity in saved experiments.',
+  modelgrids:'Run guided research questions, two-parameter grids and constrained optimization.',
+  indexstudio:'Inspect advanced researcher index methods, data passports and explanations.',
+  data:'Browse one canonical library of market instruments and downloaded observations.',
+  dhan:'Choose instruments and acquire only missing source-backed history.',
+  dataexplorer:'Inspect market data rows, original vendor files and source fields.',
+  dataquality:'Check completeness, duplicate data and market-data provenance.',
+  datadownloads:'Review downloads and source-repair progress.',
+  evidence:'Inspect original source evidence, research readiness and trained machine-learning validation.',
+  nse:'Inspect official NSE evidence and source provenance.',
+  history:'Search and interpret saved mathematical and strategy research results.',
+  workspace:'Overlay comparable saved runs and inspect differences.',
+  chartstudio:'Build interactive two- and three-dimensional research figures.',
+  comparisons:'Review historical methodology and transaction-cost comparisons.',
+  visual:'Inspect saved source-backed historical return and factor charts.',
+  workspacejobs:'Inspect research and acquisition job history.',
+  projects:'Save reproducible research in projects, notebooks and linked run references.',
+  resourcebrowser:'Search, organize, archive and restore saved model runs, charts and research records.',
+  reports:'Generate and export reports from actually saved research evidence.',
+  connections:'Check local data-provider access and permissions safely.',
+  recordingsettings:'Configure automatic read-only CE/PE recording and inspect source coverage.',
+  storage:'Manage source files, cache, archival status and recoverable data.',
+  preferences:'Choose comfortable or compact workspace settings and reduced motion.',
+  diagnostics:'Inspect API health, source errors and actual next-step repair tools.',
+  settings:'Local-only backend, broker permissions and data privacy.',
+  guide:'Help for market data, model readiness, results and backtests.',
+  journey:'Follow one five-step research workflow using the same existing models.',
+}
+const validTabs=new Set<Tab>(Object.keys(titles) as Tab[])
+function hashTab():Tab{
+  const value=decodeURIComponent(window.location.hash.replace(/^#\/?/,''))
+  return validTabs.has(value as Tab)?value as Tab:'overview'
+}
 const factors=[['momentum','Momentum'],['low_volatility','Low volatility'],['value','Value'],['quality','Quality'],['size','Size']] as const
 const number=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? v.toLocaleString('en-US',{maximumFractionDigits:d,minimumFractionDigits:d}) : '—'
 const percent=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? (v*100).toFixed(d)+'%' : '—'
@@ -244,7 +339,9 @@ function Select({label:caption,value,options,onChange}:{label:string;value:strin
 }
 const weighted=(metric:Dict|undefined,key:string)=>metric?.[key]
 function App(){
-  const [tab,setTab]=useState<Tab>('journey')
+  const [tab,setTab]=useState<Tab>(hashTab)
+  const [jobsOpen,setJobsOpen]=useState(false)
+  const [searchOpen,setSearchOpen]=useState(false)
   const [menu,setMenu]=useState(false)
   const [health,setHealth]=useState<Health|null>(null)
   const [datasets,setDatasets]=useState<Dataset[]>([])
@@ -326,14 +423,41 @@ function App(){
     setBusy(true)
     try {const value=await f();callback?.(value)}catch(e){notify(errorMessage(e),true)}finally{setBusy(false)}
   }
-  const begin=(id:Tab)=>{setTab(id);setMenu(false);window.scrollTo(0,0)}
+  const begin=(id:Tab)=>{
+    setTab(id);setMenu(false)
+    window.history.pushState({quantlab_view:id},'',window.location.pathname+
+      window.location.search+'#/'+id)
+    window.scrollTo(0,0)
+  }
+  useEffect(()=>{
+    const navigateHistory=()=>{setTab(hashTab());setMenu(false)}
+    window.addEventListener('popstate',navigateHistory)
+    window.addEventListener('hashchange',navigateHistory)
+    return()=>{
+      window.removeEventListener('popstate',navigateHistory)
+      window.removeEventListener('hashchange',navigateHistory)
+    }
+  },[])
+  useEffect(()=>{
+    const searchShortcut=(event:KeyboardEvent)=>{
+      if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){
+        event.preventDefault();setSearchOpen(open=>!open)
+      }
+    }
+    window.addEventListener('keydown',searchShortcut)
+    return()=>window.removeEventListener('keydown',searchShortcut)
+  },[])
   useEffect(()=>{
     const navigate=(event:KeyboardEvent)=>{
       if((event.ctrlKey||event.metaKey)&&event.altKey&&
          !event.shiftKey&&/^[1-9]$/.test(event.key)){
         event.preventDefault()
         const target=primarySections[Number(event.key)-1]
-        if(target){setTab(target.id);setMenu(false);window.scrollTo(0,0)}
+        if(target){
+          setTab(target.id);setMenu(false)
+          window.history.pushState({quantlab_view:target.id},'','#/'+target.id)
+          window.scrollTo(0,0)
+        }
       }
     }
     window.addEventListener('keydown',navigate)
@@ -410,12 +534,12 @@ function App(){
   const classification=<Tag tone={detail?.source.dataset_kind==='synthetic'?'warn':'blue'}>{detail?.source.dataset_kind==='synthetic'?'SYNTHETIC DATA — DEMONSTRATION':detail?'USER DATA · NOT INDEPENDENTLY AUDITED':'NO RESEARCH RUN'}</Tag>
   const chart=detail?<EquityChart rows={detail.returns}/>:null
   const panel=(key: keyof Detail,description:string)=>withRun(<Card title={description}><Table rows={(detail?.[key] as Dict[]|undefined)??[]} max={20}/></Card>)
-  return <div className="ws-shell">
+  return <div className="ws-shell ws-v2">
     <aside className={'ws-sidebar '+(menu?'open':'')}>
       <div className="ws-brand"><span className="ws-brand-mark"><Activity size={23}/></span><div><strong>QUANT<span>LAB</span></strong><small>RESEARCH WORKSTATION</small></div><button type="button" className="ws-mobile-close" onClick={()=>setMenu(false)}><X size={19}/></button></div>
       <div className="ws-env"><span className={'ws-status-dot '+(health?.ok?'':'offline')}/><div><strong>{health?.ok?'LOCAL ENGINE CONNECTED':'ENGINE DISCONNECTED'}</strong><small>127.0.0.1 · NO BROKER EXECUTION</small></div></div>
       <nav aria-label="Primary QuantLab navigation">
-        <div className="ws-nav-group"><span className="ws-nav-label">RESEARCH DESTINATIONS</span>
+        <div className="ws-nav-group"><span className="ws-nav-label">WORKSPACES</span>
           {primarySections.map((section,index)=><button type="button" key={section.id}
             title={'Ctrl+Alt+'+(index+1)+' · '+section.label}
             onClick={()=>begin(section.id)}
@@ -428,16 +552,59 @@ function App(){
     </aside>
     {menu&&<button className="ws-backdrop" onClick={()=>setMenu(false)} aria-label="Close navigation"/>}
     <div className="ws-main">
-      <header className="ws-topbar"><div className="ws-top-left"><button type="button" className="ws-menu" onClick={()=>setMenu(true)} aria-label="Open navigation"><Menu size={19}/></button><span className="ws-breadcrumb">WORKSTATION</span><ChevronRight size={14}/><strong>{titles[tab]}</strong></div><div className="ws-top-right">{job&&['queued','running'].includes(job.status)&&<Tag tone="blue"><LoaderCircle size={13} className="ws-spin"/> {label(job.kind)} running</Tag>}<Tag tone={health?.ok?'good':'bad'}>{health?.ok?'ENGINE ONLINE':'OFFLINE'}</Tag><button title="Refresh from backend" aria-label="Refresh data" className="ws-icon" onClick={()=>void refresh()}><RefreshCw size={16}/></button></div></header>
+      <header className="ws-topbar">
+        <div className="v2-shell-top-left ws-top-left">
+          <button type="button" className="ws-menu" onClick={()=>setMenu(true)} aria-label="Open navigation">
+            <Menu size={19}/></button>
+          <span className="ws-breadcrumb">QUANTLAB</span><ChevronRight size={14}/>
+          <strong>{primarySections.find(section=>section.tabs.includes(tab))?.label||'Research'}</strong>
+          {titles[tab]!==primarySections.find(section=>section.tabs.includes(tab))?.label&&
+            <><ChevronRight size={14}/><strong>{titles[tab]}</strong></>}
+        </div>
+        <div className="v2-top-actions">
+          <button type="button" className="v2-top-btn" onClick={()=>setSearchOpen(true)}
+            aria-label="Search QuantLab" title="Search QuantLab · Ctrl K">
+            <Search size={16}/><span>Search</span></button>
+          <RecorderBadge onOpen={()=>begin('recordingsettings')}/>
+          <button type="button" className="v2-top-btn" onClick={()=>setJobsOpen(true)}
+            aria-label="Open Jobs and downloads" title="Jobs and downloads">
+            <Clock3 size={16}/><span>Jobs</span></button>
+          <button type="button" className="v2-top-btn" onClick={()=>begin('guide')}
+            aria-label="Open Help" title="Help and documentation">
+            <BookOpen size={16}/><span>Help</span></button>
+          <button type="button" className="v2-top-btn primary" onClick={()=>begin('journey')}>
+            <Play size={15}/><span>New Study</span></button>
+          <button title="Refresh workstation sources" aria-label="Refresh data" className="ws-icon"
+            onClick={()=>void refresh()}><RefreshCw size={16}/></button>
+        </div>
+      </header>
+      <JobsDrawer open={jobsOpen} onClose={()=>setJobsOpen(false)}
+        onOpenFull={()=>begin('workspacejobs')}/>
+      <GlobalSearchV2 open={searchOpen} onClose={()=>setSearchOpen(false)}
+        onOpen={destination=>begin(destination)}/>
       <main className="ws-content">
-        <div className="ws-titlebar"><div><div className="ws-overline">QUANTITATIVE EQUITY INDEX & FACTOR RESEARCH</div><h1>{titles[tab]}</h1><p>Local Python research engine · React/Vite desktop-style interface · Explicit source provenance</p></div><div className="ws-title-actions"><button type="button" className="ws-button secondary" onClick={()=>begin('guide')}><BookOpen size={15}/> Guide</button><button type="button" className="ws-button secondary" onClick={()=>begin('data')}><Database size={15}/> Data</button><button type="button" className="ws-button primary" onClick={()=>begin('journey')}><Play size={14}/> Start guided study</button></div></div>
-        {primarySections.some(section=>section.tabs.includes(tab)&&section.tabs.length>1)&&
-          <nav className="ws-context-tabs" aria-label="Modules within selected research destination">
-            {primarySections.find(section=>section.tabs.includes(tab))?.tabs.map(module=>
-              <button type="button" key={module} aria-current={tab===module?'page':undefined}
-                className={tab===module?'active':''} onClick={()=>begin(module)}>
-                {titles[module]}</button>)}
-          </nav>}
+        <div className="ws-titlebar">
+          <div><div className="ws-overline">LOCAL QUANTITATIVE RESEARCH WORKSTATION</div>
+            <h1>{titles[tab]}</h1><p>{descriptions[tab]}</p></div>
+          <div className="ws-title-actions">
+            {(['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal'].includes(tab))&&
+              <button className="ws-button secondary" onClick={()=>begin('recordingsettings')}>
+                <Activity size={15}/> Recorder settings</button>}
+            {(['strategies','strategyema','strategypython','strategybacktest'].includes(tab))&&
+              <button className="ws-button secondary" onClick={()=>begin('data')}>
+                <Database size={15}/> Data coverage</button>}
+          </div>
+        </div>
+        {(()=>{
+          const visible=primarySections.find(section=>section.tabs.includes(tab))?.navTabs||[]
+          return visible.length>1?<nav className="ws-context-tabs"
+              aria-label="Modules within selected research destination">
+            {visible.map(module=><button type="button" key={module}
+              aria-current={tab===module?'page':undefined}
+              className={tab===module?'active':''} onClick={()=>begin(module)}>
+              {titles[module]}</button>)}
+          </nav>:null
+        })()}
         {deletePlan&&<div className="ws-delete-overlay">
           <section className="ws-delete-dialog" role="dialog" aria-modal="true"
             aria-label={'Delete dataset '+deletePlan.label}>
@@ -496,7 +663,34 @@ function App(){
         <Suspense fallback={<div className="ws-empty" role="status" aria-live="polite">
           <LoaderCircle size={18}/> Loading {titles[tab]}…
         </div>}>
-        {tab==='trading'&&<TradingCockpit/>}
+        {(['trading','tradingchain','tradingdepth','tradingreplay',
+            'tradingjournal','strategybacktest','connections'].includes(tab))&&
+          <TradingCockpit
+            integrated
+            selectedView={tab==='tradingreplay'?'replay':
+              tab==='tradingjournal'?'journal':
+              tab==='strategybacktest'?'strategy':
+              tab==='connections'?'setup':'live'}
+            focusLive={tab==='trading'?'signals':
+              tab==='tradingchain'?'options':
+              tab==='tradingdepth'?'depth':undefined}
+            onNavigateLiveView={view=>begin(({
+              signals:'trading',options:'tradingchain',depth:'tradingdepth'
+            } as const)[view])}
+            onNavigateView={view=>begin(({
+              live:'trading',replay:'tradingreplay',
+              strategy:'strategybacktest',research:'strategypython',
+              journal:'tradingjournal',setup:'connections',
+            } as const)[view])}
+          />}
+        {tab==='strategies'&&<StrategyLibraryV2
+          onEMA={()=>begin('strategyema')}
+          onPython={()=>begin('strategypython')}
+          onOptions={()=>begin('strategybacktest')}
+          onData={()=>begin('data')}/>}
+        {(['strategyema','strategypython'].includes(tab))&&
+          <ResearchPythonLab integrated
+            displayMode={tab==='strategyema'?'sweep':'python'}/>}
         {tab==='journey'&&<ResearchJourney datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
           onDataChanged={refresh} onOpenData={()=>begin('data')}
@@ -504,17 +698,28 @@ function App(){
           onOpenGuide={()=>begin('guide')} onOpenExperiments={()=>begin('research')}
           onOpenModels={()=>begin('mathematics')} onOpenResults={()=>begin('history')}/>}
         {tab==='overview'&&<>
-          <div className="ws-overview-banner"><div><Tag tone="blue">RESEARCH CONTROL DESK / MODEL LAB V1</Tag><h2>One workstation.<br/><em>Every model, traceable.</em></h2><p>Keep datasets, factor experiments, risk calculations and generated evidence in one reproducible local research environment.</p><div className="ws-banner-actions"><button className="ws-button primary" onClick={()=>begin('journey')}><Play size={16}/> Start guided research</button><button className="ws-button secondary" onClick={()=>begin('dhan')}><Database size={16}/> Connect market data</button></div></div><div className="ws-banner-graphic"><div className="ws-orbit one"/><div className="ws-orbit two"/><div className="ws-orbit three"/><span className="ws-center-glow"><Activity size={45}/></span><span className="ws-orbit-label a">MOMENTUM</span><span className="ws-orbit-label b">RISK</span><span className="ws-orbit-label c">FACTOR</span></div></div>
+          <V2HomeLaunchers
+            onStrategy={()=>begin('strategyema')}
+            onModel={()=>begin('mathematics')}
+            onData={()=>begin('dhan')}/>
+          <QuickPageNote title="Read-only market intelligence"
+            description="Market collection continues in the local backend. No broker orders or unobserved price series are generated."
+            ><button className="v2-secondary" type="button" onClick={()=>begin('trading')}>
+              Open live market <ArrowRight size={15}/></button></QuickPageNote>
           <div className="ws-metrics-grid"><Metric label="Market data library" value={datasets.some(d=>d.id==='dhan_shared')?'1':'—'} caption="One canonical set of downloaded stock prices"/><Metric label="Completed runs" value={String(runs.length)} caption="Stored locally on disk"/><Metric label="DhanHQ data access" value={dhan?.token_configured?'SET':'NOT SET'} caption="Read-only market data"/><Metric label="Python computation" value={health?.ok?'ONLINE':'OFFLINE'} caption="127.0.0.1:8765" highlight/></div>
           <div className="ws-grid two-thirds"><Card title="Portfolio research performance" extra={classification}>{chart??<Empty title="No historical run selected" onAction={()=>begin('research')} action="Configure experiment">Run the research engine to generate actual saved series and metrics.</Empty>}</Card><Card title="Latest research snapshot">{detail?<><div className="ws-overview-stat"><span>Strategy CAGR</span><strong>{percent(weighted(metric,'strategy_cagr'))}</strong></div><div className="ws-overview-stat"><span>Max drawdown</span><strong>{percent(weighted(metric,'max_drawdown'))}</strong></div><div className="ws-overview-stat"><span>Tracking error</span><strong>{percent(weighted(metric,'tracking_error'))}</strong></div><div className="ws-overview-stat"><span>Sample window</span><strong>{detail.meta.first_price_date?.slice(0,7)}–{detail.meta.last_price_date?.slice(0,7)}</strong></div><button className="ws-textlink" onClick={()=>begin('history')}>Inspect full run <ArrowRight size={15}/></button></>:<Empty title="Nothing to report">No metrics will appear until a Python experiment completes.</Empty>}</Card></div>
           <div className="ws-grid halves"><Card title="Market library & research inputs" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{everydaySources.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{everydaySources.length===0&&<p className="ws-caption">No market sources found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
         </>}
-        {tab==='data'&&<>
-          <MarketDataWorkspace key="library" initialPage="datasets" datasets={datasets}
+        {(['data','dhan','datadownloads'].includes(tab))&&
+          <MarketDataWorkspace key="v2-one-canonical-market-library"
+            initialPage="datasets"
+            activePage={tab==='data'?'datasets':tab==='dhan'?'get':'downloads'}
+            integrated datasets={datasets}
             onDataChanged={refresh} onSelectDataset={setSelectedDataset}
             onOpenModels={()=>begin('mathematics')}
             onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
-              if(d)inspectDatasetDeletion(d)}}/>
+              if(d)inspectDatasetDeletion(d)}}/>}
+        {tab==='data'&&<>
           <details className="ws-tri-advanced ws-data-advanced"><summary>Advanced datasets · TRI import, ZIPs, archived items and source audits</summary>
           <Card title="Your datasets" className="ws-data-library-card">
             <p className="ws-caption">Choose a dataset to use, or delete an old one.
@@ -633,19 +838,43 @@ function App(){
           </details>
 
         </details></>}
-        {tab==='dhan'&&<MarketDataWorkspace key="download" initialPage="get" datasets={datasets}
-          onDataChanged={refresh} onSelectDataset={setSelectedDataset}
-          onOpenModels={()=>begin('mathematics')}
-          onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
-            if(d)inspectDatasetDeletion(d)}}/>}
+        {tab==='dataexplorer'&&<DataManager initialSection="explorer" integrated
+          onSelectDataset={setSelectedDataset} onChanged={refresh}
+          onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
+        {tab==='dataquality'&&<>
+          <ResearchWorkspace key="v2-data-quality"
+          initialPage="quality" integrated datasets={datasets}
+          selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
+          onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
+          onOpenModels={()=>begin('mathematics')}/>
+          <details className="v2-advanced-links">
+            <summary>Source audits, mathematical evidence, learning validation and NSE documents</summary>
+            <div className="v2-action-row">
+              <button className="v2-secondary" onClick={()=>begin('evidence')}>
+                Evidence & ML <ArrowRight size={14}/></button>
+              <button className="v2-secondary" onClick={()=>begin('nse')}>
+                NSE Source Evidence <ArrowRight size={14}/></button>
+            </div>
+          </details>
+        </>}
         {tab==='nse'&&<NSESourceAssistant datasetId={selectedDataset}
           onOpenDhan={()=>begin('dhan')} onOpenData={()=>begin('data')}/>}
-        {(tab==='workspace'||tab==='projects')&&<ResearchWorkspace key={tab}
-          initialPage={tab==='projects'?'projects':'home'} datasets={datasets}
+        {(tab==='workspace'||tab==='chartstudio'||tab==='workspacejobs'||
+          tab==='projects')&&<ResearchWorkspace key={tab} integrated
+          initialPage={tab==='projects'?'projects':
+            tab==='chartstudio'?'plots':
+            tab==='workspacejobs'?'jobs':'compare'} datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
           onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
           onOpenModels={()=>begin('models')}/>}
 
+        {tab==='projects'&&<details className="v2-advanced-links">
+          <summary>Advanced project resource library, archive and Trash management</summary>
+          <div className="v2-action-row">
+            <button className="v2-secondary" onClick={()=>begin('resourcebrowser')}>
+              Browse saved resource records <ArrowRight size={14}/></button>
+          </div>
+        </details>}
         {tab==='research'&&<>
           <div className="ws-grid two-thirds"><Card title="Experiment configuration" extra={<Tag tone="blue">BACKED BY PYTHON</Tag>}><div className="ws-setup-row"><span>Source dataset</span>{dataPicker}<Tag tone={dataset?.ready?'good':'warn'}>{dataset?.ready?'READY':'NEEDS INPUTS'}</Tag></div><div className="ws-form-grid"><Field label="Experiment name" value={config.name} onChange={v=>setConfig({...config,name:v})}/><Select label="Portfolio weighting" value={config.weighting} onChange={v=>setConfig({...config,weighting:v})} options={['equal','score','inverse_volatility','minimum_variance','risk_parity'].map(v=>({value:v,label:label(v)}))}/><NumberInput label="Constituents (top N)" value={config.top_n} min={2} max={300} onChange={v=>setConfig({...config,top_n:v})}/><NumberInput label="Maximum holding weight" value={config.max_weight} min={.01} max={1} step={.01} onChange={v=>setConfig({...config,max_weight:v})}/><NumberInput label="Rebalance frequency (months)" value={config.rebalance_every} min={1} max={12} onChange={v=>setConfig({...config,rebalance_every:v})}/><NumberInput label="Transaction costs (bps)" value={config.cost_bps} min={0} max={500} step={5} onChange={v=>setConfig({...config,cost_bps:v})}/><Select label="Execution lag" value={String(config.execution_lag)} onChange={v=>setConfig({...config,execution_lag:Number(v)})} options={[{value:'1',label:'One month (conservative)'},{value:'0',label:'Same-close idealization'}]}/><NumberInput label="Formation months" value={config.momentum_formation} min={2} max={60} onChange={v=>setConfig({...config,momentum_formation:v})}/><NumberInput label="Months to skip" value={config.momentum_skip} min={0} max={12} onChange={v=>setConfig({...config,momentum_skip:v})}/><NumberInput label="Volatility lookback (months)" value={config.volatility_lookback} min={3} max={60} onChange={v=>setConfig({...config,volatility_lookback:v})}/><Field label="Validation start (optional)" type="date" value={config.validation_start} onChange={v=>setConfig({...config,validation_start:v})}/><Field label="Frozen test start (optional)" type="date" value={config.final_test_start} onChange={v=>setConfig({...config,final_test_start:v})}/></div><label className="ws-checkbox"><input type="checkbox" checked={config.sector_cap!==null} onChange={e=>setConfig({...config,sector_cap:e.target.checked ? 0.4 : null})}/> Apply historical sector concentration cap</label>{config.sector_cap!==null&&<NumberInput label="Sector allocation cap" value={config.sector_cap} min={.1} max={1} step={.05} onChange={v=>setConfig({...config,sector_cap:v})}/>}{dataset?.has_prices&&monthlyCount>0&&availableTestMonths<12&&
               <div className="ws-rule" role="status"><CircleAlert size={16}/>
@@ -667,7 +896,7 @@ function App(){
               notify('Single-use frozen experiment queued; its result receipt will be checked.') }}/>
           {job&&<Card title="Current job"><div className="ws-job-row"><Tag tone={job.status==='error'?'bad':job.status==='complete'?'good':'blue'}>{job.status.toUpperCase()}</Tag><span>{job.kind}</span><small>{job.error||job.id}</small></div></Card>}
         </>}
-        {tab==='history'&&<ResultsStudio
+        {tab==='history'&&<ResultsStudio integrated
           selectedIndexRunId={selectedRun}
           onSelectIndexRun={setSelectedRun}
           onModels={()=>begin('models')}
@@ -682,12 +911,52 @@ function App(){
         {tab==='risk'&&<>{panel('concentration','Risk concentration over time')}{panel('rolling','Rolling relative risk metrics')}</>}
         {tab==='robustness'&&<>{panel('robustness','Parameter sensitivity and robustness grid')}</>}
         {tab==='visual'&&<>{withRun(<Card title="Cumulative strategy / benchmark path" extra={classification}>{chart}</Card>)}{panel('rank_ic','Cross-sectional factor validation')}</>}
-        {(tab==='mathematics'||tab==='models')&&<ModelLaboratory
-          section={tab} datasets={datasets} selectedDataset={selectedDataset}
-          onSelectDataset={setSelectedDataset} onOpenGuide={()=>begin('guide')} onDataChanged={refresh}
-          onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}/>}
+        {tab==='mathematics'&&<>
+          <ModelLaboratory
+            section="mathematics" datasets={datasets} selectedDataset={selectedDataset}
+            onSelectDataset={setSelectedDataset} onOpenGuide={()=>begin('guide')}
+            onDataChanged={refresh}
+            onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}/>
+          <details className="v2-advanced-links">
+            <summary>Specialized model diagnostics · factor exposures, risk, concentration & validation</summary>
+            <div className="v2-action-row">
+              {([
+                ['factors','Factor Research'],['construction','Portfolio Construction'],
+                ['risk','Risk Attribution'],['rolling','Rolling Validation'],
+                ['robustness','Robustness & Sensitivity'],
+              ] as const).map(([route,title])=><button key={route}
+                className="v2-secondary" onClick={()=>begin(route)}>{title}
+                <ArrowRight size={14}/></button>)}
+              <button className="v2-secondary" onClick={()=>begin('modelgrids')}>
+                Guided Model Grids <ArrowRight size={14}/></button>
+              <button className="v2-secondary" onClick={()=>begin('indexstudio')}>
+                Index Research Studio <ArrowRight size={14}/></button>
+            </div>
+          </details>
+        </>}
+        {(['models','modelgrids','indexstudio','evidence','resourcebrowser'].includes(tab))&&
+          <ResearchWorkspace key={'v2-tool-'+tab}
+            initialPage={tab==='models'?'automation':
+              tab==='modelgrids'?'guided':
+              tab==='indexstudio'?'scholar':
+              tab==='evidence'?'integrity':'library'}
+            integrated datasets={datasets}
+            selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
+            onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
+            onOpenModels={()=>begin('mathematics')}/>}
         {tab==='guide'&&<ResearchGuide onNavigate={route=>begin(route as Tab)}/>}
         {tab==='reports'&&<>{withRun(<Card title="Generate reproducible research report"><p className="ws-caption">Generate an offline HTML report and PDF draft from selected saved Python run artifacts. Synthetic demonstrations are explicitly labeled.</p><div className="ws-actions"><button className="ws-button primary" disabled={!selectedRun||busy} onClick={downloadReport}><FileText size={15}/> Build HTML + PDF</button></div><div className="ws-artifact-list">{(detail?.artifacts||[]).map(name=><a key={name} href={'/api/runs/'+encodeURIComponent(selectedRun)+'/files/'+encodeURIComponent(name)} download><FileArchive size={16}/><span>{name}</span><ArrowDownToLine size={14}/></a>)}</div></Card>)}</>}
+        {tab==='recordingsettings'&&<div className="v2-layout-section">
+          <QuickPageNote title="Automatic BANKNIFTY CE/PE recording"
+            description="Configure read-only original 20-level capture. Collector processes remain active regardless of which QuantLab page is open."/>
+          <AutoDepthRecorder onOpenSaved={()=>begin('tradingreplay')}/>
+        </div>}
+        {tab==='storage'&&<DataManager initialSection="database" integrated
+          onSelectDataset={setSelectedDataset} onChanged={refresh}
+          onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
+        {tab==='preferences'&&<SettingsPreferencesV2/>}
+        {tab==='diagnostics'&&<DiagnosticsV2 onRepair={()=>begin('settings')}
+          onData={()=>begin('dataquality')}/>}
         {tab==='settings'&&<div className="ws-grid halves"><Card title="Backend and privacy"><div className="ws-data-audit"><div><span>API address</span><strong>127.0.0.1:8765</strong></div><div><span>Frontend address</span><strong>127.0.0.1:5173</strong></div><div><span>Data directory</span><strong>data/ (Git-ignored)</strong></div><div><span>Run artifacts</span><strong>results/workstation_runs/</strong></div><div><span>Authentication</span><strong>Loopback-only; not for public exposure</strong></div><div><span>Broker trading</span><strong>DISABLED</strong></div><div><span>Dhan token</span><strong>{health?.dhan_token_configured?'CONFIGURED (HIDDEN)':'MISSING'}</strong></div></div></Card><Card title="Integrity controls"><div className="ws-rule"><ShieldCheck size={18}/> Local data import, explicit dataset status, safe path allowlists, no broker order operations, no credential output, and no historical-performance fabrication.</div><p className="ws-caption">This is a local research environment, not an authenticated public server. Do not expose port 8765 on a network or deploy it as-is.</p><button className="ws-button secondary" onClick={()=>void refresh()}><RefreshCw size={16}/> Refresh engine status</button></Card></div>}
         </Suspense>
         <footer className="ws-footer"><span>QUANTLAB / RESEARCH WORKSTATION</span><span>LOCAL ENGINE · HISTORICAL CLAIMS REQUIRE EXTERNAL VALIDATION</span><span>© PERSONAL RESEARCH</span></footer>

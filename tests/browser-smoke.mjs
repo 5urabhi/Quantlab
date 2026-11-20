@@ -83,7 +83,7 @@ try {
     const health=await apiJson('/api/health')
     assert.equal(health.broker_orders_enabled,false,'Broker execution must be off')
     assert.equal(health.dhan_token_configured,false,'CI fixture must have no broker token')
-    await page.goto(base,{waitUntil:'domcontentloaded'})
+    await page.goto(base+'?ui=classic',{waitUntil:'domcontentloaded'})
     await page.getByText('ENGINE ONLINE',{exact:true}).waitFor({timeout:25000})
     const buttons = page.locator('aside .ws-nav-item')
     assert.equal(await buttons.count(),10,'Exactly ten main destinations including Trading Cockpit')

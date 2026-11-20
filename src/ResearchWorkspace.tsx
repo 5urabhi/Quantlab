@@ -32,7 +32,8 @@ type ModelSpec={id:string;title:string;group:string;mode:string;parameters:{
   key:string;default:number|string;type:string;min?:number;max?:number}[]}
 type NotebookCell={id:string;type:'markdown'|'run'|'chart'|'table';content?:string;run_id?:string;chart_id?:string;previous_run_ids?:string[]}
 type Props={datasets:Datum[];selectedDataset:string;onSelectDataset:(id:string)=>void;
-  onOpenDhan:()=>void;onOpenModels:()=>void;onDataChanged:()=>void;initialPage?:Page}
+  onOpenDhan:()=>void;onOpenModels:()=>void;onDataChanged:()=>void;
+  initialPage?:Page;activePage?:Page;integrated?:boolean}
 const PAGES:{id:Page;label:string;sub:string}[]=[
   {id:'home',label:'Start',sub:'Resume and guided workflows'},
   {id:'library',label:'Library',sub:'Datasets, models, results'},
@@ -96,8 +97,10 @@ const dataOptions=(datasets:Datum[])=>datasets.filter(d=>d.has_prices)
   .map(d=>({value:d.id,label:d.label}))
 
 export default function ResearchWorkspace({datasets,selectedDataset,onSelectDataset,
-  onOpenDhan,onOpenModels,onDataChanged,initialPage='home'}:Props){
-  const [page,setPage]=useState<Page>(initialPage)
+  onOpenDhan,onOpenModels,onDataChanged,initialPage='home',
+  activePage,integrated=false}:Props){
+  const [page,setPage]=useState<Page>(activePage||initialPage)
+  useEffect(()=>{if(activePage)setPage(activePage)},[activePage])
   const [library,setLibrary]=useState<Item[]>([])
   const [resources,setResources]=useState<Resource[]>([])
   const [models,setModels]=useState<ModelSpec[]>([])
@@ -249,7 +252,8 @@ export default function ResearchWorkspace({datasets,selectedDataset,onSelectData
     <button onClick={()=>setMessage(null)} aria-label="Dismiss success"><X size={14}/></button></div>}
     {error&&<div className="rw-notice error" role="alert"><X size={16}/>{error}
       <button onClick={()=>setError(null)} aria-label="Dismiss error"><X size={14}/></button></div>}</>
-  return <div className={'rw-root '+(theme==='light'?'rw-theme-light':'')}>
+  return <div className={'rw-root '+(theme==='light'?'rw-theme-light':'')+
+      (integrated?' v2-integrated':'')}>
     <div className="rw-top"><div><small>QUANTLAB / RESEARCH DESK</small>
       <h2>Research Workspace</h2><p>One library for data, experiments, models, figures and reproducible reports.</p>
     </div><div className="rw-top-actions"><button onClick={()=>setSearchOpen(true)}
@@ -258,11 +262,11 @@ export default function ResearchWorkspace({datasets,selectedDataset,onSelectData
         {theme==='dark'?'Light':'Dark'} theme</button>
       <button onClick={()=>void reload()} aria-label="Refresh workspace"><RefreshCw size={15}/></button>
     </div></div>
-    <div className="rw-navigation" role="tablist" aria-label="Research workspaces">
+    {!integrated&&<div className="rw-navigation" role="tablist" aria-label="Research workspaces">
       {PAGES.map(item=><button role="tab" key={item.id} type="button"
         aria-selected={page===item.id} className={page===item.id?'active':''}
         onClick={()=>setPage(item.id)}>{item.label}<small>{item.sub}</small></button>)}
-    </div>{notice}
+    </div>}{notice}
     {loading?<div className="rw-working"><LoaderCircle className="ql-spinning"/> Loading research library…</div>:null}
     <Suspense fallback={<div className="rw-working" role="status">
       <LoaderCircle className="ql-spinning"/> Loading research workspace tool…

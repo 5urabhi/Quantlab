@@ -35,14 +35,28 @@ const fmt=(v:number|null|undefined,digits=2)=>v===null||v===undefined?'—':v.to
 const post=(path:string,body:unknown)=>marketPost<unknown>(path,body)
 const indiaDate=(offsetDays=0)=>{const d=new Date();d.setUTCDate(d.getUTCDate()+offsetDays);return d.toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'})}
 
-export default function TradingCockpit(){
+export type TradingCockpitView=CockpitView
+export default function TradingCockpit({selectedView,focusLive,integrated=false,
+  onNavigateView,onNavigateLiveView}:{
+  selectedView?:CockpitView
+  focusLive?:'signals'|'options'|'depth'
+  integrated?:boolean
+  onNavigateView?:(view:CockpitView)=>void
+  onNavigateLiveView?:(view:'signals'|'options'|'depth')=>void
+}={}){
   const [activeTab,setActiveTab]=useState<CockpitView>(()=>
     nseMarketWindow(Date.now()).regularWindow?'live':'replay')
   const [replayView,setReplayView]=useState<ReplayView>('session')
   const [journalView,setJournalView]=useState<JournalView>('trades')
   const selectedTab=useRef(false)
   const [liveHeader,setLiveHeader]=useState<LiveHeaderState|null>(null)
-  const selectTab=(view:CockpitView)=>{selectedTab.current=true;setActiveTab(view)}
+  const selectTab=(view:CockpitView)=>{
+    selectedTab.current=true;setActiveTab(view)
+    onNavigateView?.(view)
+  }
+  useEffect(()=>{
+    if(selectedView){selectedTab.current=true;setActiveTab(selectedView)}
+  },[selectedView])
   useEffect(()=>{
     let mounted=true
     const check=()=>{
@@ -279,15 +293,24 @@ export default function TradingCockpit(){
   const liveFeedFresh=Boolean(liveHeader?.active&&liveHeader.ticker_connection==='connected'
     &&activeQuote?.fresh&&Date.now()-Date.parse(activeQuote.received_utc)<=8000)
   useEffect(()=>{
-    if(!selectedTab.current){
+    if(!selectedTab.current&&!selectedView){
       setActiveTab(liveHeader?.active||marketWindow.regularWindow?'live':'replay')
     }
   },[liveHeader?.active,marketWindow.regularWindow])
+  const manualTimer=(
+      <section className="tc-panel tc-timer">
+        <div className="tc-panel-title"><strong>Six-minute trade discipline</strong><Clock3 size={16}/></div>
+        <div className={'tc-clock '+(elapsed>=360?'tc-overdue':'')}>{countdown}</div>
+        <p className="tc-muted">Local manual reminder. No order placement, automatic stop or guaranteed exit.</p>
+        <div className="tc-actions"><button onClick={()=>setStartTime(Date.now())}>Start on fill</button><button onClick={()=>setStartTime(null)}>Reset</button></div>
+        {startTime!==null&&<p className={elapsed>=360?'tc-warning':'tc-muted'}>{elapsed>=360?'Planned holding period exceeded — reassess or exit manually.':elapsed>=300?'Final minute — check exit plan.':'Timer running from your manual start.'}</p>}
+      </section>
+  )
   return <div className="tc-shell tc-cockpit-v4">
-    <div className="tc-cockpit-intro">
+    {!integrated&&<div className="tc-cockpit-intro">
       <span className="tc-page-kicker">TRADING COPILOT · BANKNIFTY / NIFTY 50</span>
       <span className="tc-workspace-readonly"><ShieldCheck size={15}/> Read-only · no orders</span>
-    </div>
+    </div>}
     <div className="tc-v4-status" role="status" aria-label="Exchange schedule and real feed status">
       <span className={marketWindow.regularWindow?'regular':'idle'}>
         <span className="tc-status-dot"/>{marketWindow.regularWindow?'Regular NSE index hours':'Outside regular NSE index hours'}</span>
@@ -299,7 +322,7 @@ export default function TradingCockpit(){
       </span>
       <span className="tc-v4-time"><Clock3 size={14}/>{marketWindow.istClock}</span>
     </div>
-    <nav className="tc-v4-tabs" role="tablist" aria-label="Trading cockpit workspaces">
+    {!integrated&&<nav className="tc-v4-tabs" role="tablist" aria-label="Trading cockpit workspaces">
       <button type="button" role="tab" id="tc-tab-live" aria-controls="tc-view-live" aria-selected={activeTab==='live'}
         onClick={()=>selectTab('live')}><Radio size={17}/><span>Live Trading</span></button>
       <button type="button" role="tab" id="tc-tab-replay" aria-controls="tc-view-replay" aria-selected={activeTab==='replay'}
@@ -312,17 +335,19 @@ export default function TradingCockpit(){
         onClick={()=>selectTab('journal')}><ClipboardList size={17}/><span>Trade Journal</span></button>
       <button type="button" role="tab" id="tc-tab-setup" aria-controls="tc-view-setup" aria-selected={activeTab==='setup'}
         onClick={()=>selectTab('setup')}><Settings2 size={17}/><span>Connections</span></button>
-    </nav>
+    </nav>}
 
     {activeTab==='live'&&<section role="tabpanel" id="tc-view-live" aria-labelledby="tc-tab-live" className="tc-tab-page">
-      <div className="tc-v4-intro"><div><span className="tc-page-kicker">LIVE TRADING RESEARCH</span>
+      {!integrated&&<div className="tc-v4-intro"><div><span className="tc-page-kicker">LIVE TRADING RESEARCH</span>
         <h3>BANKNIFTY live monitor</h3><p>Real index ticks, selected option premium, and a source-backed 20-level book. No automatic broker orders.</p></div>
         {!liveFeedFresh&&<button className="tc-link-button" type="button" onClick={()=>selectTab('setup')}>
-          Check connection <ArrowRight size={15}/></button>}</div>
+          Check connection <ArrowRight size={15}/></button>}</div>}
       {!marketWindow.regularWindow&&!liveFeedFresh&&<div className="tc-market-note"><Clock3 size={17}/>
         <span>The regular NSE index session is outside its trading window. Feed freshness is determined only by actual Dhan packets; holidays and special sessions are not inferred.</span>
         <button type="button" onClick={()=>{selectTab('replay');setReplayView('session')}}>Open recorded market</button></div>}
-      <LiveFeedPanel onOpenSetup={()=>selectTab('setup')}
+      <LiveFeedPanel focusedView={focusLive} hideNavigation={integrated}
+        onViewChange={onNavigateLiveView}
+        onOpenSetup={()=>selectTab('setup')}
         onOpenSaved={()=>{selectTab('replay');setReplayView('recordings')}}
         onDraftJournal={(contract:OptionContract,lots:number)=>{
           if(!contract.lot_size||!contract.identity)return
@@ -338,13 +363,10 @@ export default function TradingCockpit(){
           selectTab('journal')
         }}/>
       <div className="tc-live-footer">
-      <section className="tc-panel tc-timer">
-        <div className="tc-panel-title"><strong>Six-minute trade discipline</strong><Clock3 size={16}/></div>
-        <div className={'tc-clock '+(elapsed>=360?'tc-overdue':'')}>{countdown}</div>
-        <p className="tc-muted">Local manual reminder. No order placement, automatic stop or guaranteed exit.</p>
-        <div className="tc-actions"><button onClick={()=>setStartTime(Date.now())}>Start on fill</button><button onClick={()=>setStartTime(null)}>Reset</button></div>
-        {startTime!==null&&<p className={elapsed>=360?'tc-warning':'tc-muted'}>{elapsed>=360?'Planned holding period exceeded — reassess or exit manually.':elapsed>=300?'Final minute — check exit plan.':'Timer running from your manual start.'}</p>}
-      </section>
+      {integrated?<details className="v2-manual-timer">
+        <summary>Optional six-minute manual reminder · not a strategy exit rule</summary>
+        {manualTimer}
+      </details>:manualTimer}
         <section className="tc-panel tc-live-next"><div><span className="tc-page-kicker">OPTIONS TRADE LOG</span>
           <h3>Manual fills &amp; outcomes</h3>
           <p>Use actual option fill prices; entering a trade here will not place a broker order.</p></div>

@@ -227,8 +227,11 @@ function PriceChart({data,hover,setHover}:{
     </div>
   </div>
 }
-export default function ResearchPythonLab(){
-  const [tab,setTab]=useState<Tab>('python')
+export default function ResearchPythonLab({displayMode,integrated=false}:{
+  displayMode?:Tab;integrated?:boolean
+}={}){
+  const [tab,setTab]=useState<Tab>(displayMode||'python')
+  useEffect(()=>{if(displayMode)setTab(displayMode)},[displayMode])
   const [sourceMode,setSourceMode]=useState<SourceMode>('historical')
   const [limit,setLimit]=useState<500|1500|3000|5000>(1500)
   const [startingCapital,setStartingCapital]=useState(50000)
@@ -238,7 +241,16 @@ export default function ResearchPythonLab(){
   const [pairSlow,setPairSlow]=useState(21)
   const [fast,setFast]=useState('3,5,7,9,12,15,21')
   const [slow,setSlow]=useState('13,21,26,34,50,55,89')
-  const [script,setScript]=useState(STARTING_SCRIPT)
+  const [script,setScript]=useState(()=>{
+    try{return sessionStorage.getItem('ql-v2-python-unsaved-draft')||STARTING_SCRIPT}
+    catch{return STARTING_SCRIPT}
+  })
+  // Navigating away from the editor must never discard unsaved typed code.
+  // Only the local browser session keeps this draft; nothing goes to Dhan.
+  useEffect(()=>{
+    try{sessionStorage.setItem('ql-v2-python-unsaved-draft',script.slice(0,50000))}
+    catch{/* session storage can be disabled without affecting explicit Save */}
+  },[script])
   const [savedName,setSavedName]=useState('EMA 9/21 example')
   const [status,setStatus]=useState<Status|null>(null)
   const [jobId,setJobId]=useState(()=>sessionStorage.getItem(JOB)||'')
@@ -419,18 +431,19 @@ export default function ResearchPythonLab(){
   return <section className="rpl-shell" role="region" aria-label="BANKNIFTY Python strategy research lab">
     <header className="rpl-intro">
       <div><span className="tc-page-kicker">QUANTLAB · ISOLATED BANKNIFTY RESEARCH</span>
-        <h2>Python Strategy Lab</h2>
-        <p>Paste Python, sweep all selected EMA pairs, backtest BANKNIFTY index
-          direction, and inspect crossover charts. No restart, no broker orders.</p></div>
+        <h2>{integrated?(tab==='sweep'?'EMA Crossover Explorer':'Python Strategy Editor'):'Python Strategy Lab'}</h2>
+        <p>{tab==='sweep'?
+          'Test chosen EMA values or every supported combination, inspect the top five and verify crossover timing on original BANKNIFTY index candles.':
+          'Paste or type Python, backtest BANKNIFTY index direction and inspect charts. No restart, no broker orders.'}</p></div>
       <div className="rpl-safety"><ShieldCheck size={17}/> Live Dhan recording stays separate
         <small>Read-only snapshots · no changes to depth subscriptions</small></div>
     </header>
-    <div className="rpl-tabs" role="tablist" aria-label="Strategy research modes">
+    {!integrated&&<div className="rpl-tabs" role="tablist" aria-label="Strategy research modes">
       <button role="tab" aria-selected={tab==='python'} onClick={()=>setTab('python')}>
         <Code2 size={17}/> Paste or type Python</button>
       <button role="tab" aria-selected={tab==='sweep'} onClick={()=>setTab('sweep')}>
         <SlidersHorizontal size={17}/> All EMA combinations</button>
-    </div>
+    </div>}
     <div className="rpl-panel">
       <div className="rpl-controls" aria-label="Research data and capital settings">
         <label>Original source

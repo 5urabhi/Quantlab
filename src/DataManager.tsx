@@ -58,11 +58,15 @@ async function get<T>(path:string,options?:RequestInit):Promise<T>{
   }
   return r.json() as Promise<T>
 }
-export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpenModels}:{
+export default function DataManager({
+  onSelectDataset,onChanged,onOpenDhan,onOpenModels,initialSection='library',integrated=false
+}:{
   onSelectDataset:(id:string)=>void;onChanged:()=>void;
   onOpenDhan?:()=>void;onOpenModels?:()=>void
+  initialSection?:Section;integrated?:boolean
 }){
-  const [section,setSection]=useState<Section>('library')
+  const [section,setSection]=useState<Section>(initialSection)
+  useEffect(()=>setSection(initialSection),[initialSection])
   const [systemHealth,setSystemHealth]=useState<OperationalHealth|null>(null)
   const [healthBusy,setHealthBusy]=useState(false)
   const [healthError,setHealthError]=useState('')
@@ -152,12 +156,15 @@ export default function DataManager({onSelectDataset,onChanged,onOpenDhan,onOpen
       <div><AlertTriangle size={18}/><span>Need attention</span><strong>{overview?fmt(overview.statistics.needs_attention):'…'}</strong></div>
       <div><HardDrive size={18}/><span>Catalog databases</span><strong>{overview?humanBytes(overview.statistics.catalog_database_bytes):'…'}</strong></div>
     </div>
+    <details className={integrated?'v2-database-tools':'v2-database-expanded'} open={!integrated}>
+      <summary>Additional database tools · original snapshots, analytics, microstructure & maintenance</summary>
     <nav aria-label="Database Manager sections" className="qm-tabs">
       {(['library','acquire','research','datasets','explorer','database','analytics','microstructure','sources','activity'] as Section[]).map(key=>
         <button key={key} className={section===key?'active':''} onClick={()=>setSection(key)}>
           {{library:'Market Library',datasets:'Source snapshots',research:'Research readiness',acquire:'Get model data',explorer:'Data Explorer',database:'Database tables',analytics:'Fast analytics',microstructure:'Minute & order book',sources:'Sources & provenance',activity:'Activity & recovery'}[key]}
         </button>)}
     </nav>
+    </details>
     <Suspense fallback={<div className="qm-panel" role="status">
       Loading data tools for {section.replaceAll('_',' ')}…
     </div>}>

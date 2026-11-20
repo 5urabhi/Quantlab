@@ -3,6 +3,7 @@ import {Activity,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucid
 import './live-feed.css'
 import OptionChainLive,{type OptionContract} from './OptionChainLive'
 import AutoDepthRecorder from './AutoDepthRecorder'
+import ObservedIndexChartV2 from './ObservedIndexChartV2'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 
 type DepthLevel={price:number;quantity:number;orders:number}
@@ -34,12 +35,21 @@ const timeIST=(value?:string)=>value?new Date(value).toLocaleTimeString('en-IN',
   {timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—'
 const isExactDepth=(value:string)=>/^NSE_(?:EQ|FNO):[0-9]{1,12}$/.test(value)
 
-export default function LiveFeedPanel({onOpenSetup,onDraftJournal,onOpenSaved}:{
+export default function LiveFeedPanel({
+  onOpenSetup,onDraftJournal,onOpenSaved,focusedView,hideNavigation=false,onViewChange
+}:{
   onOpenSetup?:()=>void
   onOpenSaved?:()=>void
   onDraftJournal?:(contract:OptionContract,lots:number)=>void
+  focusedView?:'signals'|'options'|'depth'
+  hideNavigation?:boolean
+  onViewChange?:(view:'signals'|'options'|'depth')=>void
 }){
-  const [view,setView]=useState<'signals'|'options'>('options')
+  const [view,setView]=useState<'signals'|'options'|'depth'>(focusedView||'options')
+  useEffect(()=>{if(focusedView)setView(focusedView)},[focusedView])
+  const changeView=(next:'signals'|'options'|'depth')=>{
+    setView(next);onViewChange?.(next)
+  }
   const [feed,setFeed]=useState<Feed|null>(null)
   const [connectedToLocal,setConnectedToLocal]=useState(false)
   const [index,setIndex]=useState<'INDEX:BANKNIFTY'|'INDEX:NIFTY50'>('INDEX:BANKNIFTY')
@@ -140,8 +150,14 @@ export default function LiveFeedPanel({onOpenSetup,onDraftJournal,onOpenSaved}:{
     })):[],[liveBook])
   const configuredDepth=feed?.active?feed.depth_identity:depthIdentity
   return <section className="tc-panel lf-root" aria-label="Live BANKNIFTY and 20-level market feed">
-    <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/> Manual live index + single-contract depth</strong>
-      <p className="tc-muted">This manual feed is independent from automatic BANKNIFTY CE/PE 20-level recording below. Both use read-only Dhan data; neither places broker orders.</p></div>
+    <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/>{hideNavigation?
+      view==='signals'?'BANKNIFTY index & signal monitor':
+      view==='depth'?'Original 20-level CE/PE order book':
+      'BANKNIFTY CE/PE option chain':
+      'Manual live index + single-contract depth'}</strong>
+      <p className="tc-muted">{hideNavigation?
+      'Live index/contract observations come from genuine Dhan packets. The automatic 190-contract CE/PE recorder is configured separately in Settings; navigation never stops it.':
+      'This manual feed is independent from automatic BANKNIFTY CE/PE 20-level recording below. Both use read-only Dhan data; neither places broker orders.'}</p></div>
       <span className={'lf-badge '+(livePrice?'live':feed?.active?'connecting':'offline')}>
         {livePrice?'LIVE · FRESH':feed?.active?'FEED STARTING / STALE':'NOT STREAMING'}</span>
     </div>
@@ -151,13 +167,15 @@ export default function LiveFeedPanel({onOpenSetup,onDraftJournal,onOpenSaved}:{
       <span>Stored in <b>dhan_shared</b></span></div>
     {error&&<p role="alert" className="tc-error">{error}</p>}
     {notice&&<p role="status" className="tc-confirm">{notice}</p>}
-    <nav className="lf-view-tabs" role="tablist" aria-label="Live trading views">
+    {!hideNavigation&&<nav className="lf-view-tabs" role="tablist" aria-label="Live trading views">
       <button type="button" role="tab" aria-selected={view==='signals'}
-        onClick={()=>setView('signals')}><Activity size={16}/> Index signal monitor</button>
+        onClick={()=>changeView('signals')}><Activity size={16}/> Index signal monitor</button>
       <button type="button" role="tab" aria-selected={view==='options'}
-        onClick={()=>setView('options')}><Database size={16}/> BANKNIFTY option chain &amp; 20-level depth</button>
-    </nav>
-    {view==='options'&&<AutoDepthRecorder onOpenSaved={onOpenSaved}/>}
+        onClick={()=>changeView('options')}><Database size={16}/> BANKNIFTY option chain &amp; 20-level depth</button>
+      <button type="button" role="tab" aria-selected={view==='depth'}
+        onClick={()=>changeView('depth')}><Database size={16}/> 20-level order book</button>
+    </nav>}
+    {view==='options'&&!hideNavigation&&<AutoDepthRecorder onOpenSaved={onOpenSaved}/>}
     {view==='options'&&<OptionChainLive
       feedActive={Boolean(feed?.active)} depthIdentity={feed?.active?feed.depth_identity||'':depthIdentity}
       currentIndexDirection={hasSignal?signal?.direction||null:null}
@@ -165,13 +183,17 @@ export default function LiveFeedPanel({onOpenSetup,onDraftJournal,onOpenSaved}:{
       onSelectDepth={identity=>{
         setDepthIdentity(identity);setIndex('INDEX:BANKNIFTY');setConfigOpen(true)
         setNotice('Contract selected. Confirm read-only Dhan 20-level streaming below to start its original order book.')
+        if(hideNavigation)changeView('depth')
       }}
       onDraftJournal={(contract,lots)=>onDraftJournal?.(contract,lots)}
     />}
     {feed?.index_packet_note&&!livePrice&&<p className="tc-warning" role="status">
       Broker index packet not supported by the published binary layout · {feed.unsupported_index_packets} observed.
       {' '}{feed.index_packet_note}</p>}
-    {view==='signals'&&<div className="lf-cards">
+    {view==='signals'&&<>
+      <ObservedIndexChartV2 rows={signal?.rows||[]}
+        sourceWarning={signal?.source_warning||''}/>
+      <div className="lf-cards">
       <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
         <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':
           'Waiting for fresh Dhan ticker data'}</small></div>
@@ -183,14 +205,16 @@ export default function LiveFeedPanel({onOpenSetup,onDraftJournal,onOpenSaved}:{
       <div className="lf-stat"><span>Depth best bid / ask</span><strong>{bookFresh?
         '₹'+fmt(liveBook?.best_bid)+' / ₹'+fmt(liveBook?.best_ask):'—'}</strong>
         <small>{bookFresh?'Original paired 20-level book':'No fresh NSE depth snapshot'}</small></div>
-    </div>}
+    </div></>}
 
     {!feed?.active&&<div className="lf-connect-block">
       <div><strong>Real-time feed is stopped</strong><p>Index signals and 20-level depth require original broker packets. Historical analysis remains separate and available at any time.</p></div>
       <button type="button" onClick={()=>setConfigOpen(v=>!v)}>{configOpen?'Close configuration':'Configure live feed'}</button>
     </div>}
     {!feed?.active&&feed&&!feed.client_id_configured&&<div className="lf-connect-warning" role="status">
-      <span>Add your Dhan client ID and token in Connections before starting a stream.</span>
+      <span>{hideNavigation?
+        'Dhan access needs verification. QuantLab can resolve the client ID from the authenticated profile when a valid local token is available.':
+        'Add your Dhan client ID and token in Connections before starting a stream.'}</span>
       {onOpenSetup&&<button type="button" onClick={onOpenSetup}>Open Connections</button>}
     </div>}
     {!feed?.active&&configOpen&&<div className="lf-start-form">
@@ -232,7 +256,8 @@ export default function LiveFeedPanel({onOpenSetup,onDraftJournal,onOpenSaved}:{
       <button type="button" onClick={()=>void stop()} disabled={busy}><Square size={15}/> Stop streams</button>
       <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Check connection</button>
     </div>}
-    {view==='options'&&<div className="lf-depth-summary">
+    {(view==='depth'||(view==='options'&&!hideNavigation))&&
+      <div className="lf-depth-summary">
       <div className="tc-panel-title"><strong>20-level market depth · {configuredDepth||'select a stock / option'}</strong>
         <span>20 bids + 20 asks, original NSE equity/derivative packet pairs</span></div>
       {optionQuote&&<div className="lf-meta">
