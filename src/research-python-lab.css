@@ -48,6 +48,8 @@
 .rpl-axis{fill:#7b98ae;font-size:11px}.rpl-grid{stroke:#294055;stroke-width:1}.rpl-zero{stroke:#536a78;stroke-dasharray:5 5;stroke-width:1.5}
 .rpl-threshold{stroke:#d2a653;stroke-dasharray:6 4;stroke-width:1.2}
 .rpl-line{fill:none;stroke:#79c6ff;stroke-width:2;vector-effect:non-scaling-stroke}
+.rpl-ema-fast{stroke:#ff7b88;stroke-width:2.2}.rpl-ema-slow{stroke:#67db9f;stroke-width:2.2}
+.rpl-key-red{color:#ff8f9c;font-weight:700}.rpl-key-green{color:#74e3ac;font-weight:700}
 .rpl-ema-spread-bps{stroke:#fbb16e}.rpl-momentum_roc5_pct{stroke:#6ee4ba}
 .rpl-rsi14{stroke:#c7a4fe}.rpl-account{stroke:#5ae5bd}
 .rpl-hover-dot{fill:#effaff;stroke:#438ab0;stroke-width:2}
