@@ -337,6 +337,33 @@ def _storage() -> None:
             CREATE INDEX IF NOT EXISTS auto_depth_features_recent
                 ON auto_banknifty_depth_features(identity, received_utc);
             """)
+            # The original selection table required selected_ltp NOT NULL,
+            # which silently excluded real, verified options with no last
+            # trade. Migrate atomically to nullable LTP without deleting or
+            # inventing any historical selection evidence.
+            columns = db.execute(
+                "PRAGMA table_info(auto_banknifty_depth_selections)"
+            ).fetchall()
+            if any(row[1] == "selected_ltp" and row[3] for row in columns):
+                db.executescript("""
+                BEGIN IMMEDIATE;
+                CREATE TABLE auto_banknifty_depth_selections_nullable(
+                    session_id TEXT NOT NULL, changed_utc TEXT NOT NULL,
+                    identity TEXT NOT NULL, option_side TEXT NOT NULL,
+                    expiry TEXT NOT NULL, strike REAL NOT NULL,
+                    lot_size INTEGER NOT NULL, selected_ltp REAL,
+                    chain_received_utc TEXT NOT NULL,
+                    PRIMARY KEY(session_id, changed_utc, identity)
+                );
+                INSERT INTO auto_banknifty_depth_selections_nullable
+                    SELECT * FROM auto_banknifty_depth_selections;
+                DROP TABLE auto_banknifty_depth_selections;
+                ALTER TABLE auto_banknifty_depth_selections_nullable
+                    RENAME TO auto_banknifty_depth_selections;
+                CREATE INDEX auto_depth_selection_recent
+                    ON auto_banknifty_depth_selections(identity, changed_utc);
+                COMMIT;
+                """)
         STORAGE_READY = current
 
 
