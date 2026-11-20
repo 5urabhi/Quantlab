@@ -227,8 +227,11 @@ function PriceChart({data,hover,setHover}:{
     </div>
   </div>
 }
-export default function ResearchPythonLab(){
-  const [tab,setTab]=useState<Tab>('python')
+export default function ResearchPythonLab({displayMode,integrated=false}:{
+  displayMode?:Tab;integrated?:boolean
+}={}){
+  const [tab,setTab]=useState<Tab>(displayMode||'python')
+  useEffect(()=>{if(displayMode)setTab(displayMode)},[displayMode])
   const [sourceMode,setSourceMode]=useState<SourceMode>('historical')
   const [limit,setLimit]=useState<500|1500|3000|5000>(1500)
   const [startingCapital,setStartingCapital]=useState(50000)
@@ -425,12 +428,12 @@ export default function ResearchPythonLab(){
       <div className="rpl-safety"><ShieldCheck size={17}/> Live Dhan recording stays separate
         <small>Read-only snapshots · no changes to depth subscriptions</small></div>
     </header>
-    <div className="rpl-tabs" role="tablist" aria-label="Strategy research modes">
+    {!integrated&&<div className="rpl-tabs" role="tablist" aria-label="Strategy research modes">
       <button role="tab" aria-selected={tab==='python'} onClick={()=>setTab('python')}>
         <Code2 size={17}/> Paste or type Python</button>
       <button role="tab" aria-selected={tab==='sweep'} onClick={()=>setTab('sweep')}>
         <SlidersHorizontal size={17}/> All EMA combinations</button>
-    </div>
+    </div>}
     <div className="rpl-panel">
       <div className="rpl-controls" aria-label="Research data and capital settings">
         <label>Original source
