@@ -241,7 +241,16 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
   const [pairSlow,setPairSlow]=useState(21)
   const [fast,setFast]=useState('3,5,7,9,12,15,21')
   const [slow,setSlow]=useState('13,21,26,34,50,55,89')
-  const [script,setScript]=useState(STARTING_SCRIPT)
+  const [script,setScript]=useState(()=>{
+    try{return sessionStorage.getItem('ql-v2-python-unsaved-draft')||STARTING_SCRIPT}
+    catch{return STARTING_SCRIPT}
+  })
+  // Navigating away from the editor must never discard unsaved typed code.
+  // Only the local browser session keeps this draft; nothing goes to Dhan.
+  useEffect(()=>{
+    try{sessionStorage.setItem('ql-v2-python-unsaved-draft',script.slice(0,50000))}
+    catch{/* session storage can be disabled without affecting explicit Save */}
+  },[script])
   const [savedName,setSavedName]=useState('EMA 9/21 example')
   const [status,setStatus]=useState<Status|null>(null)
   const [jobId,setJobId]=useState(()=>sessionStorage.getItem(JOB)||'')
