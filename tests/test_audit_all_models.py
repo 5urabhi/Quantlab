@@ -6,6 +6,9 @@ Dhan/NSE data quality or contact a broker.
 from __future__ import annotations
 
 import csv
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +23,24 @@ from workstation_api import (
 
 
 class ModelAuditAllDatasetsTests(unittest.TestCase):
+    def test_module_cli_runs_without_pythonpath_configuration(self):
+        """Regression: scripts/audit_all_models.py imported as a script fails.
+
+        The supported launcher must call '-m scripts.audit_all_models' to
+        expose workstation_api from the repository root.
+        """
+        root = Path(__file__).resolve().parents[1]
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        output = subprocess.run(
+            [sys.executable, "-m", "scripts.audit_all_models", "--help"],
+            cwd=root, env=env, capture_output=True, text=True, timeout=30,
+            check=False,
+        )
+        self.assertEqual(output.returncode, 0, output.stdout + output.stderr)
+        self.assertIn("--dataset", output.stdout)
+        self.assertIn("--preflight-only", output.stdout)
+
     def test_matrix_has_every_registered_model_and_blocks_synthetic_as_real(self):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp) / "synthetic"
