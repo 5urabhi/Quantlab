@@ -114,6 +114,12 @@ function MiniLine({data,kind,label,hover,setHover}:{
       .filter(x=>typeof x.value==='number'&&Number.isFinite(x.value))
     if(!candidates.length)return null
     const ys=candidates.map(x=>x.value as number)
+    if(kind==='price')for(const bar of data){
+      for(const key of ['fast_ema','slow_ema']){
+        const value=bar[key]
+        if(typeof value==='number'&&Number.isFinite(value))ys.push(value)
+      }
+    }
     const min=Math.min(...ys),max=Math.max(...ys)
     const spread=max-min||Math.max(1,Math.abs(max)*.002)
     const lo=min-spread*.11,hi=max+spread*.11
@@ -130,7 +136,20 @@ function MiniLine({data,kind,label,hover,setHover}:{
       path+=(started?' L':' M')+pt.x.toFixed(1)+' '+pt.y.toFixed(1)
       started=true
     }
-    return {min,max,lo,hi,path,point}
+    const overlay=(name:'fast_ema'|'slow_ema')=>{
+      let d='',begun=false
+      for(let i=0;i<data.length;i++){
+        const value=data[i][name]
+        if(typeof value!=='number'||!Number.isFinite(value)){begun=false;continue}
+        const pt=point(i,value)
+        d+=(begun?' L':' M')+pt.x.toFixed(1)+' '+pt.y.toFixed(1)
+        begun=true
+      }
+      return d
+    }
+    return {min,max,lo,hi,path,point,
+      fastOverlay:kind==='price'?overlay('fast_ema'):'',
+      slowOverlay:kind==='price'?overlay('slow_ema'):''}
   },[data,kind])
   if(!displayed)return <div className="rpl-graph-empty">No original {label.toLowerCase()} observations in this window.</div>
   const active=hover!==null&&hover>=0&&hover<data.length?hover:null
@@ -160,6 +179,10 @@ function MiniLine({data,kind,label,hover,setHover}:{
           y1={displayed.point(0,n).y} y2={displayed.point(0,n).y}
           className="rpl-threshold"/>)}
       <path d={displayed.path} className={'rpl-line rpl-'+kind}/>
+      {kind==='price'&&<>
+        <path d={displayed.fastOverlay} className="rpl-line rpl-ema-fast"/>
+        <path d={displayed.slowOverlay} className="rpl-line rpl-ema-slow"/>
+      </>}
       {kind==='price'&&data.map((bar,i)=>bar.signal==='UP'||bar.signal==='DOWN'
         ?<circle key={i} cx={displayed.point(i,bar.price as number).x}
           cy={displayed.point(i,bar.price as number).y} r={3.8}
@@ -187,7 +210,9 @@ function PriceChart({data,hover,setHover}:{
   return <div className="rpl-price-chart">
     <MiniLine data={bars} kind="price" label="BANKNIFTY index price · ▲ CE / ▼ PE crossover markers"
       hover={hover} setHover={setHover}/>
-    <div className="rpl-price-overlay">Selected fast EMA: {hover!==null&&data[hover]
+    <div className="rpl-price-overlay"><span className="rpl-key-red">Red = fast EMA</span>
+      <span className="rpl-key-green">Green = slow EMA</span>
+      Selected fast EMA: {hover!==null&&data[hover]
       ?dec(data[hover].fast_ema,2):'hover chart'} · Slow EMA: {hover!==null&&data[hover]
         ?dec(data[hover].slow_ema,2):'hover chart'}
       {hover!==null&&data[hover]?.signal!=='HOLD'&&
