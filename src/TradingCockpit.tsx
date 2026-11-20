@@ -319,6 +319,7 @@ export default function TradingCockpit(){
         <span>The regular NSE index session is outside its trading window. Feed freshness is determined only by actual Dhan packets; holidays and special sessions are not inferred.</span>
         <button type="button" onClick={()=>{selectTab('replay');setReplayView('session')}}>Open recorded market</button></div>}
       <LiveFeedPanel onOpenSetup={()=>selectTab('setup')}
+        onOpenSaved={()=>{selectTab('replay');setReplayView('recordings')}}
         onDraftJournal={(contract:OptionContract,lots:number)=>{
           if(!contract.lot_size||!contract.identity)return
           setOptionSymbol(contract.symbol)
