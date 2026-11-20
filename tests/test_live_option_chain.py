@@ -174,3 +174,27 @@ class BankNiftyOptionChainTests(TestCase):
             row = option_chain_live.chain(EXPIRY, sleep=lambda _: None)["contracts"][0]
         self.assertEqual(row["lot_size"], 35)
         self.assertEqual(row["one_lot_ask_inr"], 10_535)
+
+    def test_all_original_strikes_are_retained_in_snapshot(self):
+        """Do not discard distant valid strikes from Dhan's per-expiry chain."""
+        expiry = EXPIRY
+        source = {"data": {"last_price": 63000.0, "oc": {}}}
+        for idx in range(75):
+            strike = 59000 + 100 * idx
+            source["data"]["oc"][f"{strike:.6f}"] = {
+                "ce": {"last_price": 300.0, "top_bid_price": 299.0,
+                       "top_ask_price": 301.0},
+                "pe": {"last_price": 310.0, "top_bid_price": 309.0,
+                       "top_ask_price": 311.0},
+            }
+        normalized = option_chain_live._normalize(
+            source, expiry, WHEN,
+            {"fresh": False, "available": False,
+             "message": "No source master", "age_hours": None,
+             "by_id": {}, "by_terms": {}})
+        self.assertEqual(normalized["strike_count"], 75)
+        self.assertEqual(normalized["source_strike_count"], 75)
+        self.assertEqual(normalized["quote_count"], 150)
+        self.assertIn(59000, {c["strike"] for c in normalized["contracts"]})
+        self.assertIn(66400, {c["strike"] for c in normalized["contracts"]})
+        self.assertTrue(all(not c["contract_master_verified"] for c in normalized["contracts"]))
