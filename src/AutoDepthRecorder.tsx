@@ -5,7 +5,7 @@ import './auto-depth-recorder.css'
 
 type Settings={
   enabled:boolean;target_premium:number;tolerance:number
-  per_side:number;lots:number;sample_seconds:number
+  per_side:number;lots:number;sample_seconds:number;allow_token_renewal:boolean
 }
 type Candidate={
   identity:string;side:'CE'|'PE';strike:number;expiry:string
@@ -40,6 +40,7 @@ type AutomaticChainCapture={
 }
 const DEFAULT_SETTINGS:Settings={
   enabled:false,target_premium:300,tolerance:75,per_side:2,lots:3,sample_seconds:3,
+  allow_token_renewal:false,
 }
 const inr=(value:number|null|undefined, digits=2)=>value===null||value===undefined
   ?'—':'₹'+value.toLocaleString('en-IN',{maximumFractionDigits:digits})
@@ -103,7 +104,9 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         {
           target_premium:settings.target_premium,tolerance:settings.tolerance,
           per_side:settings.per_side,lots:settings.lots,
-          sample_seconds:settings.sample_seconds,confirm_live_data:true,
+          sample_seconds:settings.sample_seconds,
+          allow_token_renewal:settings.allow_token_renewal,
+          confirm_live_data:true,
         })
       setState(result);setSettings(result.settings);setArmedConsent(false)
       setNotice(result.market_regular_hours
@@ -180,6 +183,12 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     </div>
 
     <div className="ad-actions">
+      {!armed?<label className="ad-consent">
+        <input type="checkbox" checked={settings.allow_token_renewal}
+          onChange={e=>setSettings(current=>({...current,allow_token_renewal:e.target.checked}))}/>
+        Optional: automatically renew my still-valid Dhan-Web access token before it expires.
+        Dhan invalidates the old token on renewal; other apps using it may need to reconnect.
+      </label>:null}
       {!armed?<label className="ad-consent">
         <input type="checkbox" checked={armedConsent}
           onChange={e=>setArmedConsent(e.target.checked)}/>
