@@ -1021,6 +1021,7 @@ class BankNiftyAutoDepthRequest(BaseModel):
     per_side: Literal[1, 2, 3] = 2
     lots: int = Field(default=3, ge=1, le=20)
     sample_seconds: int = Field(default=3, ge=1, le=10)
+    allow_token_renewal: bool = False
     confirm_live_data: bool = False
 
 
