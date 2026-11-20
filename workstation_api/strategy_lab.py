@@ -381,7 +381,7 @@ def run_pair(*, fast: int, slow: int, limit: int = 1500,
         "evidence": evidence,
         "bid_ask_spread_source": "unavailable_for_cash_index_ohlc",
         "read_only": True, "orders_placed": 0,
-    })
+    }
     return save_run(output)
 
 
@@ -469,4 +469,4 @@ def run_custom(*, code: str, limit: int = 1500,
                           "note": "Reference overlays, not a claim about user strategy"},
         "bid_ask_spread_source": "unavailable_for_cash_index_ohlc",
         "read_only": True, "orders_placed": 0,
-    }
+    })
