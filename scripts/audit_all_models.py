@@ -95,6 +95,19 @@ def verify_output(result: object, spec: dict, dataset_id: str | None) -> None:
         raise ValueError("Model dispatch returned an inconsistent identity or mode")
     if not any(result.get(key) for key in ("metrics", "plots", "table")):
         raise ValueError("Model returned no numerical results or figures")
+    # Some stochastic and quote-anchored branches return early from the
+    # shared dispatch. Verify their entire output is finite as well.
+    def finite(value: object) -> None:
+        if isinstance(value, dict):
+            for nested in value.values():
+                finite(nested)
+        elif isinstance(value, (list, tuple)):
+            for nested in value:
+                finite(nested)
+        elif isinstance(value, (float, int)) and not isinstance(value, bool):
+            if not math.isfinite(float(value)):
+                raise ValueError("Nonfinite numerical output, including model plots")
+    finite(result)
     source = result.get("source")
     if spec["mode"] in MATH_MODES:
         if source is not None:
