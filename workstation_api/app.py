@@ -862,7 +862,7 @@ def strategy_lab_ema_sweep(body: EmaSweepRequest):
         raise HTTPException(400, "Confirm read-only BANKNIFTY index research")
     try:
         strategy_lab._periods(body.fast_periods, body.slow_periods)
-        return _spawn("banknifty_index_ema_parameter_sweep", strategy_lab.run_sweep,
+        return _spawn("banknifty_index_ema_parameter_sweep", strategy_lab.run_sweep_process,
                       **body.model_dump(exclude={"confirm_readonly"}))
     except (ValueError, OSError) as exc:
         bad(exc)
@@ -874,7 +874,7 @@ def strategy_lab_ema_pair(body: EmaPairRequest):
         raise HTTPException(400, "Confirm read-only BANKNIFTY EMA pair research")
     try:
         strategy_lab._periods([body.fast], [body.slow])
-        return _spawn("banknifty_index_ema_pair", strategy_lab.run_pair,
+        return _spawn("banknifty_index_ema_pair", strategy_lab.run_pair_process,
                       **body.model_dump(exclude={"confirm_readonly"}))
     except (ValueError, OSError) as exc:
         bad(exc)
