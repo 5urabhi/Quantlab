@@ -1,9 +1,8 @@
 import {useCallback,useEffect,useState} from 'react'
 import {
-  Activity,ArrowRight,BarChart3,BookOpen,CheckCircle2,Clock3,Code2,
-  Database,FlaskConical,HelpCircle,Layers3,LoaderCircle,Radio,
-  RefreshCw,Settings2,ShieldCheck,SlidersHorizontal,Terminal,
-  TrendingUp,WifiOff,X,AlertTriangle
+  Activity,ArrowRight,BarChart3,CheckCircle2,Code2,
+  Database,FlaskConical,LoaderCircle,RefreshCw,Settings2,ShieldCheck,
+  SlidersHorizontal,TrendingUp,X,AlertTriangle
 } from 'lucide-react'
 import './quantlab-v2.css'
 
