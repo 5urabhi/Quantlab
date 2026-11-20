@@ -268,6 +268,16 @@ def run_observed(spec: dict, dataset_id: str, record: dict, folder: Path,
         try:
             result = model_lab.run_model(spec["id"], dataset_id, config)
             verify_output(result, spec, dataset_id)
+            result_source = result["source"]
+            if spec["mode"] == "historical":
+                if result_source.get("source_file") != row["source_file"]:
+                    raise ValueError("Model consumed a different historical source file")
+            else:
+                quote_id = config["quote"].partition(":")[0]
+                receipt = option_quotes.get(quote_id, dataset_id)
+                if (result_source.get("source_sha256") !=
+                        receipt.get("source_sha256")):
+                    raise ValueError("Market quote source digest changed during evaluation")
             row["status"] = "observed_input_pass"
             row["reason"] = (
                 "Ran against a local original-source input. Neither source authenticity "
