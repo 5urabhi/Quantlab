@@ -4,7 +4,7 @@ import {
   CheckCircle2, ChevronRight, CircleAlert, Clock3, Database, FileArchive,
   FileText, FlaskConical, Gauge, LoaderCircle,
   LockKeyhole, Menu, Play, RefreshCw, Settings2,
-  ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X
+  ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp
 } from 'lucide-react'
 import './workstation.css'
 import {RecorderBadge,JobsDrawer,V2HomeLaunchers,StrategyLibraryV2,SettingsPreferencesV2,DiagnosticsV2,QuickPageNote} from './QuantLabV2Components'
@@ -418,7 +418,7 @@ function App(){
     setTab(id);setMenu(false)
     window.history.pushState({quantlab_view:id},'',window.location.pathname+
       window.location.search+'#/'+id)
-    window.scrollTo({top:0,behavior:'instant'})
+    window.scrollTo(0,0)
   }
   useEffect(()=>{
     const navigateHistory=()=>{setTab(hashTab());setMenu(false)}
@@ -516,12 +516,12 @@ function App(){
   const classification=<Tag tone={detail?.source.dataset_kind==='synthetic'?'warn':'blue'}>{detail?.source.dataset_kind==='synthetic'?'SYNTHETIC DATA — DEMONSTRATION':detail?'USER DATA · NOT INDEPENDENTLY AUDITED':'NO RESEARCH RUN'}</Tag>
   const chart=detail?<EquityChart rows={detail.returns}/>:null
   const panel=(key: keyof Detail,description:string)=>withRun(<Card title={description}><Table rows={(detail?.[key] as Dict[]|undefined)??[]} max={20}/></Card>)
-  return <div className="ws-shell">
+  return <div className="ws-shell ws-v2">
     <aside className={'ws-sidebar '+(menu?'open':'')}>
       <div className="ws-brand"><span className="ws-brand-mark"><Activity size={23}/></span><div><strong>QUANT<span>LAB</span></strong><small>RESEARCH WORKSTATION</small></div><button type="button" className="ws-mobile-close" onClick={()=>setMenu(false)}><X size={19}/></button></div>
       <div className="ws-env"><span className={'ws-status-dot '+(health?.ok?'':'offline')}/><div><strong>{health?.ok?'LOCAL ENGINE CONNECTED':'ENGINE DISCONNECTED'}</strong><small>127.0.0.1 · NO BROKER EXECUTION</small></div></div>
       <nav aria-label="Primary QuantLab navigation">
-        <div className="ws-nav-group"><span className="ws-nav-label">RESEARCH DESTINATIONS</span>
+        <div className="ws-nav-group"><span className="ws-nav-label">WORKSPACES</span>
           {primarySections.map((section,index)=><button type="button" key={section.id}
             title={'Ctrl+Alt+'+(index+1)+' · '+section.label}
             onClick={()=>begin(section.id)}
@@ -534,16 +534,56 @@ function App(){
     </aside>
     {menu&&<button className="ws-backdrop" onClick={()=>setMenu(false)} aria-label="Close navigation"/>}
     <div className="ws-main">
-      <header className="ws-topbar"><div className="ws-top-left"><button type="button" className="ws-menu" onClick={()=>setMenu(true)} aria-label="Open navigation"><Menu size={19}/></button><span className="ws-breadcrumb">WORKSTATION</span><ChevronRight size={14}/><strong>{titles[tab]}</strong></div><div className="ws-top-right">{job&&['queued','running'].includes(job.status)&&<Tag tone="blue"><LoaderCircle size={13} className="ws-spin"/> {label(job.kind)} running</Tag>}<Tag tone={health?.ok?'good':'bad'}>{health?.ok?'ENGINE ONLINE':'OFFLINE'}</Tag><button title="Refresh from backend" aria-label="Refresh data" className="ws-icon" onClick={()=>void refresh()}><RefreshCw size={16}/></button></div></header>
+      <header className="ws-topbar">
+        <div className="v2-shell-top-left ws-top-left">
+          <button type="button" className="ws-menu" onClick={()=>setMenu(true)} aria-label="Open navigation">
+            <Menu size={19}/></button>
+          <span className="ws-breadcrumb">QUANTLAB</span><ChevronRight size={14}/>
+          <strong>{primarySections.find(section=>section.tabs.includes(tab))?.label||'Research'}</strong>
+          {titles[tab]!==primarySections.find(section=>section.tabs.includes(tab))?.label&&
+            <><ChevronRight size={14}/><strong>{titles[tab]}</strong></>}
+        </div>
+        <div className="v2-top-actions">
+          <RecorderBadge onOpen={()=>begin('recordingsettings')}/>
+          <button type="button" className="v2-top-btn" onClick={()=>setJobsOpen(true)}
+            aria-label="Open Jobs and downloads" title="Jobs and downloads">
+            <Clock3 size={16}/><span>Jobs</span></button>
+          <button type="button" className="v2-top-btn" onClick={()=>begin('guide')}
+            aria-label="Open Help" title="Help and documentation">
+            <BookOpen size={16}/><span>Help</span></button>
+          <button type="button" className="v2-top-btn primary" onClick={()=>begin('journey')}>
+            <Play size={15}/><span>New Study</span></button>
+          <button title="Refresh workstation sources" aria-label="Refresh data" className="ws-icon"
+            onClick={()=>void refresh()}><RefreshCw size={16}/></button>
+        </div>
+      </header>
+      <JobsDrawer open={jobsOpen} onClose={()=>setJobsOpen(false)}
+        onOpenFull={()=>begin('workspacejobs')}/>
       <main className="ws-content">
-        <div className="ws-titlebar"><div><div className="ws-overline">QUANTITATIVE EQUITY INDEX & FACTOR RESEARCH</div><h1>{titles[tab]}</h1><p>Local Python research engine · React/Vite desktop-style interface · Explicit source provenance</p></div><div className="ws-title-actions"><button type="button" className="ws-button secondary" onClick={()=>begin('guide')}><BookOpen size={15}/> Guide</button><button type="button" className="ws-button secondary" onClick={()=>begin('data')}><Database size={15}/> Data</button><button type="button" className="ws-button primary" onClick={()=>begin('journey')}><Play size={14}/> Start guided study</button></div></div>
-        {primarySections.some(section=>section.tabs.includes(tab)&&section.tabs.length>1)&&
-          <nav className="ws-context-tabs" aria-label="Modules within selected research destination">
-            {primarySections.find(section=>section.tabs.includes(tab))?.tabs.map(module=>
-              <button type="button" key={module} aria-current={tab===module?'page':undefined}
-                className={tab===module?'active':''} onClick={()=>begin(module)}>
-                {titles[module]}</button>)}
-          </nav>}
+        <div className="ws-titlebar">
+          <div><div className="ws-overline">LOCAL QUANTITATIVE RESEARCH WORKSTATION</div>
+            <h1>{titles[tab]}</h1><p>{descriptions[tab]}</p></div>
+          <div className="ws-title-actions">
+            {tab==='overview'&&<button className="ws-button primary"
+              onClick={()=>begin('journey')}><Play size={15}/> New study</button>}
+            {(['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal'].includes(tab))&&
+              <button className="ws-button secondary" onClick={()=>begin('recordingsettings')}>
+                <Activity size={15}/> Recorder settings</button>}
+            {(['strategies','strategyema','strategypython','strategybacktest'].includes(tab))&&
+              <button className="ws-button secondary" onClick={()=>begin('data')}>
+                <Database size={15}/> Data coverage</button>}
+          </div>
+        </div>
+        {(()=>{
+          const visible=primarySections.find(section=>section.tabs.includes(tab))?.navTabs||[]
+          return visible.length>1?<nav className="ws-context-tabs"
+              aria-label="Modules within selected research destination">
+            {visible.map(module=><button type="button" key={module}
+              aria-current={tab===module?'page':undefined}
+              className={tab===module?'active':''} onClick={()=>begin(module)}>
+              {titles[module]}</button>)}
+          </nav>:null
+        })()}
         {deletePlan&&<div className="ws-delete-overlay">
           <section className="ws-delete-dialog" role="dialog" aria-modal="true"
             aria-label={'Delete dataset '+deletePlan.label}>
