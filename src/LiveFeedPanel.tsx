@@ -150,8 +150,14 @@ export default function LiveFeedPanel({
     })):[],[liveBook])
   const configuredDepth=feed?.active?feed.depth_identity:depthIdentity
   return <section className="tc-panel lf-root" aria-label="Live BANKNIFTY and 20-level market feed">
-    <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/> Manual live index + single-contract depth</strong>
-      <p className="tc-muted">This manual feed is independent from automatic BANKNIFTY CE/PE 20-level recording below. Both use read-only Dhan data; neither places broker orders.</p></div>
+    <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/>{hideNavigation?
+      view==='signals'?'BANKNIFTY index & signal monitor':
+      view==='depth'?'Original 20-level CE/PE order book':
+      'BANKNIFTY CE/PE option chain':
+      'Manual live index + single-contract depth'}</strong>
+      <p className="tc-muted">{hideNavigation?
+      'Live index/contract observations come from genuine Dhan packets. The automatic 190-contract CE/PE recorder is configured separately in Settings; navigation never stops it.':
+      'This manual feed is independent from automatic BANKNIFTY CE/PE 20-level recording below. Both use read-only Dhan data; neither places broker orders.'}</p></div>
       <span className={'lf-badge '+(livePrice?'live':feed?.active?'connecting':'offline')}>
         {livePrice?'LIVE · FRESH':feed?.active?'FEED STARTING / STALE':'NOT STREAMING'}</span>
     </div>
@@ -206,7 +212,9 @@ export default function LiveFeedPanel({
       <button type="button" onClick={()=>setConfigOpen(v=>!v)}>{configOpen?'Close configuration':'Configure live feed'}</button>
     </div>}
     {!feed?.active&&feed&&!feed.client_id_configured&&<div className="lf-connect-warning" role="status">
-      <span>Add your Dhan client ID and token in Connections before starting a stream.</span>
+      <span>{hideNavigation?
+        'Dhan access needs verification. QuantLab can resolve the client ID from the authenticated profile when a valid local token is available.':
+        'Add your Dhan client ID and token in Connections before starting a stream.'}</span>
       {onOpenSetup&&<button type="button" onClick={onOpenSetup}>Open Connections</button>}
     </div>}
     {!feed?.active&&configOpen&&<div className="lf-start-form">
