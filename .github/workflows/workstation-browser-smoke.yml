@@ -73,8 +73,11 @@ jobs:
           tail -n 100 /tmp/quantlab-vite.log
           exit 1
 
-      - name: Exercise actual Chromium UI -> API -> local research data -> files
+      - name: Regression-test unchanged source-backed features in Classic compatibility mode
         run: node tests/browser-smoke.mjs
+
+      - name: Exercise all eight redesigned QuantLab V2 destinations in Chromium
+        run: node tests/browser-smoke-v2.mjs
 
       - name: Validate source-labeled demo recorder
         run: node --check scripts/record_quantlab_demo.mjs
