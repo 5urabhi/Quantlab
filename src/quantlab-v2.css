@@ -178,3 +178,7 @@
 .ws-v2 .v2-integrated .rw-top>div:first-child{display:none}
 .ws-v2 .v2-integrated .rw-top-actions button{font-size:12px;min-height:38px}
 .ws-v2 .v2-integrated .rw-navigation{display:none}
+
+.v2-advanced-links{border:1px solid #345264;border-radius:10px;margin:14px 0;padding:14px 16px;background:#112b3a}
+.v2-advanced-links summary{cursor:pointer;color:#d3e8f6;font-size:13px;font-weight:700}
+.v2-advanced-links .v2-action-row{padding-top:17px}
