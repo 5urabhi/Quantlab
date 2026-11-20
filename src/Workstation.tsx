@@ -653,6 +653,9 @@ function App(){
             focusLive={tab==='trading'?'signals':
               tab==='tradingchain'?'options':
               tab==='tradingdepth'?'depth':undefined}
+            onNavigateLiveView={view=>begin(({
+              signals:'trading',options:'tradingchain',depth:'tradingdepth'
+            } as const)[view])}
             onNavigateView={view=>begin(({
               live:'trading',replay:'tradingreplay',
               strategy:'strategybacktest',research:'strategypython',
@@ -687,7 +690,8 @@ function App(){
           <div className="ws-grid halves"><Card title="Market library & research inputs" extra={<button className="ws-textlink" onClick={()=>begin('data')}>Manage <ArrowRight size={13}/></button>}><div className="ws-item-list">{everydaySources.slice(0,5).map(d=><button className="ws-dataset-row" key={d.id} onClick={()=>{setSelectedDataset(d.id);begin('data')}}><Database size={17}/><span><strong>{d.label}</strong><small>{d.basis}</small></span><Tag tone={d.ready?'good':'warn'}>{d.ready?'READY':'INCOMPLETE'}</Tag></button>)}{everydaySources.length===0&&<p className="ws-caption">No market sources found.</p>}</div></Card><Card title="Recent experiments" extra={<button className="ws-textlink" onClick={()=>begin('history')}>View history <ArrowRight size={13}/></button>}><div className="ws-item-list">{runs.slice(0,5).map(r=><button className="ws-dataset-row" key={r.id} onClick={()=>{setSelectedRun(r.id);begin('history')}}><Clock3 size={17}/><span><strong>{r.name}</strong><small>{r.id} · {date(r.created_utc)}</small></span><Tag tone={r.dataset_kind==='synthetic'?'warn':'blue'}>{r.dataset_kind}</Tag></button>)}{runs.length===0&&<p className="ws-caption">No completed runs yet.</p>}</div></Card></div>
         </>}
         {tab==='data'&&<>
-          <MarketDataWorkspace key="library" initialPage="datasets" datasets={datasets}
+          <MarketDataWorkspace key="v2-market-library" initialPage="datasets"
+            activePage="datasets" integrated datasets={datasets}
             onDataChanged={refresh} onSelectDataset={setSelectedDataset}
             onOpenModels={()=>begin('mathematics')}
             onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
