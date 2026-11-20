@@ -134,3 +134,13 @@
   border-radius:7px;background:#142c3d}
 .hob-controls-primary select:disabled{opacity:.55;cursor:not-allowed;
   background:#132537;color:#b1bec8}
+
+
+.hob-export-diagnostic{display:inline-flex;align-items:center;gap:7px;
+  background:#174b58;color:#c4f4f4;border:1px solid #4b8b91;
+  border-radius:8px;padding:9px 13px;font-weight:700;font-size:11px;
+  cursor:pointer;align-self:start}
+.hob-export-diagnostic:hover{background:#215c69}
+.hob-export-note{font-size:10px;color:#a6ccd4;line-height:1.6;
+  padding:9px 12px;background:#173646;border:1px solid #3d6675;
+  border-radius:7px;margin:0}
