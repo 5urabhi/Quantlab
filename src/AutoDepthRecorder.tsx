@@ -30,6 +30,14 @@ type Recorder={
   latest:Record<string,Latest>;read_only:boolean
   historical_depth_download_supported:boolean
 }
+type AutomaticChainCapture={
+  armed:boolean;state:string;snapshot_count_session:number
+  snapshots_saved_today:number;expiries_found:number
+  expiries_captured_session:number;last_expiry:string|null
+  last_snapshot_utc:string|null;last_strike_count:number
+  last_quote_count:number;last_error:string|null
+  capture_schedule_seconds:{nearest_two:number;next_four:number;remaining:number}
+}
 const DEFAULT_SETTINGS:Settings={
   enabled:false,target_premium:300,tolerance:75,per_side:2,lots:3,sample_seconds:3,
 }
@@ -60,6 +68,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
   onOpenSaved?:()=>void
 }){
   const [state,setState]=useState<Recorder|null>(null)
+  const [chainCapture,setChainCapture]=useState<AutomaticChainCapture|null>(null)
   const [settings,setSettings]=useState<Settings>(DEFAULT_SETTINGS)
   const settingsInitialized=useRef(false)
   const [armedConsent,setArmedConsent]=useState(false)
@@ -67,14 +76,18 @@ export default function AutoDepthRecorder({onOpenSaved}:{
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
   const refresh=useCallback(async()=>{
-    try{
-      const updated=await marketApi<Recorder>('/api/trading-cockpit/auto-depth/status')
-      setState(updated)
+    const [depth,chains]=await Promise.allSettled([
+      marketApi<Recorder>('/api/trading-cockpit/auto-depth/status'),
+      marketApi<AutomaticChainCapture>('/api/trading-cockpit/auto-chain/status'),
+    ])
+    if(depth.status==='fulfilled'){
+      setState(depth.value)
       if(!settingsInitialized.current){
-        setSettings(updated.settings)
+        setSettings(depth.value.settings)
         settingsInitialized.current=true
       }
-    }catch(e){setError(readableError(e))}
+    }else setError(readableError(depth.reason))
+    if(chains.status==='fulfilled')setChainCapture(chains.value)
   },[])
   useEffect(()=>{
     void refresh()
@@ -119,7 +132,9 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         <h3><Activity size={19}/> Record BANKNIFTY CE &amp; PE order books</h3>
         <p>Select real Dhan contracts near {inr(settings.target_premium,0)}, follow
           changes during market hours, and store original 20-bid/20-ask snapshots
-          for later liquidity and RL research. No orders are sent.</p>
+          for later liquidity and RL research. The same authorization also saves
+          complete returned Dhan option-chain snapshots for all available expiries.
+          No orders are sent.</p>
       </div>
       <span className={'ad-status '+(connected?'active':armed?'armed':'stopped')}>
         <Radio size={15}/>{STATE_NAME[state?.state||'disabled']||state?.state||'Stopped'}
@@ -169,7 +184,9 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         <input type="checkbox" checked={armedConsent}
           onChange={e=>setArmedConsent(e.target.checked)}/>
         Allow my local QuantLab server to automatically subscribe to and record original
-        Dhan market-depth data during future regular NSE sessions, until I stop it.
+        Dhan market-depth data for selected CE/PE contracts and archive the complete
+        returned BANKNIFTY option chains for listed expiries during future regular
+        NSE sessions, until I stop it.
       </label>:<p className="ad-armed-note"><ShieldCheck size={16}/>
         Consent is saved locally. Recording resumes automatically while the local server
         is running during regular NSE hours. Stopping disarms future sessions.</p>}
@@ -197,6 +214,16 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{state?.current_expiry||'—'}</strong> Dhan-listed expiry</span>
       <span><strong>{clock(state?.last_packet_utc)}</strong> most recent paired packet (IST)</span>
     </div>
+    <p className="ad-armed-note" role="status">
+      <Database size={16}/> Complete option-chain archive: <strong>{chainCapture?.state||'Checking status'}</strong>
+      {' · '}{n(chainCapture?.snapshots_saved_today)} chain snapshots saved today
+      {' · '}{n(chainCapture?.expiries_captured_session)} / {n(chainCapture?.expiries_found)} expiries observed this session.
+      {chainCapture?.last_snapshot_utc&&<> Latest: {chainCapture.last_expiry}
+        {' · '}{n(chainCapture.last_strike_count)} strikes
+        {' · '}{n(chainCapture.last_quote_count)} CE/PE quotes
+        {' · '}{clock(chainCapture.last_snapshot_utc)} IST.</>}
+      {chainCapture?.last_error&&<span className="ad-warning"> {chainCapture.last_error}</span>}
+    </p>
     <div className="ad-contracts">
       {state?.contracts.length?state.contracts.map(contract=>{
         const live=state.latest[contract.identity]
@@ -232,7 +259,8 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       contracts; the live 20-level WebSocket supplies actual books. Displayed
       quantities and depth-weighted prices are hypothetical liquidity estimates,
       not guaranteed executions or historical downloads. The backend must remain
-      running, and Dhan full-depth entitlement is required. Captured snapshots
+      running; full-depth entitlement is required only for 20-level books, not
+      ordinary option-chain snapshots. Captured snapshots
       remain available under Market Replay, even after stopping.
     </p>
   </section>
