@@ -863,12 +863,11 @@ def trading_cockpit_live_start(body: LiveCopilotRequest):
         raise HTTPException(400,"Approve read-only Dhan real-time data recording")
     if body.depth_identity and not market_depth.DEPTH_ID.fullmatch(body.depth_identity):
         raise HTTPException(400,"20-level depth is supported for exact NSE_EQ/NSE_FNO identities, not IDX_I")
-    if not os.getenv("DHAN_CLIENT_ID","").strip():
-        raise HTTPException(400,"Add your Dhan client ID in the cockpit's secure connection panel")
     if not os.getenv("DHAN_ACCESS_TOKEN","").strip():
         raise HTTPException(400,"Add a Dhan access token in the cockpit connection panel")
     try:
-        verified=dhan_auth.check_profile()
+        configured_id=os.getenv("DHAN_CLIENT_ID","").strip() or None
+        verified=dhan_auth.check_profile(client_id_override=configured_id)
         if not verified.get("ok"):
             raise ValueError(verified.get("message") or "Dhan market data access unverified")
         return live_market.start(body.index_identity,body.depth_identity,body.auto_audit)
@@ -1065,8 +1064,8 @@ def data_manager_depth_catalog(limit: int = 50):
     try:
         return {**market_depth.catalog(limit),
                 "dhan_live_credential_present":bool(
-                    os.getenv("DHAN_ACCESS_TOKEN","").strip() and
-                    os.getenv("DHAN_CLIENT_ID","").strip())}
+                    os.getenv("DHAN_ACCESS_TOKEN","").strip()),
+                "client_id_discovered_from_profile_at_connect": True}
     except (ValueError, OSError) as exc:
         bad(exc)
 
@@ -1093,8 +1092,8 @@ def data_manager_depth_start(body: DepthCaptureRequest):
         raise HTTPException(400, "Confirm authorized read-only Dhan market-depth recording")
     if not market_depth.DEPTH_ID.fullmatch(body.identity):
         raise HTTPException(400, "Use exact NSE_EQ/NSE_FNO Security ID")
-    if not os.getenv("DHAN_ACCESS_TOKEN") or not os.getenv("DHAN_CLIENT_ID"):
-        raise HTTPException(400, "Configure DHAN_ACCESS_TOKEN and DHAN_CLIENT_ID in local ignored .env")
+    if not os.getenv("DHAN_ACCESS_TOKEN"):
+        raise HTTPException(400, "Configure a Dhan access token in the private local connection panel")
     ident = market_depth._id()
     return {**_spawn("dhan_depth_capture", market_depth.start_live,
                     body.identity, body.depth, body.duration_seconds,
