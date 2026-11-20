@@ -27,7 +27,7 @@ local checks**. This invokes one local read-only report and the existing
 Dhan profile/token verification endpoint (the latter contacts Dhan).
 
 Confirm:
-- **Dhan token valid**, historical **Data API active**, client ID configured.
+- **Dhan token valid**, historical **Data API active**, client ID automatically resolved from the authenticated profile or explicitly configured.
   A connected historical Data API does **not** prove 20-level entitlement.
 - **BANKNIFTY one-minute spot ready**. If not, use the existing **Get missing
   index spot candles** action in Connections.
@@ -66,6 +66,36 @@ If armed but `Connected · no fresh depth packets`, check Dhan full-market-
 depth entitlement separately, verify the correct option IDs, and inspect
 the Dhan connection. The 1-minute Data API plan may be active while full
 depth is unavailable. The UI does not authorize any trade or order.
+
+### Additional automatic option-chain archive
+
+The same **Arm automatic 20-level recording** consent now starts a second
+read-only worker; there is no separate downloader to run. While QuantLab is
+running during regular NSE sessions it discovers all Dhan-listed active
+BANKNIFTY expiries, saves *every strike Dhan returns* for each expiry and
+records the provider quote timestamp, source and per-expiry counts in the
+existing `dhan_shared.option_chain_observations` table.
+
+The nearest two expiries refresh approximately every 90 seconds, the next
+four approximately every 5 minutes, and farther expiries every 30 minutes.
+Dhan's documented unique-request 3-second limit is enforced through the
+shared option-chain adapter. The recorder automatically reconnects, checks
+its local database, limits snapshots to 2,500 per IST day, and never claims
+that a REST quote is a tick-by-tick trade or 20-level order book. Status is
+shown next to the 20-level recorder. Exchange holidays provide no guaranteed
+fresh quotes; a successful HTTP response alone is not proof of active trading.
+
+Dhan client ID is normally discovered from the authenticated Dhan profile:
+no manual ID is needed if the profile supplies it. A user may enter it only
+as a fallback when profile discovery fails.
+
+**Optional credential rotation:** Tick **Automatically renew still-valid
+Dhan-Web token** at arm time only if the token was saved in QuantLab's private
+local `.env`. Dhan's `RenewToken` API invalidates the previous token, which
+may affect other apps using it. This opt-in does not collect PIN/TOTP and
+cannot renew an already expired token or token from an unsupported login
+method. If your machine is off during the valid renewal window, re-login
+may still be required.
 
 ## Step 3 — Verify saved original packet evidence
 
