@@ -134,6 +134,7 @@ def _run(stop: Event) -> None:
         expiries: list[str] = []
         next_discovery = 0.0
         current_day = ""
+        master_ready_today = False
         failures = 0
         next_token_check = 0.0
         while not stop.is_set():
@@ -165,12 +166,24 @@ def _run(stop: Event) -> None:
             day = _now().astimezone(auto_option_depth.IST).date().isoformat()
             if day != current_day:
                 current_day = day
+                master_ready_today = False
                 captured.clear()
                 schedule.clear()
                 expiries.clear()
                 next_discovery = 0.0
                 _status(expiries_captured_session=0, snapshot_count_session=0,
                         snapshots_saved_today=0, last_error=None)
+            if not master_ready_today:
+                try:
+                    # Same official atomic refresh used by the depth worker;
+                    # never leave new expiry/lot mappings for manual repair.
+                    auto_option_depth._refresh_master_if_needed()
+                    master_ready_today = True
+                except (OSError, ValueError, sqlite3.Error):
+                    _status(state="master_unavailable", last_error=
+                            "Automatic Dhan instrument-master validation failed; retrying.")
+                    stop.wait(30)
+                    continue
             now = time.monotonic()
             if now >= next_discovery or not expiries:
                 try:
