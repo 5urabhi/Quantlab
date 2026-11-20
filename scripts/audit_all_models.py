@@ -19,8 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from workstation_api import (
-    model_input_selector, model_lab, model_registry, option_market,
-    option_quotes, service,
+    historical_readiness, model_input_selector, model_lab, model_registry,
+    option_market, option_quotes, service,
 )
 
 MATH_MODES = {"synthetic", "theoretical"}
@@ -337,6 +337,31 @@ def inspect_dataset(record: dict, *, execute: bool) -> tuple[dict, list[dict]]:
     }
     before = dataset_digests(folder)
     entry["data_file_digests"] = before
+    # Index-study truth is separate from individual numerical-model readiness.
+    # A stock-return GARCH can run without PIT membership, whereas publishable
+    # multifactor NIFTY research cannot. Report both dimensions separately.
+    try:
+        evidence = historical_readiness.inspect(dataset_id)
+        checks = evidence.get("checks", [])
+        entry["index_research_evidence_status"] = evidence.get("status")
+        entry["index_research_structural_ready"] = bool(
+            evidence.get("structural_run_ready", False))
+        entry["index_research_blockers"] = [
+            {"name": x.get("name"), "detail": safe_message(x.get("detail", "")),
+             "next_action": safe_message(x.get("next_action", ""))}
+            for x in checks if x.get("status") == "blocked"
+        ]
+        entry["index_research_source_review_needed"] = [
+            {"name": x.get("name"), "next_action": safe_message(x.get("next_action", ""))}
+            for x in checks if x.get("status") == "review"
+        ]
+    except Exception as exc:
+        entry["index_research_evidence_status"] = "unable_to_audit"
+        entry["index_research_structural_ready"] = False
+        entry["index_research_evidence_error"] = (
+            type(exc).__name__ + ": " + safe_message(exc))
+        entry["index_research_blockers"] = []
+        entry["index_research_source_review_needed"] = []
     rows = []
     for spec in model_registry.MODELS:
         if spec["mode"] in MATH_MODES:
@@ -434,6 +459,19 @@ def write_report(output: Path, body: dict, rows: list[dict]) -> None:
                 + " | " + str(row["minimum_returns"]) + " (" +
                 str(row["preferred_returns"]) + ") | " + action + " |"
             )
+        lines += [
+            "",
+            "**Index/PIT research evidence:** " +
+            str(dataset.get("index_research_evidence_status", "unavailable")) +
+            " · source blockers: " +
+            str(len(dataset.get("index_research_blockers", []))) +
+            " · additional reviews: " +
+            str(len(dataset.get("index_research_source_review_needed", []))),
+            "",
+        ]
+        for evidence in dataset.get("index_research_blockers", [])[:12]:
+            lines.append("- **Missing source:** " + str(evidence["name"]) +
+                         " — " + str(evidence["next_action"]))
         lines += [
             "",
             "Original CSV/manifest SHA-256 digests are in SUMMARY.json and "
