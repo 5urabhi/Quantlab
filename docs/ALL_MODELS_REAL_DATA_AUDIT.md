@@ -140,7 +140,12 @@ There is now a model-page action:
 "Reuse existing BANKNIFTY recording · no new Dhan request".**
 
 The selector lists only SHA-checked original-source normalized snapshots
-with positive uncrossed original bid/ask. Clicking "Use this saved
+with positive uncrossed original bid/ask. It now **prefers the latest locally
+received observation inside the scheduled weekday 09:15–15:30 IST window**,
+rather than automatically selecting the newest off-hours recording. Off-hours
+observations remain available with a clear timing label. This is a
+receive-clock classification only, NOT an exchange timestamp, NSE holiday
+check, or quote-freshness certification. Clicking "Use this saved
 observation" creates a source-bound saved quote for `dhan_shared`; it
 does not fetch from Dhan, modify the continuous recorder, or place an order.
 The same saved quote can be selected for all five quote-based models.
