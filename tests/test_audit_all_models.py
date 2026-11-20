@@ -90,9 +90,12 @@ class ModelAuditAllDatasetsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)
             dates = pd.bdate_range("2026-01-01", periods=100)
+            alpha, beta = [100.0], [90.0]
+            for n in range(1, 100):
+                alpha.append(alpha[-1] * (1.0004 + ((n % 7) - 3) * .001))
+                beta.append(beta[-1] * (1.0008 + ((n % 11) - 5) * .0007))
             prices = pd.DataFrame({
-                "ALPHA": [100 * (1.0005 ** n) for n in range(100)],
-                "BETA": [90 * (1.0009 ** n) for n in range(100)],
+                "ALPHA": alpha, "BETA": beta,
             }, index=dates)
             prices.to_csv(folder / "daily_prices.csv", index_label="date")
             dataset = {
