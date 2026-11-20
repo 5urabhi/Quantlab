@@ -169,6 +169,70 @@ Broker fill, historical option fills, slippage and real options P&L
 are not inferred from the spot index replay. The existing 20-level depth
 selection stays read-only and requires a live Dhan F&O subscription.
 
+## Automatic BANKNIFTY CE/PE 20-level recording (opt-in, implemented)
+
+**Open Trading Cockpit → Live Trading → BANKNIFTY option chain & 20-level
+depth → Record BANKNIFTY CE & PE order books.**
+
+1. Keep the local QuantLab backend running and configure your Dhan token and
+   client ID in its ignored .env file. Verify **full market-depth entitlement**;
+   the historical Dhan Data API subscription alone does NOT establish this.
+2. The defaults are **target option LTP ₹300**, premium tolerance **±₹75**,
+   **2 CE and 2 PE** contracts, **3 lots**, and a persisted sample of at most
+   one genuine paired order book every **3 seconds per contract**.
+3. Tick the explicit authorization box, then click **Arm automatic 20-level
+   recording**. QuantLab remembers that permission on your local machine. If
+   the server runs during a regular NSE weekday trading session (09:15–15:30
+   IST), it starts the recorder; outside those hours it stays armed without
+   issuing vendor requests. Broker holidays and special sessions are not
+   guessed—the feed must actually deliver valid packets. If the local
+   backend stops, no depth is recorded.
+4. QuantLab refreshes the official Dhan BANKNIFTY expiry and option chain
+   approximately every **75 seconds**, selecting the closest contracts near
+   the target premium by **original Dhan option LTP and positive volume**.
+   It only accepts an exact fresh **NSE_FNO** ID, expiry, CE/PE, strike and lot
+   from the official Dhan instrument master; it refreshes missing/stale
+   master data atomically. If an updated selection changes the real contract
+   IDs, the recorder reconnects the 20-depth WebSocket with the updated list.
+   At most **six** contracts are subscribed in one connection (Dhan supports
+   up to 50 on a 20-depth connection). A little selection hysteresis avoids
+   excessive switching. Missing data stays missing.
+5. The backend joins Dhan's actual 20 bid and 20 ask levels **by security ID
+   and receive time**. Only paired original packets no more than one second
+   apart form an accepted snapshot. For each valid sampled packet pair, it
+   stores complete original 20-level price/size/order arrays, raw pair SHA
+   digests, exact instrument metadata and separate derived research features.
+   Samples are keyed by local UTC receive time, **not exchange event time**.
+6. Status shows per-contract freshness, spread in bps, 20-level imbalance,
+   bid/ask quantities and illustrative weighted average prices for buying
+   or selling **3 × the master-verified current lot size** (e.g. 90 units
+   only when the master confirms 30 per lot). If the original 20 levels lack
+   enough quantity, weighted price is **unavailable**, not guessed.
+7. Click **Review saved depth** to inspect the captures in Market Replay.
+   Original JSON books go into the existing `live_depth_books` table of
+   `dhan_shared`; contract-selection evidence goes into
+   `auto_banknifty_depth_selections`; derived numeric book features go into
+   `auto_banknifty_depth_features` in the **same shared SQLite database**.
+   You can run queries, chart metrics or use original records in future
+   offline ML/RL research without creating duplicate historical datasets.
+8. Click **Stop and disarm recording** to stop current and future automatic
+   sessions. Captured observations remain available. A persisted opt-in
+   resumes only when your local QuantLab server starts.
+
+**Data and safety limits:** Recording is read-only. There are NO order API
+calls, automatic trades, synthetic order books, dealer fills, or promises of
+historical 20-level data. Order-book freshness depends on original Dhan
+packets and your separate market-depth entitlement. Defaults sample (not
+archive every tick); there is a hard ceiling of 100,000 persisted depth
+snapshots per IST day to prevent unbounded storage. The collector respects
+regular NSE clock hours and reconnects on interruptions. Depth VWAP is an
+indicative displayed-book liquidity model; queuing, partial fills, latency,
+impact, cancels and taxes are not verified. True historical order-book data
+starts only **after** the first successful live capture.
+
+Dhan documentation: https://dhanhq.co/docs/v2/full-market-depth/
+and https://dhanhq.co/docs/v2/option-chain/.
+
 ## One-screen options backtest: BANKNIFTY signals buy historical CE/PE contracts
 
 **Default continuous-reversal research rule.** The fixed-hold selector
