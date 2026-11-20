@@ -140,8 +140,8 @@ export default function LiveFeedPanel({onOpenSetup,onDraftJournal,onOpenSaved}:{
     })):[],[liveBook])
   const configuredDepth=feed?.active?feed.depth_identity:depthIdentity
   return <section className="tc-panel lf-root" aria-label="Live BANKNIFTY and 20-level market feed">
-    <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/> Live streaming · index + 20-level depth</strong>
-      <p className="tc-muted">Dhan ticker WebSocket for BANKNIFTY / NIFTY 50 · separate order-book WebSocket for one NSE stock or option. No broker orders.</p></div>
+    <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/> Manual live index + single-contract depth</strong>
+      <p className="tc-muted">This manual feed is independent from automatic BANKNIFTY CE/PE 20-level recording below. Both use read-only Dhan data; neither places broker orders.</p></div>
       <span className={'lf-badge '+(livePrice?'live':feed?.active?'connecting':'offline')}>
         {livePrice?'LIVE · FRESH':feed?.active?'FEED STARTING / STALE':'NOT STREAMING'}</span>
     </div>
