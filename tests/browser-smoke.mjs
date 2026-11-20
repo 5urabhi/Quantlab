@@ -250,9 +250,23 @@ try {
     }).inputValue(),'signal_reversal')
     assert.equal(await historicalOptions.getByRole('combobox',{
       name:'Options backtest holding period',
-    }).isDisabled(),true,'Fixed-time input must be inactive under signal reversal')
+    }).count(),0,'Fixed-time input must not appear under an uncapped reversal rule')
     await historicalOptions.getByText('Fixed holding time does not control',{exact:false}).waitFor()
     await historicalOptions.getByText('UP → buy CE',{exact:false}).waitFor()
+    // EMA crossover is a separate explicit model, never silently replace
+    // the existing EMA/RSI historical baseline.
+    const signalSelector=historicalOptions.getByRole('combobox',{
+      name:'Options backtest signal model',
+    })
+    assert.equal(await signalSelector.inputValue(),'ema_crossover')
+    await signalSelector.selectOption('ema_rsi')
+    assert.equal(await signalSelector.inputValue(),'ema_rsi')
+    await signalSelector.selectOption('ema_crossover')
+    await historicalOptions.getByText('Pure 9/21 EMA crossover:',{exact:false}).waitFor()
+    await historicalOptions.getByText('No fixed time limit:',{exact:false}).waitFor()
+    assert.equal(await historicalOptions.getByRole('combobox',{
+      name:'Highlighted option exit rule',
+    }).inputValue(),'signal_reversal')
 
     // Exercise the actual UI -> read-only job POST -> completed job result
     // without any real vendor access; every returned price is synthetic CI.
@@ -262,6 +276,7 @@ try {
       assert.equal(request.lots,3)
       assert.equal(request.target_ltp,300)
       assert.equal(request.hold_rule,'signal_reversal')
+      assert.equal(request.signal_model,'ema_crossover')
       return route.fulfill({status:200,contentType:'application/json',
         body:JSON.stringify({job_id:'ci_synthetic_options_fixture',status:'queued'})})
     })
@@ -273,7 +288,9 @@ try {
             mode:'HISTORICAL_DHAN_OPTION_OHLC_NEXT_OPEN_PROXY',
             underlying:'INDEX:BANKNIFTY',
             signal_source:'SYNTHETIC CI - NO DHAN MARKET DATA',
-            signal_model:'fixture',signal_events:1,actionable_signals:1,
+            signal_model:'ema9_21_confirmed_cross_1m_v1',
+            signal_strategy:'ema_crossover',
+            signal_events:1,actionable_signals:1,
             auto_downloaded_missing_spot:false,
             historical_window:{first:'2026-11-18',
               through_exclusive:'2026-11-19',observed_index_bars:70},

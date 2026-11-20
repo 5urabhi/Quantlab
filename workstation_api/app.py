@@ -786,6 +786,7 @@ class HistoricalOptionsBacktestRequest(BaseModel):
     fee_per_side: float = Field(default=20, ge=0, le=1000, allow_inf_nan=False)
     hold_rule: Literal["fixed", "signal_reversal", "signal_reversal_or_cap",
                        "premium_target_stop", "hybrid"] = "fixed"
+    signal_model: Literal["ema_rsi", "ema_crossover"] = "ema_rsi"
     hold_minutes: Literal[1, 3, 5, 6, 10, 30, 60] = 5
     reversal_cap_minutes: int = Field(default=10, ge=1, le=120)
     confirm_readonly: bool = False

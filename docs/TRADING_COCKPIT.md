@@ -249,6 +249,51 @@ starts only **after** the first successful live capture.
 Dhan documentation: https://dhanhq.co/docs/v2/full-market-depth/
 and https://dhanhq.co/docs/v2/option-chain/.
 
+## Pure 9/21 EMA crossover strategy (read-only option backtest)
+
+**Trading Cockpit → Options Backtest → Strategy signal → EMA crossover ·
+9 red / 21 green** tests the original one-minute BANKNIFTY underlying
+(index security ID 25). It is **not** the existing EMA+RSI classifier,
+which remains available in the adjacent dropdown.
+
+Pure crossover rules:
+
+- 9-EMA (red) strictly crosses **above** the 21-EMA (green) on a fully
+  observed completed one-minute candle: emit one **UP** event. Under the
+  reversal exit rule, open a long **CE** at the *next* observed option
+  candle OPEN; no naked option selling.
+- 9-EMA crosses **below** 21-EMA: emit one **DOWN** event. Exit an
+  existing long CE and, only if separate genuine put prices and capital
+  exist, open long **PE** at that same next original minute's OPEN.
+- When there is no actual crossing, emit NO_TRADE (hold or stay flat).
+  Never buy a new option merely because 9-EMA remains above/below 21-EMA.
+- All EMAs are seeded from original index closes. Reset at each new NSE
+  session and any missing one-minute index candle. No lookahead, overnight
+  indicator stitching, synthetic contract candles, or same-close fills.
+- **Default exit rule: hold until opposite crossover, with NO fixed time cap.**
+  Hold the existing long CE or PE for as many minutes as necessary, until a
+  subsequent confirmed opposite EMA crossing. Close any remaining position
+  at the observed intraday session boundary (no overnight exposure).
+  Fixed 1/3/5/6/10/30/60-minute exits and capped/hybrid policies remain
+  available only as optional benchmark comparisons, not the strategy default.
+  Pure crossover mode does not apply the premium stop/target unless an
+  explicitly different exit policy is selected.
+- Underlying crossover signals and historical **option premiums** remain
+  separate. Dhan original exact-strike CE/PE contract minute bars drive
+  simulated option P&L, subject to source gaps, lot/expiry provenance,
+  quoted volume, user-selected slippage and fees.
+- The **Live Trading** monitor currently uses the separate EMA+RSI
+  baseline. Selecting this historical strategy does **not** authorize
+  a live broker trade or install a live EMA alert.
+
+**How to evaluate:** select the model and historical window, keep near
+monthly expiry, preferred ₹300 premium and explicit lot size/cost
+assumptions, run the read-only options backtest, then inspect CE↔PE flips,
+number of *distinct crosses*, skipped real option entries, after-cost
+P&L and drawdown. Compare its results to an identical EMA+RSI run on
+exactly the same source period and exit rule. Do not rely on simulated
+OHLC opens as guaranteed fills. Begin with paper trading.
+
 ## One-screen options backtest: BANKNIFTY signals buy historical CE/PE contracts
 
 **Default continuous-reversal research rule.** The fixed-hold selector

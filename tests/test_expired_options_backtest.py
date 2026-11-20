@@ -92,6 +92,108 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.data_patch.start()
         self.addCleanup(self.data_patch.stop)
 
+    @staticmethod
+    def _crossover_source():
+        """Two turning trends and a late recovery; all within one NSE session."""
+        rows = []
+        for i in range(120):
+            if i < 30:
+                price = 63000 - 4 * i
+            elif i < 65:
+                price = 63000 - 4 * 29 + 8 * (i - 29)
+            elif i < 99:
+                price = 63000 - 4 * 29 + 8 * (65 - 29) - 12 * (i - 65)
+            else:
+                price = 63000 - 4 * 29 + 8 * (65 - 29) - 12 * (99 - 65) + 12 * (i - 99)
+            rows.append({
+                "timestamp_utc": stamp(i), "session_ist": DAY,
+                "open": price, "high": price + 2, "low": price - 2,
+                "close": price, "volume": 100,
+            })
+        return rows
+
+    def test_pure_ema_cross_changes_direction_only_on_confirmed_cross(self):
+        rows = self._crossover_source()
+        signals = exp._signals(rows, signal_model="ema_crossover")
+        crosses = [x for x in signals if x["direction"] != "NO_TRADE"]
+        self.assertGreaterEqual(len(crosses), 2, crosses)
+        self.assertEqual([x["direction"] for x in crosses[:2]],
+                         ["UP", "DOWN"])
+        self.assertEqual(len(crosses), len({x["bar_utc"] for x in crosses}))
+        self.assertTrue(all(x["ema9"] is not None and x["ema21"] is not None
+                            for x in crosses))
+        for event in crosses:
+            if event["direction"] == "UP":
+                self.assertGreater(event["ema9"], event["ema21"])
+                self.assertEqual(event["signal_kind"], "cross_above")
+            else:
+                self.assertLess(event["ema9"], event["ema21"])
+                self.assertEqual(event["signal_kind"], "cross_below")
+        self.assertTrue(all(x["direction"] == "NO_TRADE" for x in signals[:21]))
+        self.assertNotEqual(exp._signals(rows, signal_model="ema_rsi"),
+                            signals)
+
+    def test_ema_cross_is_prefix_causal_no_future_candle_lookahead(self):
+        rows = self._crossover_source()
+        final = exp._signals(rows, signal_model="ema_crossover")
+        for cutoff in (20, 29, 40, 55, 68, 82, 101, 120):
+            prefix = exp._signals(rows[:cutoff], signal_model="ema_crossover")
+            self.assertEqual(prefix, final[:cutoff])
+        self.assertTrue(all(e["direction"] in ("UP", "DOWN", "NO_TRADE")
+                            for e in final))
+
+    def test_ema_crossover_resets_on_missing_minutes_and_new_session(self):
+        rows = self._crossover_source()
+        # A missing minute must not be forward-filled to generate a crossover.
+        missing = rows[:43] + rows[44:70]
+        broken = exp._signals(missing, signal_model="ema_crossover")
+        self.assertTrue(all(e["direction"] == "NO_TRADE"
+                            for e in broken[43:64]))
+        tomorrow = (START + timedelta(days=1)).date().isoformat()
+        other = []
+        for i, item in enumerate(rows[:29]):
+            other.append({**item,
+                "timestamp_utc": (START + timedelta(days=1, minutes=i)).isoformat(),
+                "session_ist": tomorrow})
+        combined = exp._signals(rows[:45] + other, signal_model="ema_crossover")
+        self.assertEqual(combined[45:],
+                         exp._signals(other, signal_model="ema_crossover"))
+
+    def test_crossover_signals_work_with_existing_ce_pe_reversal_simulator(self):
+        rows = self._crossover_source()
+        signals = exp._signals(rows, signal_model="ema_crossover")
+        # Synthetic TEST fixture only; real backtests require original
+        # Dhan option candles, exact expiry and provider lot evidence.
+        options = {}
+        for i in range(len(rows)):
+            for side in ("CALL", "PUT"):
+                options[(stamp(i), side)] = {
+                    63000.: quote(i, strike=63000, side=side,
+                                  open_price=300 + i * .03,
+                                  close_price=300 + i * .03)}
+        result = exp.simulate_options(
+            signals, rows, options, policy="signal_reversal",
+            hold=1, cap=2,  # Ignored for reversal-only holding.
+            target_ltp=300, tolerance=50, lots=1, slippage_bps=0,
+            fee_per_side=0)
+        self.assertGreaterEqual(result["trade_count"], 1)
+        self.assertEqual(result["trades"][0]["option_side"], "CE")
+        self.assertEqual(result["trades"][0]["exit_reason"], "opposite_signal")
+        self.assertGreater(result["trades"][0]["hold_minutes"], 6)
+        self.assertTrue(result["trades"][0]["entry_utc"] >
+                        result["trades"][0]["signal_utc"])
+
+    def test_unrecognized_signal_model_is_rejected_before_network(self):
+        with self.assertRaisesRegex(ValueError, "EMA/RSI or EMA"):
+            exp._validate_params(
+                limit=500, expiry_flag="MONTH", expiry_code=0,
+                wings=3, lot_size=30, lots=1, target_ltp=300,
+                tolerance=50, starting_capital=50000,
+                stop_pct=2.5, target_pct=5, slippage_bps=5,
+                fee_per_side=20, hold_rule="signal_reversal",
+                hold_minutes=5, reversal_cap_minutes=10,
+                signal_model="not_a_strategy")
+
     def test_contract_selection_uses_signal_close_and_keeps_strike(self):
         quotes = market()
         quotes[(stamp(29), "CALL")] = {

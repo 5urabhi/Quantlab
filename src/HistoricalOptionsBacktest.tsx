@@ -4,6 +4,7 @@ import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './historical-options-backtest.css'
 
 type Rule='fixed'|'signal_reversal'|'signal_reversal_or_cap'|'premium_target_stop'|'hybrid'
+type SignalModel='ema_rsi'|'ema_crossover'
 type OptionTrade={
   signal_utc:string;entry_utc:string;exit_utc:string;session_ist:string
   underlying_direction:string;option_side:'CE'|'PE';strike:number
@@ -54,6 +55,8 @@ type CompareRow={
 }
 type BacktestResult={
   mode:string;underlying:string;signal_source:string;signal_model:string
+  signal_strategy?:SignalModel
+  ema_crossover_rules?:{fast:number;slow:number;timeframe_minutes:number}|null
   signal_events:number;actionable_signals:number;auto_downloaded_missing_spot?:boolean
   historical_window:{first:string;through_exclusive:string;observed_index_bars:number}
   data_evidence:{request_count:number;fresh_requests:number;cached_requests:number
@@ -85,7 +88,7 @@ const IST=(value:string)=>new Date(value).toLocaleString('en-IN',{
 const OPTIONS_JOB_KEY='quantlab_banknifty_historical_options_job'
 const MODE_LABEL:Record<Rule,string>={
   fixed:'Fixed-time exit',
-  signal_reversal:'Flip CE ↔ PE on opposite signal',
+  signal_reversal:'Hold until opposite signal (no time cap)',
   signal_reversal_or_cap:'Flip on opposite signal or time cap',
   premium_target_stop:'Option premium target/stop',
   hybrid:'Flip, time cap or option stop/target',
@@ -153,6 +156,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
   const [slippage,setSlippage]=useState(5)
   const [feePerSide,setFeePerSide]=useState(20)
   const [selectedRule,setSelectedRule]=useState<Rule>('signal_reversal')
+  const [signalModel,setSignalModel]=useState<SignalModel>('ema_crossover')
 
   const refreshJob=useCallback(async(id:string)=>{
     const status=await marketApi<Job>('/api/jobs/'+encodeURIComponent(id))
@@ -193,7 +197,8 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
         wings,target_ltp:targetLtp,tolerance,lots,lot_size:lotSize,
         stop_pct:stopLoss,target_pct:profitTarget,slippage_bps:slippage,
         fee_per_side:feePerSide,hold_rule:selectedRule,hold_minutes:holdMinutes,
-        reversal_cap_minutes:reversalCap,confirm_readonly:true,
+        reversal_cap_minutes:reversalCap,signal_model:signalModel,
+        confirm_readonly:true,
       }
       const started=await marketPost<{job_id:string}>('/api/trading-cockpit/options/backtest',request)
       sessionStorage.setItem(OPTIONS_JOB_KEY,started.job_id)
@@ -209,6 +214,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       research_only:true,read_only:result.read_only,
       orders_placed:result.orders_placed,
       model_version:result.signal_model,
+      signal_strategy:result.signal_strategy??null,
       historical_window:result.historical_window,
       actionable_signals:result.actionable_signals,
       source_coverage:{
@@ -260,16 +266,27 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
     <header className="hob-head"><div>
       <span className="tc-page-kicker">YOUR STRATEGY · HISTORICAL BACKTEST</span>
       <h3>Trade BANKNIFTY signals through CE/PE options</h3>
-      <p>QuantLab generates UP/DOWN signals from BANKNIFTY and tests buying the corresponding historical CE or PE near your preferred premium. By default, an opposite signal closes the held option and opens the opposite side at the same next observed minute's OPEN, if original prices and purchasing power are available. No live orders are sent.</p>
+      <p>Choose pure EMA 9/21 crossover or the existing EMA + RSI baseline.
+        Signals are based only on completed BANKNIFTY index candles; each
+        crossover buys the corresponding historical CE/PE on the next observed
+        minute's OPEN. An opposite crossover can close and flip the position.
+        All executions are simulations, not broker orders.</p>
     </div><span className="hob-badge"><ShieldCheck size={15}/> Read-only historical research</span></header>
 
     <div className="hob-flow" aria-label="Historical strategy execution flow">
-      <span>1 · BANKNIFTY UP/DOWN signal</span><ArrowRight size={16}/><span>2 · Select historical CE/PE</span>
+      <span>1 · BANKNIFTY {signalModel==='ema_crossover'?'EMA crossover':'EMA/RSI'} signal</span><ArrowRight size={16}/><span>2 · Select historical CE/PE</span>
       <ArrowRight size={16}/><span>3 · Buy {lots} lots near ₹{DEC(targetLtp,0)}</span>
       <ArrowRight size={16}/><span>4 · Compare exits and ₹ P&amp;L</span>
     </div>
 
     <div className="hob-controls hob-controls-primary" aria-label="Options backtest main settings">
+      <label>Strategy signal
+        <select aria-label="Options backtest signal model" value={signalModel}
+          onChange={e=>{setSignalModel(e.target.value as SignalModel);setResult(null)}}>
+          <option value="ema_crossover">EMA crossover · 9 red / 21 green</option>
+          <option value="ema_rsi">Existing EMA 9/21 + RSI confirmation</option>
+        </select>
+      </label>
       <label>Historical BANKNIFTY window
         <select aria-label="Options backtest historical window" value={historicalWindow}
           onChange={e=>setHistoricalWindow(Number(e.target.value) as typeof historicalWindow)}>
@@ -297,20 +314,32 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
           {(Object.keys(MODE_LABEL) as Rule[]).map(rule=><option key={rule} value={rule}>{MODE_LABEL[rule]}</option>)}
         </select>
       </label>
-      <label>Fixed holding period {selectedRule==='fixed'?'':'· fixed-time policy only'}
+      {selectedRule==='fixed'&&<label>Fixed holding period
         <select aria-label="Options backtest holding period" value={holdMinutes}
-          disabled={selectedRule!=='fixed'}
           onChange={e=>setHoldMinutes(Number(e.target.value) as typeof holdMinutes)}>
           {[1,3,5,6,10,30,60].map(minutes=><option key={minutes} value={minutes}>
             {minutes===60?'1 hour':minutes+' minutes'}</option>)}
         </select>
-      </label>
+      </label>}
     </div>
+    {signalModel==='ema_crossover'&&<p className="hob-hold-note" role="note">
+      <strong>Pure 9/21 EMA crossover:</strong> 9 EMA (red) crosses above
+      21 EMA (green) → buy CE; crosses below → close CE and buy PE.
+      Only a confirmed completed one-minute candle triggers a change.
+      <strong> No fixed time limit:</strong> under the selected
+      &quot;Hold until opposite signal&quot; rule, keep the existing CE/PE
+      until the next opposite crossover, even after 5, 6 or 30 minutes.
+      Close remaining options at the end of the intraday session.
+      No crossover means hold, not a new trade. EMA calculations reset
+      on new trading sessions or missing minutes. The Live Trading
+      monitor still uses the separate EMA/RSI baseline; this is a
+      read-only historical strategy test.
+    </p>}
     {selectedRule!=='fixed'&&<p className="hob-hold-note" role="note">
       Fixed holding time does not control this selected rule. The options backtester
       still compares fixed 1–60-minute policies separately in the results table.
       {selectedRule==='signal_reversal'
-        ?' Reversal-only positions exit on an opposite BANKNIFTY signal or at the intraday session boundary.'
+        ?' No 5–6-minute cap: positions exit only when the opposite BANKNIFTY signal is confirmed or the intraday session ends.'
         :' Time caps and premium stop/target settings are configured in Advanced settings.'}
     </p>}
     <details className="hob-advanced-settings" aria-label="Advanced backtest data and cost settings">
@@ -353,12 +382,13 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
               <option key={n} value={n}>ATM ±{n} ({2*(2*n+1)} source requests per 30d)</option>)}
           </select>
         </label>
-        <label>Maximum hold when reversal is delayed
+        {(selectedRule==='signal_reversal_or_cap'||selectedRule==='hybrid')&&
+        <label>Maximum holding time (capped variants only)
           <select aria-label="Options backtest reversal time cap" value={reversalCap}
             onChange={e=>setReversalCap(Number(e.target.value))}>
             {[3,5,6,10,15,30,60].map(n=><option key={n} value={n}>{n} minutes</option>)}
           </select>
-        </label>
+        </label>}
         <label>Profit target % · option premium
           <input aria-label="Historical option profit target percent" type="number" min=".1" max="100" step=".5"
             value={profitTarget} onChange={e=>setProfitTarget(Number(e.target.value))}/>
@@ -378,8 +408,12 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       </div>
     </details>
     <div className="hob-flip-note" role="note">
-      <strong>Default reversal:</strong> UP → buy CE · DOWN → sell CE and buy PE · UP → sell PE and buy CE.
-      An opposite signal is known only after its candle completes; both hypothetical transactions use the following minute's OPEN, with separately selected actual strikes.
+      <strong>Default: hold until the opposite confirmed crossover, with no maximum duration.</strong>
+      UP → buy CE · DOWN → close CE and buy PE · UP → close PE and buy CE.
+      Keep the existing long option while the EMA lines remain on the same side;
+      exit any remaining position at the intraday session end. Each opposite
+      signal is known only after its candle completes, and both hypothetical
+      transactions use the following minute's OPEN, with separately selected actual strikes.
       If the replacement contract lacks original quotes or cash is insufficient, remain flat and record why.
     </div>
     <div className="hob-description">
@@ -426,7 +460,9 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       <header className="hob-results-head"><div>
         <span className="tc-page-kicker"><CheckCircle2 size={15}/> ORIGINAL DHAN OPTION CANDLES · SIMULATED FILLS</span>
         <h4>Historical CE/PE account results</h4>
-        <p>{result.auto_downloaded_missing_spot?'BANKNIFTY source auto-downloaded · ':''}{result.historical_window.first} through {result.historical_window.through_exclusive} (end exclusive) ·
+        <p><strong>{result.signal_strategy==='ema_crossover'
+          ?'Pure EMA 9/21 crossovers':'EMA 9/21 + RSI baseline'}</strong> ·
+          {' '}{result.auto_downloaded_missing_spot?'BANKNIFTY source auto-downloaded · ':''}{result.historical_window.first} through {result.historical_window.through_exclusive} (end exclusive) ·
           {' '}{result.actionable_signals} BANKNIFTY UP/DOWN signals ·
           {' '}{result.data_evidence.unique_option_minute_bars} actual-strike option minute bars.</p>
       </div>
