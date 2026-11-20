@@ -6,6 +6,7 @@ Dhan/NSE data quality or contact a broker.
 from __future__ import annotations
 
 import csv
+from datetime import datetime, timedelta, timezone
 import os
 import subprocess
 import sys
@@ -23,6 +24,18 @@ from workstation_api import (
 
 
 class ModelAuditAllDatasetsTests(unittest.TestCase):
+    def test_future_original_quote_timestamp_is_still_rejected(self):
+        captured = datetime.now(timezone.utc) + timedelta(days=2)
+        expiry = captured + timedelta(days=30)
+        raw = (
+            "captured_at,provider,underlying,underlying_spot,expiry_at,"
+            "strike,option_type,bid,ask\n"
+            f"{captured.isoformat()},DHAN,NIFTY50,22000,"
+            f"{expiry.isoformat()},22000,call,100,105\n"
+        ).encode("utf-8")
+        with self.assertRaisesRegex(ValueError, "future"):
+            option_quotes._validate(raw)
+
     def test_module_cli_runs_without_pythonpath_configuration(self):
         """Regression: scripts/audit_all_models.py imported as a script fails.
 
