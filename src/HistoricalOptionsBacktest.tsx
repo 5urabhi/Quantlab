@@ -314,14 +314,13 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
           {(Object.keys(MODE_LABEL) as Rule[]).map(rule=><option key={rule} value={rule}>{MODE_LABEL[rule]}</option>)}
         </select>
       </label>
-      <label>Fixed holding period {selectedRule==='fixed'?'':'· fixed-time policy only'}
+      {selectedRule==='fixed'&&<label>Fixed holding period
         <select aria-label="Options backtest holding period" value={holdMinutes}
-          disabled={selectedRule!=='fixed'}
           onChange={e=>setHoldMinutes(Number(e.target.value) as typeof holdMinutes)}>
           {[1,3,5,6,10,30,60].map(minutes=><option key={minutes} value={minutes}>
             {minutes===60?'1 hour':minutes+' minutes'}</option>)}
         </select>
-      </label>
+      </label>}
     </div>
     {signalModel==='ema_crossover'&&<p className="hob-hold-note" role="note">
       <strong>Pure 9/21 EMA crossover:</strong> 9 EMA (red) crosses above
@@ -383,12 +382,13 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
               <option key={n} value={n}>ATM ±{n} ({2*(2*n+1)} source requests per 30d)</option>)}
           </select>
         </label>
-        <label>Maximum hold when reversal is delayed
+        {(selectedRule==='signal_reversal_or_cap'||selectedRule==='hybrid')&&
+        <label>Maximum holding time (capped variants only)
           <select aria-label="Options backtest reversal time cap" value={reversalCap}
             onChange={e=>setReversalCap(Number(e.target.value))}>
             {[3,5,6,10,15,30,60].map(n=><option key={n} value={n}>{n} minutes</option>)}
           </select>
-        </label>
+        </label>}
         <label>Profit target % · option premium
           <input aria-label="Historical option profit target percent" type="number" min=".1" max="100" step=".5"
             value={profitTarget} onChange={e=>setProfitTarget(Number(e.target.value))}/>
