@@ -7,6 +7,7 @@ import StrategyWorkbench from './StrategyWorkbench'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './trading-cockpit.css'
 import LiveFeedPanel from './LiveFeedPanel'
+import TradingAcceptancePanel from './TradingAcceptancePanel'
 import type {OptionContract} from './OptionChainLive'
 
 type Entry = {id:string;created_utc:string;identity:string;bar_utc:string;direction:string;reference_close:number;horizon_minutes:number;quote_mode:string;evaluation:string;observed_close:number|null;actual_direction:string|null}
@@ -438,6 +439,10 @@ export default function TradingCockpit(){
         <h3>One library. Automatic reuse.</h3>
         <p>Verify the Dhan connection, inspect source coverage and prepare missing genuine observations without making duplicate datasets.</p>
       </div><button type="button" className="tc-link-button" onClick={()=>selectTab('live')}>Return to Live Trading <ArrowRight size={15}/></button></div>
+      <TradingAcceptancePanel
+        onOpenLive={()=>selectTab('live')}
+        onOpenBacktest={()=>selectTab('strategy')}
+        onOpenReplay={()=>{selectTab('replay');setReplayView('recordings')}}/>
           <section className="tc-panel tc-token-panel" aria-label="Dhan data API connection">
       <div className="tc-panel-title"><strong>Dhan market data connection</strong><span>Local-only token · read-only verification</span></div>
       <div className="tc-token-status">
