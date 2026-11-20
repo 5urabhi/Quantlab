@@ -2,6 +2,7 @@ import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Activity,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
 import './live-feed.css'
 import OptionChainLive,{type OptionContract} from './OptionChainLive'
+import AutoDepthRecorder from './AutoDepthRecorder'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 
 type DepthLevel={price:number;quantity:number;orders:number}
@@ -33,8 +34,9 @@ const timeIST=(value?:string)=>value?new Date(value).toLocaleTimeString('en-IN',
   {timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—'
 const isExactDepth=(value:string)=>/^NSE_(?:EQ|FNO):[0-9]{1,12}$/.test(value)
 
-export default function LiveFeedPanel({onOpenSetup,onDraftJournal}:{
+export default function LiveFeedPanel({onOpenSetup,onDraftJournal,onOpenSaved}:{
   onOpenSetup?:()=>void
+  onOpenSaved?:()=>void
   onDraftJournal?:(contract:OptionContract,lots:number)=>void
 }){
   const [view,setView]=useState<'signals'|'options'>('options')
@@ -138,8 +140,8 @@ export default function LiveFeedPanel({onOpenSetup,onDraftJournal}:{
     })):[],[liveBook])
   const configuredDepth=feed?.active?feed.depth_identity:depthIdentity
   return <section className="tc-panel lf-root" aria-label="Live BANKNIFTY and 20-level market feed">
-    <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/> Live streaming · index + 20-level depth</strong>
-      <p className="tc-muted">Dhan ticker WebSocket for BANKNIFTY / NIFTY 50 · separate order-book WebSocket for one NSE stock or option. No broker orders.</p></div>
+    <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/> Manual live index + single-contract depth</strong>
+      <p className="tc-muted">This manual feed is independent from automatic BANKNIFTY CE/PE 20-level recording below. Both use read-only Dhan data; neither places broker orders.</p></div>
       <span className={'lf-badge '+(livePrice?'live':feed?.active?'connecting':'offline')}>
         {livePrice?'LIVE · FRESH':feed?.active?'FEED STARTING / STALE':'NOT STREAMING'}</span>
     </div>
@@ -155,6 +157,7 @@ export default function LiveFeedPanel({onOpenSetup,onDraftJournal}:{
       <button type="button" role="tab" aria-selected={view==='options'}
         onClick={()=>setView('options')}><Database size={16}/> BANKNIFTY option chain &amp; 20-level depth</button>
     </nav>
+    {view==='options'&&<AutoDepthRecorder onOpenSaved={onOpenSaved}/>}
     {view==='options'&&<OptionChainLive
       feedActive={Boolean(feed?.active)} depthIdentity={feed?.active?feed.depth_identity||'':depthIdentity}
       currentIndexDirection={hasSignal?signal?.direction||null:null}

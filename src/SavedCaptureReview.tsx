@@ -19,7 +19,15 @@ type Book={
   identity:string;received_utc:string;best_bid:number;best_ask:number;
   spread_bps:number;imbalance:number;full_depth:boolean;bid_levels:number;
   ask_levels:number;bid:{price:number;quantity:number;orders:number}[];
-  ask:{price:number;quantity:number;orders:number}[]
+  ask:{price:number;quantity:number;orders:number}[];
+  collection_mode?:string
+  computed_features?:{
+    side:'CE'|'PE';strike:number;expiry:string
+    lots:number;units:number;lot_size_verified:number
+    buy_vwap_for_units:number|null;sell_vwap_for_units:number|null
+    bid_quantity_20:number;ask_quantity_20:number
+    chain_received_utc:string;clock_basis:string
+  }|null
 }
 type SavedBooks={
   identity:string;sampling:string;snapshots:Book[];historical_download_supported:boolean
@@ -123,16 +131,38 @@ export default function SavedCaptureReview(){
         <td>{d.correct}</td><td>{d.incorrect}</td><td>{d.unverifiable}</td>
         <td>{d.directional_accuracy===null?'—':fmt(d.directional_accuracy*100,1)+'%'}</td></tr>)}</tbody>
     </table></div>}
+    {books?.snapshots.some(b=>b.collection_mode==='auto_banknifty_20_level')&&
+      <p className="tc-confirm">
+        Automatic BANKNIFTY CE/PE books are included below. Derived 3-lot
+        liquidity prices use the contract's master-verified lot size and
+        original 20-level quantities, not confirmed broker fills.
+      </p>}
     {books&&books.snapshots.length>0&&<div className="tc-table-scroll tc-archive-table">
       <table><thead><tr><th>Observed IST</th><th>Bid (₹)</th><th>Ask (₹)</th>
-        <th>Spread (bps)</th><th>Bid depth share</th><th>Original levels</th><th></th></tr></thead>
+        <th>Spread (bps)</th><th>Bid depth share</th><th>Original levels</th>
+        <th>Source / option</th><th>Buy lots VWAP (₹)</th><th>Sell lots VWAP (₹)</th><th></th></tr></thead>
         <tbody>{books.snapshots.map((b,i)=><tr key={b.received_utc+i}>
           <td>{time(b.received_utc)}</td><td>{fmt(b.best_bid)}</td><td>{fmt(b.best_ask)}</td>
           <td>{fmt(b.spread_bps)}</td><td>{fmt(50*(b.imbalance+1),1)}%</td>
           <td>{b.bid_levels} / {b.ask_levels}</td>
+          <td>{b.computed_features
+            ?b.computed_features.side+' '+fmt(b.computed_features.strike,0)
+            :'Manual book'}</td>
+          <td>{fmt(b.computed_features?.buy_vwap_for_units)}</td>
+          <td>{fmt(b.computed_features?.sell_vwap_for_units)}</td>
           <td><button type="button" onClick={()=>setSelectedBook(selectedBook===i?null:i)}>Levels</button></td>
         </tr>)}</tbody></table></div>}
     {chosenBook&&<details className="tc-archive-levels" open><summary>Snapshot levels · {time(chosenBook.received_utc)}</summary>
+      {chosenBook.computed_features&&<p className="tc-muted">
+        Original automatic contract: {chosenBook.identity} · {chosenBook.computed_features.side}
+        {' '}{fmt(chosenBook.computed_features.strike,0)}
+        {' '}· {chosenBook.computed_features.lots} lots × verified
+        {' '}{chosenBook.computed_features.lot_size_verified} =
+        {' '}{chosenBook.computed_features.units} units.
+        Indicated buy VWAP ₹{fmt(chosenBook.computed_features.buy_vwap_for_units)},
+        sell VWAP ₹{fmt(chosenBook.computed_features.sell_vwap_for_units)}.
+        Only levels present in Dhan's received packet are included.
+      </p>}
       <div className="tc-table-scroll"><table><thead><tr><th>Level</th><th>Bid (₹)</th><th>Bid qty</th><th>Ask (₹)</th><th>Ask qty</th></tr></thead>
       <tbody>{Array.from({length:Math.max(chosenBook.bid.length,chosenBook.ask.length)},(_,i)=><tr key={i}>
         <td>{i+1}</td><td>{fmt(chosenBook.bid[i]?.price)}</td><td>{fmt(chosenBook.bid[i]?.quantity,0)}</td>

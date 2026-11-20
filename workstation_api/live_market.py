@@ -168,6 +168,13 @@ def _public_book(book: dict | None) -> dict | None:
         "bid_levels": len(bids), "ask_levels": len(asks),
         "full_depth": book.get("full_depth",False),
         "source_clock": "local_receive_not_exchange",
+        "collection_mode": book.get("collection_mode", "manual_live_feed"),
+        # Only locally derived metrics for the same ORIGINAL contract.
+        "computed_features": (
+            book.get("computed_features")
+            if isinstance(book.get("computed_features"), dict)
+            and book["computed_features"].get("identity") == book["identity"]
+            else None),
     }
 
 
