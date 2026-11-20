@@ -47,6 +47,87 @@ class BankNiftyStrategyLabTests(TestCase):
         with self.assertRaises(ValueError):
             lab._periods([22], [9])
 
+    def test_all_supported_periods_have_exact_11026_unique_pairs(self):
+        from workstation_api import ema_grid_scorer
+        pairs = ema_grid_scorer.all_supported_pairs()
+        self.assertEqual(len(pairs), 11026)
+        self.assertEqual(pairs[0], (2, 3))
+        self.assertEqual(pairs[-1], (149, 150))
+        self.assertEqual(len(set(pairs)), len(pairs))
+        self.assertTrue(all(2 <= a < b <= 150 for a, b in pairs))
+
+    def test_fast_ema_scoring_is_exactly_equal_to_original_bar_simulator(self):
+        from workstation_api import ema_grid_scorer
+        rows = (
+            rows_for_day(date(2026, 11, 17)) +
+            rows_for_day(date(2026, 11, 18)) +
+            rows_for_day(date(2026, 11, 19))
+        )
+        # A missing original bar should not create an invented cross or fill.
+        rows = rows[:400] + rows[401:]
+        pairs = [(2, 3), (3, 7), (5, 13), (9, 21),
+                 (21, 34), (34, 55), (89, 149)]
+        grid = ema_grid_scorer.FastSweep(
+            rows, {p for pair in pairs for p in pair},
+            starting_capital=50000, cost_bps=7)
+        for fast, slow in pairs:
+            with self.subTest(fast=fast, slow=slow):
+                original, _ = lab.crossover_events(rows, fast, slow)
+                legacy = lab.backtest_index(
+                    rows, original, starting_capital=50000,
+                    cost_bps=7, include_chart=False)["metrics"]
+                compact = grid.score(fast, slow)
+                self.assertEqual(compact, legacy)
+                events, count = grid.signals(fast, slow)
+                self.assertEqual(count, sum(x != "HOLD" for x in original))
+                self.assertEqual([("UP" if x[1]==1 else "DOWN") for x in events],
+                                 [x for x in original if x != "HOLD"])
+
+    def test_exhaustive_sweep_returns_real_top_five_not_just_256_samples(self):
+        from workstation_api import ema_grid_scorer
+        rows = (
+            rows_for_day(date(2026, 11, 18)) +
+            rows_for_day(date(2026, 11, 19))
+        )
+        evidence = {"basis": "original_Dhan_IDX_I_unadjusted_spot_index",
+                    "identity": "INDEX:BANKNIFTY",
+                    "original_sha256": "a"*64,
+                    "rows": len(rows), "sessions": 2}
+        with TemporaryDirectory() as tmp, \
+             patch.object(lab, "load_index", return_value=(rows, evidence)) as source, \
+             patch.object(lab, "_run_root", return_value=Path(tmp)):
+            result = lab.run_sweep(
+                limit=1500, fast_periods=[9], slow_periods=[21],
+                mode="all", starting_capital=50000, cost_bps=5)
+        source.assert_called_once_with(1500, "historical")
+        self.assertEqual(result["search_mode"], "all")
+        self.assertEqual(result["combinations_tested"], 11026)
+        self.assertTrue(result["search_space"]["complete_supported_grid"])
+        self.assertEqual(len(result["top_five"]), 5)
+        self.assertEqual(len(result["ranked"]), 100)
+        self.assertEqual(result["ranked_returned"], 100)
+        self.assertTrue(all(2 <= x["fast"] < x["slow"] <= 150
+                            for x in result["top_five"]))
+        self.assertEqual(result["orders_placed"], 0)
+        self.assertFalse(result["validation"]["holdout_available"])
+
+    def test_sweep_fails_closed_for_unknown_search_modes(self):
+        with self.assertRaisesRegex(ValueError, "custom EMA lists or all"):
+            lab.run_sweep_process(
+                fast_periods=[9], slow_periods=[21], mode="unknown")
+        with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+            bad = client.post("/api/trading-cockpit/research-lab/ema-sweep",
+                json={"mode":"unsafe","confirm_readonly":True})
+            self.assertEqual(bad.status_code, 422)
+            with patch("workstation_api.app._spawn",return_value={
+                 "job_id":"all_grid_fixture","status":"queued"}) as queued:
+                ok = client.post("/api/trading-cockpit/research-lab/ema-sweep",
+                    json={"mode":"all","confirm_readonly":True})
+                self.assertEqual(ok.status_code, 200)
+                self.assertEqual(queued.call_args.kwargs["mode"],"all")
+                self.assertEqual(queued.call_args.args[0],
+                                 "banknifty_index_ema_parameter_sweep")
+
     def test_crossover_only_on_real_index_one_minute_observed_close(self):
         rows = rows_for_day(date(2026, 11, 19))
         signals, indicators = lab.crossover_events(rows, 9, 21)

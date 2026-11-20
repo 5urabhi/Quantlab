@@ -823,6 +823,7 @@ class StrategyLabBase(BaseModel):
 
 
 class EmaSweepRequest(StrategyLabBase):
+    mode: Literal["selected", "all"] = "selected"
     fast_periods: list[int] = Field(
         default_factory=lambda: [3, 5, 7, 9, 12, 15, 21],
         min_length=1, max_length=32)
@@ -861,7 +862,8 @@ def strategy_lab_ema_sweep(body: EmaSweepRequest):
     if not body.confirm_readonly:
         raise HTTPException(400, "Confirm read-only BANKNIFTY index research")
     try:
-        strategy_lab._periods(body.fast_periods, body.slow_periods)
+        if body.mode == "selected":
+            strategy_lab._periods(body.fast_periods, body.slow_periods)
         return _spawn("banknifty_index_ema_parameter_sweep", strategy_lab.run_sweep_process,
                       **body.model_dump(exclude={"confirm_readonly"}))
     except (ValueError, OSError) as exc:

@@ -310,48 +310,84 @@ def _periods(fast_periods: list[int], slow_periods: list[int]) -> list[tuple[int
 def run_sweep(*, limit: int = 1500, fast_periods: list[int],
               slow_periods: list[int], starting_capital: float = 50000,
               cost_bps: float = 5, source_mode: str = "historical",
-              progress=None) -> dict:
-    combinations = _periods(fast_periods, slow_periods)
+              mode: str = "selected", progress=None) -> dict:
+    """Compare manually selected periods or *all* supported 2..150 pairs."""
+    from . import ema_grid_scorer
+    if mode == "selected":
+        combinations = _periods(fast_periods, slow_periods)
+    elif mode == "all":
+        combinations = ema_grid_scorer.all_supported_pairs()
+    else:
+        raise ValueError("Select custom EMA lists or all supported periods")
     rows, evidence = load_index(limit, source_mode)
     sessions = sorted({row["session_ist"] for row in rows})
-    # Reserve whole calendar sessions for validation. Small samples are not
-    # promoted to independently validated out-of-sample performance.
+    # A complete-session forward holdout is never used to rank/train.
     validated = len(sessions) >= 6
     cutoff = max(2, int(len(sessions) * .7)) if validated else len(sessions)
     train_days = set(sessions[:cutoff])
     holdout_days = set(sessions[cutoff:])
     train_rows = [row for row in rows if row["session_ist"] in train_days]
     test_rows = [row for row in rows if row["session_ist"] in holdout_days]
+    periods = {period for fast, slow in combinations for period in (fast, slow)}
+    evaluator = ema_grid_scorer.FastSweep(
+        train_rows, periods, starting_capital=starting_capital,
+        cost_bps=cost_bps)
     trials = []
     for n, (fast, slow) in enumerate(combinations):
-        signals, _ = crossover_events(train_rows, fast, slow)
-        train = backtest_index(train_rows, signals,
-                               starting_capital=starting_capital,
-                               cost_bps=cost_bps, include_chart=False)["metrics"]
-        trials.append({"fast": fast, "slow": slow, "training": train})
-        if progress and (n % 8 == 0 or n == len(combinations)-1):
+        train = evaluator.score(fast, slow)
+        eligible = train["trade_count"] >= ema_grid_scorer.MIN_RANK_TRADES
+        trials.append({
+            "fast": fast, "slow": slow,
+            "training": train, "ranking_eligible": eligible,
+        })
+        if progress and (n % 64 == 0 or n == len(combinations)-1):
             progress(10 + 80 * (n + 1) / len(combinations),
-                     "Index-only EMA crossover sweep: " +
+                     "Scoring original BANKNIFTY EMA pairs: " +
                      str(n + 1) + "/" + str(len(combinations)))
-    # Ranking is strictly in-sample; never select a winner on test data.
-    trials.sort(key=lambda x: (x["training"]["return_proxy_pct"],
-                               x["training"]["trade_count"]), reverse=True)
+    # Minimum three CLOSED trades reduces one-lucky-cross rankings. Never
+    # select a winner on holdout results. Surface under-sampled pairs as such.
+    trials.sort(key=lambda x: (
+        x["ranking_eligible"],
+        x["training"]["return_proxy_pct"],
+        -x["training"]["max_closed_trade_drawdown_pct"],
+        x["training"]["trade_count"],
+    ), reverse=True)
     if validated and test_rows:
-        for trial in trials[:20]:
-            cross, _ = crossover_events(test_rows, trial["fast"], trial["slow"])
-            trial["holdout"] = backtest_index(
-                test_rows, cross, starting_capital=starting_capital,
-                cost_bps=cost_bps, include_chart=False)["metrics"]
+        top = trials[:20]
+        test_periods = {p for t in top for p in (t["fast"], t["slow"])}
+        test_evaluator = ema_grid_scorer.FastSweep(
+            test_rows, test_periods, starting_capital=starting_capital,
+            cost_bps=cost_bps)
+        for trial in top:
+            trial["holdout"] = test_evaluator.score(
+                trial["fast"], trial["slow"])
+    top_five = trials[:5]
     best = trials[0]
     actual_signals, indicators = crossover_events(rows, best["fast"], best["slow"])
-    selected = backtest_index(rows, actual_signals,
-                              starting_capital=starting_capital,
-                              cost_bps=cost_bps, include_chart=True)
+    selected = backtest_index(
+        rows, actual_signals, starting_capital=starting_capital,
+        cost_bps=cost_bps, include_chart=True)
+    qualifying = sum(1 for t in trials if t["ranking_eligible"])
     return save_run({
         "kind": "ema_sweep", "identity": IDENTITY,
         "model": INDICATOR_VERSION,
+        "search_mode": mode,
+        "search_space": {
+            "min_period": 2, "max_period": 150, "rule": "fast < slow",
+            "complete_supported_grid": mode == "all",
+        },
         "combinations_tested": len(combinations),
-        "ranked": trials,
+        # All pairs are evaluated; only 100 summaries are persisted, keeping
+        # the saved evidence small and the UI navigable.
+        "ranked": trials[:100],
+        "top_five": top_five,
+        "ranked_returned": min(100, len(trials)),
+        "qualifying_combinations": qualifying,
+        "min_completed_trades_to_rank": ema_grid_scorer.MIN_RANK_TRADES,
+        "ranking_basis": (
+            "Training index-proxy return after per-side costs; prioritize at "
+            "least 3 completed trades, then smaller closed-trade drawdown. "
+            "Holdout is displayed but never used in selection."),
         "best_pair": {"fast": best["fast"], "slow": best["slow"]},
         "selected": selected,
         "overlays": _overlay(rows, actual_signals, indicators),
@@ -360,11 +396,13 @@ def run_sweep(*, limit: int = 1500, fast_periods: list[int],
             "whole_sessions_train": len(train_days),
             "whole_sessions_holdout": len(holdout_days),
             "holdout_available": validated,
-            "selection_rule": "train-only return proxy, top 20 holdout evaluated",
-            "warning": ("Holdout uses separate whole sessions; no tuning on test."
-                        if validated else
-                        "Fewer than 6 sessions: ranking is exploratory, no "
-                        "independent out-of-sample validation."),
+            "selection_rule": "train-only top-five; top 20 holdout evaluated",
+            "warning": (
+                "Out-of-sample results cover later entire sessions; "
+                "do not tune the winner on holdout."
+                if validated else
+                "Fewer than six recorded sessions: rankings are exploratory; "
+                "no independent out-of-sample test is available."),
         },
         "bid_ask_spread_source": "unavailable_for_cash_index_ohlc",
         "read_only": True, "orders_placed": 0,
@@ -514,13 +552,17 @@ def _run_low_priority(kind: str, params: dict, progress=None) -> dict:
 def run_sweep_process(*, limit: int = 1500, fast_periods: list[int],
                       slow_periods: list[int],
                       starting_capital: float = 50000, cost_bps: float = 5,
-                      source_mode: str = "historical", progress=None) -> dict:
-    _periods(fast_periods, slow_periods)
+                      source_mode: str = "historical", mode: str = "selected",
+                      progress=None) -> dict:
+    if mode == "selected":
+        _periods(fast_periods, slow_periods)
+    elif mode != "all":
+        raise ValueError("Select custom EMA lists or all supported periods")
     return _run_low_priority("ema_sweep", {
         "limit": limit, "fast_periods": fast_periods,
         "slow_periods": slow_periods,
         "starting_capital": starting_capital, "cost_bps": cost_bps,
-        "source_mode": source_mode}, progress=progress)
+        "source_mode": source_mode, "mode": mode}, progress=progress)
 
 
 def run_pair_process(*, fast: int, slow: int, limit: int = 1500,

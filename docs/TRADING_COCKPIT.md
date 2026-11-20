@@ -279,13 +279,27 @@ new code.
    Use Python standard-library features only. No pandas, NumPy, Python
    package installs, external files, network requests, or Dhan orders
    in custom scripts.
-4. To test **all selected EMA combinations**, switch to the other editor
-   tab and supply comma-separated fast and slow periods. Every valid
-   fast<slow pair is tested, up to **256 combinations per job**. The
-   sweep ranks by *training-session* directional index proxy returns;
-   a separate full-session holdout is shown when six or more sessions
-   exist. Tests below that threshold are explicitly exploratory.
-   Select **View chart** on a row to plot a specific EMA pair.
+4. Switch to **All EMA combinations** to choose one of three modes:
+   **Choose one EMA pair** (fast/slow periods such as 9/21), **Choose several
+   EMA values** (comma-separated lists, up to 256 valid fast<slow pairs),
+   or **Test all supported pairs** (every integer 2≤fast<slow≤150:
+   exactly **11,026 unique combinations**, not a sampled subset).
+   Each comparison scores genuine completed BANKNIFTY index candles with
+   the same next-original-open, flip-on-opposite-confirmed-cross and
+   observed-end-of-day rules. Exhaustive mode precomputes each period's
+   session-reset EMA curve once and scores reversals/boundaries in a
+   separate low-priority process to protect live Dhan recording.
+   Results show **Top 5** cards with training return, completed trades,
+   closed-trade drawdown and holdout return where available; an expandable
+   table saves summaries for the top 100. All 11,026 pairs are evaluated
+   before ranking. To limit one-trade winners, pairs with fewer than
+   three completed trades rank below eligible pairs and are explicitly
+   labeled exploratory. Selection uses *training sessions only*; a later
+   whole-session holdout is shown for the top 20 candidates when six or
+   more sessions exist, never used to select winners. Select **View EMA
+   chart and trades** on a top-five card, or **View chart** in the
+   table, to examine that pair's full-series visualization and index
+   paper outcomes. No result guarantees a profitable options strategy.
 5. Inspect the synchronized charts: **original BANKNIFTY price, red
    fast-EMA and green slow-EMA with crossover markers, five-minute
    rate-of-change momentum, EMA spread in basis points, RSI(14) with
