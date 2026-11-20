@@ -168,6 +168,9 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
             hold=5, cap=10, slippage_bps=0)
         self.assertEqual(outcome["trade_count"], 3)
         self.assertEqual(outcome["reversal_switches"], 2)
+        self.assertEqual(outcome["reversal_audit"]["opposite_signal_exits"], 2)
+        self.assertEqual(outcome["reversal_audit"]["same_open_reentry_attempts"], 2)
+        self.assertEqual(outcome["reversal_audit"]["rejected_reentry_reasons"], {})
         first, second, third = outcome["trades"]
         self.assertEqual(
             [(t["option_side"], t["entry_utc"], t["exit_utc"])
@@ -220,6 +223,10 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertEqual(result["trades"][0]["exit_reason"], "opposite_signal")
         self.assertEqual(result["trades"][0]["exit_utc"], stamp(36))
         self.assertEqual(result["unscored"]["no_option_near_target_at_signal"], 1)
+        self.assertEqual(result["reversal_audit"]["opposite_signal_exits"], 1)
+        self.assertEqual(result["reversal_audit"]["completed_flips"], 0)
+        self.assertEqual(result["reversal_audit"]["rejected_reentry_reasons"],
+                         {"no_option_near_target_at_signal": 1})
 
     def test_expired_source_is_fetched_then_reused_without_second_vendor_call(self):
         start = date(2026, 11, 18)
@@ -269,6 +276,9 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertEqual(report["selected_rule_id"], "fixed_5")
         self.assertEqual(report["data_evidence"]["fresh_requests"], 6)
         self.assertEqual(report["selected"]["trade_count"], 1)
+        self.assertEqual(report["research_readiness"]["observed_sessions"], 1)
+        self.assertFalse(report["research_readiness"]["training_performed"])
+        self.assertGreater(report["research_readiness"]["directional_signal_bars"], 0)
         self.assertEqual(report["selected"]["trades"][0]["strike"], 62000)
         self.assertEqual(report["selected"]["trades"][0]["option_side"], "CE")
         self.assertEqual(report["orders_placed"], 0)

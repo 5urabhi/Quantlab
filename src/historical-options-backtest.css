@@ -98,3 +98,39 @@
 .hob-route-summary{margin:0;line-height:1.5;padding:9px 12px;
   border:1px solid #355468;border-radius:7px;background:#142c3b;
   font-size:11px;color:#adc8d9}
+
+
+/* Reconcile repeated signal labels, executable price coverage and genuine flips. */
+.hob-research-audit{display:grid;gap:13px;padding:16px;border:1px solid #3b6778;
+  border-radius:11px;background:#112b3c;color:#bedbea}
+.hob-research-audit>header{display:flex;align-items:flex-start;justify-content:space-between;gap:13px;flex-wrap:wrap}
+.hob-research-audit h5{font-size:15px;line-height:1.4;color:#eefbff;margin:5px 0}
+.hob-research-audit header p{font-size:11px;line-height:1.6;max-width:850px;margin:0;color:#aac6d4}
+.hob-research-status{font-size:11px;font-weight:700;border:1px solid #735b34;
+  padding:8px 10px;border-radius:20px;background:#3f3020;color:#ffd89e}
+.hob-audit-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.hob-audit-grid>div{min-width:0;display:flex;flex-direction:column;gap:5px;
+  border:1px solid #365368;padding:11px 12px;border-radius:9px;background:#19364a}
+.hob-audit-grid>div>span{font-size:11px;color:#a5c9da}
+.hob-audit-grid>div>strong{font-size:19px;color:#f1fcff;line-height:1.2}
+.hob-audit-grid>div>small{font-size:10px;color:#a6c6d3;line-height:1.5}
+.hob-zero-flip-diagnostic{padding:10px 12px;font-size:11px;line-height:1.65;
+  border-left:3px solid #e2a35e;color:#f4dfc3;background:#362e2b;margin:0;border-radius:5px}
+.hob-audit-detail{border:1px solid #395d70;border-radius:8px;background:#132c40;overflow:hidden}
+.hob-audit-detail>summary{cursor:pointer;padding:11px 13px;font-weight:700;font-size:12px;color:#a8e4ed}
+.hob-audit-detail-body{display:grid;gap:9px;padding:12px 15px 15px;font-size:11px;
+  line-height:1.65;color:#b9d5e3}
+.hob-audit-detail-body p{margin:0}
+.hob-audit-detail-body ul,.hob-audit-detail-body ol{margin:0 0 4px;padding-left:22px}
+.hob-audit-rejections{display:flex;flex-wrap:wrap;gap:7px}
+.hob-audit-rejections span{background:#24435a;border:1px solid #49697c;
+  padding:5px 9px;border-radius:5px}
+@media(max-width:1050px){.hob-audit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:550px){.hob-audit-grid{grid-template-columns:1fr}}
+
+
+.hob-hold-note{font-size:11px;line-height:1.65;color:#aecbd8;
+  margin:0;padding:10px 12px;border:1px solid #35566b;
+  border-radius:7px;background:#142c3d}
+.hob-controls-primary select:disabled{opacity:.55;cursor:not-allowed;
+  background:#132537;color:#b1bec8}

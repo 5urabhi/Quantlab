@@ -171,7 +171,11 @@ selection stays read-only and requires a live Dhan F&O subscription.
 
 ## One-screen options backtest: BANKNIFTY signals buy historical CE/PE contracts
 
-**Default continuous-reversal research rule.** UP → long CE; at the
+**Default continuous-reversal research rule.** The fixed-hold selector
+is disabled when the selected rule is signal reversal, because 1/3/5/6/10/30/60
+minute durations do not determine when a reversal-only position exits. Those
+fixed-time scenarios are still independently evaluated in the comparison
+table. UP → long CE; at the
 first completed DOWN signal close the CE at the next observed minute OPEN
 and **buy a newly selected PE at that exact same OPEN**. On the next
 completed UP signal, close the PE and buy a newly selected CE at that
@@ -189,6 +193,78 @@ exits, a coincident opposite signal does not automatically enter at
 the same opening; explicit opposite-signal reversal triggers are required.
 All transitions are **hypothetical read-only next-open executions**, not
 broker orders or verified fills.
+
+### Historical options → research and RL readiness (implemented audit, no training)
+
+The historical options results now include **Signal reversal diagnostics and RL
+training readiness**. This is a read-only source audit executed on the same
+original Dhan/index candles used by the backtest. It answers these questions
+*before* a user is tempted to optimize returns or train an RL agent:
+
+- **How many distinct UP↔DOWN changes actually occurred?** The EMA/RSI
+  classifier runs on *every completed minute*. Its 1,000 labels across a
+  nine-session sample do not imply 1,000 independent direction reversals or
+  entry opportunities. NO_TRADE is neutral and within-day direction changes
+  are counted only when a new actionable label differs from the prior one.
+- **Was an original CE/PE available near the selected premium at the signal?**
+  A source quote must exist at the completed signal candle with positive
+  volume, near the chosen ₹300 ± tolerance; the same actual strike/security
+  must then have a valid NEXT minute OPEN. The audit reports how often this
+  succeeds. This availability measure is separate from the much stricter
+  requirement that *every minute* of the eventual trade path is observed.
+- **Why did the exit-and-flip strategy show zero flips?** Every selected
+  simulated position reports whether it exited because of an opposite signal,
+  whether a same-open replacement was attempted, whether it became a scored
+  CE or PE, and which rule rejected replacement (missing option near target,
+  missing next OPEN, insufficient paper cash, incomplete exact-contract path,
+  zero volume, session cutoff, or position still open). Zero flips with zero
+  opposite exits is fundamentally different from zero flips with two rejected
+  PE/CE replacements.
+- **Are we ready to train/validate an RL policy?** The audit counts
+  *independent trading sessions*, original index minutes, option
+  contract/session identities, real distinct signal runs and aligned
+  source observations. Prototype/readiness planning targets of 30 sessions
+  and research planning target of 250 sessions, 100 real direction changes,
+  and ≥90% option-entry coverage are **project-defined heuristics**, not
+  statistical guarantees. Historical option OHLC alone does **not** make
+  an execution-grade RL system ready. The API explicitly reports
+  `training_performed: false` and `research_grade_rl_ready: false`.
+
+**Proposed future model sequence (not claimed as implemented RL):**
+
+1. **Fix the baseline evidence first.** Validate that the same EMA/RSI
+   signals, fixed-horizon and CE↔PE rules all use identical original option
+   data, side-specific contract selection, 3 lots, source-matched fees and
+   no overnight trading. Reconcile missed trades and unscored reasons.
+2. **Supervised prediction baseline.** Train on lagged BANKNIFTY returns,
+   EMA/RSI/ATR/realized-volatility, time-of-day and source-dated option
+   premium/volume/IV/OI where available; forecast directional *probability*
+   or net-after-cost CE/PE outcome, not a certain sign. Evaluate calibration
+   and costs on later dates only. Missing source fields are masked rather
+   than replaced with fictitious observations.
+3. **Contextual bandit/position gate.** Choose among FLAT, CE and PE with
+   action masks for an absent contract, a rejected premium, insufficient
+   capital or a market/session boundary. Compare with always-flat, fixed
+   1/3/5/6/10/30/60-minute exits and opposite-signal switching.
+4. **Offline RL only after enough sessions and contract coverage.**
+   Prototype discrete-action DQN/QR-DQN or action-masked PPO in an isolated
+   *historical paper environment*. State contains only data available when
+   decisions were made. Actions are FLAT, BUY CE, BUY PE, HOLD and EXIT/FLIP,
+   never undocumented broker orders. Reward is change in paper portfolio
+   value minus explicit fees/slippage and risk penalties. Episode boundaries
+   are NSE sessions; no overnight positions. Use chronological train /
+   validation / untouched test days, multiple seeds, walk-forward
+   retraining, and per-regime negative-control comparisons.
+5. **Paper-trade live observations** against future index/option tapes,
+   timestamped bid/ask, book liquidity and exact lots before considering
+   broker execution. Historical OHLC cannot certify fill probability or
+   exact intraminute stop orders. Nothing currently authorizes live orders.
+
+A current window of only nine sessions and tens of thousands of
+multi-contract minute bars is enough to test the research infrastructure,
+but **not enough to claim a trained strategy generalizes**. Prefer expanding
+the genuine historical data and preserving source versions over generating
+synthetic options returns or fitting a large policy on these nine days.
 
 **Open Trading Cockpit → Options Backtest → Run options backtest.**
 The CE/PE simulation is the primary workflow. Index-only directional
