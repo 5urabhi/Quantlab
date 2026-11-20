@@ -196,10 +196,15 @@ class UnifiedMarketDataTests(unittest.TestCase):
                 self.assertFalse(target.exists())
                 with patch.object(market.dhan_auth, "check_profile",
                                   return_value={"ok": True,
-                                                "data_plan_active": True}) as verify:
+                                                "data_plan_active": True}) as verify, \
+                     patch.object(api_module.auto_option_depth, "resume_if_armed") as depth_start, \
+                     patch.object(api_module.auto_option_chain, "resume_if_armed") as chain_start:
                     response = self.client.post(
                         "/api/market-data/providers/dhan/connect", json=payload)
                 self.assertEqual(response.status_code, 200, response.text)
+                depth_start.assert_called_once()
+                chain_start.assert_called_once()
+                self.assertTrue(response.json()["automatic_recording"])
                 self.assertNotIn(secret, response.text)
                 self.assertEqual(verify.call_args.kwargs["token_override"], secret)
                 self.assertTrue(target.is_file())

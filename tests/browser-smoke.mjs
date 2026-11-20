@@ -117,7 +117,9 @@ try {
     assert.equal(await autoDepth.getByRole('spinbutton',{
       name:'Auto depth target premium',
     }).inputValue(),'300')
-    await autoDepth.getByRole('checkbox').check()
+    await autoDepth.getByRole('checkbox',{name:/Allow my local QuantLab server/}).check()
+    assert.equal(await autoDepth.getByRole('checkbox',{name:/Optional: automatically renew/}).isChecked(),false,
+      'Token renewal must stay independently opt-in')
     assert.equal(await armDepth.isEnabled(),true,
       'Opt-in consent allows arming the local recorder')
     let armedRequest=null

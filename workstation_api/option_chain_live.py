@@ -29,7 +29,6 @@ EXPIRY_TTL_SECONDS = 300
 CHAIN_TTL_SECONDS = 10
 MIN_CHAIN_INTERVAL_SECONDS = 3.15
 MAX_MASTER_BYTES = 100_000_000
-MAX_CHAIN_STRIKES = 50
 _EXPIRY_CACHE: dict = {}
 _CHAIN_CACHE: dict = {}
 _LAST_VENDOR_CALL = 0.0
@@ -223,7 +222,7 @@ def _normalize(raw: dict, expiry: str, captured: datetime, master: dict) -> dict
             strikes.append((abs(strike - spot), strike, pair))
     strikes.sort(key=lambda item: (item[0], item[1]))
     normalized = []
-    for _, strike, pair in strikes[:MAX_CHAIN_STRIKES]:
+    for _, strike, pair in strikes:
         for field, side in (("ce", "CE"), ("pe", "PE")):
             quote = pair.get(field)
             if not isinstance(quote, dict):
@@ -239,6 +238,7 @@ def _normalize(raw: dict, expiry: str, captured: datetime, master: dict) -> dict
         "not_live_stream": True, "market_master_fresh": bool(master.get("fresh")),
         "master_message": master.get("message", ""), "master_age_hours": master.get("age_hours"),
         "contracts": normalized, "quote_count": len(normalized),
+        "strike_count": len(strikes), "source_strike_count": len(book),
         "read_only": True,
         "warning": "Dhan chain is a REST snapshot, NOT a 20-level WebSocket; option bid/ask may already have changed. Exact lot size and security ID require the current official local master.",
     }
@@ -297,7 +297,7 @@ def expiries(*, sleep=time.sleep) -> dict:
         })
         if not expirations:
             raise ValueError("Dhan provided no current BANKNIFTY expiries")
-        result = {"underlying": "BANKNIFTY", "expiries": expirations[:40],
+        result = {"underlying": "BANKNIFTY", "expiries": expirations,
                   "nearest_expiry": expirations[0],
                   "received_utc": _clock().isoformat(),
                   "source": "Dhan v2 original expirylist",

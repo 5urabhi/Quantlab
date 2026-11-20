@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, trading_acceptance
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, auto_option_chain, trading_acceptance
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -863,12 +863,11 @@ def trading_cockpit_live_start(body: LiveCopilotRequest):
         raise HTTPException(400,"Approve read-only Dhan real-time data recording")
     if body.depth_identity and not market_depth.DEPTH_ID.fullmatch(body.depth_identity):
         raise HTTPException(400,"20-level depth is supported for exact NSE_EQ/NSE_FNO identities, not IDX_I")
-    if not os.getenv("DHAN_CLIENT_ID","").strip():
-        raise HTTPException(400,"Add your Dhan client ID in the cockpit's secure connection panel")
     if not os.getenv("DHAN_ACCESS_TOKEN","").strip():
         raise HTTPException(400,"Add a Dhan access token in the cockpit connection panel")
     try:
-        verified=dhan_auth.check_profile()
+        configured_id=os.getenv("DHAN_CLIENT_ID","").strip() or None
+        verified=dhan_auth.check_profile(client_id_override=configured_id)
         if not verified.get("ok"):
             raise ValueError(verified.get("message") or "Dhan market data access unverified")
         return live_market.start(body.index_identity,body.depth_identity,body.auto_audit)
@@ -1022,6 +1021,7 @@ class BankNiftyAutoDepthRequest(BaseModel):
     per_side: Literal[1, 2, 3] = 2
     lots: int = Field(default=3, ge=1, le=20)
     sample_seconds: int = Field(default=3, ge=1, le=10)
+    allow_token_renewal: bool = False
     confirm_live_data: bool = False
 
 
@@ -1045,9 +1045,11 @@ def banknifty_auto_depth_status():
 @app.post("/api/trading-cockpit/auto-depth/arm")
 def banknifty_auto_depth_arm(body: BankNiftyAutoDepthRequest):
     try:
-        return auto_option_depth.arm(
+        armed = auto_option_depth.arm(
             body.model_dump(exclude={"confirm_live_data"}),
             confirm_live_data=body.confirm_live_data)
+        auto_option_chain.resume_if_armed()
+        return {**armed, "option_chain_capture": auto_option_chain.status()}
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
@@ -1055,9 +1057,17 @@ def banknifty_auto_depth_arm(body: BankNiftyAutoDepthRequest):
 @app.post("/api/trading-cockpit/auto-depth/disarm")
 def banknifty_auto_depth_disarm():
     try:
-        return auto_option_depth.disarm()
+        result = auto_option_depth.disarm()
+        auto_option_chain.disarmed()
+        return {**result, "option_chain_capture": auto_option_chain.status()}
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
+
+
+@app.get("/api/trading-cockpit/auto-chain/status")
+def banknifty_auto_chain_status():
+    """Safe local-only capture counts; no additional Dhan API requests."""
+    return auto_option_chain.status()
 
 
 @app.get("/api/data-manager/depth/catalog")
@@ -1065,8 +1075,8 @@ def data_manager_depth_catalog(limit: int = 50):
     try:
         return {**market_depth.catalog(limit),
                 "dhan_live_credential_present":bool(
-                    os.getenv("DHAN_ACCESS_TOKEN","").strip() and
-                    os.getenv("DHAN_CLIENT_ID","").strip())}
+                    os.getenv("DHAN_ACCESS_TOKEN","").strip()),
+                "client_id_auto_lookup_supported": True}
     except (ValueError, OSError) as exc:
         bad(exc)
 
@@ -1093,8 +1103,8 @@ def data_manager_depth_start(body: DepthCaptureRequest):
         raise HTTPException(400, "Confirm authorized read-only Dhan market-depth recording")
     if not market_depth.DEPTH_ID.fullmatch(body.identity):
         raise HTTPException(400, "Use exact NSE_EQ/NSE_FNO Security ID")
-    if not os.getenv("DHAN_ACCESS_TOKEN") or not os.getenv("DHAN_CLIENT_ID"):
-        raise HTTPException(400, "Configure DHAN_ACCESS_TOKEN and DHAN_CLIENT_ID in local ignored .env")
+    if not os.getenv("DHAN_ACCESS_TOKEN"):
+        raise HTTPException(400, "Configure a Dhan access token in the local ignored .env through Trading Cockpit > Connections")
     ident = market_depth._id()
     return {**_spawn("dhan_depth_capture", market_depth.start_live,
                     body.identity, body.depth, body.duration_seconds,
@@ -2660,9 +2670,14 @@ class DhanLocalConnect(BaseModel):
 def market_data_connect_dhan(body: DhanLocalConnect):
     """Explicit local-only, no-token-in-response Dhan account preflight."""
     try:
-        return market_data_workflow.store_verified_dhan_access_token(
+        verified = market_data_workflow.store_verified_dhan_access_token(
             body.access_token.get_secret_value(), confirm_local_storage=body.confirm_local_storage,
             client_id=body.client_id.get_secret_value() if body.client_id else "")
+        # Connecting through the UI should start the read-only CE/PE recorders
+        # immediately (or queue them for NSE hours); no Arm click is required.
+        auto_option_depth.resume_if_armed()
+        auto_option_chain.resume_if_armed()
+        return {**verified, "automatic_recording": auto_option_depth.status()["armed"]}
     except Exception as exc:
         bad(exc)
 
@@ -3613,6 +3628,7 @@ def register_research_hypothesis(body:ResearchHypothesisRequest):
 def resume_user_armed_banknifty_depth():
     try:
         auto_option_depth.resume_if_armed()
+        auto_option_chain.resume_if_armed()
     except (ValueError, OSError, sqlite3.Error):
         LOG.warning("Previously armed automatic depth recorder could not resume")
 
@@ -3620,6 +3636,7 @@ def resume_user_armed_banknifty_depth():
 @app.on_event("shutdown")
 def suspend_banknifty_depth_on_local_shutdown():
     auto_option_depth.suspend_for_shutdown()
+    auto_option_chain.suspend_for_shutdown()
 
 
 # Missing or interrupted SHARED DERIVED VIEW publications are repaired at startup

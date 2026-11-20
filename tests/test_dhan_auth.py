@@ -75,6 +75,22 @@ class DhanAuthTests(TestCase):
         self.assertEqual(mismatch["code"],"client_id_mismatch")
         self.assertNotIn("1000001234",str(mismatch))
 
+    def test_profile_client_id_is_resolvable_without_manual_entry(self):
+        future = datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(hours=12)
+        document = {"dhanClientId": "1000001234",
+                    "tokenValidity": future.strftime("%d/%m/%Y %H:%M"),
+                    "dataPlan": "Active"}
+        with patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": "SECRET_PRIVATE_TOKEN",
+                                     "DHAN_CLIENT_ID": ""}):
+            result = dhan_auth.check_profile(
+                opener=lambda *args, **kwargs: MockResponse(document))
+        self.assertTrue(result["client_id_auto_available"])
+        self.assertTrue(result["client_id_ready"])
+        self.assertEqual(result["client_id_source"], "authenticated_profile")
+        self.assertFalse(result["client_id_configured"])
+        self.assertNotIn("1000001234", str(result))
+        self.assertNotIn("SECRET_PRIVATE_TOKEN", str(result))
+
     def test_expired_token_is_not_truthy_validity(self):
         past = (datetime.now(ZoneInfo("Asia/Kolkata")) - timedelta(days=3))
         document = {"tokenValidity": past.strftime("%d/%m/%Y %H:%M"),

@@ -24,7 +24,7 @@ import struct
 import time
 import uuid
 
-from . import dhan_workspace, market_depth, shared_market_data
+from . import dhan_option_chain, dhan_workspace, market_depth, shared_market_data
 
 IST = ZoneInfo("Asia/Kolkata")
 LOCK = RLock()
@@ -341,12 +341,21 @@ def _ticker_worker(stop: Event, subscriptions: list[dict], url: str) -> None:
     attempts=0
     while not stop.is_set():
         try:
-            with connect(url,open_timeout=10,close_timeout=2,max_size=200_000) as ws:
+            # Dhan may rotate its active token after explicit local opt-in.
+            # Re-read it on reconnect rather than looping on the revoked URL.
+            current_token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
+            current_client = dhan_option_chain._client_id(current_token)
+            current_url = ("wss://api-feed.dhan.co?version=2&token=" +
+                           quote(current_token, safe="") + "&clientId=" +
+                           quote(current_client, safe="") + "&authType=2")
+            with connect(current_url,open_timeout=10,close_timeout=2,max_size=200_000) as ws:
                 ws.send(json.dumps({"RequestCode":15,"InstrumentCount":len(subscriptions),
                                     "InstrumentList":subscriptions}))
                 _update(ticker_connection="connected",last_error=None)
                 attempts=0
                 while not stop.is_set():
+                    if os.getenv("DHAN_ACCESS_TOKEN", "").strip() != current_token:
+                        break  # Credentials rotated; reconnect with updated auth.
                     try:
                         data=ws.recv(timeout=1)
                     except TimeoutError:
@@ -425,11 +434,16 @@ def _depth_worker(stop: Event, identity: str, url: str) -> None:
     while not stop.is_set():
         last={}
         try:
-            with connect(url,open_timeout=10,close_timeout=2,max_size=250_000) as ws:
+            current_token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
+            current_client = dhan_option_chain._client_id(current_token)
+            current_url = market_depth._live_endpoint(20, current_client, current_token)
+            with connect(current_url,open_timeout=10,close_timeout=2,max_size=250_000) as ws:
                 ws.send(json.dumps(packet_request))
                 _update(depth_connection="connected")
                 attempts=0
                 while not stop.is_set():
+                    if os.getenv("DHAN_ACCESS_TOKEN", "").strip() != current_token:
+                        break  # Dhan-Web renewal invalidates the old token.
                     try:
                         blob=ws.recv(timeout=1)
                     except TimeoutError:
@@ -472,10 +486,10 @@ def start(index_identity: str, depth_identity: str = "", auto_audit: bool = Fals
         raise ValueError("Choose BANKNIFTY or NIFTY 50 index")
     if depth_identity and not market_depth.DEPTH_ID.fullmatch(depth_identity):
         raise ValueError("20-level depth requires an exact NSE_EQ/NSE_FNO Security ID")
-    client=os.getenv("DHAN_CLIENT_ID","").strip()
     token=os.getenv("DHAN_ACCESS_TOKEN","").strip()
-    if not client or not token:
-        raise ValueError("Configure Dhan client ID and access token in the cockpit connection form")
+    if not token:
+        raise ValueError("Configure a Dhan access token in Trading Cockpit > Connections")
+    client=dhan_option_chain._client_id(token)
     if not client.isdigit() or not 4<=len(client)<=20 or len(token)>4096:
         raise ValueError("Invalid locally stored Dhan live market credentials")
     with LOCK:
