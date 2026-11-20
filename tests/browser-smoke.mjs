@@ -161,9 +161,75 @@ try {
     await lab.getByRole('img',{name:/Momentum/}).waitFor()
     await lab.getByRole('img',{name:/RSI/}).waitFor()
     await lab.getByRole('tab',{name:/All EMA combinations/}).click()
+    await lab.getByRole('radio',{name:/Choose one EMA pair/}).waitFor()
+    const pairFast=lab.getByRole('spinbutton',{name:'Chosen fast EMA period'})
+    const pairSlow=lab.getByRole('spinbutton',{name:'Chosen slow EMA period'})
+    assert.equal(await pairFast.inputValue(),'9')
+    assert.equal(await pairSlow.inputValue(),'21')
+    await pairFast.fill('7')
+    await pairSlow.fill('34')
+    await lab.getByRole('button',{name:/Backtest chosen EMA pair/}).waitFor()
+    await lab.getByRole('radio',{name:/Choose several EMA values/}).check()
     await lab.getByRole('textbox',{name:'Fast EMA combination list'}).fill('3, 9')
     await lab.getByRole('textbox',{name:'Slow EMA combination list'}).fill('21, 34')
-    await lab.getByRole('button',{name:/Backtest every EMA combination/}).waitFor()
+    await lab.getByRole('button',{name:/Compare chosen EMA combinations/}).waitFor()
+    await lab.getByRole('radio',{name:/Test all supported pairs/}).check()
+    await lab.getByText('Exhaustive search: 11,026 combinations.',{exact:false}).waitFor()
+    await page.route('**/api/trading-cockpit/research-lab/ema-sweep',route=>{
+      const request=route.request().postDataJSON()
+      assert.equal(request.mode,'all')
+      assert.equal(request.confirm_readonly,true)
+      return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({
+        job_id:'ci_all_ema_fixture',status:'queued',
+      })})
+    })
+    const demoMetrics={
+      trade_count:12,crossovers:20,win_rate_pct:58,pnl_proxy_inr:450,
+      return_proxy_pct:0.9,ending_capital_proxy_inr:50450,
+      index_points:110,max_closed_trade_drawdown_pct:1.2,
+      profit_factor:1.5,trade_sharpe_unannualized:0.5,
+      avg_hold_minutes:17,unscored:{},
+    }
+    const topFive=[[3,7],[5,13],[9,21],[12,26],[21,55]]
+      .map(([fast,slow],i)=>({
+        fast,slow,ranking_eligible:true,
+        training:{...demoMetrics,return_proxy_pct:1.1-i*.2},
+        holdout:{...demoMetrics,return_proxy_pct:0.2-i*.1},
+      }))
+    await page.route('**/api/jobs/ci_all_ema_fixture',route=>
+      route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({
+        id:'ci_all_ema_fixture',status:'complete',percent:100,
+        result:{
+          kind:'ema_sweep',run_id:'banknifty_'+'b'.repeat(20),
+          identity:'INDEX:BANKNIFTY',read_only:true,orders_placed:0,
+          evidence:{identity:'INDEX:BANKNIFTY',basis:'CI_SYNTHETIC_NOT_DHAN',
+            source_mode:'historical',rows:3,sessions:1,
+            first_utc:'2026-11-18T04:00:00+00:00',
+            last_utc:'2026-11-18T04:02:00+00:00'},
+          best_pair:{fast:3,slow:7},
+          combinations_tested:11026,search_mode:'all',
+          ranked:topFive,top_five:topFive,
+          ranked_returned:5,qualifying_combinations:4000,
+          min_completed_trades_to_rank:3,
+          ranking_basis:'Training only',
+          validation:{whole_sessions_train:1,whole_sessions_holdout:0,
+            holdout_available:false,warning:'CI fixture'},
+          selected:{read_only:true,orders_placed:0,
+            basis:'hypothetical_1x_banknifty_index_directional_proxy_not_tradable',
+            metrics:demoMetrics,trades:[],chart:[]},
+          overlays:[],
+          bid_ask_spread_source:'unavailable_for_cash_index_ohlc',
+        },
+      })}))
+    await lab.getByRole('button',{name:/Test all 11,026 EMA combinations/}).click()
+    await lab.getByRole('heading',{name:/Top five EMA strategies/}).waitFor()
+    assert.equal(await lab.locator('.rpl-top-card').count(),5,
+      'The actual UI must render exactly five ranked EMA cards')
+    await lab.getByText('11,026 pairs tested',{exact:false}).waitFor()
+    await lab.getByText('EMA 3 / 7',{exact:false}).first().waitFor()
+    await lab.getByText('View ranked comparison table',{exact:false}).waitFor()
+    await page.unroute('**/api/trading-cockpit/research-lab/ema-sweep')
+    await page.unroute('**/api/jobs/ci_all_ema_fixture')
     await page.unroute('**/api/trading-cockpit/research-lab/status')
     await page.unroute('**/api/trading-cockpit/research-lab/runs')
     await page.unroute('**/api/trading-cockpit/research-lab/python')
