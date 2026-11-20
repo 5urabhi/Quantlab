@@ -73,8 +73,14 @@ def _settings_path() -> Path:
 
 def _config() -> dict:
     path = _settings_path()
-    if not path.is_file() or path.is_symlink():
+    if path.is_symlink():
+        # Never trust a symlinked settings file or infer permission from it.
         return dict(DEFAULTS)
+    if not path.is_file():
+        # User-authorized read-only BANKNIFTY collection is the normal default:
+        # when an API token is already locally configured, launch both CE/PE
+        # collectors with the workstation. An explicit Stop persists disabled.
+        return {**DEFAULTS, "enabled": bool(os.getenv("DHAN_ACCESS_TOKEN", "").strip())}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         return _validate_config(raw)
@@ -629,7 +635,7 @@ def disarm() -> dict:
 def resume_if_armed() -> None:
     global SHUTTING_DOWN
     SHUTTING_DOWN = False
-    # Only previously consented settings may start any future broker feed.
+    # Start automatically with a locally configured Dhan token; explicit disarm persists.
     if _config()["enabled"]:
         _ensure_worker()
 
