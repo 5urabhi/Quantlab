@@ -249,6 +249,75 @@ starts only **after** the first successful live capture.
 Dhan documentation: https://dhanhq.co/docs/v2/full-market-depth/
 and https://dhanhq.co/docs/v2/option-chain/.
 
+## Python Strategy Lab — paste or type and run without stopping live recording
+
+Open **Trading Cockpit → Python Research Lab**. This is a **separate read-only
+research worker**, not a restart or reconfiguration of the Dhan WebSocket
+recorders. The existing 100-above/100-below ATM option-depth and all-expiry
+option-chain collectors continue receiving and saving source data while the
+research job runs. Never restart QuantLab to run another pasted strategy.
+If upgrading QuantLab while the market is open, wait until the current
+recording session finishes before restarting the application to load the
+new code.
+
+**One-screen workflow:**
+
+1. Select **Dhan IDX_I historical candles** or **Already recorded live
+   BANKNIFTY minutes**, both copied from the local source into a
+   separate research snapshot. Live-recorded minute candles are from actual
+   observed LTP ticks and have no authenticated traded volume. They may
+   contain missing minutes; no bars are invented.
+2. Choose **Paste or type Python**. Type directly into the editor or paste a
+   script and click **Run pasted Python backtest** (Ctrl/Cmd+Enter also works).
+   You can save/load up to 12 code snippets in local browser storage.
+   Code is not automatically saved or uploaded to Dhan.
+3. The supported callback is
+   `def signal(history): return "UP" | "DOWN" | "HOLD"`.
+   It is called once after each actual completed one-minute bar. It sees
+   only that bar and earlier bars **from the same IST session**; no
+   future data, no look-ahead, and no same-close simulated fill.
+   Use Python standard-library features only. No pandas, NumPy, Python
+   package installs, external files, network requests, or Dhan orders
+   in custom scripts.
+4. To test **all selected EMA combinations**, switch to the other editor
+   tab and supply comma-separated fast and slow periods. Every valid
+   fast<slow pair is tested, up to **256 combinations per job**. The
+   sweep ranks by *training-session* directional index proxy returns;
+   a separate full-session holdout is shown when six or more sessions
+   exist. Tests below that threshold are explicitly exploratory.
+   Select **View chart** on a row to plot a specific EMA pair.
+5. Inspect the synchronized charts: **original BANKNIFTY price, red
+   fast-EMA and green slow-EMA with crossover markers, five-minute
+   rate-of-change momentum, EMA spread in basis points, RSI(14) with
+   overbought/oversold reference levels (70/30), and paper account equity**.
+   Hover, zoom, inspect actual trade entry/exit times and view net paper
+   P&L, win rate, completed-trade drawdown, index points, fees, average
+   hold and missing-data exclusions. Download the result as JSON. Results
+   are also saved to the local Research Lab archive.
+6. Every directional backtest is **uncapped hold until opposite
+   confirmed signal**, with liquidation at an **actually observed**
+   15:29 IST session-ending candle. A missing EOD candle means the
+   position is marked unscored rather than inventing a closing fill.
+
+**Important:** The BANKNIFTY cash index cannot actually be purchased or
+shorted. Results use an explicit hypothetical one-times directional
+index exposure with per-side cost in basis points. This is NOT the P&L of
+a BANKNIFTY CE/PE option. Use **Options Backtest** separately to price
+actual historical CE/PE contracts, strikes, premiums, lots and costs.
+The *EMA spread* displayed here is the difference between EMA lines,
+not the *bid-ask spread* in Dhan's separate 20-level option book.
+RSI overbought/oversold is also visible in the graph.
+
+**Mandatory isolation for pasted Python:** On Ubuntu the user must have
+`bubblewrap` (`bwrap`) and `util-linux` (`prlimit`), e.g. one-time
+`sudo apt install bubblewrap util-linux`, and working unprivileged user
+namespaces. QuantLab runs custom Python in a separate time-bounded process
+with network access disabled, only a temporary candle file mounted,
+resource limits and no broker credentials. The API **fails closed** and
+explains the unavailable dependency; it does **not** fall back to executing
+pasted code in the API or recorder. Built-in EMA sweeps do not require
+bubblewrap and continue to work. This limit is intentional.
+
 ## Pure 9/21 EMA crossover strategy (read-only option backtest)
 
 **Trading Cockpit → Options Backtest → Strategy signal → EMA crossover ·

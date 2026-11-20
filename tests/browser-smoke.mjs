@@ -89,6 +89,86 @@ try {
     assert.equal(await buttons.count(),10,'Exactly ten main destinations including Trading Cockpit')
     await screenshot('01-home-desktop')
   })
+  await step('paste Python and run isolated strategy research in the Cockpit UI',async()=>{
+    await nav('Trading Cockpit').click()
+    await page.route('**/api/trading-cockpit/research-lab/status',route=>
+      route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({
+        python_sandbox:{available:true,engine:'bubblewrap',requires:[],
+          note:'SYNTHETIC CI isolation status only'},
+        live_capture_isolated:true,broker_orders_enabled:false,
+        note:'SYNTHETIC CI fixture, no Dhan credentials',
+      })}))
+    await page.route('**/api/trading-cockpit/research-lab/runs',route=>
+      route.fulfill({status:200,contentType:'application/json',
+        body:JSON.stringify({runs:[]})}))
+    const tabs=page.getByRole('tablist',{name:'Trading cockpit workspaces'})
+    await tabs.getByRole('tab',{name:'Python Research Lab'}).click()
+    const lab=page.getByRole('region',{name:'BANKNIFTY Python strategy research lab'})
+    await lab.getByRole('heading',{name:'Python Strategy Lab'}).waitFor()
+    await lab.getByRole('tab',{name:/Paste or type Python/}).waitFor()
+    const editor=lab.getByRole('textbox',{name:'Paste or type Python backtest code'})
+    const code='def signal(history):\n    return "HOLD"'
+    await editor.fill(code)
+    await lab.getByRole('button',{name:/Save code locally/}).click()
+    await lab.getByText('Saved EMA 9/21 example in this browser only.',{exact:false}).waitFor()
+    await page.route('**/api/trading-cockpit/research-lab/python',route=>{
+      const request=route.request().postDataJSON()
+      assert.equal(request.confirm_readonly,true)
+      assert.equal(request.code,code)
+      assert.equal(request.source_mode,'historical')
+      assert.equal(request.limit,1500)
+      return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({
+        job_id:'ci_python_lab_fixture',status:'queued',
+      })})
+    })
+    await page.route('**/api/jobs/ci_python_lab_fixture',route=>
+      route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({
+        id:'ci_python_lab_fixture',status:'complete',percent:100,
+        result:{
+          kind:'python_strategy',run_id:'banknifty_'+'a'.repeat(20),
+          identity:'INDEX:BANKNIFTY',read_only:true,orders_placed:0,
+          evidence:{identity:'INDEX:BANKNIFTY',basis:'CI_SYNTHETIC_NOT_DHAN',
+            source_mode:'historical',rows:3,sessions:1,
+            first_utc:'2026-11-18T04:00:00+00:00',
+            last_utc:'2026-11-18T04:02:00+00:00',
+            original_sha256:'0'.repeat(64)},
+          selected:{read_only:true,orders_placed:0,
+            basis:'hypothetical_1x_banknifty_index_directional_proxy_not_tradable',
+            metrics:{trade_count:0,crossovers:0,win_rate_pct:null,pnl_proxy_inr:0,
+              return_proxy_pct:0,ending_capital_proxy_inr:50000,index_points:0,
+              max_closed_trade_drawdown_pct:0,profit_factor:null,
+              trade_sharpe_unannualized:null,avg_hold_minutes:null,unscored:{}},
+            trades:[],chart:[
+              {time:'2026-11-18T04:00:00+00:00',price:63000,account:50000,
+                signal:'HOLD',position:'HOLD'},
+              {time:'2026-11-18T04:01:00+00:00',price:63001,account:50000,
+                signal:'HOLD',position:'HOLD'},
+              {time:'2026-11-18T04:02:00+00:00',price:63002,account:50000,
+                signal:'HOLD',position:'HOLD'},
+            ]},
+          overlays:[0,1,2].map(i=>({
+            time:'2026-11-18T04:0'+i+':00+00:00',price:63000+i,
+            open:63000+i,high:63002+i,low:62998+i,
+            fast_ema:62999+i,slow_ema:62998+i,ema_spread_bps:2,
+            momentum_roc5_pct:0.2,rsi14:55,signal:'HOLD',
+          })),
+          bid_ask_spread_source:'unavailable_for_cash_index_ohlc',
+        },
+      })}))
+    await lab.getByRole('button',{name:/Run pasted Python backtest/}).click()
+    await lab.getByRole('heading',{name:'Custom Python strategy'}).waitFor()
+    await lab.getByRole('img',{name:/BANKNIFTY index price/}).waitFor()
+    await lab.getByRole('img',{name:/Momentum/}).waitFor()
+    await lab.getByRole('img',{name:/RSI/}).waitFor()
+    await lab.getByRole('tab',{name:/All EMA combinations/}).click()
+    await lab.getByRole('textbox',{name:'Fast EMA combination list'}).fill('3, 9')
+    await lab.getByRole('textbox',{name:'Slow EMA combination list'}).fill('21, 34')
+    await lab.getByRole('button',{name:/Backtest every EMA combination/}).waitFor()
+    await page.unroute('**/api/trading-cockpit/research-lab/status')
+    await page.unroute('**/api/trading-cockpit/research-lab/runs')
+    await page.unroute('**/api/trading-cockpit/research-lab/python')
+    await page.unroute('**/api/jobs/ci_python_lab_fixture')
+  })
   await step('all research destination views and nested navigation',async()=>{
     for (const section of ['Trading Cockpit','Guided Research','Home','Data Library','Model Laboratory','Experiment Studio',
       'Compare & Visualize','Results Studio','Research Projects','Help & Settings']) {
@@ -99,7 +179,7 @@ try {
     await nav('Trading Cockpit').click()
     await page.getByText('Intraday trading cockpit',{exact:true}).first().waitFor()
     const modes=page.getByRole('tablist',{name:'Trading cockpit workspaces'})
-    for(const name of ['Live Trading','Market Replay','Options Backtest','Trade Journal','Connections']){
+    for(const name of ['Live Trading','Market Replay','Options Backtest','Python Research Lab','Trade Journal','Connections']){
       await modes.getByRole('tab',{name,exact:true}).waitFor()
     }
     // One focused panel at a time. No duplicated Trading Cockpit heading.
