@@ -171,7 +171,11 @@ selection stays read-only and requires a live Dhan F&O subscription.
 
 ## One-screen options backtest: BANKNIFTY signals buy historical CE/PE contracts
 
-**Default continuous-reversal research rule.** UP → long CE; at the
+**Default continuous-reversal research rule.** The fixed-hold selector
+is disabled when the selected rule is signal reversal, because 1/3/5/6/10/30/60
+minute durations do not determine when a reversal-only position exits. Those
+fixed-time scenarios are still independently evaluated in the comparison
+table. UP → long CE; at the
 first completed DOWN signal close the CE at the next observed minute OPEN
 and **buy a newly selected PE at that exact same OPEN**. On the next
 completed UP signal, close the PE and buy a newly selected CE at that
