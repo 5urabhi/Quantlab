@@ -15,7 +15,7 @@ import pandas as pd
 
 from scripts import audit_all_models
 from workstation_api import (
-    model_input_selector, model_lab, model_registry, option_market, option_quotes, research_acceptance, service,
+    model_data_manager, model_input_selector, model_lab, model_registry, option_market, option_quotes, research_acceptance, service,
 )
 
 
@@ -85,6 +85,39 @@ class ModelAuditAllDatasetsTests(unittest.TestCase):
         self.assertEqual(params["assets"], 2)
         self.assertEqual(params["max_weight"], .5)
         fetch.assert_called_once_with("local_dataset", 60, 2)
+
+    def test_original_daily_only_stock_panel_is_eligible_for_market_models(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            dates = pd.bdate_range("2026-01-01", periods=100)
+            prices = pd.DataFrame({
+                "ALPHA": [100 * (1.0005 ** n) for n in range(100)],
+                "BETA": [90 * (1.0009 ** n) for n in range(100)],
+            }, index=dates)
+            prices.to_csv(folder / "daily_prices.csv", index_label="date")
+            dataset = {
+                "id": "upload_daily_only", "kind": "uploaded",
+                "label": "Actual source daily-only test fixture",
+                "has_prices": False, "has_daily_prices": True,
+                "benchmark_kind": "missing",
+            }
+            with patch.object(service, "dataset_path", return_value=(folder, dataset)):
+                source_readiness = model_lab.readiness("upload_daily_only")
+                aligned, source = model_lab._historical_input(
+                    "upload_daily_only", 60, 2
+                )
+                single = model_input_selector.inspect(
+                    "upload_daily_only", "gbm_fit"
+                )
+                prepared = model_data_manager._observed(
+                    "upload_daily_only", 2, 60
+                )
+        self.assertTrue(source_readiness["has_prices"])
+        self.assertEqual(source_readiness["frequency"], "daily")
+        self.assertEqual(len(aligned), 99)
+        self.assertEqual(source["source_file"], "daily_prices.csv")
+        self.assertEqual(prepared["common_returns"], 99)
+        self.assertEqual(single["eligible_count"], 2)
 
     def test_valid_original_tri_can_run_without_separate_stock_prices(self):
         with patch.object(model_input_selector, "inspect", return_value={
