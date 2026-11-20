@@ -127,3 +127,24 @@
 @media(max-width:1240px){.ws-v2 .ws-sidebar{width:206px}.ws-v2 .ws-main{margin-left:206px;width:calc(100% - 206px)}.ws-v2 .ws-content{padding:20px}.ws-v2 .v2-recorder-text small{max-width:100px}.v2-launch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:960px){.ws-v2 .ws-sidebar{width:260px}.ws-v2 .ws-main{margin-left:0;width:100%}.ws-v2 .ws-topbar{padding:0 14px}.ws-v2 .ws-content{padding:16px}.v2-top-btn span{display:none}.v2-top-btn{min-width:39px;padding:9px}.v2-recorder{min-width:auto}.v2-recorder-text small{display:none}.ws-v2 .ws-titlebar{align-items:flex-start}}
 @media(max-width:640px){.v2-launch-grid,.v2-settings-grid{grid-template-columns:1fr}.v2-launch-card{min-height:180px}.v2-health-list>div{flex-wrap:wrap}.v2-health-list strong{min-width:0}.ws-v2 .ws-titlebar{flex-direction:column}.ws-v2 .ws-title-actions{width:100%}.ws-v2 .ws-title-actions button{flex:1}.v2-recorder-text{display:none}.v2-recorder{min-width:39px;justify-content:center}.ws-v2 .ws-topbar{gap:4px}}
+
+/* Original one-minute index chart: never invent missing observed candles. */
+.v2-observed-chart{margin:12px 0 17px;padding:16px;border:1px solid #355669;border-radius:12px;background:#0b1c2b;min-width:0}
+.v2-observed-head{display:flex;justify-content:space-between;align-items:start;gap:20px;flex-wrap:wrap;margin-bottom:7px}
+.v2-observed-head strong{font-size:16px;color:#e3f5fc}
+.v2-observed-head p{font-size:12px;color:#9fbed1;margin:5px 0}
+.v2-observed-head label{display:flex;align-items:center;gap:8px;color:#b4cbd8;font-size:12px}
+.v2-observed-head select{background:#142f41;border:1px solid #406378;color:#e4f4fa;border-radius:8px;padding:8px}
+.v2-observed-chart svg{width:100%;height:auto;display:block;min-width:0;touch-action:pan-y}
+.v2-observed-meta{display:flex;flex-wrap:wrap;gap:15px;margin:8px 0;border-top:1px solid #2d4b60;padding-top:12px;color:#a9c4d3;font-size:12px}
+.v2-observed-meta strong{color:#d6f0f7;font-variant-numeric:tabular-nums}
+.v2-observed-meta strong.red{color:#ff95a2}.v2-observed-meta strong.green{color:#7de5b0}
+.v2-chart-source{margin:8px 0 0;font-size:12px;color:#9bbbc9;line-height:1.65}
+.v2-chart-warning{color:#f4c18b;border:1px solid #7a653b;border-radius:8px;padding:8px;font-size:12px}
+.v2-chart-empty{padding:58px 20px;background:#122d3e;border:1px dashed #34546a;border-radius:10px;text-align:center;color:#aec9da;font-size:13px;line-height:1.6}
+.v2-database-tools{border:1px solid #33536a;border-radius:9px;padding:11px;margin:14px 0;background:#142b3e}
+.v2-database-tools summary{cursor:pointer;font-size:13px;font-weight:700;color:#b7d5e7}
+.v2-database-tools nav{margin-top:12px;display:flex;flex-wrap:wrap;gap:6px}
+.v2-database-expanded summary{display:none}
+.v2-integrated .rw-top{border-bottom:1px solid #304c5c;margin-bottom:13px}
+@media(max-width:640px){.v2-observed-chart{padding:8px}.v2-observed-head{flex-direction:column}.v2-observed-meta{gap:9px}}
