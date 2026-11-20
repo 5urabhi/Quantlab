@@ -1104,7 +1104,7 @@ def data_manager_depth_start(body: DepthCaptureRequest):
     if not market_depth.DEPTH_ID.fullmatch(body.identity):
         raise HTTPException(400, "Use exact NSE_EQ/NSE_FNO Security ID")
     if not os.getenv("DHAN_ACCESS_TOKEN"):
-        raise HTTPException(400, "Configure a Dhan access token in the private local connection panel")
+        raise HTTPException(400, "Configure a Dhan access token in the local ignored .env through Trading Cockpit > Connections")
     ident = market_depth._id()
     return {**_spawn("dhan_depth_capture", market_depth.start_live,
                     body.identity, body.depth, body.duration_seconds,
@@ -2670,9 +2670,14 @@ class DhanLocalConnect(BaseModel):
 def market_data_connect_dhan(body: DhanLocalConnect):
     """Explicit local-only, no-token-in-response Dhan account preflight."""
     try:
-        return market_data_workflow.store_verified_dhan_access_token(
+        verified = market_data_workflow.store_verified_dhan_access_token(
             body.access_token.get_secret_value(), confirm_local_storage=body.confirm_local_storage,
             client_id=body.client_id.get_secret_value() if body.client_id else "")
+        # Connecting through the UI should start the read-only CE/PE recorders
+        # immediately (or queue them for NSE hours); no Arm click is required.
+        auto_option_depth.resume_if_armed()
+        auto_option_chain.resume_if_armed()
+        return {**verified, "automatic_recording": auto_option_depth.status()["armed"]}
     except Exception as exc:
         bad(exc)
 
