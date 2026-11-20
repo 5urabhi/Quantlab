@@ -211,41 +211,92 @@ export function SettingsPreferencesV2(){
       costs use bps and the BANKNIFTY index uses points.</p></div></div>
   </section>
 }
+type DiagnosticCheck={
+  name:string;status:'healthy'|'waiting'|'attention';detail:string
+}
+function recorderEvidence(source:Recorder):DiagnosticCheck{
+  const name='Dhan market capture'
+  const timestamp=Date.parse(source.last_packet_utc||'')
+  const age=Number.isFinite(timestamp)
+    ?Math.max(0,Math.floor((Date.now()-timestamp)/1000)):null
+  const ageLabel=age===null?'no original packets recorded':age+'s since last original packet'
+  if(!source.armed)return {name,status:'waiting',
+    detail:'Recorder off · enable it in Settings → Automatic Recording'}
+  if(source.state==='armed_waiting_for_nse_hours')return {name,status:'waiting',
+    detail:'Armed · waiting for regular NSE market hours · '+ageLabel}
+  if(source.state==='other_local_worker')return {name,status:'waiting',
+    detail:'Another local QuantLab worker owns the recorder · inspect that process'}
+  if(source.state==='recording_original_depth'&&source.connected&&age!==null&&age<=30){
+    return {name,status:'healthy',
+      detail:'Recording original 20-level depth · '+source.snapshots_saved+
+      ' snapshots saved · '+age+'s packet age'}
+  }
+  const state=source.state?.replaceAll('_',' ')||'unknown'
+  return {name,status:'attention',
+    detail:'No verified fresh 20-level depth · '+state+' · '+ageLabel+
+      (source.last_error?' · '+source.last_error:'')}
+}
+async function diagnosticJson<T>(path:string):Promise<T>{
+  const response=await fetch(path,{cache:'no-store'})
+  if(!response.ok)throw Error('HTTP '+response.status)
+  return (await response.json()) as T
+}
 export function DiagnosticsV2({onRepair,onData}:{
   onRepair:()=>void;onData:()=>void
 }){
-  const [checks,setChecks]=useState<{name:string;ok:boolean;detail:string}[]>([])
-  const [busy,setBusy]=useState(false)
+  const [checks,setChecks]=useState<DiagnosticCheck[]>([])
+  const [busy,setBusy]=useState(true)
   const refresh=useCallback(async()=>{
     setBusy(true)
-    const checks=await Promise.allSettled([
-      fetch('/api/health'),fetch('/api/trading-cockpit/auto-depth/status'),
-      fetch('/api/workspace/jobs')
+    const [api,recorder,jobs]=await Promise.allSettled([
+      diagnosticJson<unknown>('/api/health'),
+      diagnosticJson<Recorder>('/api/trading-cockpit/auto-depth/status'),
+      diagnosticJson<{jobs?:Job[]}>('/api/workspace/jobs')
     ])
-    setChecks(checks.map((entry,i)=>({
-      name:['Python API','Dhan market capture','Research job queue'][i],
-      ok:entry.status==='fulfilled'&&entry.value.ok,
-      detail:entry.status==='rejected'?getError(entry.reason):
-        'HTTP '+entry.value.status
-    })))
+    const rows:DiagnosticCheck[]=[
+      api.status==='fulfilled'
+        ?{name:'Python API',status:'healthy',detail:'Health endpoint responded successfully'}
+        :{name:'Python API',status:'attention',detail:getError(api.reason)},
+      recorder.status==='fulfilled'
+        ?recorderEvidence(recorder.value)
+        :{name:'Dhan market capture',status:'attention',
+          detail:'Recorder status unavailable · '+getError(recorder.reason)},
+      jobs.status==='fulfilled'&&Array.isArray(jobs.value.jobs)
+        ?{name:'Research job queue',status:'healthy',
+          detail:jobs.value.jobs.filter(x=>['queued','running'].includes(x.status)).length+
+            ' active · '+jobs.value.jobs.length+' recent jobs'}
+        :{name:'Research job queue',status:'attention',
+          detail:jobs.status==='rejected'?getError(jobs.reason):'Job list not returned'}
+    ]
+    setChecks(rows)
     setBusy(false)
   },[])
-  useEffect(()=>{void refresh()},[refresh])
+  useEffect(()=>{
+    void refresh()
+    const timer=window.setInterval(()=>{void refresh()},15000)
+    return()=>window.clearInterval(timer)
+  },[refresh])
   return <section className="v2-layout-section">
     <div className="v2-section-head"><div><h2>Diagnostics</h2>
-      <p>Inspect actual local service responses and open the repair tools when needed.</p></div>
+      <p>Source-aware local checks update automatically every 15 seconds. An HTTP 200
+        alone does not mean Dhan is sending original 20-level packets.</p></div>
       <button className="v2-secondary" onClick={()=>void refresh()} disabled={busy}>
         <RefreshCw size={15}/> Recheck</button></div>
-    <div className="v2-health-list">{checks.map(item=><div key={item.name}>
-      {item.ok?<CheckCircle2 size={19}/>:<AlertTriangle size={19}/>}
-      <strong>{item.name}</strong><span>{item.ok?'Reachable':'Needs attention'} · {item.detail}</span>
+    <div className="v2-health-list" aria-live="polite">{checks.map(item=><div
+      key={item.name} data-status={item.status}>
+      {item.status==='healthy'?<CheckCircle2 size={19}/>:
+        item.status==='waiting'?<Activity size={19}/>:<AlertTriangle size={19}/>}
+      <strong>{item.name}</strong>
+      <span>{item.status==='healthy'?'Healthy':
+        item.status==='waiting'?'Waiting':'Needs attention'} · {item.detail}</span>
     </div>)}</div>
     <div className="v2-action-row">
       <button className="v2-primary" onClick={onRepair}><SlidersHorizontal size={17}/> Open detailed provider diagnostics</button>
       <button className="v2-secondary" onClick={onData}><Database size={17}/> Review data quality</button>
     </div>
-    <p className="v2-microcopy">A reachable API does not prove fresh market packets or a licensed
-      full-depth entitlement. Check the timestamps and original depth counts in Recording.</p>
+    <p className="v2-microcopy">When the market is closed, an armed recorder may correctly be waiting.
+      During live NSE hours, confirm the original packet age stays fresh while you
+      navigate pages and run a separate Python/EMA backtest. These checks are read-only.</p>
   </section>
 }
 export function QuickPageNote({title,description,children}:{

@@ -193,3 +193,9 @@
 .ws-v2 .tc-live-footer .tc-live-next h3{font-size:15px}
 .ws-v2 .tc-live-footer .tc-live-next p{font-size:13px}
 @media(max-width:600px){.ws-v2 .tc-live-footer{flex-direction:column}}
+
+/* Source-aware recorder health distinguishes an idle/off-session collector from a broken live feed. */
+.v2-health-list>div[data-status='attention']{border-color:#a86955}
+.v2-health-list>div[data-status='attention'] svg{color:#f1a486}
+.v2-health-list>div[data-status='waiting'] svg{color:#edc77d}
+.v2-health-list>div[data-status='healthy'] svg{color:#92ddc1}
