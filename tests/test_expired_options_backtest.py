@@ -173,11 +173,13 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
                                   close_price=300 + i * .03)}
         result = exp.simulate_options(
             signals, rows, options, policy="signal_reversal",
+            hold=1, cap=2,  # Ignored for reversal-only holding.
             target_ltp=300, tolerance=50, lots=1, slippage_bps=0,
             fee_per_side=0)
         self.assertGreaterEqual(result["trade_count"], 1)
         self.assertEqual(result["trades"][0]["option_side"], "CE")
         self.assertEqual(result["trades"][0]["exit_reason"], "opposite_signal")
+        self.assertGreater(result["trades"][0]["hold_minutes"], 6)
         self.assertTrue(result["trades"][0]["entry_utc"] >
                         result["trades"][0]["signal_utc"])
 
