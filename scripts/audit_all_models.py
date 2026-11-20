@@ -508,7 +508,8 @@ def audit(*, datasets: list[str] | None, execute: bool, output: Path) -> dict:
         "external_market_evidence_certified": False,
         "caveat": UNVERIFIED,
     }
-    write_report(output, report, rows)
+    # Include math-only models once, without falsely associating them with data.
+    write_report(output, report, rows + mathematics)
     return report
 
 
