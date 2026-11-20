@@ -2,7 +2,7 @@ import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {
   Activity, ArrowDownToLine, ArrowRight, BarChart3, Beaker, BookOpen, Check,
   CheckCircle2, ChevronRight, CircleAlert, Clock3, Database, FileArchive,
-  FileText, FlaskConical, Gauge, LoaderCircle,
+  FileText, Gauge, LoaderCircle,
   LockKeyhole, Menu, Play, RefreshCw, Settings2,
   ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp
 } from 'lucide-react'
