@@ -163,6 +163,20 @@ try{
    await page.getByRole('heading',{name:'Diagnostics',exact:true}).waitFor()
    await shot('08-diagnostics')
  })
+ await step('Advanced mathematical grids, index research, evidence and resource library remain accessible',async()=>{
+   const archived=[
+     ['modelgrids','Guided Model Grids'],
+     ['indexstudio','Index Research Studio'],
+     ['evidence','Evidence & Machine Learning'],
+     ['resourcebrowser','Saved Resource Library'],
+   ]
+   for(const [route,heading] of archived){
+     await page.goto(base+'#/'+route,{waitUntil:'domcontentloaded'})
+     await page.getByRole('heading',{name:heading,exact:true}).waitFor()
+     await page.locator('.rw-root').waitFor()
+   }
+   await shot('08-advanced-research-library')
+ })
  await step('Deep-link, browser back and Help / New Study buttons',async()=>{
    await page.goto(base+'#/strategyema',{waitUntil:'domcontentloaded'})
    await page.getByRole('heading',{name:'EMA Explorer',exact:true}).waitFor()
