@@ -5,6 +5,7 @@ import './research-python-lab.css'
 
 type SourceMode='historical'|'recorded_live'
 type Tab='sweep'|'python'
+type EmaMode='pair'|'selected'|'all'
 type JobResponse={job_id:string;status:string}
 type Job={id:string;status:string;stage?:string;percent?:number;error?:string;result?:LabResult}
 type PaperTrade={
@@ -34,7 +35,13 @@ type LabResult={
     rows:number;sessions:number;first_utc:string;last_utc:string}
   model?:string;reference_ema?:{fast:number;slow:number;note:string}
   best_pair?:{fast:number;slow:number};combinations_tested?:number
-  ranked?:{fast:number;slow:number;training:Stat;holdout?:Stat}[]
+  ranked?:{fast:number;slow:number;training:Stat;holdout?:Stat
+    ranking_eligible?:boolean}[]
+  top_five?:{fast:number;slow:number;training:Stat;holdout?:Stat
+    ranking_eligible?:boolean}[]
+  search_mode?:'selected'|'all'
+  ranked_returned?:number;qualifying_combinations?:number
+  min_completed_trades_to_rank?:number;ranking_basis?:string
   validation?:{whole_sessions_train:number;whole_sessions_holdout:number
     holdout_available:boolean;warning:string}
   selected:{metrics:Stat;trades:PaperTrade[];chart:CurveBar[]
@@ -226,6 +233,9 @@ export default function ResearchPythonLab(){
   const [limit,setLimit]=useState<500|1500|3000|5000>(1500)
   const [startingCapital,setStartingCapital]=useState(50000)
   const [costBps,setCostBps]=useState(5)
+  const [emaMode,setEmaMode]=useState<EmaMode>('pair')
+  const [pairFast,setPairFast]=useState(9)
+  const [pairSlow,setPairSlow]=useState(21)
   const [fast,setFast]=useState('3,5,7,9,12,15,21')
   const [slow,setSlow]=useState('13,21,26,34,50,55,89')
   const [script,setScript]=useState(STARTING_SCRIPT)
@@ -304,16 +314,32 @@ export default function ResearchPythonLab(){
     }catch(err){setBusy(false);setError(readableError(err))}
   }
   const runSweep=()=>{
-    const f=periods(fast),s=periods(slow)
-    const pairs=f.flatMap(a=>s.filter(b=>b>a).map(b=>[a,b]))
-    if(!f.length||!s.length||f.some(n=>!Number.isInteger(n)||n<2||n>150)
-        ||s.some(n=>!Number.isInteger(n)||n<2||n>150)
-        ||pairs.length>256||!pairs.length){
-      setError('Select 1–256 valid fast < slow EMA combinations using integer periods 2–150.')
+    setError('')
+    if(emaMode==='pair'){
+      if(!Number.isInteger(pairFast)||!Number.isInteger(pairSlow)
+          ||pairFast<2||pairSlow>150||pairFast>=pairSlow){
+        setError('Choose integer fast/slow EMA periods with 2 ≤ fast < slow ≤ 150.')
+        return
+      }
+      runPair(pairFast,pairSlow)
       return
     }
-    setTab('sweep')
-    void start('ema-sweep',{fast_periods:f,slow_periods:s})
+    if(emaMode==='all'){
+      // The backend generates every integer fast < slow from 2..150,
+      // rather than quietly testing only a sample of pairs.
+      void start('ema-sweep',{mode:'all'})
+      return
+    }
+    const f=periods(fast),s=periods(slow)
+    const pairs=f.flatMap(a=>s.filter(b=>b>a).map(b=>[a,b]))
+    if(!f.length||!s.length||f.length>32||s.length>32
+        ||f.some(n=>!Number.isInteger(n)||n<2||n>150)
+        ||s.some(n=>!Number.isInteger(n)||n<2||n>150)
+        ||pairs.length>256||!pairs.length){
+      setError('Enter 1–256 distinct valid fast < slow combinations (periods 2–150).')
+      return
+    }
+    void start('ema-sweep',{mode:'selected',fast_periods:f,slow_periods:s})
   }
   const runPython=()=>{
     setTab('python')
@@ -485,21 +511,59 @@ export default function ResearchPythonLab(){
         <button className="rpl-run" type="button" onClick={runPython} disabled={busyNow||!status?.python_sandbox.available}>
           <Play size={18}/> {busyNow?'Research job running':'Run pasted Python backtest'}</button>
       </>:<>
-        <h3><SlidersHorizontal size={18}/> Search EMA combinations</h3>
-        <p className="rpl-note">Enter period lists. QuantLab evaluates
-          <strong> every valid fast &lt; slow pair</strong> in these lists—maximum 256
-          combinations per run. It ranks on training sessions and separately
-          reports test-session evidence where enough history exists.</p>
-        <div className="rpl-ema-inputs">
-          <label>Fast EMA periods
-            <input aria-label="Fast EMA combination list" value={fast}
-              onChange={e=>setFast(e.target.value)}/></label>
-          <label>Slow EMA periods
-            <input aria-label="Slow EMA combination list" value={slow}
-              onChange={e=>setSlow(e.target.value)}/></label>
+        <h3><SlidersHorizontal size={18}/> Choose EMA values or find the best five</h3>
+        <div className="rpl-ema-modes" role="radiogroup" aria-label="EMA backtest search mode">
+          <label><input type="radio" name="ema-search-mode" checked={emaMode==='pair'}
+              onChange={()=>setEmaMode('pair')}/>
+            <strong>Choose one EMA pair</strong><small>Example: 9 / 21</small></label>
+          <label><input type="radio" name="ema-search-mode" checked={emaMode==='selected'}
+              onChange={()=>setEmaMode('selected')}/>
+            <strong>Choose several EMA values</strong><small>Compare up to 256 pairs</small></label>
+          <label><input type="radio" name="ema-search-mode" checked={emaMode==='all'}
+              onChange={()=>setEmaMode('all')}/>
+            <strong>Test all supported pairs</strong><small>2–150 · 11,026 pairs</small></label>
         </div>
+        {emaMode==='pair'&&<>
+          <p className="rpl-note">Backtest your chosen fast and slow EMA settings
+            using completed BANKNIFTY candles; hold until the opposite
+            confirmed crossover or the observed intraday session close.</p>
+          <div className="rpl-ema-inputs">
+            <label>Fast EMA period
+              <input aria-label="Chosen fast EMA period" type="number" min={2} max={149}
+                value={pairFast} onChange={e=>setPairFast(Number(e.target.value))}/></label>
+            <label>Slow EMA period
+              <input aria-label="Chosen slow EMA period" type="number" min={3} max={150}
+                value={pairSlow} onChange={e=>setPairSlow(Number(e.target.value))}/></label>
+          </div>
+        </>}
+        {emaMode==='selected'&&<>
+          <p className="rpl-note">Enter comma-separated values. QuantLab tests
+            every valid fast &lt; slow combination from your two lists
+            (up to 256 pairs), and ranks the strongest five.</p>
+          <div className="rpl-ema-inputs">
+            <label>Fast EMA periods
+              <input aria-label="Fast EMA combination list" value={fast}
+                onChange={e=>setFast(e.target.value)}/></label>
+            <label>Slow EMA periods
+              <input aria-label="Slow EMA combination list" value={slow}
+                onChange={e=>setSlow(e.target.value)}/></label>
+          </div>
+        </>}
+        {emaMode==='all'&&<div className="rpl-all-warning" role="note">
+          <strong>Exhaustive search: 11,026 combinations.</strong>
+          Every integer EMA fast &lt; slow, from 2 through 150, is
+          evaluated on the selected BANKNIFTY historical window.
+          Research runs at low OS priority in a separate process while Dhan
+          continues recording. Rankings use training sessions only;
+          later sessions are reserved for an independent check if available.
+          The top five and top 100 summaries are saved—not just a sample
+          of tested pairs.
+        </div>}
         <button className="rpl-run" type="button" onClick={runSweep} disabled={busyNow}>
-          <Play size={18}/> {busyNow?'Research job running':'Backtest every EMA combination'}</button>
+          <Play size={18}/> {busyNow?'Research job running':
+            emaMode==='pair'?'Backtest chosen EMA pair':
+            emaMode==='all'?'Test all 11,026 EMA combinations':
+            'Compare chosen EMA combinations'}</button>
       </>}
     </div>
     {(jobId||job)&&<div className="rpl-progress" role="status">
@@ -562,20 +626,51 @@ export default function ResearchPythonLab(){
         It is <strong>not</strong> the market bid–ask spread. Real option bid–ask
         spread requires matching recorded Dhan 20-level books, available separately
         under Market Replay; no spread is inferred from index candles.</p>
-      {sweep?.ranked?.length&&<div className="rpl-ranking">
-        <h3>EMA combination search · {sweep.combinations_tested} tested</h3>
-        <div className="rpl-table-scroll"><table>
-          <thead><tr><th>Fast / slow</th><th>Train trades</th><th>Train return</th>
-            <th>Train max DD</th><th>Holdout return</th><th>Graph</th></tr></thead>
-          <tbody>{sweep.ranked.map(row=><tr key={row.fast+'-'+row.slow}>
-            <td>{row.fast} / {row.slow}</td>
-            <td>{row.training.trade_count}</td>
-            <td>{dec(row.training.return_proxy_pct)}%</td>
-            <td>{dec(row.training.max_closed_trade_drawdown_pct)}%</td>
-            <td>{row.holdout?dec(row.holdout.return_proxy_pct)+'%':'not scored'}</td>
-            <td><button type="button" disabled={busyNow}
-              onClick={()=>runPair(row.fast,row.slow)}>View chart</button></td>
-          </tr>)}</tbody></table></div>
+      {tab==='sweep'&&sweep?.ranked?.length&&<div className="rpl-ranking">
+        <h3>Top five EMA strategies · {dec(sweep.combinations_tested,0)} pairs tested</h3>
+        <p className="rpl-note">{sweep.ranking_basis||
+          'Ranked by training-session index-directional paper returns.'}
+          {' '}At least {sweep.min_completed_trades_to_rank||3} completed trades
+          required to qualify for the primary ranking.
+          {' '}{sweep.qualifying_combinations===undefined?'':dec(sweep.qualifying_combinations,0)+
+            ' pairs met that minimum.'}</p>
+        <div className="rpl-top-five" aria-label="Top five EMA crossover combinations">
+          {(sweep.top_five||sweep.ranked.slice(0,5)).map((row,i)=>
+            <article className="rpl-top-card" key={row.fast+'-'+row.slow}>
+              <span className="rpl-top-rank">#{i+1} · EMA {row.fast} / {row.slow}</span>
+              <strong>{dec(row.training.return_proxy_pct)}% training return</strong>
+              <small>{row.training.trade_count} closed trades · {dec(
+                row.training.max_closed_trade_drawdown_pct)}% closed-trade drawdown</small>
+              <small>{row.holdout?'Holdout: '+dec(row.holdout.return_proxy_pct)+'%':
+                'Holdout: insufficient sessions'}</small>
+              {row.ranking_eligible===false&&
+                <small className="rpl-incomplete">Below minimum trade count · exploratory</small>}
+              <button type="button" disabled={busyNow}
+                onClick={()=>runPair(row.fast,row.slow)}>View EMA chart and trades</button>
+            </article>)}
+        </div>
+        <details className="rpl-all-ranking">
+          <summary>View ranked comparison table · {dec(sweep.ranked_returned||
+            sweep.ranked.length,0)} saved of {dec(sweep.combinations_tested,0)} tested</summary>
+          <div className="rpl-table-scroll"><table>
+            <thead><tr><th>Rank</th><th>Fast / slow</th><th>Train trades</th>
+              <th>Train return</th><th>Win rate</th><th>Train max DD</th>
+              <th>Holdout return</th><th>Graph</th></tr></thead>
+            <tbody>{sweep.ranked.map((row,i)=><tr key={row.fast+'-'+row.slow}>
+              <td>{i+1}{row.ranking_eligible===false?'*':''}</td>
+              <td>{row.fast} / {row.slow}</td>
+              <td>{row.training.trade_count}</td>
+              <td>{dec(row.training.return_proxy_pct)}%</td>
+              <td>{dec(row.training.win_rate_pct)}%</td>
+              <td>{dec(row.training.max_closed_trade_drawdown_pct)}%</td>
+              <td>{row.holdout?dec(row.holdout.return_proxy_pct)+'%':'not scored'}</td>
+              <td><button type="button" disabled={busyNow}
+                onClick={()=>runPair(row.fast,row.slow)}>View chart</button></td>
+            </tr>)}</tbody></table>
+          </div>
+          <p className="rpl-note">* Fewer than three completed positions.
+            Results use BANKNIFTY index exposure proxies, not executable CE/PE P&amp;L.</p>
+        </details>
       </div>}
       {result.selected.trades.length>0&&<div className="rpl-ranking">
         <h3>Exact signal → next-open paper trades</h3>
