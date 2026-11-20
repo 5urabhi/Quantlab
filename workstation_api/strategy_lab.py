@@ -1,0 +1,356 @@
+"""BANKNIFTY EMA parameter sweeps and direct index-paper backtests.
+
+Reads only SHA-verified original Dhan IDX_I minute candles. It never changes
+the live recorder's configuration, SQLite files, WebSocket subscriptions,
+tokens or source datasets. The underlying cash index is NOT tradable; index
+P&L below is a transparent directional exposure proxy, not option P&L.
+"""
+from __future__ import annotations
+
+from collections import Counter
+from datetime import datetime, timedelta, time
+from math import isfinite, sqrt
+from statistics import mean, stdev
+
+from . import cockpit_sources, trading_cockpit, service
+
+IDENTITY = "INDEX:BANKNIFTY"
+MAX_BARS = 5000
+MAX_PAIRS = 256
+INDICATOR_VERSION = "ema_sma_seed_session_reset_1m_v1"
+HOLD = "HOLD"
+UP = "UP"
+DOWN = "DOWN"
+IST = trading_cockpit.IST
+SESSION_OPEN = time(9, 15)
+SESSION_LAST = time(15, 29)
+
+
+def _market_bar(row: dict) -> bool:
+    stamp = trading_cockpit._ts(row["timestamp_utc"])
+    local = stamp.astimezone(IST)
+    return (row["session_ist"] == local.date().isoformat()
+            and SESSION_OPEN <= local.time().replace(tzinfo=None) <= SESSION_LAST)
+
+
+def _contiguous(a: dict, b: dict) -> bool:
+    return (a["session_ist"] == b["session_ist"]
+            and trading_cockpit._ts(b["timestamp_utc"]) -
+            trading_cockpit._ts(a["timestamp_utc"]) == timedelta(minutes=1))
+
+
+def load_index(limit: int) -> tuple[list[dict], dict]:
+    if limit not in (500, 1500, 3000, 5000):
+        raise ValueError("Select 500, 1500, 3000 or 5000 original 1-minute bars")
+    # Underlying adapter independently checks original bytes against a
+    # Dhan source manifest. No live database mutation or vendor request.
+    source = cockpit_sources.series(IDENTITY, limit=limit)
+    rows = [row for row in trading_cockpit._validated(source["rows"])
+            if _market_bar(row)]
+    if len(rows) < 50:
+        raise ValueError("Need at least 50 original regular-session BANKNIFTY candles")
+    return rows, {
+        "identity": IDENTITY, "basis": source["basis"],
+        "original_sha256": source["source_file_sha256"],
+        "rows": len(rows), "sessions": len(set(r["session_ist"] for r in rows)),
+        "first_utc": rows[0]["timestamp_utc"],
+        "last_utc": rows[-1]["timestamp_utc"],
+        "live_recorder_touched": False,
+    }
+
+
+def ema_series(rows: list[dict], fast: int, slow: int) -> tuple[list, list, list]:
+    if not 2 <= fast < slow <= 150:
+        raise ValueError("EMA fast must be >=2, strictly below slow <=150")
+    first = [None] * len(rows)
+    second = [None] * len(rows)
+    roc5 = [None] * len(rows)
+    offset = 0
+    while offset < len(rows):
+        end = offset + 1
+        while end < len(rows) and _contiguous(rows[end - 1], rows[end]):
+            end += 1
+        closes = [row["close"] for row in rows[offset:end]]
+        f = trading_cockpit._ema(closes, fast)
+        s = trading_cockpit._ema(closes, slow)
+        for i, (a, b) in enumerate(zip(f, s)):
+            first[offset + i] = a
+            second[offset + i] = b
+            if i >= 5 and closes[i - 5] > 0:
+                roc5[offset + i] = round(
+                    100 * (closes[i] / closes[i - 5] - 1), 4)
+        offset = end
+    return first, second, roc5
+
+
+def crossover_events(rows: list[dict], fast: int, slow: int) -> tuple[list[str], dict]:
+    fast_line, slow_line, momentum = ema_series(rows, fast, slow)
+    signals = [HOLD] * len(rows)
+    for i in range(1, len(rows)):
+        if not _contiguous(rows[i - 1], rows[i]):
+            continue
+        f0, f1 = fast_line[i - 1], fast_line[i]
+        s0, s1 = slow_line[i - 1], slow_line[i]
+        if None in (f0, f1, s0, s1):
+            continue
+        if f0 <= s0 and f1 > s1:
+            signals[i] = UP
+        elif f0 >= s0 and f1 < s1:
+            signals[i] = DOWN
+    return signals, {"fast": fast_line, "slow": slow_line, "momentum_roc5_pct": momentum}
+
+
+def _round(value, places=4):
+    return round(float(value), places) if isfinite(value) else None
+
+
+def backtest_index(rows: list[dict], signals: list[str], *,
+                   starting_capital: float = 50000,
+                   cost_bps: float = 5, include_chart: bool = True) -> dict:
+    """One hypothetical index-directional exposure held until opposite cross.
+
+    Trigger is observed at close of candle i. Entry/exit uses OPEN of i+1
+    only if i+1 is real, consecutive, same session. Flat at a verified 15:29
+    index close; truncated last sessions are not promoted to an EOD fill.
+    """
+    if len(signals) != len(rows) or len(rows) > MAX_BARS:
+        raise ValueError("Research signals must align with original minute bars")
+    if not (1000 <= starting_capital <= 100_000_000
+            and 0 <= cost_bps <= 500):
+        raise ValueError("Select a bounded starting account and trading cost")
+    if any(v not in (UP, DOWN, HOLD) for v in signals):
+        raise ValueError("Code returned unsupported signal (UP, DOWN, HOLD only)")
+    capital = float(starting_capital)
+    position = None
+    pending = None
+    trades, trace = [], []
+    unscored = Counter()
+    highs = capital
+    max_dd = 0.
+    actual_signal_count = sum(x != HOLD for x in signals)
+
+    def exit_position(price: float, stamp: str, reason: str):
+        nonlocal position, capital, highs, max_dd
+        pos = position
+        if pos is None:
+            return
+        shares = pos["index_units"]
+        points = (price - pos["entry_price"]) * pos["direction"]
+        sell_cost = price * shares * cost_bps / 10000
+        pnl = points * shares - pos["entry_cost"] - sell_cost
+        capital += pnl
+        hold = (trading_cockpit._ts(stamp) -
+                trading_cockpit._ts(pos["entry_utc"])).total_seconds() / 60
+        trades.append({
+            "direction": UP if pos["direction"] == 1 else DOWN,
+            "entry_utc": pos["entry_utc"], "exit_utc": stamp,
+            "entry_price": pos["entry_price"], "exit_price": price,
+            "hold_minutes": round(hold, 2),
+            "index_points": round(points, 4),
+            "net_pnl_proxy_inr": round(pnl, 2),
+            "equity_inr": round(capital, 2),
+            "exit_reason": reason,
+        })
+        highs = max(highs, capital)
+        max_dd = max(max_dd, (highs - capital) / highs * 100 if highs > 0 else 0.)
+        position = None
+
+    for i, row in enumerate(rows):
+        if i > 0 and not _contiguous(rows[i - 1], row):
+            if position is not None:
+                unscored["unclosed_on_missing_bar_or_session"] += 1
+                position = None
+            pending = None
+        if pending is not None:
+            if position is None or position["direction"] != pending:
+                if position is not None:
+                    exit_position(row["open"], row["timestamp_utc"], "opposite_confirmed_cross")
+                if capital > 0:
+                    shares = capital / row["open"]
+                    position = {
+                        "direction": pending,
+                        "index_units": shares, "entry_price": row["open"],
+                        "entry_cost": shares * row["open"] * cost_bps / 10000,
+                        "entry_utc": row["timestamp_utc"],
+                    }
+            pending = None
+        # Only the actual observed regular-session 15:29 candle can provide
+        # a definite EOD close; the terminal partial day is not assumed closed.
+        at = trading_cockpit._ts(row["timestamp_utc"]).astimezone(IST)
+        if at.time().replace(tzinfo=None) == SESSION_LAST:
+            exit_position(row["close"], row["timestamp_utc"], "observed_session_end")
+            pending = None
+        elif signals[i] in (UP, DOWN):
+            if i + 1 < len(rows) and _contiguous(row, rows[i + 1]):
+                pending = 1 if signals[i] == UP else -1
+            else:
+                unscored["cross_without_next_original_open"] += 1
+        if include_chart:
+            unrealized = 0.
+            if position is not None:
+                unrealized = ((row["close"] - position["entry_price"])
+                              * position["direction"] * position["index_units"]
+                              - position["entry_cost"])
+            trace.append({
+                "time": row["timestamp_utc"],
+                "price": _round(row["close"]),
+                "account": _round(capital + unrealized, 2),
+                "signal": signals[i],
+                "position": (UP if position and position["direction"] == 1
+                             else DOWN if position else HOLD),
+            })
+    if position is not None:
+        unscored["open_position_at_truncated_history_end"] += 1
+
+    wins = [t["net_pnl_proxy_inr"] for t in trades if t["net_pnl_proxy_inr"] > 0]
+    losses = [t["net_pnl_proxy_inr"] for t in trades if t["net_pnl_proxy_inr"] < 0]
+    realized = [t["net_pnl_proxy_inr"] for t in trades]
+    sharpe = None
+    if len(realized) >= 3 and len(set(round(v, 6) for v in realized)) > 1:
+        # Per-trade statistic; not misleadingly annualized without elapsed time.
+        sharpe = mean(realized) / stdev(realized) * sqrt(len(realized))
+    profit_factor = sum(wins) / abs(sum(losses)) if losses else None
+    return {
+        "metrics": {
+            "trade_count": len(trades),
+            "crossovers": actual_signal_count,
+            "win_rate_pct": _round(len(wins) / len(trades) * 100, 2) if trades else None,
+            "pnl_proxy_inr": _round(capital - starting_capital, 2),
+            "return_proxy_pct": _round((capital / starting_capital - 1) * 100, 3),
+            "ending_capital_proxy_inr": _round(capital, 2),
+            "index_points": _round(sum(t["index_points"] for t in trades), 3),
+            "max_closed_trade_drawdown_pct": _round(max_dd, 3),
+            "profit_factor": _round(profit_factor, 3) if profit_factor is not None else None,
+            "trade_sharpe_unannualized": _round(sharpe, 3) if sharpe is not None else None,
+            "avg_hold_minutes": _round(mean(t["hold_minutes"] for t in trades), 2)
+                                if trades else None,
+            "unscored": dict(unscored),
+        },
+        "trades": trades if include_chart else [],
+        "chart": trace if include_chart else [],
+        "read_only": True, "orders_placed": 0,
+        "basis": "hypothetical_1x_banknifty_index_directional_proxy_not_tradable",
+    }
+
+
+def _overlay(rows: list[dict], signals: list[str], indicators: dict) -> list[dict]:
+    result = []
+    for i, row in enumerate(rows):
+        f = indicators["fast"][i]
+        s = indicators["slow"][i]
+        spread = (f - s) / row["close"] * 10000 if f is not None and s is not None else None
+        result.append({
+            "time": row["timestamp_utc"], "price": row["close"],
+            "open": row["open"], "high": row["high"], "low": row["low"],
+            "fast_ema": f, "slow_ema": s,
+            "ema_spread_bps": _round(spread, 3) if spread is not None else None,
+            "momentum_roc5_pct": indicators["momentum_roc5_pct"][i],
+            "signal": signals[i],
+        })
+    return result
+
+
+def _periods(fast_periods: list[int], slow_periods: list[int]) -> list[tuple[int, int]]:
+    if not fast_periods or not slow_periods:
+        raise ValueError("Enter at least one fast and one slow EMA period")
+    if len(fast_periods) > 32 or len(slow_periods) > 32:
+        raise ValueError("Use at most 32 distinct periods in each range")
+    if any(type(i) is not int or i < 2 or i > 150 for i in fast_periods + slow_periods):
+        raise ValueError("EMA periods must be integers between 2 and 150")
+    result = sorted({(fast, slow) for fast in fast_periods for slow in slow_periods
+                     if fast < slow})
+    if not result or len(result) > MAX_PAIRS:
+        raise ValueError("Select between 1 and 256 valid fast < slow EMA combinations")
+    return result
+
+
+def run_sweep(*, limit: int = 1500, fast_periods: list[int],
+              slow_periods: list[int], starting_capital: float = 50000,
+              cost_bps: float = 5, progress=None) -> dict:
+    combinations = _periods(fast_periods, slow_periods)
+    rows, evidence = load_index(limit)
+    sessions = sorted({row["session_ist"] for row in rows})
+    # Reserve whole calendar sessions for validation. Small samples are not
+    # promoted to independently validated out-of-sample performance.
+    validated = len(sessions) >= 6
+    cutoff = max(2, int(len(sessions) * .7)) if validated else len(sessions)
+    train_days = set(sessions[:cutoff])
+    holdout_days = set(sessions[cutoff:])
+    train_rows = [row for row in rows if row["session_ist"] in train_days]
+    test_rows = [row for row in rows if row["session_ist"] in holdout_days]
+    trials = []
+    for n, (fast, slow) in enumerate(combinations):
+        signals, _ = crossover_events(train_rows, fast, slow)
+        train = backtest_index(train_rows, signals,
+                               starting_capital=starting_capital,
+                               cost_bps=cost_bps, include_chart=False)["metrics"]
+        trials.append({"fast": fast, "slow": slow, "training": train})
+        if progress and (n % 8 == 0 or n == len(combinations)-1):
+            progress(10 + 80 * (n + 1) / len(combinations),
+                     "Index-only EMA crossover sweep: " +
+                     str(n + 1) + "/" + str(len(combinations)))
+    # Ranking is strictly in-sample; never select a winner on test data.
+    trials.sort(key=lambda x: (x["training"]["return_proxy_pct"],
+                               x["training"]["trade_count"]), reverse=True)
+    if validated and test_rows:
+        for trial in trials[:20]:
+            cross, _ = crossover_events(test_rows, trial["fast"], trial["slow"])
+            trial["holdout"] = backtest_index(
+                test_rows, cross, starting_capital=starting_capital,
+                cost_bps=cost_bps, include_chart=False)["metrics"]
+    best = trials[0]
+    actual_signals, indicators = crossover_events(rows, best["fast"], best["slow"])
+    selected = backtest_index(rows, actual_signals,
+                              starting_capital=starting_capital,
+                              cost_bps=cost_bps, include_chart=True)
+    return {
+        "kind": "ema_sweep", "identity": IDENTITY,
+        "model": INDICATOR_VERSION,
+        "combinations_tested": len(combinations),
+        "ranked": trials,
+        "best_pair": {"fast": best["fast"], "slow": best["slow"]},
+        "selected": selected,
+        "overlays": _overlay(rows, actual_signals, indicators),
+        "evidence": evidence,
+        "validation": {
+            "whole_sessions_train": len(train_days),
+            "whole_sessions_holdout": len(holdout_days),
+            "holdout_available": validated,
+            "selection_rule": "train-only return proxy, top 20 holdout evaluated",
+            "warning": ("Holdout uses separate whole sessions; no tuning on test."
+                        if validated else
+                        "Fewer than 6 sessions: ranking is exploratory, no "
+                        "independent out-of-sample validation."),
+        },
+        "bid_ask_spread_source": "unavailable_for_cash_index_ohlc",
+        "read_only": True, "orders_placed": 0,
+    }
+
+
+def run_custom(*, code: str, limit: int = 1500,
+               starting_capital: float = 50000, cost_bps: float = 5,
+               progress=None) -> dict:
+    from . import python_strategy_sandbox
+    rows, evidence = load_index(limit)
+    if progress:
+        progress(12, "Snapshotting original BANKNIFTY candles for isolated Python")
+    signals, sandbox = python_strategy_sandbox.run_python(code, rows)
+    if progress:
+        progress(85, "Scoring causal index-directional fills and plotting")
+    selected = backtest_index(rows, signals,
+                              starting_capital=starting_capital,
+                              cost_bps=cost_bps, include_chart=True)
+    # Always label the reference 9/21 EMA overlay as independent of custom
+    # strategy. It can explain the spread, not claim authorship of signals.
+    _, indicators = crossover_events(rows, 9, 21)
+    return {
+        "kind": "python_strategy", "identity": IDENTITY,
+        "strategy_origin": "user_entered_python_isolated_no_broker_access",
+        "selected": selected,
+        "overlays": _overlay(rows, signals, indicators),
+        "evidence": evidence, "sandbox": sandbox,
+        "reference_ema": {"fast": 9, "slow": 21,
+                          "note": "Reference overlays, not a claim about user strategy"},
+        "bid_ask_spread_source": "unavailable_for_cash_index_ohlc",
+        "read_only": True, "orders_placed": 0,
+    }
