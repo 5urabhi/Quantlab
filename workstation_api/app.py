@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, trading_acceptance
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, pit_index, service, shared_market_data, research_library, research_insights, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, auto_option_chain, trading_acceptance
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -1044,9 +1044,11 @@ def banknifty_auto_depth_status():
 @app.post("/api/trading-cockpit/auto-depth/arm")
 def banknifty_auto_depth_arm(body: BankNiftyAutoDepthRequest):
     try:
-        return auto_option_depth.arm(
+        armed = auto_option_depth.arm(
             body.model_dump(exclude={"confirm_live_data"}),
             confirm_live_data=body.confirm_live_data)
+        auto_option_chain.resume_if_armed()
+        return {**armed, "option_chain_capture": auto_option_chain.status()}
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
@@ -1054,9 +1056,17 @@ def banknifty_auto_depth_arm(body: BankNiftyAutoDepthRequest):
 @app.post("/api/trading-cockpit/auto-depth/disarm")
 def banknifty_auto_depth_disarm():
     try:
-        return auto_option_depth.disarm()
+        result = auto_option_depth.disarm()
+        auto_option_chain.disarmed()
+        return {**result, "option_chain_capture": auto_option_chain.status()}
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
+
+
+@app.get("/api/trading-cockpit/auto-chain/status")
+def banknifty_auto_chain_status():
+    """Safe local-only capture counts; no additional Dhan API requests."""
+    return auto_option_chain.status()
 
 
 @app.get("/api/data-manager/depth/catalog")
@@ -3612,6 +3622,7 @@ def register_research_hypothesis(body:ResearchHypothesisRequest):
 def resume_user_armed_banknifty_depth():
     try:
         auto_option_depth.resume_if_armed()
+        auto_option_chain.resume_if_armed()
     except (ValueError, OSError, sqlite3.Error):
         LOG.warning("Previously armed automatic depth recorder could not resume")
 
@@ -3619,6 +3630,7 @@ def resume_user_armed_banknifty_depth():
 @app.on_event("shutdown")
 def suspend_banknifty_depth_on_local_shutdown():
     auto_option_depth.suspend_for_shutdown()
+    auto_option_chain.suspend_for_shutdown()
 
 
 # Missing or interrupted SHARED DERIVED VIEW publications are repaired at startup
