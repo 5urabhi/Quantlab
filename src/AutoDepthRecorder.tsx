@@ -10,6 +10,7 @@ type Settings={
 }
 type Candidate={
   identity:string;side:'CE'|'PE';strike:number;expiry:string
+  wing?:'above'|'below';atm_strike?:number
   lot_size:number;ltp:number;chain_received_utc:string;volume:number
 }
 type Latest={
@@ -237,12 +238,13 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         {Boolean(state.dropped_depth_samples)&&
           <> {n(state.dropped_depth_samples)} samples were skipped because
           local storage could not keep up.</>}
-      </p>{state.contracts.slice(0,8).map(contract=>{
+      </p>{[...state.contracts.filter(x=>x.wing==='above').slice(0,4),
+        ...state.contracts.filter(x=>x.wing==='below').slice(0,4)].map(contract=>{
         const live=state.latest[contract.identity]
         return <article className="ad-contract" key={contract.identity}>
           <div className="ad-contract-title">
             <strong className={contract.side==='CE'?'ce':'pe'}>{contract.side}</strong>
-            <strong>{n(contract.strike,0)} strike</strong>
+            <strong>{n(contract.strike,0)} strike{contract.wing?' · '+contract.wing+' ATM':''}</strong>
             <span>{contract.identity} · {contract.expiry}</span>
             <small>Chain LTP {inr(contract.ltp)}</small>
           </div>
