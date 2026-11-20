@@ -63,6 +63,24 @@ are saved every three seconds; other selected contracts save full original
 subscribed. The complete option-chain snapshot collector continues to archive
 every returned CE/PE strike for every Dhan-listed expiry separately.
 
+**Coverage and packet-freshness diagnostics:** Some far-out BANKNIFTY
+contracts have a verified security ID but no last traded price. They can be
+subscribed for real 20-level depth; their chain premium is displayed as
+unavailable, never assumed zero. The recorder selects them where the official
+master matches and saves only genuinely received bid+ask books. When fewer
+than 100 contracts exist in an ATM wing, the warning explains how many
+complete original CE/PE strike pairs are listed versus how many are
+master-verified. Do not substitute options from another expiry silently.
+
+Because broad contracts are sampled every 30 seconds while original depth
+packets may arrive more frequently, a **saved-book age** is *not* the age
+of the last live feed packet. Trading Cockpit now reports them separately
+along with per-contract actual packet activity, unique contracts with
+stored original depth, and sockets with recent genuine packets. Four
+connected sockets never mean all 200 subscribed contracts have fresh books.
+A socket with no source-verified bid+ask pairs for over 120 seconds will
+reconnect automatically with bounded retry delays.
+
 **Stop and disarm recording** remains a persistent opt-out. If you intentionally
 stopped recording before, re-enable it once using **Arm automatic 20-level
 recording**; QuantLab will then resume automatically on subsequent startups.
