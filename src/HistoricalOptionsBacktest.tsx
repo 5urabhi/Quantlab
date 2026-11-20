@@ -245,14 +245,22 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
           {(Object.keys(MODE_LABEL) as Rule[]).map(rule=><option key={rule} value={rule}>{MODE_LABEL[rule]}</option>)}
         </select>
       </label>
-      <label>Fixed holding period
+      <label>Fixed holding period {selectedRule==='fixed'?'':'· fixed-time policy only'}
         <select aria-label="Options backtest holding period" value={holdMinutes}
+          disabled={selectedRule!=='fixed'}
           onChange={e=>setHoldMinutes(Number(e.target.value) as typeof holdMinutes)}>
           {[1,3,5,6,10,30,60].map(minutes=><option key={minutes} value={minutes}>
             {minutes===60?'1 hour':minutes+' minutes'}</option>)}
         </select>
       </label>
     </div>
+    {selectedRule!=='fixed'&&<p className="hob-hold-note" role="note">
+      Fixed holding time does not control this selected rule. The options backtester
+      still compares fixed 1–60-minute policies separately in the results table.
+      {selectedRule==='signal_reversal'
+        ?' Reversal-only positions exit on an opposite BANKNIFTY signal or at the intraday session boundary.'
+        :' Time caps and premium stop/target settings are configured in Advanced settings.'}
+    </p>}
     <details className="hob-advanced-settings" aria-label="Advanced backtest data and cost settings">
       <summary><Database size={16}/> Advanced contract and cost settings
         <small>Expiry, premium range, lot-size assumption, stop/target, slippage and fees</small>
