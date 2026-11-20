@@ -56,6 +56,8 @@ type ModelSourceOptions={
   auto_download_supported?:boolean;
   tri:{runnable:boolean;returns:number;reason:string;index_name?:string}
 }
+type RecordedChainSummary={captured_at:string;expiry:string;original_contracts:number;
+  valid_contracts:number;snapshot_sha256:string;expiry_time_is_assumed:boolean}
 type MarketQuoteSnapshot={id:string;dataset_id:string;captured_at:string;source_sha256:string;
   contracts:{provider:string;underlying:string;strike:number;option_type:string;
     captured_at:string;expiry_at:string;row_index:number;bid:number;ask:number;quote_age_days:number}[]}
@@ -163,6 +165,11 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
   const [matrixError,setMatrixError]=useState<string|null>(null)
   const [matrixLoading,setMatrixLoading]=useState(false)
   const [quoteSnapshots,setQuoteSnapshots]=useState<MarketQuoteSnapshot[]>([])
+  const [recordedChains,setRecordedChains]=useState<RecordedChainSummary[]>([])
+  const [recordedChainSha,setRecordedChainSha]=useState('')
+  const [recordedLoading,setRecordedLoading]=useState(false)
+  const [recordedError,setRecordedError]=useState('')
+  const [recordedMessage,setRecordedMessage]=useState('')
   const [quoteFile,setQuoteFile]=useState<File|null>(null)
   const [quoteConfirmed,setQuoteConfirmed]=useState(false)
   const [quoteLoading,setQuoteLoading]=useState(false)
@@ -237,6 +244,39 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
   },[selectedDataset])
   useEffect(()=>{setQuoteError('');setQuoteMessage('');setQuoteFile(null)
     void refreshQuotes()},[refreshQuotes])
+  const refreshRecordedChains=useCallback(async()=>{
+    if(selectedDataset!=='dhan_shared'){setRecordedChains([]);setRecordedChainSha('');return}
+    try{
+      const data=await getJSON<{snapshots:RecordedChainSummary[]}>(
+        '/lab/option-quotes/recorded-chains')
+      setRecordedChains(data.snapshots)
+      setRecordedChainSha(previous=>data.snapshots.some(
+        snap=>snap.snapshot_sha256===previous)?previous:
+        data.snapshots[0]?.snapshot_sha256||'')
+    }catch(e){
+      setRecordedError(e instanceof Error?e.message:String(e))
+    }
+  },[selectedDataset])
+  useEffect(()=>{void refreshRecordedChains()},[refreshRecordedChains])
+  const reuseRecordedChain=async()=>{
+    if(!selectedDataset||selectedDataset!=='dhan_shared'||!recordedChainSha||recordedLoading)return
+    setRecordedError('');setRecordedMessage('');setRecordedLoading(true)
+    try{
+      const response=await fetch('/api/lab/option-quotes/use-recorded',{
+        method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({dataset_id:selectedDataset,
+          snapshot_sha256:recordedChainSha,confirm_reuse:true})})
+      if(!response.ok)throw new Error(await errorText(response))
+      const result=await response.json() as {
+        id:string;contracts:number;reused_existing:boolean;warning:string}
+      setParams(prev=>({...prev,quote:result.id+':0'}))
+      setRecordedMessage(result.contracts+' source-checked recorded contracts '+
+        (result.reused_existing?'reused':'imported')+'. '+result.warning)
+      await refreshQuotes();void refreshMatrix()
+    }catch(e){setRecordedError(e instanceof Error?e.message:String(e))}
+    finally{setRecordedLoading(false)}
+  }
   const fetchDhanOptionChain=async()=>{
     if(!selectedDataset||quoteLoading||dhanQuoteJob&&['queued','running'].includes(dhanQuoteJob.status))return
     setDhanQuoteError('');setDhanQuoteMessage('')
@@ -1085,6 +1125,44 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
                 A live snapshot is not historical options backtest data. No credential
                 or proprietary quote is sent to this browser.</p>
             </div>
+            {selectedDataset==='dhan_shared'&&<div className="ql-dhan-quote-fetch"
+              role="region" aria-label="Reuse recorded BANKNIFTY option chain">
+              <div className="ql-panel-title"><Database size={15}/>
+                <h3>Reuse existing BANKNIFTY recording · no new Dhan request</h3></div>
+              <p>QuantLab also stores BANKNIFTY option chains when your read-only recorder is
+                armed. Reuse a SHA-checked saved observation directly for all five quote
+                models, without fetching it again. This creates a dataset-bound model
+                input, not a new market dataset or trading order.</p>
+              <div className="ql-dhan-quote-controls">
+                <label className="ql-field"><span>Recorded original-source snapshot</span>
+                  <select aria-label="Select saved BANKNIFTY chain"
+                    value={recordedChainSha}
+                    onChange={e=>setRecordedChainSha(e.target.value)}
+                    disabled={recordedLoading}>
+                    {!recordedChains.length&&<option value="">No eligible saved chain</option>}
+                    {recordedChains.map(chain=><option key={chain.snapshot_sha256}
+                      value={chain.snapshot_sha256}>
+                      {chain.captured_at.slice(0,16).replace('T',' ')} UTC ·
+                      {chain.expiry} expiry · {chain.valid_contracts} valid quotes
+                    </option>)}
+                  </select></label>
+                <button type="button" onClick={()=>void reuseRecordedChain()}
+                  disabled={!recordedChainSha||recordedLoading}>
+                  <Database size={14}/>
+                  {recordedLoading?'Validating saved chain…':'Use this saved observation'}
+                </button>
+                <button type="button" disabled={recordedLoading}
+                  onClick={()=>void refreshRecordedChains()}>
+                  <Activity size={14}/> Recheck saved chains
+                </button>
+              </div>
+              <p className="ql-note">Historical source observations are not executable live
+                prices. Dhan's original vendor JSON was not retained by this recorder;
+                quote receive time is local, and expiry time assumes 15:30 IST.
+                A saved observation is never reconstructed from BANKNIFTY spot candles.</p>
+              {recordedMessage&&<p className="ql-alert good" role="status">{recordedMessage}</p>}
+              {recordedError&&<p className="ql-alert bad" role="alert">{recordedError}</p>}
+            </div>}
             <details className="ql-advanced-import">
               <summary>Alternative · Import original provider quote CSV</summary>
               <p>CSV columns: <code>captured_at,provider,underlying,underlying_spot,
