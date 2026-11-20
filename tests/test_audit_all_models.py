@@ -15,7 +15,7 @@ import pandas as pd
 
 from scripts import audit_all_models
 from workstation_api import (
-    model_lab, model_registry, option_market, option_quotes, research_acceptance, service,
+    model_input_selector, model_lab, model_registry, option_market, option_quotes, research_acceptance, service,
 )
 
 
@@ -85,6 +85,21 @@ class ModelAuditAllDatasetsTests(unittest.TestCase):
         self.assertEqual(params["assets"], 2)
         self.assertEqual(params["max_weight"], .5)
         fetch.assert_called_once_with("local_dataset", 60, 2)
+
+    def test_valid_original_tri_can_run_without_separate_stock_prices(self):
+        with patch.object(model_input_selector, "inspect", return_value={
+            "candidates": [],
+            "tri": {"runnable": True, "returns": 135},
+        }) as inspect:
+            params, actual, assets, ticker = audit_all_models.historical_input(
+                model_registry.CATALOG["gbm_fit"], "tri_only",
+                {"has_prices": False}
+            )
+        self.assertEqual(params["target"], "benchmark_tri")
+        self.assertEqual(actual, 135)
+        self.assertEqual(assets, 1)
+        self.assertEqual(ticker, "source-linked NIFTY TRI")
+        inspect.assert_called_once_with("tri_only", "gbm_fit")
 
     def test_quote_candidate_ref_requires_exact_saved_contract(self):
         snapshots = [{
