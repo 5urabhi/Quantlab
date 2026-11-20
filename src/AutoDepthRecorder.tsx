@@ -81,10 +81,13 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     if(busy||!armedConsent)return
     setBusy(true);setError('');setNotice('')
     try{
-      const {enabled:_,...options}=settings
       const result=await marketPost<Recorder>(
         '/api/trading-cockpit/auto-depth/arm',
-        {...options,confirm_live_data:true})
+        {
+          target_premium:settings.target_premium,tolerance:settings.tolerance,
+          per_side:settings.per_side,lots:settings.lots,
+          sample_seconds:settings.sample_seconds,confirm_live_data:true,
+        })
       setState(result);setSettings(result.settings);setArmedConsent(false)
       setNotice(result.market_regular_hours
         ?'Recorder armed. Waiting for original Dhan CE/PE depth packets.'
