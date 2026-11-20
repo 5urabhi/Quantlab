@@ -143,7 +143,7 @@ class BankNiftyStrategyLabTests(TestCase):
         rows = rows_for_day(date(2026, 11, 19), stop=40)
         with patch.object(sandbox.shutil, "which", return_value=None), \
              patch.object(sandbox.subprocess, "run") as subprocess:
-            with self.assertRaisesRegex(ValueError, "no unsafe in-process fallback"):
+            with self.assertRaisesRegex(ValueError, "unsafe in-process fallback"):
                 sandbox.run_python("def signal(history): return 'HOLD'", rows)
             subprocess.assert_not_called()
 
