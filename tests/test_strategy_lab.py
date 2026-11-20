@@ -139,6 +139,38 @@ class BankNiftyStrategyLabTests(TestCase):
         self.assertEqual(len(rows), 100)
         self.assertTrue(evidence["live_recorder_touched"] is False)
 
+    def test_built_in_sweep_launches_low_priority_process_without_token(self):
+        with patch.object(lab.shutil,"which",return_value="/usr/bin/nice"), \
+             patch.object(lab.subprocess,"run") as child, \
+             patch.object(lab,"read_run",return_value={
+                 "kind":"ema_sweep","run_id":"banknifty_"+("b"*20)}) as read:
+            def complete(command, **kwargs):
+                self.assertEqual(command[1:3], ["-n","10"])
+                self.assertIn("workstation_api.strategy_lab_process",command)
+                self.assertTrue(kwargs["close_fds"])
+                self.assertTrue(kwargs["start_new_session"])
+                self.assertEqual(kwargs["timeout"],120)
+                self.assertEqual(kwargs["env"]["OMP_NUM_THREADS"],"1")
+                self.assertNotIn("DHAN_ACCESS_TOKEN",kwargs["env"])
+                self.assertNotIn("DHAN_CLIENT_ID",kwargs["env"])
+                Path(command[-1]).write_text(
+                    '{"run_id":"banknifty_'+("b"*20)+'"}',encoding="utf-8")
+                from types import SimpleNamespace
+                return SimpleNamespace(returncode=0)
+            child.side_effect=complete
+            result = lab.run_sweep_process(
+                fast_periods=[9],slow_periods=[21],limit=500)
+            self.assertEqual(result["kind"],"ema_sweep")
+            child.assert_called_once()
+            read.assert_called_once_with("banknifty_"+("b"*20))
+
+    def test_missing_nice_utility_fails_before_launch(self):
+        with patch.object(lab.shutil,"which",return_value=None), \
+             patch.object(lab.subprocess,"run") as child:
+            with self.assertRaisesRegex(ValueError,"nice utility"):
+                lab.run_sweep_process(fast_periods=[9],slow_periods=[21])
+            child.assert_not_called()
+
     def test_user_python_fails_closed_without_bubblewrap(self):
         rows = rows_for_day(date(2026, 11, 19), stop=40)
         with patch.object(sandbox.shutil, "which", return_value=None), \
