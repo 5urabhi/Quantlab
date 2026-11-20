@@ -400,17 +400,20 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
             <small>{DEC(result.research_readiness.signal_bars_with_next_option_open,0)} of
               {' '}{DEC(result.research_readiness.directional_signal_bars,0)} directional bars
               have matched original option quotes and next OPEN</small></div>
-          <div><span>Reversal exits / actual flips</span>
+          <div><span>Reversal exits / attempts / flips</span>
             <strong>{scenario.reversal_audit?.opposite_signal_exits??0}
+              {' / '}{scenario.reversal_audit?.same_open_reentry_attempts??0}
               {' / '}{scenario.reversal_switches??0}</strong>
             <small>{scenario.reversal_audit?.opposite_exits_without_completed_reentry??0}
-              {' '}reversal exits not followed by scored replacement entries</small></div>
+              {' '}opposite exits without scored replacement trades</small></div>
         </div>
         {scenario.policy==='signal_reversal'&&(scenario.reversal_switches??0)===0&&
           <p className="hob-zero-flip-diagnostic" role="status">
             {scenario.reversal_audit?.opposite_signal_exits===0
               ?'No completed trade exited on an opposite BANKNIFTY signal in this sample. A large count of repeated UP/DOWN candles does not mean the held positions encountered tradable reversals.'
-              :`${scenario.reversal_audit?.opposite_signal_exits??0} completed position(s) exited on an opposite signal, but no replacement CE/PE trade passed all original-price, cash and complete-path requirements. Expand the source gaps below for the rejected entries.`}
+              :(scenario.reversal_audit?.same_open_reentry_attempts??0)===0
+                ?'An opposite signal closed at least one scored position, but the simulator did not attempt the corresponding same-OPEN replacement. This is a signal-to-trade alignment discrepancy to investigate, not evidence that the option trade failed from missing prices.'
+                :`${scenario.reversal_audit?.opposite_signal_exits??0} position(s) exited on an opposite signal, but no replacement CE/PE trade passed all original-price, cash and complete-path checks. Expand the rejection reasons below.`}
           </p>}
         <details className="hob-audit-detail">
           <summary>See reversal rejections, RL blockers and next experiments</summary>
