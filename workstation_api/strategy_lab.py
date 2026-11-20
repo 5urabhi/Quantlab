@@ -16,7 +16,7 @@ import os
 from math import isfinite, sqrt
 from statistics import mean, stdev
 
-from . import cockpit_sources, trading_cockpit, service
+from . import cockpit_sources, live_market, trading_cockpit, service
 
 IDENTITY = "INDEX:BANKNIFTY"
 MAX_BARS = 5000
@@ -43,19 +43,27 @@ def _contiguous(a: dict, b: dict) -> bool:
             trading_cockpit._ts(a["timestamp_utc"]) == timedelta(minutes=1))
 
 
-def load_index(limit: int) -> tuple[list[dict], dict]:
+def load_index(limit: int, source_mode: str = "historical") -> tuple[list[dict], dict]:
     if limit not in (500, 1500, 3000, 5000):
         raise ValueError("Select 500, 1500, 3000 or 5000 original 1-minute bars")
-    # Underlying adapter independently checks original bytes against a
-    # Dhan source manifest. No live database mutation or vendor request.
-    source = cockpit_sources.series(IDENTITY, limit=limit)
+    if source_mode == "historical":
+        # SHA-verified original Dhan IDX_I historical batch.
+        source = cockpit_sources.series(IDENTITY, limit=limit)
+    elif source_mode == "recorded_live":
+        # Snapshot only already-completed original live ticks aggregated by
+        # minute. No subscription, direct vendor call or recorder restart.
+        source = live_market.minute_series(IDENTITY, limit=limit)
+    else:
+        raise ValueError("Choose historical Dhan or recorded live index candles")
     rows = [row for row in trading_cockpit._validated(source["rows"])
             if _market_bar(row)]
     if len(rows) < 50:
         raise ValueError("Need at least 50 original regular-session BANKNIFTY candles")
     return rows, {
         "identity": IDENTITY, "basis": source["basis"],
-        "original_sha256": source["source_file_sha256"],
+        "source_mode": source_mode,
+        "source_warning": source.get("source_warning") or source.get("warning"),
+        "original_sha256": source.get("source_file_sha256"),
         "rows": len(rows), "sessions": len(set(r["session_ist"] for r in rows)),
         "first_utc": rows[0]["timestamp_utc"],
         "last_utc": rows[-1]["timestamp_utc"],
@@ -297,9 +305,10 @@ def _periods(fast_periods: list[int], slow_periods: list[int]) -> list[tuple[int
 
 def run_sweep(*, limit: int = 1500, fast_periods: list[int],
               slow_periods: list[int], starting_capital: float = 50000,
-              cost_bps: float = 5, progress=None) -> dict:
+              cost_bps: float = 5, source_mode: str = "historical",
+              progress=None) -> dict:
     combinations = _periods(fast_periods, slow_periods)
-    rows, evidence = load_index(limit)
+    rows, evidence = load_index(limit, source_mode)
     sessions = sorted({row["session_ist"] for row in rows})
     # Reserve whole calendar sessions for validation. Small samples are not
     # promoted to independently validated out-of-sample performance.
@@ -360,8 +369,8 @@ def run_sweep(*, limit: int = 1500, fast_periods: list[int],
 
 def run_pair(*, fast: int, slow: int, limit: int = 1500,
              starting_capital: float = 50000,
-             cost_bps: float = 5) -> dict:
-    rows, evidence = load_index(limit)
+             cost_bps: float = 5, source_mode: str = "historical") -> dict:
+    rows, evidence = load_index(limit, source_mode)
     signals, indicators = crossover_events(rows, fast, slow)
     selected = backtest_index(rows, signals, starting_capital=starting_capital,
                               cost_bps=cost_bps, include_chart=True)
@@ -436,9 +445,9 @@ def read_run(run_id: str) -> dict:
 
 def run_custom(*, code: str, limit: int = 1500,
                starting_capital: float = 50000, cost_bps: float = 5,
-               progress=None) -> dict:
+               source_mode: str = "historical", progress=None) -> dict:
     from . import python_strategy_sandbox
-    rows, evidence = load_index(limit)
+    rows, evidence = load_index(limit, source_mode)
     if progress:
         progress(12, "Snapshotting original BANKNIFTY candles for isolated Python")
     signals, sandbox = python_strategy_sandbox.run_python(code, rows)
