@@ -20,3 +20,6 @@ node_modules/
 dist/
 .local-tools/
 .local-state/
+
+# Local-only Dhan token renewal process lock; never commit runtime state
+.dhan_renewal.lock
