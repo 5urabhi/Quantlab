@@ -6,11 +6,14 @@ claim successful Dhan depth entitlement or source market observations.
 from __future__ import annotations
 
 from tempfile import TemporaryDirectory
+from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Event
 from unittest import TestCase
 from unittest.mock import patch
 import os
+import sqlite3
 
 from workstation_api import auto_option_depth as auto
 from workstation_api import wide_option_depth as wide
@@ -72,15 +75,107 @@ class WideDepthContractsTests(TestCase):
         self.assertFalse(any(x["security_id"] == "999999" for x in selected))
         self.assertFalse(any(x["strike"] == 60700 for x in selected))
 
-    def test_only_original_valid_expiry_and_ltp(self):
+    def test_expiry_mismatch_is_rejected_but_no_last_trade_is_allowed(self):
         source = chain_fixture(above=2, below=2)
         source["contracts"][0]["expiry"] = "2027-11-23"
         source["contracts"][2]["ltp"] = 0.
         selected = wide.select_atm_contracts(source, auto.DEFAULTS)
         self.assertFalse(any(x["identity"] == source["contracts"][0]["identity"]
                              for x in selected))
-        self.assertTrue(all(x["ltp"] > 0 for x in selected))
+        self.assertTrue(any(x["ltp"] is None for x in selected))
         self.assertEqual(selected[0]["atm_strike"], 63000.)
+
+    def test_untraded_but_master_verified_options_complete_full_wings(self):
+        source = chain_fixture()
+        # Five far-above strikes, both CE and PE, have not traded; a real
+        # verified security ID still qualifies for original depth.
+        for option in source["contracts"]:
+            if 67600 <= option["strike"] <= 68000:
+                option["ltp"] = None
+        selected = wide.select_atm_contracts(source, auto.DEFAULTS)
+        self.assertEqual(len(selected), 200)
+        self.assertEqual(sum(x["wing"] == "above" for x in selected), 100)
+        self.assertEqual(wide._coverage_diagnostics(
+            source, selected)["missing_ltp_selected"], 10)
+
+    def test_source_limited_45_above_strikes_reports_exact_shortfall(self):
+        source = chain_fixture(above=45, below=50)
+        selected = wide.select_atm_contracts(source, auto.DEFAULTS)
+        counts = wide._coverage_diagnostics(source, selected)
+        self.assertEqual(len(selected), 190)
+        self.assertEqual(counts["source_pairs_above"], 45)
+        self.assertEqual(counts["source_pairs_below"], 50)
+        self.assertIn("45/50 strike pairs verified", counts["rejection_explanations"]["above"])
+
+    def test_packet_receipt_health_is_independent_of_disk_sample_age(self):
+        now = datetime(2026, 11, 20, 5, 30, tzinfo=timezone.utc)
+        selected = wide.select_atm_contracts(
+            chain_fixture(above=1, below=1), auto.DEFAULTS)
+        identity = selected[0]["identity"]
+        state = {
+            "connected": True, "contracts": [selected[0]],
+            "latest": {identity: {"received_utc": (
+                now - timedelta(seconds=45)).isoformat()}},
+            "received_pairs": 0,
+        }
+        last_source = now - timedelta(seconds=2)
+        with patch.object(auto, "STATE", state):
+            wide._record_original_pairs(0, [({}, selected[0])], last_source)
+            with patch.object(auto, "_now", return_value=now), \
+                 patch.object(auto, "_market_open", return_value=True), \
+                 patch.object(auto, "_config", return_value={
+                     **auto.DEFAULTS, "enabled": True}):
+                report = auto.status()
+        self.assertEqual(report["received_pairs"], 1)
+        self.assertEqual(report["contracts_with_saved_books"], 1)
+        self.assertEqual(report["contracts_with_recent_packets"], 1)
+        self.assertEqual(report["sockets_with_recent_pairs"], 1)
+        self.assertEqual(report["latest"][identity]["age_seconds"], 45)
+        self.assertEqual(report["latest"][identity]["feed_age_seconds"], 2)
+        self.assertTrue(report["latest"][identity]["feed_fresh"])
+        self.assertNotIn("observed_by_contract", report)
+        self.assertNotIn("socket_last_paired_utc", report)
+        self.assertFalse(wide._stalled_socket(now.timestamp(), now.timestamp() - 100))
+        self.assertTrue(wide._stalled_socket(now.timestamp(), now.timestamp() - 121))
+
+    def test_nullable_ltp_receipt_migration_preserves_real_historical_rows(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shared.sqlite3"
+            with sqlite3.connect(path) as db:
+                db.execute("""CREATE TABLE auto_banknifty_depth_selections(
+                    session_id TEXT NOT NULL, changed_utc TEXT NOT NULL,
+                    identity TEXT NOT NULL, option_side TEXT NOT NULL,
+                    expiry TEXT NOT NULL, strike REAL NOT NULL,
+                    lot_size INTEGER NOT NULL, selected_ltp REAL NOT NULL,
+                    chain_received_utc TEXT NOT NULL,
+                    PRIMARY KEY(session_id, changed_utc, identity))""")
+                db.execute("""INSERT INTO auto_banknifty_depth_selections
+                    VALUES ('old','2026-11-19T05:00:00+00:00',
+                    'NSE_FNO:99','CE','2026-11-23',63200,30,201,
+                    '2026-11-19T05:00:00+00:00')""")
+            @contextmanager
+            def mocked_db():
+                with sqlite3.connect(path) as db:
+                    yield db
+            with patch.object(auto.shared_market_data, "database_path",
+                              return_value=path), \
+                 patch.object(auto.live_market, "_init_db"), \
+                 patch.object(auto.live_market, "_database", mocked_db), \
+                 patch.object(auto, "STORAGE_READY", None):
+                auto._storage()
+            with sqlite3.connect(path) as db:
+                original = db.execute("SELECT selected_ltp FROM "
+                    "auto_banknifty_depth_selections WHERE identity='NSE_FNO:99'"
+                ).fetchone()[0]
+                self.assertEqual(original, 201)
+                db.execute("""INSERT INTO auto_banknifty_depth_selections
+                    VALUES ('new','2026-11-20T05:00:00+00:00',
+                    'NSE_FNO:100','PE','2026-11-23',63100,30,NULL,
+                    '2026-11-20T05:00:00+00:00')""")
+                value = db.execute("SELECT selected_ltp FROM "
+                    "auto_banknifty_depth_selections WHERE identity='NSE_FNO:100'"
+                ).fetchone()[0]
+                self.assertIsNone(value)
 
     def test_exactly_four_websockets_with_50_instruments_each(self):
         selected = wide.select_atm_contracts(chain_fixture(), auto.DEFAULTS)
