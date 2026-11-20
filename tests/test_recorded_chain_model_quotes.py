@@ -80,6 +80,39 @@ class RecordedBankNiftyQuoteBridgeTests(unittest.TestCase):
         self.assertEqual(results["snapshots"][0]["valid_contracts"], 2)
         self.assertTrue(results["snapshots"][0]["expiry_time_is_assumed"])
 
+    def test_receive_clock_preference_is_not_exchange_time_proof(self):
+        normal = recorded_chain_model_quotes._session_context(
+            "2026-11-20T09:59:37+00:00")
+        late = recorded_chain_model_quotes._session_context(
+            "2026-11-20T16:19:49+00:00")
+        weekend = recorded_chain_model_quotes._session_context(
+            "2026-11-21T09:59:37+00:00")
+        self.assertTrue(normal["received_during_scheduled_nse_hours"])
+        self.assertIn("15:29", normal["received_ist"])
+        self.assertFalse(late["received_during_scheduled_nse_hours"])
+        self.assertFalse(weekend["received_during_scheduled_nse_hours"])
+        self.assertTrue(normal["regular_session_clock_only_not_exchange_verified"])
+
+    def test_default_prefers_in_hours_over_newer_after_hours(self):
+        def make(captured, digest):
+            return {
+                "captured_at": captured, "expiry": "2026-11-23",
+                "original_contracts": 400, "valid_contracts": 350,
+                "snapshot_sha256": digest, "expiry_time_is_assumed": True
+            }
+        late = make("2026-11-20T16:19:49+00:00", "a" * 64)
+        in_session = make("2026-11-20T09:59:37+00:00", "b" * 64)
+        with patch.object(recorded_chain_model_quotes, "_entries",
+                          return_value=[{}, {}]), \
+             patch.object(recorded_chain_model_quotes, "_checked",
+                          side_effect=[late, in_session]):
+            selection = recorded_chain_model_quotes.available()
+        self.assertEqual(selection["recommended_snapshot_sha256"], "b" * 64)
+        self.assertTrue(selection["snapshots"][1][
+            "received_during_scheduled_nse_hours"])
+        self.assertFalse(selection["snapshots"][0][
+            "received_during_scheduled_nse_hours"])
+
     def test_explicit_reuse_is_idempotent_and_stores_normalized_provenance(self):
         with self.assertRaisesRegex(ValueError, "Confirm"):
             recorded_chain_model_quotes.use_saved(
