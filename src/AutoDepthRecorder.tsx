@@ -36,6 +36,8 @@ type AutomaticChainCapture={
   expiries_captured_session:number;last_expiry:string|null
   last_snapshot_utc:string|null;last_strike_count:number
   last_quote_count:number;last_error:string|null
+  token_maintenance:string;token_maintenance_message:string|null
+  token_renewal_opted_in:boolean
   capture_schedule_seconds:{nearest_two:number;next_four:number;remaining:number}
 }
 const DEFAULT_SETTINGS:Settings={
@@ -232,6 +234,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         {' · '}{n(chainCapture.last_quote_count)} CE/PE quotes
         {' · '}{clock(chainCapture.last_snapshot_utc)} IST.</>}
       {chainCapture?.last_error&&<span className="ad-warning"> {chainCapture.last_error}</span>}
+      {chainCapture?.token_renewal_opted_in&&<span> Token maintenance: {chainCapture.token_maintenance_message||"checking"}.</span>}
     </p>
     <div className="ad-contracts">
       {state?.contracts.length?state.contracts.map(contract=>{
