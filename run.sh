@@ -32,7 +32,8 @@ case "${1:-workstation}" in
         done
         ;;
     esac
-    exec nice -n 10 .venv/bin/python scripts/audit_all_models.py "$@"
+    # Execute as a module: the repo root must be on sys.path for workstation_api.
+    exec nice -n 10 .venv/bin/python -m scripts.audit_all_models "$@"
     ;;
   legacy-streamlit)
     exec bash scripts/start.sh research
