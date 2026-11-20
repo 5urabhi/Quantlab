@@ -115,7 +115,8 @@ def import_quotes(dataset_id: str, raw: bytes, *,
     root=_root()
     root.mkdir(parents=True,exist_ok=True)
     if source_type not in {"user_uploaded_original_option_quote_csv",
-                           "dhan_readonly_optionchain_api_v2"}:
+                           "dhan_readonly_optionchain_api_v2",
+                           "dhan_cached_normalized_optionchain_v1"}:
         raise ValueError("Unsupported quote source type")
     if provider_raw_json is not None and (
             not isinstance(provider_raw_json,bytes) or
@@ -135,9 +136,13 @@ def import_quotes(dataset_id: str, raw: bytes, *,
         "independently_source_certified":False,
         "model_inputs_are_market_quotes":True,
         "risk_free_yield_source":"model_assumptions_until_user_supplies_verified_rates",
-        "warning":"Bid and ask originate from the user's provider export. "
-                  "Provider identity, option style, liquidity, risk-free curve, "
-                  "dividend timing and quote freshness are not independently audited.",
+        "warning":("Bid and ask were copied from a SHA-checked locally saved, "
+                   "normalized Dhan chain. Original vendor JSON was NOT retained; "
+                   "expiry time is assumed. This is not a live executable quote."
+                   if source_type == "dhan_cached_normalized_optionchain_v1" else
+                   "Bid and ask originate from the user's provider export. "
+                   "Provider identity, option style, liquidity, risk-free curve, "
+                   "dividend timing and quote freshness are not independently audited."),
     }
     if len(json.dumps(metadata))>190_000:
         raise ValueError("Quote manifest exceeds safe bounded size")

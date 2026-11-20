@@ -33,7 +33,8 @@ SOURCE_NAMES = (
 COLUMNS = (
     "dataset_id", "dataset_kind", "model_id", "model_name", "mode",
     "status", "minimum_returns", "preferred_returns", "observed_returns",
-    "assets", "selected_ticker", "quote_reference", "source_file",
+    "missing_minimum", "missing_to_target", "assets", "selected_ticker",
+    "quote_reference", "source_file",
     "source_sha256", "reason", "next_action", "duration_seconds",
 )
 UNVERIFIED = (
@@ -82,7 +83,8 @@ def make_row(spec: dict, dataset_id: str, kind: str) -> dict:
         "mode": spec["mode"], "status": "blocked_input",
         "minimum_returns": minimum,
         "preferred_returns": math.ceil(minimum * 1.2) if minimum else 0,
-        "observed_returns": "", "assets": "", "selected_ticker": "",
+        "observed_returns": "", "missing_minimum": "", "missing_to_target": "",
+        "assets": "", "selected_ticker": "",
         "quote_reference": "", "source_file": "", "source_sha256": "",
         "reason": "", "next_action": "", "duration_seconds": "",
     }
@@ -161,13 +163,26 @@ def historical_input(spec: dict, dataset_id: str, record: dict) -> tuple[dict, i
         if key in {"gbm_fit", "merton_fit"} and tri.get("runnable"):
             return ({"target": "benchmark_tri"}, int(tri["returns"]), 1,
                     "source-linked NIFTY TRI")
-        shortfall = min((int(x.get("missing_to_target", minimum))
-                         for x in suggestions.get("candidates", [])
-                         if x.get("extendable")), default=math.ceil(minimum * 1.2))
+        extendable = [candidate for candidate in suggestions.get("candidates", [])
+                      if candidate.get("extendable")]
+        if extendable:
+            best = max(extendable, key=lambda item: int(item.get("returns", 0)))
+            observed = int(best["returns"])
+            needed_min = max(0, minimum - observed)
+            needed_target = max(0, math.ceil(minimum * 1.2) - observed)
+            raise ValueError(
+                "No eligible observed stock or TRI for " + key + ". Best extendable "
+                "ticker " + str(best.get("display_name") or best["ticker"]) +
+                " (" + str(best["ticker"]) + ") has " + str(observed) +
+                " observed returns, " + str(needed_min) +
+                " short of the " + str(minimum) + "-return minimum and " +
+                str(needed_target) + " short of the preferred " +
+                str(math.ceil(minimum * 1.2)) + "-return +20% target. "
+                "Select this exact stock and append authorized original history."
+            )
         raise ValueError(
-            "No eligible single-stock series or admissible original TRI; "
-            + str(shortfall) + " more returns needed to reach the preferred "
-            "+20% target for the best extendable stock, or repair source gaps"
+            "No stock or admissible TRI satisfies the " + str(minimum) +
+            "-return requirement. Check observed daily-price continuity and source integrity."
         )
 
     readiness = model_lab.readiness(dataset_id)
@@ -219,11 +234,31 @@ def run_observed(spec: dict, dataset_id: str, record: dict, folder: Path,
         try:
             parameters, observed, assets, ticker = historical_input(spec, dataset_id, record)
             row["observed_returns"] = observed
+            row["missing_minimum"] = max(0, row["minimum_returns"] - observed)
+            row["missing_to_target"] = max(0, row["preferred_returns"] - observed)
             row["assets"] = assets
             row["selected_ticker"] = ticker
         except Exception as exc:
             row["reason"] = type(exc).__name__ + ": " + safe_message(exc)
+            if spec["id"] in model_input_selector.MINIMUM:
+                try:
+                    evidence = model_input_selector.inspect(dataset_id, spec["id"])
+                    extendable = [item for item in evidence.get("candidates", [])
+                                  if item.get("extendable")]
+                    if extendable:
+                        best = max(extendable,
+                                   key=lambda item: int(item.get("returns", 0)))
+                        row["selected_ticker"] = best["ticker"]
+                        row["observed_returns"] = int(best["returns"])
+                        row["missing_minimum"] = int(best["missing_minimum"])
+                        row["missing_to_target"] = int(best["missing_to_target"])
+                except (ValueError, KeyError, TypeError, OSError):
+                    pass
             row["next_action"] = (
+                "Models → Heston historical variance proxy → choose the named "
+                "stock → Complete recommended stock (+20%). Original Dhan "
+                "cache is reused before downloading uncovered windows."
+                if spec["id"] == "heston_proxy" and row["selected_ticker"] else
                 "Data Center → Get Market Data: select exact stocks, append missing "
                 "observations with the +20% buffer, and resolve gaps"
             )
@@ -249,6 +284,10 @@ def run_observed(spec: dict, dataset_id: str, record: dict, folder: Path,
             if not row["reason"]:
                 row["reason"] = "No original saved option bid/ask contract is available"
             row["next_action"] = (
+                "Models → Observed option-quote model → Reuse existing BANKNIFTY "
+                "recording (no new Dhan request), if available; otherwise capture "
+                "one authorized read-only Dhan chain or import a source CSV"
+                if dataset_id == "dhan_shared" else
                 "Data Center / Model Catalog: capture an original read-only Dhan "
                 "option chain or import an authorized option quote CSV"
             )
@@ -428,6 +467,8 @@ def write_report(output: Path, body: dict, rows: list[dict]) -> None:
         "- Blocked by data/quotes: " + str(body["blocked_input"]),
         "- Actual-source model calculations failed: " + str(body["software_fail"]),
         "- Datasets changed while checking: " + str(body["source_changed"]),
+        "- Empty legacy data containers excluded from default totals: " +
+        ", ".join(body.get("excluded_unprepared_legacy_containers", [])),
         "",
         "A blocked model is **not** a passing calculation. A numerical software "
         "failure is **not** automatically a missing-data failure.",
@@ -448,8 +489,8 @@ def write_report(output: Path, body: dict, rows: list[dict]) -> None:
             + str(dataset["return_basis"]) + "; benchmark: "
             + str(dataset["benchmark_kind"]),
             "",
-            "| Model | Result | Observed returns | Needed (+20%) | Action / explanation |",
-            "| --- | --- | ---: | ---: | --- |",
+            "| Model | Result | Observed returns | Minimum / target | Missing min / target | Action / explanation |",
+            "| --- | --- | ---: | ---: | ---: | --- |",
         ]
         for row in by_dataset.get(did, []):
             action = row["reason"] if row["status"] == "observed_input_pass" else (
@@ -458,8 +499,10 @@ def write_report(output: Path, body: dict, rows: list[dict]) -> None:
             lines.append(
                 "| " + row["model_name"].replace("|", "/") + " | " + row["status"]
                 + " | " + str(row["observed_returns"] or "—")
-                + " | " + str(row["minimum_returns"]) + " (" +
-                str(row["preferred_returns"]) + ") | " + action + " |"
+                + " | " + str(row["minimum_returns"]) + " / " +
+                str(row["preferred_returns"]) + " | " +
+                str(row["missing_minimum"] if row["missing_minimum"] != "" else "—") + " / " +
+                str(row["missing_to_target"] if row["missing_to_target"] != "" else "—") + " | " + action + " |"
             )
         lines += [
             "",
@@ -505,8 +548,17 @@ def audit(*, datasets: list[str] | None, execute: bool, output: Path) -> dict:
     # The built-in synthetic demonstration is not an original market-data
     # source. Do not make normal real-data totals look blocked by this fixture.
     # Users may still explicitly request --dataset synthetic for diagnostics.
+    skipped_legacy = []
     if not datasets:
-        entries = [e for e in entries if e.get("kind") != "synthetic"]
+        skipped_legacy = [
+            e["id"] for e in entries
+            if e["id"] == "dhan_monthly" and
+            not (e.get("has_prices") or e.get("has_daily_prices"))
+        ]
+        entries = [
+            e for e in entries if e.get("kind") != "synthetic"
+            and e["id"] not in skipped_legacy
+        ]
     if datasets:
         missing = sorted(set(datasets) - {entry["id"] for entry in entries})
         if missing:
@@ -567,6 +619,7 @@ def audit(*, datasets: list[str] | None, execute: bool, output: Path) -> dict:
         "math_pass": sum(x["status"] == "math_pass" for x in mathematics),
         "math_fail": sum(x["status"] == "software_fail" for x in mathematics),
         "datasets": datasets_out,
+        "excluded_unprepared_legacy_containers": skipped_legacy,
         "observed_input_pass": sum(x["status"] == "observed_input_pass" for x in rows),
         "blocked_input": sum(x["status"] == "blocked_input" for x in rows),
         "software_fail": sum(x["status"] == "software_fail" for x in rows),
@@ -606,6 +659,9 @@ def main(argv: list[str] | None = None) -> int:
     print("")
     print("QuantLab: " + str(report["registered_models"]) + " registered models / "
           + str(len(report["datasets"])) + " datasets")
+    if report["excluded_unprepared_legacy_containers"]:
+        print("Skipped unprepared legacy container(s):",
+              ", ".join(report["excluded_unprepared_legacy_containers"]))
     print("Math pass:", report["math_pass"], "  Actual-input pass:",
           report["observed_input_pass"], "  Data blocked:", report["blocked_input"],
           "  Software failures:", report["software_fail"])
