@@ -13,6 +13,10 @@ from pathlib import Path
 from uuid import uuid4
 import json
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
 from math import isfinite, sqrt
 from statistics import mean, stdev
 
@@ -441,6 +445,94 @@ def read_run(run_id: str) -> dict:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 5_000_000:
         raise ValueError("Saved research result unavailable")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _run_low_priority(kind: str, params: dict, progress=None) -> dict:
+    """CPU-intensive EMA grid runs OUTSIDE FastAPI and live Dhan recorder.
+
+    The child sees only bounded analysis configuration and local source data,
+    never the Dhan access token, API jobs, WebSocket or broker state.
+    """
+    nice = shutil.which("nice")
+    if not nice:
+        raise ValueError("Ubuntu nice utility is required to protect live recording")
+    if kind not in ("ema_sweep", "ema_pair"):
+        raise ValueError("Only built-in EMA grid/pair analysis is supported")
+    if progress:
+        progress(10, "Launching separate lower-priority BANKNIFTY research process")
+    with tempfile.TemporaryDirectory(prefix="quantlab_index_research_") as temp:
+        work = Path(temp)
+        work.chmod(0o700)
+        request = work / "request.json"
+        response = work / "response.json"
+        encoded = json.dumps({"kind": kind, "params": params},
+                             allow_nan=False).encode("utf-8")
+        if len(encoded) > 16000:
+            raise ValueError("Research configuration is too large")
+        descriptor = os.open(request, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as file:
+            file.write(encoded)
+        command = [nice, "-n", "10", sys.executable, "-m",
+                   "workstation_api.strategy_lab_process",
+                   str(request), str(response)]
+        safe_environment = {
+            "PATH": os.defpath, "HOME": str(work),
+            "PYTHONPATH": str(service.ROOT),
+            "LANG": "C.UTF-8", "TZ": "Asia/Kolkata",
+            "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1",
+        }
+        # Do not inherit DHAN_ACCESS_TOKEN, other broker secrets or open FDs.
+        try:
+            proc = subprocess.run(
+                command, cwd=service.ROOT, env=safe_environment,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=120, start_new_session=True, close_fds=True,
+                check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(
+                "The isolated EMA parameter grid exceeded 120 seconds; "
+                "try fewer combinations. Live Dhan recording was untouched.") from exc
+        except OSError as exc:
+            raise ValueError(
+                "Could not launch the separate index-research process") from exc
+        if not response.is_file() or response.is_symlink() or response.stat().st_size > 4096:
+            raise ValueError("Isolated EMA process produced no verified result receipt")
+        try:
+            status = json.loads(response.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as exc:
+            raise ValueError("Invalid isolated EMA research completion receipt") from exc
+        if proc.returncode != 0 or "run_id" not in status:
+            raise ValueError("EMA research process: " +
+                             str(status.get("detail") or status.get("error")
+                                 or "worker failed")[:210])
+    if progress:
+        progress(93, "Loading saved index-only research and charts")
+    return read_run(status["run_id"])
+
+
+def run_sweep_process(*, limit: int = 1500, fast_periods: list[int],
+                      slow_periods: list[int],
+                      starting_capital: float = 50000, cost_bps: float = 5,
+                      source_mode: str = "historical", progress=None) -> dict:
+    _periods(fast_periods, slow_periods)
+    return _run_low_priority("ema_sweep", {
+        "limit": limit, "fast_periods": fast_periods,
+        "slow_periods": slow_periods,
+        "starting_capital": starting_capital, "cost_bps": cost_bps,
+        "source_mode": source_mode}, progress=progress)
+
+
+def run_pair_process(*, fast: int, slow: int, limit: int = 1500,
+                     starting_capital: float = 50000,
+                     cost_bps: float = 5, source_mode: str = "historical",
+                     progress=None) -> dict:
+    _periods([fast], [slow])
+    return _run_low_priority("ema_pair", {
+        "fast": fast, "slow": slow, "limit": limit,
+        "starting_capital": starting_capital,
+        "cost_bps": cost_bps, "source_mode": source_mode},
+        progress=progress)
 
 
 def run_custom(*, code: str, limit: int = 1500,
