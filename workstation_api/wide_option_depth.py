@@ -332,11 +332,17 @@ def run(stop: Event) -> None:
                             auto.STATE["state"] = "recording_original_depth"
                             auto.STATE["last_error"] = None
             finally:
+                source_interrupted = abort.is_set()
                 abort.set()
                 for worker in workers:
                     worker.join(timeout=4)
                 auto._status_update(connected=False, sockets_connected=0)
-            failures = 0
+            if source_interrupted and not stop.is_set() and auto._market_open():
+                failures += 1
+                stop.wait(min(auto.MAX_RECONNECT_DELAY_SECONDS,
+                              3 * (2 ** min(failures, 4))))
+            else:
+                failures = 0
         except Exception as exc:
             failures += 1
             auto._status_update(
