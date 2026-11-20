@@ -95,6 +95,7 @@ class AutomaticCompleteChainTests(TestCase):
              patch.object(chains, "status",
                           return_value={"armed": True, "read_only": True}):
             with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+                resume.reset_mock()  # Exclude FastAPI startup hook from endpoint assertion.
                 response = client.post("/api/trading-cockpit/auto-depth/arm",
                                        json={"confirm_live_data": True})
         self.assertEqual(response.status_code, 200, response.text)
