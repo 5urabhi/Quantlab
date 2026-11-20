@@ -65,7 +65,7 @@ try {
   const synthetic=await page.request.post(
     api+'/api/datasets/synthetic')
   assert.equal(synthetic.status(),200,'Synthetic fixture must be available')
-  await page.goto(base,{waitUntil:'domcontentloaded'})
+  await page.goto(base+'?ui=classic',{waitUntil:'domcontentloaded'})
   await page.getByText('ENGINE ONLINE',{exact:true}).waitFor({timeout:30000})
   await page.evaluate(()=>{
     const div=document.createElement('div')
