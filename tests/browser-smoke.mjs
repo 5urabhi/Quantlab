@@ -107,7 +107,7 @@ try {
     await lab.getByRole('heading',{name:'Python Strategy Lab'}).waitFor()
     await lab.getByRole('tab',{name:/Paste or type Python/}).waitFor()
     const editor=lab.getByRole('textbox',{name:'Paste or type Python backtest code'})
-    const code='def signal(history):\\n    return "HOLD"'
+    const code='def signal(history):\n    return "HOLD"'
     await editor.fill(code)
     await lab.getByRole('button',{name:/Save code locally/}).click()
     await lab.getByText('Saved EMA 9/21 example in this browser only.',{exact:false}).waitFor()
