@@ -114,9 +114,10 @@ try {
     })
     assert.equal(await armDepth.isDisabled(),true,
       'Automatic recording must require explicit consent')
-    assert.equal(await autoDepth.getByRole('spinbutton',{
-      name:'Auto depth target premium',
-    }).inputValue(),'300')
+    await autoDepth.getByText('Automatic coverage: 100 contracts above + 100 below ATM').waitFor()
+    assert.equal(await autoDepth.getByRole('combobox',{
+      name:'Auto depth sample interval',
+    }).inputValue(),'30')
     await autoDepth.getByRole('checkbox',{name:/Allow my local QuantLab server/}).check()
     assert.equal(await autoDepth.getByRole('checkbox',{name:/Optional: automatically renew/}).isChecked(),false,
       'Token renewal must stay independently opt-in')
@@ -148,8 +149,8 @@ try {
     }))
     await armDepth.click()
     await autoDepth.getByRole('button',{name:'Stop and disarm recording'}).waitFor()
-    assert.equal(armedRequest?.target_premium,300)
-    assert.equal(armedRequest?.per_side,2)
+    assert.equal(armedRequest?.selection_mode,'atm_contracts_100_each')
+    assert.equal(armedRequest?.sample_seconds,30)
     assert.equal(armedRequest?.lots,3)
     assert.equal(armedRequest?.confirm_live_data,true)
     await autoDepth.getByRole('button',{name:'Stop and disarm recording'}).click()
