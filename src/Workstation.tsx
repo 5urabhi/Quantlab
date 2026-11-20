@@ -841,11 +841,22 @@ function App(){
         {tab==='dataexplorer'&&<DataManager initialSection="explorer" integrated
           onSelectDataset={setSelectedDataset} onChanged={refresh}
           onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
-        {tab==='dataquality'&&<ResearchWorkspace key="v2-data-quality"
+        {tab==='dataquality'&&<>
+          <ResearchWorkspace key="v2-data-quality"
           initialPage="quality" integrated datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
           onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
-          onOpenModels={()=>begin('mathematics')}/>}
+          onOpenModels={()=>begin('mathematics')}/>
+          <details className="v2-advanced-links">
+            <summary>Source audits, mathematical evidence, learning validation and NSE documents</summary>
+            <div className="v2-action-row">
+              <button className="v2-secondary" onClick={()=>begin('evidence')}>
+                Evidence & ML <ArrowRight size={14}/></button>
+              <button className="v2-secondary" onClick={()=>begin('nse')}>
+                NSE Source Evidence <ArrowRight size={14}/></button>
+            </div>
+          </details>
+        </>}
         {tab==='nse'&&<NSESourceAssistant datasetId={selectedDataset}
           onOpenDhan={()=>begin('dhan')} onOpenData={()=>begin('data')}/>}
         {(tab==='workspace'||tab==='chartstudio'||tab==='workspacejobs'||
@@ -857,6 +868,13 @@ function App(){
           onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
           onOpenModels={()=>begin('models')}/>}
 
+        {tab==='projects'&&<details className="v2-advanced-links">
+          <summary>Advanced project resource library, archive and Trash management</summary>
+          <div className="v2-action-row">
+            <button className="v2-secondary" onClick={()=>begin('resourcebrowser')}>
+              Browse saved resource records <ArrowRight size={14}/></button>
+          </div>
+        </details>}
         {tab==='research'&&<>
           <div className="ws-grid two-thirds"><Card title="Experiment configuration" extra={<Tag tone="blue">BACKED BY PYTHON</Tag>}><div className="ws-setup-row"><span>Source dataset</span>{dataPicker}<Tag tone={dataset?.ready?'good':'warn'}>{dataset?.ready?'READY':'NEEDS INPUTS'}</Tag></div><div className="ws-form-grid"><Field label="Experiment name" value={config.name} onChange={v=>setConfig({...config,name:v})}/><Select label="Portfolio weighting" value={config.weighting} onChange={v=>setConfig({...config,weighting:v})} options={['equal','score','inverse_volatility','minimum_variance','risk_parity'].map(v=>({value:v,label:label(v)}))}/><NumberInput label="Constituents (top N)" value={config.top_n} min={2} max={300} onChange={v=>setConfig({...config,top_n:v})}/><NumberInput label="Maximum holding weight" value={config.max_weight} min={.01} max={1} step={.01} onChange={v=>setConfig({...config,max_weight:v})}/><NumberInput label="Rebalance frequency (months)" value={config.rebalance_every} min={1} max={12} onChange={v=>setConfig({...config,rebalance_every:v})}/><NumberInput label="Transaction costs (bps)" value={config.cost_bps} min={0} max={500} step={5} onChange={v=>setConfig({...config,cost_bps:v})}/><Select label="Execution lag" value={String(config.execution_lag)} onChange={v=>setConfig({...config,execution_lag:Number(v)})} options={[{value:'1',label:'One month (conservative)'},{value:'0',label:'Same-close idealization'}]}/><NumberInput label="Formation months" value={config.momentum_formation} min={2} max={60} onChange={v=>setConfig({...config,momentum_formation:v})}/><NumberInput label="Months to skip" value={config.momentum_skip} min={0} max={12} onChange={v=>setConfig({...config,momentum_skip:v})}/><NumberInput label="Volatility lookback (months)" value={config.volatility_lookback} min={3} max={60} onChange={v=>setConfig({...config,volatility_lookback:v})}/><Field label="Validation start (optional)" type="date" value={config.validation_start} onChange={v=>setConfig({...config,validation_start:v})}/><Field label="Frozen test start (optional)" type="date" value={config.final_test_start} onChange={v=>setConfig({...config,final_test_start:v})}/></div><label className="ws-checkbox"><input type="checkbox" checked={config.sector_cap!==null} onChange={e=>setConfig({...config,sector_cap:e.target.checked ? 0.4 : null})}/> Apply historical sector concentration cap</label>{config.sector_cap!==null&&<NumberInput label="Sector allocation cap" value={config.sector_cap} min={.1} max={1} step={.05} onChange={v=>setConfig({...config,sector_cap:v})}/>}{dataset?.has_prices&&monthlyCount>0&&availableTestMonths<12&&
               <div className="ws-rule" role="status"><CircleAlert size={16}/>
