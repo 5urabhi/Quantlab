@@ -200,6 +200,58 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       setJobId(started.job_id)
     }catch(e){setError(readableError(e))}
   }
+  const downloadSafeDiagnostic=()=>{
+    if(!result)return
+    // Aggregates only: no broker credentials, client ID, private positions,
+    // raw option candles, exact account identifiers or order-book packets.
+    const output={
+      version:'banknifty_options_backtest_safe_v1',
+      research_only:true,read_only:result.read_only,
+      orders_placed:result.orders_placed,
+      model_version:result.signal_model,
+      historical_window:result.historical_window,
+      actionable_signals:result.actionable_signals,
+      source_coverage:{
+        original_option_minute_bars:result.data_evidence.unique_option_minute_bars,
+        fresh_requests:result.data_evidence.fresh_requests,
+        cached_requests:result.data_evidence.cached_requests,
+        empty_requests:result.data_evidence.empty_requests,
+        conflicted_excluded:result.data_evidence.conflicted_excluded,
+        active_failed_contracts:
+          result.data_evidence.active_source?.failed_contract_requests??0,
+        routing:result.data_evidence.routing??null,
+      },
+      selected_policy:result.selected_rule_id,
+      trade_summary:{
+        trade_count:result.selected.trade_count,
+        reversal_switches:result.selected.reversal_switches??0,
+        reversal_audit:result.selected.reversal_audit??null,
+        unscored:result.selected.unscored,
+        net_pnl_inr:result.selected.net_pnl_inr,
+        return_pct:result.selected.return_pct,
+        max_closed_trade_drawdown_pct:result.selected.max_closed_trade_drawdown_pct,
+      },
+      research_readiness:result.research_readiness??null,
+      comparison:result.comparison.map(x=>({
+        rule_id:x.rule_id,trade_count:x.trade_count,
+        reversal_switches:x.reversal_switches??0,
+        net_pnl_inr:x.net_pnl_inr,return_pct:x.return_pct,
+        unscored:x.unscored,
+      })),
+      assumptions:result.assumptions,
+      notes:'Simulation uses original source candles with explicit execution assumptions; not broker fills. An unscored trade is not a zero-P&L trade.',
+    }
+    const blob=new Blob([JSON.stringify(output,null,2)+'\n'],
+      {type:'application/json'})
+    const url=URL.createObjectURL(blob)
+    const anchor=document.createElement('a')
+    anchor.href=url
+    anchor.download='quantlab-banknifty-options-safe-diagnostics.json'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    window.setTimeout(()=>URL.revokeObjectURL(url),1000)
+  }
   const running=Boolean(jobId)
   const requestedPairs=2*(2*wings+1)
   const scenario=result?.selected
@@ -377,7 +429,15 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
         <p>{result.auto_downloaded_missing_spot?'BANKNIFTY source auto-downloaded · ':''}{result.historical_window.first} through {result.historical_window.through_exclusive} (end exclusive) ·
           {' '}{result.actionable_signals} BANKNIFTY UP/DOWN signals ·
           {' '}{result.data_evidence.unique_option_minute_bars} actual-strike option minute bars.</p>
-      </div></header>
+      </div>
+      <button type="button" className="hob-export-diagnostic"
+        onClick={downloadSafeDiagnostic}>
+        <Database size={15}/> Download safe backtest diagnostic
+      </button></header>
+      <p className="hob-export-note">Share the downloaded JSON here if zero
+        reversals or missing contracts still appear. It contains aggregate
+        evidence and strategy results—not Dhan tokens, original candles,
+        order-book packets or private account identifiers.</p>
       <div className="hob-metrics">
         <div><span>Selected policy return</span><strong className={scenario.net_pnl_inr>=0?'hob-positive':'hob-negative'}>{scenario.net_pnl_inr>=0?'+':''}{CASH(scenario.net_pnl_inr)}</strong><small>{scenario.return_pct>=0?'+':''}{PCT(scenario.return_pct)}</small></div>
         <div><span>Account balance</span><strong>{CASH(scenario.ending_capital_inr)}</strong><small>Started {CASH(scenario.starting_capital_inr)}</small></div>
