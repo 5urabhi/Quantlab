@@ -564,8 +564,6 @@ function App(){
           <div><div className="ws-overline">LOCAL QUANTITATIVE RESEARCH WORKSTATION</div>
             <h1>{titles[tab]}</h1><p>{descriptions[tab]}</p></div>
           <div className="ws-title-actions">
-            {tab==='overview'&&<button className="ws-button primary"
-              onClick={()=>begin('journey')}><Play size={15}/> New study</button>}
             {(['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal'].includes(tab))&&
               <button className="ws-button secondary" onClick={()=>begin('recordingsettings')}>
                 <Activity size={15}/> Recorder settings</button>}
