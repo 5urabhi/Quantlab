@@ -19,7 +19,7 @@ import os
 import sqlite3
 import time
 
-from . import auto_option_depth, option_chain_live, shared_market_data
+from . import auto_option_depth, dhan_session_maintenance, option_chain_live, shared_market_data
 
 LOCK = RLock()
 STOP = Event()
@@ -35,6 +35,8 @@ STATE = {
     "expiries_captured_session": 0, "last_expiry": None,
     "last_snapshot_utc": None, "last_quote_count": 0,
     "last_strike_count": 0, "last_error": None,
+    "token_maintenance": "not_authorized",
+    "token_maintenance_message": None,
 }
 
 
@@ -105,6 +107,7 @@ def status() -> dict:
         snapshot = dict(STATE)
     return {**snapshot,
             "armed": _enabled(), "market_regular_hours": _market_open(),
+            "token_renewal_opted_in": bool(auto_option_depth._config().get("allow_token_renewal")),
             "read_only": True, "shared_library": shared_market_data.SHARED_ID,
             "depth_all_contracts": False,
             "capture_schedule_seconds": {"nearest_two": 90,
@@ -133,11 +136,24 @@ def _run(stop: Event) -> None:
         next_discovery = 0.0
         current_day = ""
         failures = 0
+        next_token_check = 0.0
         while not stop.is_set():
             if not _enabled():
                 _status(state="disabled", last_error=None)
                 stop.wait(10)
                 continue
+            # Token checks also run overnight. An eligible token can be renewed
+            # before the next market open, but only after separate opt-in.
+            if time.monotonic() >= next_token_check:
+                try:
+                    auth = dhan_session_maintenance.maintain()
+                    _status(token_maintenance=auth["state"],
+                            token_maintenance_message=auth["message"])
+                except (OSError, ValueError, TypeError, sqlite3.Error):
+                    _status(token_maintenance="maintenance_unavailable",
+                            token_maintenance_message=
+                            "Dhan renewal maintenance could not complete safely.")
+                next_token_check = time.monotonic() + 900
             if not _market_open():
                 _status(state="armed_waiting_for_nse_hours")
                 stop.wait(20)
