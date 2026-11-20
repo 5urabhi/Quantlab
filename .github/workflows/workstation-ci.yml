@@ -54,6 +54,16 @@ jobs:
       - name: Test local FastAPI and React workstation model endpoints
         run: python -m unittest discover -s tests -p 'test_react_workstation_api.py' -v
 
+      # Run the exact user-facing launcher, not just imported unit tests.
+      # A per-run synthetic fixture exercises CLI packaging without credentials,
+      # touching Dhan, or claiming original market evidence.
+      - name: Smoke-check bash audit-models command and 35-row output
+        run: |
+          python -m venv .venv --system-site-packages
+          python -c 'from workstation_api import service; service.create_synthetic()'
+          bash run.sh audit-models --dataset synthetic --preflight-only --output-dir artifacts/audit-models-cli-smoke
+          python -c "import csv; from pathlib import Path; p=Path('artifacts/audit-models-cli-smoke'); rows=list(csv.DictReader((p/'ALL_MODEL_RESULTS.csv').open())); assert len(rows)==35, len(rows); assert (p/'MODEL_AUDIT.md').is_file()"
+
       - name: Reject invalid Python escape sequences in research doctor
         run: python -W error::SyntaxWarning -W error::DeprecationWarning -m py_compile scripts/quantlab_finish.py
 
