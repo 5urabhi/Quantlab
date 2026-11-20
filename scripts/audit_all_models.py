@@ -284,6 +284,10 @@ def run_observed(spec: dict, dataset_id: str, record: dict, folder: Path,
             if not row["reason"]:
                 row["reason"] = "No original saved option bid/ask contract is available"
             row["next_action"] = (
+                "Models → Observed option-quote model → Reuse existing BANKNIFTY "
+                "recording (no new Dhan request), if available; otherwise capture "
+                "one authorized read-only Dhan chain or import a source CSV"
+                if dataset_id == "dhan_shared" else
                 "Data Center / Model Catalog: capture an original read-only Dhan "
                 "option chain or import an authorized option quote CSV"
             )
@@ -497,8 +501,8 @@ def write_report(output: Path, body: dict, rows: list[dict]) -> None:
                 + " | " + str(row["observed_returns"] or "—")
                 + " | " + str(row["minimum_returns"]) + " / " +
                 str(row["preferred_returns"]) + " | " +
-                str(row["missing_minimum"] or "—") + " / " +
-                str(row["missing_to_target"] or "—") + " | " + action + " |"
+                str(row["missing_minimum"] if row["missing_minimum"] != "" else "—") + " / " +
+                str(row["missing_to_target"] if row["missing_to_target"] != "" else "—") + " | " + action + " |"
             )
         lines += [
             "",
