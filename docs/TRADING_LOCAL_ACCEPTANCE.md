@@ -48,10 +48,20 @@ token inside **Trading Cockpit → Connections** starts both background collecto
 immediately, without restarting the workstation.
 
 Open **Live Trading → BANKNIFTY option chain & 20-level depth** only to inspect
-status or stop recording. Defaults: target option LTP ₹300 ±₹75, 2 CE and
-2 PE real verified contracts, 3 lots, and at most one genuine 20-level book
-every 3 seconds per contract. The complete option-chain snapshot collector
-automatically stores every returned CE/PE strike for every Dhan-listed expiry.
+status or stop recording. By default the 20-level collector follows **100
+verified option contracts above the nearest listed BANKNIFTY ATM strike and
+100 below** for the nearest listed expiry: **50 real CE and 50 real PE per
+direction, 200 total**. This is 50 listed strike levels on either side of ATM,
+not a ±100-point index range. Four WebSockets subscribe to 50 instruments each.
+If some original contract IDs or prices are missing, the actual smaller number
+is displayed and nothing is fabricated.
+
+Recording remains read-only. Four near-ATM contracts (nearest above/below CE+PE)
+are saved every three seconds; other selected contracts save full original
+20-level paired books every 30 seconds by default to respect the local
+200,000-books/day safety limit. Market packets remain real-time while
+subscribed. The complete option-chain snapshot collector continues to archive
+every returned CE/PE strike for every Dhan-listed expiry separately.
 
 **Stop and disarm recording** remains a persistent opt-out. If you intentionally
 stopped recording before, re-enable it once using **Arm automatic 20-level
