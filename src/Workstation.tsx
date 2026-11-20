@@ -47,10 +47,10 @@ const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momen
 type Tab =
   'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingreplay'|'tradingjournal'|
   'strategies'|'strategyema'|'strategypython'|'strategybacktest'|
-  'mathematics'|'models'|'research'|'factors'|'construction'|'risk'|'rolling'|'robustness'|
-  'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|
+  'mathematics'|'models'|'research'|'factors'|'construction'|'risk'|'rolling'|'robustness'|'modelgrids'|'indexstudio'|
+  'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|'evidence'|
   'history'|'workspace'|'chartstudio'|'comparisons'|'visual'|'workspacejobs'|
-  'projects'|'reports'|'settings'|'connections'|'recordingsettings'|
+  'projects'|'reports'|'resourcebrowser'|'settings'|'connections'|'recordingsettings'|
   'storage'|'preferences'|'diagnostics'|'guide'|'journey'
 type PrimarySection={id:Tab;label:string;icon:typeof Activity;tabs:Tab[];navTabs:Tab[]}
 const primarySections:PrimarySection[]=[
@@ -62,16 +62,16 @@ const primarySections:PrimarySection[]=[
     tabs:['strategies','strategyema','strategypython','strategybacktest'],
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
   {id:'mathematics',label:'Models',icon:Sigma,
-    tabs:['mathematics','models','research','factors','construction','risk','rolling','robustness','journey'],
+    tabs:['mathematics','models','research','factors','construction','risk','rolling','robustness','modelgrids','indexstudio','journey'],
     navTabs:['mathematics','research','models']},
   {id:'data',label:'Data Center',icon:Database,
-    tabs:['data','dhan','dataexplorer','dataquality','datadownloads','nse'],
+    tabs:['data','dhan','dataexplorer','dataquality','datadownloads','nse','evidence'],
     navTabs:['data','dhan','dataexplorer','dataquality','datadownloads']},
   {id:'history',label:'Results & Charts',icon:BarChart3,
     tabs:['history','workspace','chartstudio','comparisons','visual','workspacejobs'],
     navTabs:['history','workspace','chartstudio']},
   {id:'projects',label:'Projects',icon:BookOpen,
-    tabs:['projects','reports'],navTabs:['projects','reports']},
+    tabs:['projects','reports','resourcebrowser'],navTabs:['projects','reports']},
   {id:'connections',label:'Settings',icon:Settings2,
     tabs:['connections','recordingsettings','storage','preferences','diagnostics','settings','guide'],
     navTabs:['connections','recordingsettings','storage','preferences','diagnostics']},
@@ -86,13 +86,16 @@ const titles:Record<Tab,string>={
   research:'Index Builder',factors:'Factor Research',
   construction:'Portfolio Construction',risk:'Risk Attribution',
   rolling:'Rolling Validation',robustness:'Robustness & Sensitivity',
+  modelgrids:'Guided Model Grids',indexstudio:'Index Research Studio',
   data:'Market Library',dhan:'Get Market Data',
   dataexplorer:'Data Explorer',dataquality:'Quality & Coverage',
   datadownloads:'Downloads',nse:'NSE Source Evidence',
+  evidence:'Evidence & Machine Learning',
   history:'All Research Results',workspace:'Compare Runs',
   chartstudio:'Chart Studio',comparisons:'Index Comparison',
   visual:'Historical Charts',workspacejobs:'Research Job History',
   projects:'My Projects & Notebooks',reports:'Research Reports',
+  resourcebrowser:'Saved Resource Library',
   connections:'Connections',recordingsettings:'Automatic Recording',
   storage:'Storage & Data Management',preferences:'Preferences',
   diagnostics:'System Diagnostics',settings:'Backend & Privacy',
@@ -117,11 +120,14 @@ const descriptions:Record<Tab,string>={
   risk:'Measure portfolio concentration and rolling risk on archived runs.',
   rolling:'Use rolling time windows on saved historical index results.',
   robustness:'Study parameter stability and sensitivity in saved experiments.',
+  modelgrids:'Run guided research questions, two-parameter grids and constrained optimization.',
+  indexstudio:'Inspect advanced researcher index methods, data passports and explanations.',
   data:'Browse one canonical library of market instruments and downloaded observations.',
   dhan:'Choose instruments and acquire only missing source-backed history.',
   dataexplorer:'Inspect market data rows, original vendor files and source fields.',
   dataquality:'Check completeness, duplicate data and market-data provenance.',
   datadownloads:'Review downloads and source-repair progress.',
+  evidence:'Inspect original source evidence, research readiness and trained machine-learning validation.',
   nse:'Inspect official NSE evidence and source provenance.',
   history:'Search and interpret saved mathematical and strategy research results.',
   workspace:'Overlay comparable saved runs and inspect differences.',
@@ -130,6 +136,7 @@ const descriptions:Record<Tab,string>={
   visual:'Inspect saved source-backed historical return and factor charts.',
   workspacejobs:'Inspect research and acquisition job history.',
   projects:'Save reproducible research in projects, notebooks and linked run references.',
+  resourcebrowser:'Search, organize, archive and restore saved model runs, charts and research records.',
   reports:'Generate and export reports from actually saved research evidence.',
   connections:'Check local data-provider access and permissions safely.',
   recordingsettings:'Configure automatic read-only CE/PE recording and inspect source coverage.',
@@ -902,14 +909,23 @@ function App(){
               ] as const).map(([route,title])=><button key={route}
                 className="v2-secondary" onClick={()=>begin(route)}>{title}
                 <ArrowRight size={14}/></button>)}
+              <button className="v2-secondary" onClick={()=>begin('modelgrids')}>
+                Guided Model Grids <ArrowRight size={14}/></button>
+              <button className="v2-secondary" onClick={()=>begin('indexstudio')}>
+                Index Research Studio <ArrowRight size={14}/></button>
             </div>
           </details>
         </>}
-        {tab==='models'&&<ResearchWorkspace key="v2-advanced-research"
-          initialPage="automation" integrated datasets={datasets}
-          selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
-          onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
-          onOpenModels={()=>begin('mathematics')}/>}
+        {(['models','modelgrids','indexstudio','evidence','resourcebrowser'].includes(tab))&&
+          <ResearchWorkspace key={'v2-tool-'+tab}
+            initialPage={tab==='models'?'automation':
+              tab==='modelgrids'?'guided':
+              tab==='indexstudio'?'scholar':
+              tab==='evidence'?'integrity':'library'}
+            integrated datasets={datasets}
+            selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
+            onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
+            onOpenModels={()=>begin('mathematics')}/>}
         {tab==='guide'&&<ResearchGuide onNavigate={route=>begin(route as Tab)}/>}
         {tab==='reports'&&<>{withRun(<Card title="Generate reproducible research report"><p className="ws-caption">Generate an offline HTML report and PDF draft from selected saved Python run artifacts. Synthetic demonstrations are explicitly labeled.</p><div className="ws-actions"><button className="ws-button primary" disabled={!selectedRun||busy} onClick={downloadReport}><FileText size={15}/> Build HTML + PDF</button></div><div className="ws-artifact-list">{(detail?.artifacts||[]).map(name=><a key={name} href={'/api/runs/'+encodeURIComponent(selectedRun)+'/files/'+encodeURIComponent(name)} download><FileArchive size={16}/><span>{name}</span><ArrowDownToLine size={14}/></a>)}</div></Card>)}</>}
         {tab==='recordingsettings'&&<div className="v2-layout-section">
