@@ -161,6 +161,13 @@ try{
    await page.getByText('Appearance & units',{exact:true}).waitFor()
    await sub('System Diagnostics')
    await page.getByRole('heading',{name:'Diagnostics',exact:true}).waitFor()
+   const recorderDiagnostic=page.locator('.v2-health-list>div').filter({hasText:'Dhan market capture'})
+   await recorderDiagnostic.waitFor()
+   await recorderDiagnostic.locator('span').getByText(/(Healthy|Waiting|Needs attention)/).waitFor()
+   assert.ok(['healthy','waiting','attention'].includes(
+     await recorderDiagnostic.getAttribute('data-status')),
+     'Recorder health must be classified using packet and connection evidence')
+   await page.getByText('HTTP 200', {exact:false}).first().waitFor()
    await shot('08-diagnostics')
  })
  await step('Advanced mathematical grids, index research, evidence and resource library remain accessible',async()=>{
