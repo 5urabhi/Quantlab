@@ -33,6 +33,8 @@ MAX_REQUESTS = 48
 # Current listed options can span several BANKNIFTY index levels across
 # a multi-day window; never reject all of them on the first unavailable ID.
 MAX_ACTIVE_REQUESTS = 96
+SIGNAL_MODELS = ("ema_rsi", "ema_crossover")
+EMA_CROSSOVER_VERSION = "ema9_21_confirmed_cross_1m_v1"
 REQUIRED = ("open", "high", "low", "close", "volume", "oi", "iv", "strike", "spot")
 
 
@@ -45,7 +47,10 @@ def _validate_params(*, limit: int, expiry_flag: str, expiry_code: int,
                      tolerance: float, starting_capital: float, stop_pct: float,
                      target_pct: float, slippage_bps: float,
                      fee_per_side: float, hold_rule: str,
-                     hold_minutes: int, reversal_cap_minutes: int) -> None:
+                     hold_minutes: int, reversal_cap_minutes: int,
+                     signal_model: str = "ema_rsi") -> None:
+    if signal_model not in SIGNAL_MODELS:
+        raise ValueError("Choose EMA/RSI or EMA 9/21 crossover for BANKNIFTY index signals")
     if limit not in (500, 1500, 3000, 5000):
         raise ValueError("Choose a supported original index history window")
     if expiry_flag not in ("MONTH", "WEEK") or expiry_code not in (0, 1, 2):
@@ -618,8 +623,68 @@ def load_active_option_market(spot_rows: list[dict], *,
     return lookup, result
 
 
-def _signals(source_rows: list[dict]) -> list[dict]:
-    """Same causal completed-bar EMA/RSI decision used by the index cockpit."""
+def _ema_crossover_signals(source_rows: list[dict]) -> list[dict]:
+    """Pure BANKNIFTY 9/21 EMA crossings on completed ORIGINAL 1-minute bars.
+
+    No RSI filter, no same-candle option fill, no synthetic missing minute.
+    A crossover is emitted exactly once when fast EMA changes position
+    relative to slow EMA. Both EMAs are seeded with an observed SMA and
+    reset on each session boundary or missing one-minute observation.
+    When no crossover occurs, NO_TRADE means *hold* the current position
+    under the reversal strategy, not a forced exit.
+    """
+    rows = trading_cockpit._validated(source_rows)
+    events: list[dict] = []
+    closes: list[float] = []
+    previous_fast: float | None = None
+    previous_slow: float | None = None
+    previous_time: datetime | None = None
+    previous_session: str | None = None
+    for current in rows:
+        observed = _stamp(current["timestamp_utc"])
+        local = observed.astimezone(IST)
+        if (not clock_time(9, 15) <= local.time().replace(tzinfo=None)
+                <= clock_time(15, 29)):
+            closes = []
+            previous_fast = previous_slow = previous_time = None
+            previous_session = None
+            continue
+        if (current["session_ist"] != previous_session
+                or previous_time is None
+                or observed - previous_time != timedelta(minutes=1)):
+            closes = []
+            previous_fast = previous_slow = None
+        closes.append(current["close"])
+        fast = trading_cockpit._ema(closes, 9)[-1]
+        slow = trading_cockpit._ema(closes, 21)[-1]
+        direction = "NO_TRADE"
+        if (fast is not None and slow is not None
+                and previous_fast is not None and previous_slow is not None):
+            if previous_fast <= previous_slow and fast > slow:
+                direction = "UP"
+            elif previous_fast >= previous_slow and fast < slow:
+                direction = "DOWN"
+        events.append({
+            "bar_utc": current["timestamp_utc"],
+            "session_ist": current["session_ist"],
+            "direction": direction,
+            "underlying_close": current["close"],
+            "ema9": fast, "ema21": slow,
+            "signal_kind": ("cross_above" if direction == "UP" else
+                            "cross_below" if direction == "DOWN" else None),
+        })
+        previous_fast, previous_slow = fast, slow
+        previous_time = observed
+        previous_session = current["session_ist"]
+    return events
+
+
+def _signals(source_rows: list[dict], *, signal_model: str = "ema_rsi") -> list[dict]:
+    """Choose pure EMA crossover or the existing EMA+RSI baseline."""
+    if signal_model == "ema_crossover":
+        return _ema_crossover_signals(source_rows)
+    if signal_model != "ema_rsi":
+        raise ValueError("Unknown original BANKNIFTY signal model")
     rows = trading_cockpit._validated(source_rows)
     result = []
     for index in range(29, len(rows)):
@@ -904,6 +969,7 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
                  slippage_bps: float = 5, fee_per_side: float = 20,
                  hold_rule: str = "fixed", hold_minutes: int = 5,
                  reversal_cap_minutes: int = 10,
+                 signal_model: str = "ema_rsi",
                  fetcher=None, active_fetcher=None, throttle=None,
                  master_refresher=None, progress=None) -> dict:
     """One-click original BANKNIFTY signals -> option-contract P&L proxy.
@@ -919,7 +985,8 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
                      target_pct=target_pct, slippage_bps=slippage_bps,
                      fee_per_side=fee_per_side, hold_rule=hold_rule,
                      hold_minutes=hold_minutes,
-                     reversal_cap_minutes=reversal_cap_minutes)
+                     reversal_cap_minutes=reversal_cap_minutes,
+                     signal_model=signal_model)
     if progress:
         progress(2, "Verifying original BANKNIFTY index minute candles")
     acquired_spot = False
@@ -1051,8 +1118,10 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
             "for the eligible historical period. Check the selected "
             "expiry, dates, coverage and vendor error details.")
     if progress:
-        progress(67, "Replaying original completed BANKNIFTY directional signals")
-    events = _signals(rows)
+        progress(67, ("Replaying completed BANKNIFTY EMA 9/21 crossovers"
+                      if signal_model == "ema_crossover" else
+                      "Replaying original completed BANKNIFTY EMA/RSI directional signals"))
+    events = _signals(rows, signal_model=signal_model)
     policies = [("fixed", h, 10) for h in VALID_HOLDS] + [
         ("signal_reversal", hold_minutes, 10),
         ("signal_reversal_or_cap", hold_minutes, 10),
@@ -1109,7 +1178,17 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
         "underlying": "INDEX:BANKNIFTY",
         "signal_source": "Original Dhan one-minute BANKNIFTY spot",
         "auto_downloaded_missing_spot": acquired_spot,
-        "signal_model": trading_cockpit.VERSION,
+        "signal_model": (EMA_CROSSOVER_VERSION if signal_model == "ema_crossover"
+                         else trading_cockpit.VERSION),
+        "signal_strategy": signal_model,
+        "ema_crossover_rules": ({
+            "fast": 9, "slow": 21, "timeframe_minutes": 1,
+            "up": "fast EMA crosses strictly above slow after completed candle",
+            "down": "fast EMA crosses strictly below slow after completed candle",
+            "flat": "no crossover, retain current position until exit policy",
+            "entry": "original next-minute option OPEN only",
+            "session_reset": True,
+        } if signal_model == "ema_crossover" else None),
         "signal_events": len(events),
         "actionable_signals": sum(e["direction"] in ("UP", "DOWN") for e in events),
         "historical_window": {"first": start.isoformat(),
