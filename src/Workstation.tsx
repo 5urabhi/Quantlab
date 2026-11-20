@@ -82,7 +82,7 @@ const titles:Record<Tab,string>={
   tradingjournal:'Trade Journal',strategies:'Strategy Library',
   strategyema:'EMA Explorer',strategypython:'Python Editor',
   strategybacktest:'BANKNIFTY Backtests',
-  mathematics:'Model Catalog',models:'Advanced Mathematical Models',
+  mathematics:'Model Catalog',models:'Advanced Research Tools',
   research:'Index Builder',factors:'Factor Research',
   construction:'Portfolio Construction',risk:'Risk Attribution',
   rolling:'Rolling Validation',robustness:'Robustness & Sensitivity',
@@ -110,7 +110,7 @@ const descriptions:Record<Tab,string>={
   strategypython:'Paste, run and save isolated Python research without interrupting Dhan capture.',
   strategybacktest:'Compare directional signal timing and original-contract CE/PE paper P&L.',
   mathematics:'Choose stochastic, volatility, options, risk and portfolio mathematical models.',
-  models:'Explore advanced source-backed and theoretical model families.',
+  models:'Sweep parameters, test walk-forward stability, study shocks and inspect advanced research tools.',
   research:'Construct, backtest and validate factor-based equity indices.',
   factors:'Inspect real saved factor ranking and exposure output.',
   construction:'Inspect constituent weights, concentration and rebalance consequences.',
@@ -890,10 +890,30 @@ function App(){
         {tab==='risk'&&<>{panel('concentration','Risk concentration over time')}{panel('rolling','Rolling relative risk metrics')}</>}
         {tab==='robustness'&&<>{panel('robustness','Parameter sensitivity and robustness grid')}</>}
         {tab==='visual'&&<>{withRun(<Card title="Cumulative strategy / benchmark path" extra={classification}>{chart}</Card>)}{panel('rank_ic','Cross-sectional factor validation')}</>}
-        {(tab==='mathematics'||tab==='models')&&<ModelLaboratory
-          section={tab} datasets={datasets} selectedDataset={selectedDataset}
-          onSelectDataset={setSelectedDataset} onOpenGuide={()=>begin('guide')} onDataChanged={refresh}
-          onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}/>}
+        {tab==='mathematics'&&<>
+          <ModelLaboratory
+            section="mathematics" datasets={datasets} selectedDataset={selectedDataset}
+            onSelectDataset={setSelectedDataset} onOpenGuide={()=>begin('guide')}
+            onDataChanged={refresh}
+            onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}/>
+          <details className="v2-advanced-links">
+            <summary>Specialized model diagnostics · factor exposures, risk, concentration & validation</summary>
+            <div className="v2-action-row">
+              {([
+                ['factors','Factor Research'],['construction','Portfolio Construction'],
+                ['risk','Risk Attribution'],['rolling','Rolling Validation'],
+                ['robustness','Robustness & Sensitivity'],
+              ] as const).map(([route,title])=><button key={route}
+                className="v2-secondary" onClick={()=>begin(route)}>{title}
+                <ArrowRight size={14}/></button>)}
+            </div>
+          </details>
+        </>}
+        {tab==='models'&&<ResearchWorkspace key="v2-advanced-research"
+          initialPage="automation" integrated datasets={datasets}
+          selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
+          onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
+          onOpenModels={()=>begin('mathematics')}/>}}
         {tab==='guide'&&<ResearchGuide onNavigate={route=>begin(route as Tab)}/>}
         {tab==='reports'&&<>{withRun(<Card title="Generate reproducible research report"><p className="ws-caption">Generate an offline HTML report and PDF draft from selected saved Python run artifacts. Synthetic demonstrations are explicitly labeled.</p><div className="ws-actions"><button className="ws-button primary" disabled={!selectedRun||busy} onClick={downloadReport}><FileText size={15}/> Build HTML + PDF</button></div><div className="ws-artifact-list">{(detail?.artifacts||[]).map(name=><a key={name} href={'/api/runs/'+encodeURIComponent(selectedRun)+'/files/'+encodeURIComponent(name)} download><FileArchive size={16}/><span>{name}</span><ArrowDownToLine size={14}/></a>)}</div></Card>)}</>}
         {tab==='recordingsettings'&&<div className="v2-layout-section">
