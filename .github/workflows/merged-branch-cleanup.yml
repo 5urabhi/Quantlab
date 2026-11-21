@@ -1,0 +1,37 @@
+name: Delete merged QuantLab branches
+
+# Runs on each merge and once when first merged to main, which also cleans
+# historic merged heads. This is intentionally distinct from repo's native
+# "delete_branch_on_merge" administration-only checkbox.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: quantlab-merged-branch-pruning
+  cancel-in-progress: false
+
+jobs:
+  clean:
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted default-branch code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Prune only SHA-matched merged pull-request branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_API_URL: ${{ github.api_url }}
+        run: |
+          python3 scripts/cleanup_merged_branches.py --apply
