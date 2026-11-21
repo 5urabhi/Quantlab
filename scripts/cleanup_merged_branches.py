@@ -36,7 +36,7 @@ def eligible_merged_heads(
     open_heads = {
         p["head"]["ref"]
         for p in open_prs
-        if (p.get("head") or {}).get("repo", {}).get("full_name") == repository
+        if ((p.get("head") or {}).get("repo") or {}).get("full_name") == repository
     }
     result: dict[str, tuple[str, int, str]] = {}
     for pr in closed_prs:
