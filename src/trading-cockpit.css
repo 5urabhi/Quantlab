@@ -294,3 +294,13 @@
 .tc-optional-hold-metrics summary{cursor:pointer;font-size:12px;font-weight:680;color:#b6d9df}
 .tc-optional-hold-metrics p{margin:10px 0}
 .tc-optional-hold-metrics strong{color:#93e1c7}
+
+
+/* Trading Journal: source methodology is available on demand, never hidden
+   from the audit. The default table follows actual fill and P&L columns. */
+.tc-journal-explanation{padding:11px 14px;margin:8px 0 15px;
+  background:#132a39;border:1px solid #375868;border-radius:9px;
+  color:#a5c5d0;font-size:11px;line-height:1.55}
+.tc-journal-explanation summary{color:#9ce0cf;font-weight:720;cursor:pointer}
+.tc-journal-explanation summary:focus-visible{outline:2px solid #74e0c9}
+.tc-journal-explanation p{margin:10px 0 0}
