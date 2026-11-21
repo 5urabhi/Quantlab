@@ -55,7 +55,7 @@ JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension"}
+CANCELLABLE_TASKS = {"workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -1798,6 +1798,9 @@ class LabDataRequest(BaseModel):
     dataset_id: str = Field(min_length=1, max_length=120)
     params: dict[str, float | int | str] = Field(default_factory=dict)
     confirm_download: bool = False
+    # Only the explicit Models primary action enables automatic calculation
+    # after source acquisition. Data Center / download-only actions stay unchanged.
+    run_after_download: bool = False
 
 
 @app.get("/api/lab/data-requirements")
@@ -1826,6 +1829,63 @@ def research_lab_requirements(model_id: str, dataset_id: str = "",
         bad(exc)
 
 
+def _complete_lab_history_and_run(model_id: str, dataset_id: str,
+                                  params: dict, *, progress=None) -> dict:
+    """One user-authorized job: cache -> uncovered Dhan history -> validate -> fit.
+
+    This is not invoked by GET, page navigation, the read-only verification
+    command or the automatic depth recorder. If actual source observations
+    remain insufficient, never execute or archive a misleading model fit.
+    """
+    def stage(percent: float, message: str):
+        if progress is not None:
+            progress(percent, message)
+
+    def acquisition_progress(percent: float, message: str):
+        stage(2 + .82 * percent, message)
+
+    stage(1, "Checking original historical data and source availability")
+    acquired = data_acquisition.execute(
+        model_id, dataset_id, params, progress=acquisition_progress)
+    source_id = acquired.get("dataset_id")
+    actual_params = dict(params)
+    ticker = acquired.get("selected_ticker")
+    if model_id in {"gbm_fit", "ou_fit", "merton_fit", "heston_proxy"}:
+        if ticker:
+            actual_params.update(target="stock", ticker=ticker)
+        else:
+            return {**acquired, "status": "incomplete", "run_id": None,
+                    "message": acquired.get("message") or
+                    "No verified selected stock is ready for the model."}
+
+    if not source_id:
+        return {**acquired, "status": "incomplete", "run_id": None,
+                "message": acquired.get("message") or
+                "No verified shared historical observations were prepared."}
+    stage(86, "Rechecking the model against newly prepared original returns")
+    final_plan = model_data_manager.inspect(model_id, source_id, actual_params)
+    if not final_plan.get("runnable"):
+        return {**acquired, "status": "incomplete", "run_id": None,
+                "after": final_plan, "message":
+                "Downloaded all available authorized history, but the observed "
+                "sample still does not meet the model minimum. No fit was saved."}
+
+    stage(92, "Running Python model on the verified observed series")
+    saved = model_lab.save_result(model_lab.run_model(
+        model_id, source_id, actual_params))
+    stage(99, "Saved the source-bound model result")
+    buffer_complete = not bool(final_plan.get("missing_to_target"))
+    return {**acquired, "dataset_id": source_id,
+            "selected_ticker": ticker, "after": final_plan,
+            "status": "ready" if buffer_complete else "minimum_ready",
+            "run_id": saved["run_id"],
+            "message": ("Historical inputs prepared (+20% target met); "
+                        if buffer_complete else
+                        "Model minimum satisfied; preferred +20% history is "
+                        "not fully available. ") +
+                       "Python calculation completed and saved to Results & Charts."}
+
+
 @app.post("/api/lab/data-requirements/extend")
 def extend_research_lab_data(body: LabDataRequest):
     if not body.confirm_download:
@@ -1834,8 +1894,11 @@ def extend_research_lab_data(body: LabDataRequest):
         plan = model_data_manager.inspect(body.model_id, body.dataset_id, body.params)
         if not plan.get("can_download"):
             raise ValueError(plan.get("download_explanation") or "No download needed or unavailable")
-        return {**_spawn("lab_shared_data_extension", data_acquisition.execute,
-                         body.model_id, body.dataset_id, body.params),
+        kind = ("lab_shared_data_extension_and_run" if body.run_after_download
+                else "lab_shared_data_extension")
+        action = (_complete_lab_history_and_run if body.run_after_download
+                  else data_acquisition.execute)
+        return {**_spawn(kind, action, body.model_id, body.dataset_id, body.params),
                 "planned": plan, "destination_dataset_id": shared_market_data.SHARED_ID}
     except Exception as exc:
         bad(exc)
