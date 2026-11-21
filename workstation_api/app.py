@@ -3466,6 +3466,16 @@ def ask_research_assistant(kind: Literal["model_run", "research_run"],
         bad(exc)
 
 
+@app.post("/api/workspace/results/{kind}/{run_id}/investigate")
+def investigate_archived_research(kind: Literal["model_run", "research_run"],
+                                  run_id: str):
+    """Explicit read-only evidence tools; no broker access or automatic downloads."""
+    try:
+        return research_assistant.investigate(kind, run_id)
+    except (ValueError, OSError, FileNotFoundError, KeyError) as exc:
+        bad(exc)
+
+
 class SelectionAuditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run_ids: list[str] = Field(min_length=2,max_length=8)
