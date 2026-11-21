@@ -1204,6 +1204,17 @@ function AutomationPanel({datasets,selectedDataset,onSelectDataset,models,runs,b
   </div>
 }
 
+type SourceAnomaly={
+  symbol:string;date:string;type:string;severity:string;return_fraction:number|null;
+  robust_z:number|null;forest_score:number|null;reason:string
+}
+type SourceAnomalyReport={
+  dataset_id:string;source_file:string;source_sha256:string;detector:string;
+  candidate_count:number;source_assets_total:number;assets_not_assessed:number;
+  frequency:string;events:SourceAnomaly[];events_not_displayed:number;
+  inspected_assets:{symbol:string;ml_status:string;review_candidates:number}[];
+  limitations:string[];method:{trailing_robust:string;unsupervised_ml:string}
+}
 type DuplicateInventory={scanned_dataset_views:number;scanned_bytes:number;
   identical_groups:{signature_sha256:string;datasets:{dataset_id:string;title:string;
     file_bytes:number;file_count:number;dependencies:number;
@@ -1215,6 +1226,10 @@ function QualityPanel({datasets,selectedDataset,onSelectDataset,onOpenDhan,onOpe
   onOpenDhan:()=>void;onOpenLibrary:()=>void
 }){
   const [quality,setQuality]=useState<Raw|null>(null)
+  const [anomalies,setAnomalies]=useState<SourceAnomalyReport|null>(null)
+  const [anomalyError,setAnomalyError]=useState('')
+  const [anomalySymbol,setAnomalySymbol]=useState('')
+  const [anomalyBusy,setAnomalyBusy]=useState(false)
   const [disk,setDisk]=useState<{bytes:Record<string,number>;total_bytes:number}|null>(null)
   const [duplicates,setDuplicates]=useState<DuplicateInventory|null>(null)
   const [dupBusy,setDupBusy]=useState(false)
@@ -1228,14 +1243,33 @@ function QualityPanel({datasets,selectedDataset,onSelectDataset,onOpenDhan,onOpe
       const [q,s]=await Promise.all([api<Raw>('/workspace/quality/'+encodeURIComponent(selectedDataset)),
         api<{bytes:Record<string,number>;total_bytes:number}>('/workspace/storage')])
       setQuality(q);setDisk(s)
+      setAnomalies(null);setAnomalyError('')
+      setAnomalyBusy(true)
+      try{
+        const report=await api<SourceAnomalyReport>('/workspace/quality/'+
+          encodeURIComponent(selectedDataset)+'/anomalies')
+        setAnomalies(report)
+      }catch(e){setAnomalyError(e instanceof Error?e.message:String(e))}
+      finally{setAnomalyBusy(false)}
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
+  }
+  const inspectSymbol=async()=>{
+    if(!selectedDataset||!anomalySymbol)return
+    setAnomalyBusy(true);setAnomalyError('')
+    try{
+      const report=await api<SourceAnomalyReport>('/workspace/quality/'+
+        encodeURIComponent(selectedDataset)+'/anomalies?symbol='+
+        encodeURIComponent(anomalySymbol))
+      setAnomalies(report)
+    }catch(e){setAnomalyError(e instanceof Error?e.message:String(e))}
+    finally{setAnomalyBusy(false)}
   }
   return <div className="rw-stack">
     <Box title="Market-data evidence audit">
       <p className="rw-help">Inspect actual observations and possible quality issues. No missing sessions are manufactured and extreme moves are marked for review rather than automatically corrected.</p>
       <div className="rw-form-grid"><Select label="Observed dataset" value={selectedDataset}
-        onChange={v=>{onSelectDataset(v);setQuality(null)}} options={dataOptions(datasets)}/>
+        onChange={v=>{onSelectDataset(v);setQuality(null);setAnomalies(null);setAnomalySymbol('');setAnomalyError('')}} options={dataOptions(datasets)}/>
         <div className="rw-inline-actions"><button className="rw-primary" disabled={busy||!selectedDataset} onClick={()=>void inspect()}>
           {busy?<LoaderCircle size={15}/>:<ShieldCheck size={15}/>} Audit dataset</button>
           <button onClick={onOpenDhan}><Database size={15}/> Open data manager</button></div></div>
@@ -1273,6 +1307,66 @@ function QualityPanel({datasets,selectedDataset,onSelectDataset,onOpenDhan,onOpe
       <p className="rw-caution">{String(quality.warning||'This audit does not establish investability.')}</p>
       <button onClick={()=>safeDownload('quantlab_quality_'+selectedDataset+'.json',
         JSON.stringify(quality,null,2),'application/json')}><Download size={15}/> Export audit JSON</button>
+    </Box>}
+    {quality&&<Box title="Statistical anomalies · read-only review">
+      <p className="rw-help">The audit checks adjacent original returns against past-only
+        robust statistics and scores later samples with an early-trained IsolationForest.
+        Unusual returns can be genuine news or corporate actions: prices are never repaired
+        automatically or treated as a trading signal.</p>
+      <div className="rw-inline-actions">
+        <label className="rw-field rw-anomaly-symbol"><span>Inspect a particular security</span>
+          <select value={anomalySymbol} onChange={e=>setAnomalySymbol(e.target.value)}>
+            <option value="">First six securities (automatic)</option>
+            {((quality.assets||[]) as {symbol:string}[]).map(asset=>
+              <option key={asset.symbol} value={asset.symbol}>{asset.symbol}</option>)}
+          </select></label>
+        <button type="button" disabled={anomalyBusy||!anomalySymbol}
+          onClick={()=>void inspectSymbol()}>
+          {anomalyBusy?<LoaderCircle size={15}/>:<Search size={15}/>}
+          Inspect selected security</button>
+      </div>
+      {anomalyError&&<p className="rw-error" role="alert">
+        Statistical scan unavailable: {anomalyError}. The original quality audit remains available.
+      </p>}
+      {anomalyBusy&&<p className="rw-help" role="status">Checking actual stored observations…</p>}
+      {anomalies&&<div className="rw-anomaly-findings" aria-label="Original-source anomaly findings">
+        <NumberStats data={[
+          {label:'Review candidates',value:anomalies.candidate_count},
+          {label:'Securities inspected',value:anomalies.inspected_assets.length},
+          {label:'Securities not assessed',value:anomalies.assets_not_assessed},
+          {label:'Frequency',value:anomalies.frequency},
+        ]}/>
+        {anomalies.candidate_count===0?<p className="rw-success">
+          No candidates in the inspected sample. This does not establish source correctness.
+        </p>:<div className="rw-scroll"><table>
+          <thead><tr><th>Security</th><th>Date</th><th>Flag</th>
+            <th>Observed return</th><th>Reason to inspect</th></tr></thead>
+          <tbody>{anomalies.events.map((event,index)=><tr
+            key={event.symbol+'-'+event.date+'-'+event.type+'-'+index}>
+            <td>{event.symbol}</td><td>{event.date}</td>
+            <td>{event.type==='invalid_or_missing_price'?'Missing/invalid':'Unusual return'}</td>
+            <td>{event.return_fraction===null?'—':
+              (100*event.return_fraction).toFixed(2)+'%'}</td>
+            <td>{event.reason}</td>
+          </tr>)}</tbody>
+        </table></div>}
+        {anomalies.events_not_displayed>0&&<p className="rw-help">
+          {anomalies.events_not_displayed} further candidates omitted from this bounded preview.
+          Download JSON to retain the displayed evidence, or inspect a single security.
+        </p>}
+        <p className="rw-help"><strong>Original file:</strong> {anomalies.source_file}
+          {' · SHA-256: '}{anomalies.source_sha256.slice(0,16)}…
+          {' · Detector: '}{anomalies.detector}</p>
+        <p className="rw-caution">{anomalies.limitations[0]}</p>
+        <div className="rw-inline-actions">
+          <button type="button" onClick={()=>safeDownload(
+            'quantlab_anomalies_'+selectedDataset+'.json',
+            JSON.stringify(anomalies,null,2),'application/json')}>
+            <Download size={15}/> Export anomaly evidence</button>
+          <button type="button" onClick={onOpenLibrary}><Database size={15}/>
+            Inspect original dataset</button>
+        </div>
+      </div>}
     </Box>}
     <Box title="Find exact duplicate prepared datasets">
       <p className="rw-help">QuantLab fingerprints every regular file in each user-owned prepared dataset view,
