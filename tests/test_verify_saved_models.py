@@ -142,21 +142,94 @@ class SavedModelVerificationTests(unittest.TestCase):
                 writer=csv.DictWriter(f,fieldnames=list(rows[0]))
                 writer.writeheader();writer.writerows(rows)
             return report
+        sample_trading = {
+            "read_only": True, "external_api_requests": 0, "orders_placed": 0,
+            "market_regular_hours_ist": False, "recorder_armed": True,
+            "saved_books": {"total_automatic_books": 9},
+            "checks": [
+                {"code": "banknifty_history", "title": "BANKNIFTY history",
+                 "status": "pass", "detail": "Original minute candles saved",
+                 "next_action": "Review spot research", "screen": "backtest"},
+                {"code": "live_depth", "title": "Live 20-level depth",
+                 "status": "waiting", "detail": "Outside regular market hours",
+                 "next_action": "Inspect during NSE session", "screen": "live"},
+            ],
+        }
         with TemporaryDirectory() as root, \
              patch.object(mod,"selected_dataset_ids",
                           return_value=["dhan_shared"]), \
              patch.object(mod,"link_existing_chain",
                           return_value={"status":"quoted"}) as linked, \
+             patch.object(mod.trading_acceptance, "report",
+                          return_value=sample_trading) as trading, \
              patch.object(mod.audit_all_models,"audit",
                           side_effect=local_audit) as audit:
             folder=Path(root)/"verification"
             result=mod.verify(dataset_ids=["dhan_shared"],output=folder)
             self.assertEqual(result["verdict"],"SOURCE_DATA_INCOMPLETE")
             self.assertTrue((folder/"FULL_SAVED_VERIFICATION.json").exists())
+            self.assertTrue((folder/"FULL_TRADING_READINESS.json").exists())
+            self.assertEqual(result["trading_readiness"]["status"], "available")
+            self.assertEqual(result["trading_readiness"]["saved_books_total"], 9)
+            self.assertEqual(result["trading_readiness"]["checks"][1]["status"],
+                             "waiting")
+            self.assertIn("BANKNIFTY trading-source readiness",
+                          (folder/"FULL_SAVED_VERIFICATION.md").read_text())
+            trading.assert_called_once()
             linked.assert_called_once()
             audit.assert_called_once()
             with self.assertRaisesRegex(ValueError,"exists"):
                 mod.verify(dataset_ids=["dhan_shared"],output=folder)
+
+
+    def test_unavailable_trading_report_never_invalidates_unrelated_models(self):
+        report, rows = fake_report()
+        def local_audit(*, datasets, execute, output):
+            output.mkdir(parents=True)
+            with (output / "ALL_MODEL_RESULTS.csv").open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+            return report
+        with TemporaryDirectory() as root, \
+             patch.object(mod, "selected_dataset_ids", return_value=["dhan_shared"]), \
+             patch.object(mod, "link_existing_chain",
+                          return_value={"status": "already_saved_quotes_available"}), \
+             patch.object(mod.audit_all_models, "audit",
+                          side_effect=local_audit), \
+             patch.object(mod.trading_acceptance, "report",
+                          side_effect=OSError("Market source database locked")):
+            output = Path(root) / "verification"
+            result = mod.verify(dataset_ids=["dhan_shared"], output=output)
+            self.assertEqual(result["verdict"], "ALL_REGISTERED_MODELS_EXECUTED")
+            self.assertEqual(result["trading_readiness"]["status"], "unavailable")
+            self.assertIn("locked", result["trading_readiness"]["reason"])
+            self.assertFalse((output / "FULL_TRADING_READINESS.json").exists())
+            self.assertIn("could not be examined",
+                          (output / "FULL_SAVED_VERIFICATION.md").read_text())
+
+    def test_source_check_without_read_only_provenance_is_rejected(self):
+        report, rows = fake_report()
+        def local_audit(*, datasets, execute, output):
+            output.mkdir(parents=True)
+            with (output / "ALL_MODEL_RESULTS.csv").open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+            return report
+        with TemporaryDirectory() as root, \
+             patch.object(mod, "selected_dataset_ids", return_value=["dhan_shared"]), \
+             patch.object(mod, "link_existing_chain",
+                          return_value={"status": "already_saved_quotes_available"}), \
+             patch.object(mod.audit_all_models, "audit",
+                          side_effect=local_audit), \
+             patch.object(mod.trading_acceptance, "report",
+                          return_value={"read_only": False, "external_api_requests": 1}):
+            output = Path(root) / "verification"
+            result = mod.verify(dataset_ids=["dhan_shared"], output=output)
+            self.assertEqual(result["trading_readiness"]["status"], "unavailable")
+            self.assertIn("read-only", result["trading_readiness"]["reason"])
+            self.assertFalse((output / "FULL_TRADING_READINESS.json").exists())
 
 
 if __name__=="__main__":
