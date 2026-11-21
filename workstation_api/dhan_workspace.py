@@ -306,6 +306,15 @@ def _safe_batch_failure(item: dict) -> dict:
             "The Dhan historical-data endpoint rejected this request."
         )
         diagnostic = f"Dhan HTTP {status} (vendor response body hidden)"
+    elif ("conflicting ohlcv" in raw.lower()
+          or "timestamp-valid" in raw.lower()
+          or "duplicate timestamps" in raw.lower()):
+        code = "SOURCE TIMESTAMPS"
+        summary = ("Dhan supplied missing or conflicting original candle timestamps. "
+                   "Valid cached windows are preserved. Retry only the failed stock; "
+                   "if the same source anomaly recurs, contact Dhan rather than "
+                   "guessing a price or selecting conflicting bars.")
+        diagnostic = "Original Dhan OHLCV timestamps did not pass source validation"
     elif "network" in raw.lower() or "timeout" in raw.lower():
         code = "NETWORK"
         summary = "Could not reach Dhan's market-data service. Check connectivity and retry."
@@ -795,7 +804,17 @@ def run_batch(batch_id: str, cancel_event: threading.Event | None = None) -> dic
                 data["index_spot"] = index_spot.download(data)
                 _save_batch(data)
         data["status"] = "completed"
-        LOG.info("Dhan batch completed: batch_id=%s total=%d", batch_id, len(data["items"]))
+        failures=[item["symbol"] for item in data["items"]
+                  if item["status"]=="failed"]
+        if failures:
+            LOG.warning("Dhan batch finished with incomplete original-data coverage: "
+                        "batch_id=%s completed=%d failed=%d failed_symbols=%s; "
+                        "resume reuses completed windows.",
+                        batch_id,len(data["items"])-len(failures),
+                        len(failures),",".join(failures[:10]))
+        else:
+            LOG.info("Dhan batch completed successfully: batch_id=%s total=%d",
+                     batch_id,len(data["items"]))
         data["current_symbol"] = None
         _save_batch(data)
         return _summarize(data)
