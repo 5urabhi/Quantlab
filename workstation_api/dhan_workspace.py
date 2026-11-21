@@ -690,11 +690,9 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
                 "missing_or_invalid_provider_timestamp",regex=False).any()
             if unknown_time:
                 raise ValueError(
-                    "Dhan source contains missing or unparseable timestamps. "
-                    "The exact rejected source rows were retained for audit at "
-                    +quality_file.relative_to(service.DATA).as_posix()
-                    +"; date-window coverage was NOT marked complete. "
-                    "Resume after provider correction.")
+                    "Dhan source contains missing or unparseable timestamps; "
+                    "coverage was NOT marked complete. Source audit: "
+                    +quality_file.relative_to(service.DATA).as_posix())
         incoming = normalize(frame)
         incoming = incoming.sort_values("datetime")
         if incoming["datetime"].duplicated().any():
