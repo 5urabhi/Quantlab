@@ -120,7 +120,7 @@ export default function IndexBuilderWorkspace({
     settingsBlockers.length===0&&!busy&&!jobActive)
   const sourceKind=source?.kind==='synthetic'?'Synthetic demonstration':
     source?.independently_verified?'Source reviewed':'Observed source · not independently reviewed'
-  const set=<K extends keyof IndexBuilderConfig>(key:K,value:IndexBuilderConfig[K])=>
+  const set=(key:keyof IndexBuilderConfig,value:number|string|null)=>
     onConfigChange({...config,[key]:value})
   const sourceOptions=datasets.filter(item=>
     item.id==='dhan_shared'||item.kind!=='dhan'||item.id===selectedDataset)
