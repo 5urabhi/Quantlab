@@ -200,8 +200,13 @@ try{
    await page.getByRole('heading',{name:'Organize your studies'}).waitFor()
    const creation=page.getByRole('group',{name:'Create research artifact'})
    await creation.getByRole('button',{name:'New project'}).waitFor()
-   await creation.getByRole('button',{name:'Notebook'}).click()
-   await page.getByRole('button',{name:'Create notebook'}).waitFor()
+   const notebookKind=creation.getByRole('button',{name:'Notebook'})
+   if(await notebookKind.isEnabled()){
+     await notebookKind.click()
+     await page.getByRole('button',{name:'Create notebook'}).waitFor()
+   }else{
+     assert.equal(await notebookKind.isDisabled(),true)
+   }
    await creation.getByRole('button',{name:'New project'}).click()
    await page.getByRole('button',{name:'Create project'}).waitFor()
    await shot('07-projects')
