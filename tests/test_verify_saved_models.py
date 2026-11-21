@@ -77,13 +77,31 @@ class SavedModelVerificationTests(unittest.TestCase):
         available.assert_called_once()
         linked.assert_called_once_with("dhan_shared","a"*64,confirm_reuse=True)
 
-    def test_previously_saved_quote_skips_new_derived_catalog_file(self):
+    def test_previously_saved_runnable_quote_skips_derived_catalog_file(self):
         with patch.object(mod.option_quotes,"list_for",
                           return_value=[{"contracts":[{"row_index":0}]}]), \
+             patch.object(mod.audit_all_models, "actual_quote_refs",
+                          return_value=["oq_saved:0"]), \
              patch.object(mod.recorded_chain_model_quotes,"use_saved") as write:
             receipt=mod.link_existing_chain(["dhan_shared"],enabled=True)
         self.assertEqual(receipt["status"],"already_saved_quotes_available")
+        self.assertEqual(receipt["runnable_saved_contracts_inspected"],1)
         write.assert_not_called()
+
+    def test_unusable_catalog_quote_does_not_block_original_chain_reuse(self):
+        with patch.object(mod.option_quotes,"list_for",
+                          return_value=[{"contracts":[{"row_index":0}]}]), \
+             patch.object(mod.audit_all_models, "actual_quote_refs",
+                          return_value=[]), \
+             patch.object(mod.recorded_chain_model_quotes,"available",
+                          return_value={"recommended_snapshot_sha256":"b"*64}), \
+             patch.object(mod.recorded_chain_model_quotes,"use_saved",
+                          return_value={"id":"oq_reused","contracts":120,
+                                        "reused_existing":False}) as write:
+            receipt=mod.link_existing_chain(["dhan_shared"],enabled=True)
+        self.assertEqual(receipt["status"],"source_bound_quote_reused")
+        write.assert_called_once_with(
+            "dhan_shared","b"*64,confirm_reuse=True)
 
     def test_missing_chain_is_blocked_not_fabricated(self):
         with patch.object(mod.option_quotes,"list_for",return_value=[]), \
