@@ -7,7 +7,7 @@ import {
   ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp
 } from 'lucide-react'
 import './workstation.css'
-import {RecorderBadge,JobsDrawer,V2HomeLaunchers,StrategyLibraryV2,SettingsPreferencesV2,DiagnosticsV2,QuickPageNote} from './QuantLabV2Components'
+import {RecorderBadge,JobsDrawer,V2HomeLaunchers,StrategyLibraryV2,ConnectionsLandingV2,SettingsPreferencesV2,DiagnosticsV2,QuickPageNote} from './QuantLabV2Components'
 import ResearchPythonLab from './ResearchPythonLab'
 import AutoDepthRecorder from './AutoDepthRecorder'
 import DataManager from './DataManager'
@@ -74,7 +74,7 @@ const primarySections:PrimarySection[]=[
     tabs:['projects','reports','resourcebrowser'],navTabs:['projects','reports']},
   {id:'connections',label:'Settings',icon:Settings2,
     tabs:['connections','recordingsettings','storage','preferences','diagnostics','settings','guide'],
-    navTabs:['connections','recordingsettings','storage','preferences','diagnostics']},
+    navTabs:['connections','recordingsettings','diagnostics']},
 ]
 const titles:Record<Tab,string>={
   overview:'Home',trading:'Live Market',tradingchain:'Option Chain',
@@ -341,6 +341,7 @@ const weighted=(metric:Dict|undefined,key:string)=>metric?.[key]
 function App(){
   const [tab,setTab]=useState<Tab>(hashTab)
   const [jobsOpen,setJobsOpen]=useState(false)
+  const [connectionEditing,setConnectionEditing]=useState(false)
   const [searchOpen,setSearchOpen]=useState(false)
   const [menu,setMenu]=useState(false)
   const [health,setHealth]=useState<Health|null>(null)
@@ -364,6 +365,7 @@ function App(){
   const [notice,setNotice]=useState<{text:string;error:boolean}|null>(null)
   const [auditResult,setAuditResult]=useState<Dict|null>(null)
   const [dhan,setDhan]=useState<DhanStatus|null>(null)
+  useEffect(()=>{if(tab!=='connections')setConnectionEditing(false)},[tab])
   const dataset=datasets.find(d=>d.id===selectedDataset)
   const everydaySources=datasets.filter(d=>d.id==='dhan_shared'||d.kind!=='dhan'||d.id===selectedDataset)
   const selected=runs.find(r=>r.id===selectedRun)
@@ -691,7 +693,8 @@ function App(){
           <LoaderCircle size={18}/> Loading {titles[tab]}…
         </div>}>
         {(['trading','tradingchain','tradingdepth','tradingreplay',
-            'tradingjournal','strategybacktest','connections'].includes(tab))&&
+            'tradingjournal','strategybacktest'].includes(tab)||
+            (tab==='connections'&&connectionEditing))&&
           <TradingCockpit
             integrated
             selectedView={tab==='tradingreplay'?'replay':
@@ -710,6 +713,18 @@ function App(){
               journal:'tradingjournal',setup:'connections',
             } as const)[view])}
           />}
+        {tab==='connections'&&!connectionEditing&&
+          <ConnectionsLandingV2 apiHealthy={Boolean(health?.ok)}
+            tokenConfigured={Boolean(health?.dhan_token_configured)}
+            onConfigure={()=>setConnectionEditing(true)}
+            onRecording={()=>begin('recordingsettings')}
+            onDiagnostics={()=>begin('diagnostics')}
+            onData={()=>begin('data')}/>}
+        {tab==='connections'&&connectionEditing&&
+          <button type="button" className="ws-button secondary v2-connection-back"
+            onClick={()=>setConnectionEditing(false)}>
+            ← Back to Connections
+          </button>}
         {tab==='strategies'&&<StrategyLibraryV2
           onEMA={()=>begin('strategyema')}
           onPython={()=>begin('strategypython')}
