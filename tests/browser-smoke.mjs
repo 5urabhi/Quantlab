@@ -722,7 +722,8 @@ try {
     await page.locator('.rj-model-grid button').filter({hasText:'Geometric Brownian Motion'}).first().click()
     await page.getByRole('button',{name:/Configure and run Geometric Brownian Motion/}).click()
     await page.getByRole('region',{name:'Research step 3: Run model'}).waitFor()
-    await page.getByRole('button',{name:'Run selected model'}).click()
+    // The guided journey shares the new focused model action.
+    await page.getByRole('button',{name:'Run model',exact:true}).click()
     await page.getByRole('region',{name:'Research step 4: Analyze saved run'}).waitFor({timeout:40000})
     await page.locator('.rs-identity h3').waitFor({timeout:20000})
     await page.getByRole('button',{name:/Next · Save and export evidence/}).click()
