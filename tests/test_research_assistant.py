@@ -136,6 +136,58 @@ class SourceGroundedAssistantTests(unittest.TestCase):
         self.assertIn("score(i,t)", response["answer"])
         self.assertTrue(any(x["tab"] == "evidence" for x in response["references"]))
 
+    def test_investigation_does_not_treat_synthetic_as_market_data(self):
+        with patch.object(research_assistant.research_insights, "inspect_quality") as inspect, \
+             patch.object(research_assistant.source_anomalies, "scan") as anomalies:
+            result = research_assistant.investigate("research_run", "run_01")
+        self.assertEqual(result["engine"], "offline_multi_tool_evidence_investigator")
+        self.assertEqual(result["steps"][1]["status"], "not_applicable")
+        self.assertEqual(result["steps"][2]["status"], "not_applicable")
+        self.assertEqual(result["anomaly_preview"], [])
+        inspect.assert_not_called()
+        anomalies.assert_not_called()
+
+    def test_investigation_source_change_and_anomaly_remain_review_only(self):
+        observed = evidence()
+        observed["evidence_class"] = "observed_unverified"
+        observed["source"] = {
+            "dataset_id": "dhan_shared", "dataset_kind": "dhan",
+            "source_hashes": {"daily_prices.csv": "archived_original_hash"}}
+        quality = {"ready": True, "source_file": "daily_prices.csv",
+                   "sha256": "current_original_hash",
+                   "issues": {"missing_asset_values_assessed": 1},
+                   "unassessed_assets": 15}
+        anomaly = {
+            "candidate_count": 2, "source_sha256": "current_original_hash",
+            "detector": "source_anomaly_audit_v1",
+            "inspected_assets": [{"symbol": "A"}], "assets_not_assessed": 15,
+            "events": [{"symbol": "A", "date": "2026-11-01",
+                       "type": "unusual_observed_return",
+                       "return_fraction": .55, "reason": "unusual historical close"}]}
+        with patch.object(result_evidence, "summarize", return_value=observed), \
+             patch.object(research_assistant.research_insights, "inspect_quality",
+                          return_value=quality) as inspect, \
+             patch.object(research_assistant.source_anomalies, "scan",
+                          return_value=anomaly) as detect:
+            result = research_assistant.investigate("research_run", "run_01")
+        self.assertTrue(result["findings"]["source_changed_since_archive"])
+        self.assertEqual(result["findings"]["anomaly_candidates_inspected"], 2)
+        self.assertEqual(result["steps"][1]["status"], "warning")
+        self.assertEqual(result["steps"][2]["status"], "review")
+        self.assertTrue(any("not verified" in s.lower() or "not confirmed" in s.lower()
+                            for s in result["limitations"]))
+        inspect.assert_called_once_with("dhan_shared", max_assets=12)
+        detect.assert_called_once_with("dhan_shared", max_assets=4, max_events=8)
+
+    def test_investigation_endpoint_is_validated_and_read_only(self):
+        url = "/api/workspace/results/research_run/run_01/investigate"
+        ok = self.client.post(url, json={})
+        self.assertEqual(ok.status_code, 200, ok.text)
+        self.assertEqual(ok.json()["engine"], "offline_multi_tool_evidence_investigator")
+        self.assertNotIn("DHAN_ACCESS_TOKEN", ok.text)
+        bad_id = self.client.post("/api/workspace/results/model_run/../investigate", json={})
+        self.assertNotEqual(bad_id.status_code, 200)
+
     def test_api_rejects_extra_fields_long_question_and_bad_context(self):
         url = "/api/workspace/results/research_run/run_01/ask"
         success = self.client.post(url, json={"question": "What is the Sharpe ratio?"})
