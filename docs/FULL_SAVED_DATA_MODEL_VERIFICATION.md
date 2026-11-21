@@ -30,6 +30,9 @@ Results are saved under `results/full_saved_verification_UTC/`:
 
 - `FULL_SAVED_VERIFICATION.md`: at-a-glance outcomes and exact blockers;
 - `FULL_SAVED_VERIFICATION.json`: machine-readable status, provenance limits;
+- `FULL_TRADING_READINESS.json`: locally saved BANKNIFTY minute-source,
+  verified CE/PE master, recorder status and original 20+20 depth receipts
+  (when available, otherwise an explicit unavailable status);
 - `ALL_MODEL_RESULTS.csv`: every model/dataset result;
 - `MODEL_AUDIT.md`, `SUMMARY.json`, `DATASET_SUMMARY.csv`: full
   original-price, historical index/PIT and source-integrity model audit.
@@ -53,6 +56,30 @@ tradable live quote or proof of a fill.
 To guarantee *no files whatsoever* are created outside the report directory,
 use `--no-link-recorded`. The five observed-quote models will then remain
 blocked until a quote is manually linked via Models.
+
+## BANKNIFTY trading-source evidence in the same command
+
+The command also invokes the existing **read-only trading acceptance** tool,
+without contacting Dhan or placing trades. Its additional checks distinguish:
+
+- Prepared original BANKNIFTY one-minute index history;
+- locally cached original-master-verified CE/PE option identities;
+- currently armed/live 20-level recorder state (an off-hours recorder is
+  appropriately labeled **waiting**, not a passing live feed);
+- checksum-verified original saved 20-bid/20-ask depth books, including
+  the presence of both call and put observations;
+- historical CE/PE P&L validation and options-specific RL as separate
+  **not-yet-executed/not-ready gates**, not silently counted as passes.
+
+The extra `FULL_TRADING_READINESS.json` file provides evidence statuses
+for each gate; a missing source DB does not reclassify a passing standalone
+numerical model as failing software. Neither a recent socket connection
+nor a saved quote proves executable fills or exchange-event quote time.
+Option P&L requires a distinct dated historical contract backtest.
+
+`+20%` original data completion, live Dhan login validity and exchange
+market-hours packets cannot be established by a read-only GitHub CI run.
+A connected provider and a locally saved observation are separate truths.
 
 ## Distinguishing outcomes
 
