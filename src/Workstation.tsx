@@ -11,6 +11,7 @@ import {RecorderBadge,JobsDrawer,V2HomeLaunchers,StrategyLibraryV2,ConnectionsLa
 import ResearchPythonLab from './ResearchPythonLab'
 import AutoDepthRecorder from './AutoDepthRecorder'
 import DataManager from './DataManager'
+import IndexBuilderWorkspace from './IndexBuilderWorkspace'
 import GlobalSearchV2 from './GlobalSearchV2'
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
@@ -152,7 +153,6 @@ function hashTab():Tab{
   const value=decodeURIComponent(window.location.hash.replace(/^#\/?/,''))
   return validTabs.has(value as Tab)?value as Tab:'overview'
 }
-const factors=[['momentum','Momentum'],['low_volatility','Low volatility'],['value','Value'],['quality','Quality'],['size','Size']] as const
 const number=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? v.toLocaleString('en-US',{maximumFractionDigits:d,minimumFractionDigits:d}) : '—'
 const percent=(v:unknown,d=2)=>typeof v==='number' && Number.isFinite(v) ? (v*100).toFixed(d)+'%' : '—'
 const label=(s:string)=>s.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase())
@@ -328,15 +328,6 @@ function BarRows({rows,valueKey='weight',nameKey='name'}:{rows:Dict[];valueKey?:
   const top=rows.slice(0,14); const max=Math.max(...top.map(r=>Math.abs(Number(r[valueKey]||0))),.00001)
   return <div className="ws-bars">{top.map((r,i)=><div className="ws-bar-row" key={i}><span title={String(r[nameKey])}>{String(r[nameKey]??'—')}</span><div><i style={{width:(Math.abs(Number(r[valueKey]||0))/max*100)+'%'}}/></div><strong>{percent(Number(r[valueKey]))}</strong></div>)}</div>
 }
-function NumberInput({label:caption,value,onChange,min,max,step=1}:{label:string;value:number;onChange:(n:number)=>void;min?:number;max?:number;step?:number}){
-  return <label className="ws-field"><span>{caption}</span><input type="number" value={value} onChange={e=>onChange(Number(e.target.value))} min={min} max={max} step={step}/></label>
-}
-function Field({label:caption,value,onChange,placeholder='',type='text'}:{label:string;value:string;onChange:(s:string)=>void;placeholder?:string;type?:string}){
-  return <label className="ws-field"><span>{caption}</span><input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)}/></label>
-}
-function Select({label:caption,value,options,onChange}:{label:string;value:string;options:{value:string;label:string}[];onChange:(v:string)=>void}){
-  return <label className="ws-field"><span>{caption}</span><select value={value} onChange={e=>onChange(e.target.value)}>{options.map(opt=><option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></label>
-}
 const weighted=(metric:Dict|undefined,key:string)=>metric?.[key]
 function App(){
   const [tab,setTab]=useState<Tab>(hashTab)
@@ -367,18 +358,10 @@ function App(){
   const [dhan,setDhan]=useState<DhanStatus|null>(null)
   useEffect(()=>{if(tab!=='connections')setConnectionEditing(false)},[tab])
   const dataset=datasets.find(d=>d.id===selectedDataset)
-  const everydaySources=datasets.filter(d=>d.id==='dhan_shared'||d.kind!=='dhan'||d.id===selectedDataset)
   const selected=runs.find(r=>r.id===selectedRun)
   const metrics=detail?.meta.metrics_by_split??selected?.metrics_by_split??{}
   const split=Object.entries(metrics).at(-1)
   const metric=split?.[1]
-  const monthlyCount=dataset?.monthly_price_observations??0
-  const requiredWarmup=Math.max(
-    (config.factor_weights.momentum||0)>0?config.momentum_formation+config.momentum_skip:0,
-    (config.factor_weights.low_volatility||0)>0 || ['inverse_volatility','minimum_variance','risk_parity'].includes(config.weighting)
-      ?config.volatility_lookback:0
-  )
-  const availableTestMonths=Math.max(0,monthlyCount-requiredWarmup-config.execution_lag)
   const notify=(text:string,error=false)=>setNotice({text,error})
   const refresh=useCallback(async()=>{
     try {
@@ -532,7 +515,6 @@ function App(){
   }
   const downloadReport=()=>execute(()=>post<{job_id:string}>('/runs/'+selectedRun+'/reports',{}),r=>{setJob({id:r.job_id,kind:'reports',status:'queued'});notify('Report export queued.')})
   const runPicker=<select aria-label="Select completed experiment" className="ws-select" value={selectedRun} onChange={e=>setSelectedRun(e.target.value)}>{runs.length===0?<option value="">No runs yet</option>:runs.map(r=><option key={r.id} value={r.id}>{r.name} · {r.id}</option>)}</select>
-  const dataPicker=<select className="ws-select" aria-label="Select research dataset" value={selectedDataset} onChange={e=>{setSelectedDataset(e.target.value)}}><option value="">Choose market source</option>{everydaySources.map(d=><option key={d.id} value={d.id}>{d.label}{d.ready?'':' (additional model evidence needed)'}</option>)}</select>
   const withRun=(content:React.ReactNode)=><>{runs.length===0?<Empty title="No research run selected" onAction={()=>begin('research')} action="Run an experiment">All charts are generated from Python research outputs, not hardcoded sample performance.</Empty>:<>{runPicker}{content}</>}</>
   const classification=<Tag tone={detail?.source.dataset_kind==='synthetic'?'warn':'blue'}>{detail?.source.dataset_kind==='synthetic'?'SYNTHETIC DATA — DEMONSTRATION':detail?'USER DATA · NOT INDEPENDENTLY AUDITED':'NO RESEARCH RUN'}</Tag>
   const chart=detail?<EquityChart rows={detail.returns}/>:null
@@ -918,17 +900,16 @@ function App(){
           </div>
         </details>}
         {tab==='research'&&<>
-          <div className="ws-grid two-thirds"><Card title="Experiment configuration" extra={<Tag tone="blue">BACKED BY PYTHON</Tag>}><div className="ws-setup-row"><span>Source dataset</span>{dataPicker}<Tag tone={dataset?.ready?'good':'warn'}>{dataset?.ready?'READY':'NEEDS INPUTS'}</Tag></div><div className="ws-form-grid"><Field label="Experiment name" value={config.name} onChange={v=>setConfig({...config,name:v})}/><Select label="Portfolio weighting" value={config.weighting} onChange={v=>setConfig({...config,weighting:v})} options={['equal','score','inverse_volatility','minimum_variance','risk_parity'].map(v=>({value:v,label:label(v)}))}/><NumberInput label="Constituents (top N)" value={config.top_n} min={2} max={300} onChange={v=>setConfig({...config,top_n:v})}/><NumberInput label="Maximum holding weight" value={config.max_weight} min={.01} max={1} step={.01} onChange={v=>setConfig({...config,max_weight:v})}/><NumberInput label="Rebalance frequency (months)" value={config.rebalance_every} min={1} max={12} onChange={v=>setConfig({...config,rebalance_every:v})}/><NumberInput label="Transaction costs (bps)" value={config.cost_bps} min={0} max={500} step={5} onChange={v=>setConfig({...config,cost_bps:v})}/><Select label="Execution lag" value={String(config.execution_lag)} onChange={v=>setConfig({...config,execution_lag:Number(v)})} options={[{value:'1',label:'One month (conservative)'},{value:'0',label:'Same-close idealization'}]}/><NumberInput label="Formation months" value={config.momentum_formation} min={2} max={60} onChange={v=>setConfig({...config,momentum_formation:v})}/><NumberInput label="Months to skip" value={config.momentum_skip} min={0} max={12} onChange={v=>setConfig({...config,momentum_skip:v})}/><NumberInput label="Volatility lookback (months)" value={config.volatility_lookback} min={3} max={60} onChange={v=>setConfig({...config,volatility_lookback:v})}/><Field label="Validation start (optional)" type="date" value={config.validation_start} onChange={v=>setConfig({...config,validation_start:v})}/><Field label="Frozen test start (optional)" type="date" value={config.final_test_start} onChange={v=>setConfig({...config,final_test_start:v})}/></div><label className="ws-checkbox"><input type="checkbox" checked={config.sector_cap!==null} onChange={e=>setConfig({...config,sector_cap:e.target.checked ? 0.4 : null})}/> Apply historical sector concentration cap</label>{config.sector_cap!==null&&<NumberInput label="Sector allocation cap" value={config.sector_cap} min={.1} max={1} step={.05} onChange={v=>setConfig({...config,sector_cap:v})}/>}{dataset?.has_prices&&monthlyCount>0&&availableTestMonths<12&&
-              <div className="ws-rule" role="status"><CircleAlert size={16}/>
-                <div><strong>Limited statistical window: {monthlyCount} price observations</strong>
-                  <p>After approximately {requiredWarmup} months of signal history and {config.execution_lag} month(s) of execution lag, only up to {availableTestMonths} eligible months remain before other eligibility gates. CAGR, drawdown or inference may be undefined. Short-sample runs are exploratory, not resume-ready performance claims.</p>
-                  {monthlyCount>4&&<button type="button" className="ws-textlink"
-                    onClick={()=>setConfig(c=>({...c,momentum_formation:3,momentum_skip:1,volatility_lookback:3,rebalance_every:1}))}>
-                    Apply explicit short-sample demonstration settings <ArrowRight size={13}/></button>}
-                </div>
-              </div>}
-              <div className="ws-actions"><button className="ws-button primary" disabled={!dataset?.ready||busy||!!job&&['queued','running'].includes(job.status)} onClick={startRun}><Play size={15}/> Run Python backtest</button><span className="ws-caption">Uses saved datasets with explicit provenance; writes result artifacts to disk.</span></div></Card>
-          <Card title="Factor allocation"><p className="ws-caption">Select a factor and adjust its relative contribution to the composite score.</p><div className="ws-sliders">{factors.map(([key,name])=><label className="ws-factor" key={key}><div><span>{name}</span><strong>{number(config.factor_weights[key],1)}</strong></div><input type="range" min="0" max="1" step=".1" value={config.factor_weights[key]??0} onChange={e=>setConfig({...config,factor_weights:{...config.factor_weights,[key]:Number(e.target.value)}})}/></label>)}</div><div className="ws-rule"><ShieldCheck size={16}/> A backtest cannot prove historical correctness when constituent histories, adjusted returns, and benchmark evidence are missing.</div></Card></div>
+          <IndexBuilderWorkspace config={config} onConfigChange={setConfig}
+            datasets={datasets} selectedDataset={selectedDataset}
+            onSelectDataset={setSelectedDataset} busy={busy}
+            jobActive={Boolean(job&&['queued','running'].includes(job.status))}
+            onRun={startRun}
+            onOpenData={()=>begin('data')} onGetData={()=>begin('dhan')}
+            onOpenNse={()=>begin('nse')} onOpenResults={()=>begin('history')}
+            onOpenStudio={()=>begin('indexstudio')}/>
+          <details className="idx-advanced" aria-label="Advanced historical validation and source preparation">
+            <summary>Historical source preparation, PIT validation and frozen evaluation</summary>
           <HistoricalValidationPanel datasetId={selectedDataset} config={config}
             hasDailyPrices={!!dataset?.has_daily_prices}
             onDataCreated={id=>{setSelectedDataset(id);void refresh();
@@ -936,6 +917,7 @@ function App(){
             onOpenData={()=>begin('data')} onOpenDhan={()=>begin('dhan')}
             onJobQueued={id=>{setJob({id,kind:'frozen_evaluation',status:'queued'});
               notify('Single-use frozen experiment queued; its result receipt will be checked.') }}/>
+          </details>
           {job&&<Card title="Current job"><div className="ws-job-row"><Tag tone={job.status==='error'?'bad':job.status==='complete'?'good':'blue'}>{job.status.toUpperCase()}</Tag><span>{job.kind}</span><small>{job.error||job.id}</small></div></Card>}
         </>}
         {tab==='history'&&<ResultsStudio integrated
