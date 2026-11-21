@@ -44,7 +44,6 @@ def _verified(quote: dict, expiry: str) -> bool:
         and quote.get("expiry") == expiry
         and quote.get("option_type") in ("CE", "PE")
         and isinstance(lot, int) and lot > 0
-        and isinstance(ltp, (int, float)) and math.isfinite(ltp) and ltp > 0
         and isinstance(strike, (int, float)) and math.isfinite(strike) and strike > 0
     )
 
@@ -71,9 +70,16 @@ def select_atm_contracts(chain: dict, cfg: dict, previous_ids=()) -> list[dict]:
         # Never select ambiguous duplicate source observations for one term.
         if side not in pairs.setdefault(strike, {}):
             pairs[strike][side] = q
-    if not pairs:
+    # Anchor on *official-master-verified listed* strikes (including
+    # untraded contracts with missing LTP). An unverified/synthetic strike
+    # must never move ATM or shift the above/below wing selection.
+    source_strikes = {
+        float(q["strike"]) for q in chain.get("contracts", [])
+        if isinstance(q, dict) and _verified(q, expiry)
+    }
+    if not source_strikes or not pairs:
         return []
-    atm = min(pairs, key=lambda strike: (abs(strike - spot), strike))
+    atm = min(source_strikes, key=lambda strike: (abs(strike - spot), strike))
     above = sorted((strike for strike, sides in pairs.items()
                     if strike > atm and "CE" in sides and "PE" in sides))
     below = sorted((strike for strike, sides in pairs.items()
@@ -94,7 +100,13 @@ def select_atm_contracts(chain: dict, cfg: dict, previous_ids=()) -> list[dict]:
                 selected.append({
                     "identity": identity, "security_id": identity.split(":")[1],
                     "side": side, "strike": strike, "expiry": expiry,
-                    "lot_size": q["lot_size"], "ltp": float(q["ltp"]),
+                    "lot_size": q["lot_size"],
+                    # A Dhan-verified security can have no last trade yet,
+                    # especially far OTM; only original depth can confirm it.
+                    "ltp": (float(q["ltp"])
+                            if isinstance(q.get("ltp"), (int, float))
+                            and math.isfinite(q["ltp"]) and q["ltp"] > 0
+                            else None),
                     "bid": q.get("bid"), "ask": q.get("ask"),
                     "volume": q.get("volume") if isinstance(q.get("volume"), int) else 0,
                     "chain_received_utc": chain.get("received_utc"),
@@ -103,6 +115,63 @@ def select_atm_contracts(chain: dict, cfg: dict, previous_ids=()) -> list[dict]:
                 })
     # Deterministic packing and no hidden substitution across wings.
     return selected
+
+
+def _coverage_diagnostics(chain: dict, selected: list[dict]) -> dict:
+    """Explain source-limited ATM coverage without guessing missing options."""
+    atm = selected[0]["atm_strike"] if selected else None
+    result = {
+        "source_pairs_above": 0, "source_pairs_below": 0,
+        "missing_ltp_selected": sum(q.get("ltp") is None for q in selected),
+        "rejection_explanations": {},
+    }
+    if atm is None:
+        return result
+    raw_pairs: dict[float, set[str]] = {}
+    valid_pairs: dict[float, set[str]] = {}
+    for q in chain.get("contracts", []):
+        if not isinstance(q, dict) or q.get("expiry") != chain.get("expiry"):
+            continue
+        strike = q.get("strike")
+        side = q.get("option_type")
+        if (not isinstance(strike, (int, float)) or not math.isfinite(strike)
+                or strike <= 0 or side not in ("CE", "PE") or strike == atm):
+            continue
+        raw_pairs.setdefault(float(strike), set()).add(side)
+        if _verified(q, chain["expiry"]):
+            valid_pairs.setdefault(float(strike), set()).add(side)
+    for wing, test in (("above", lambda k: k > atm), ("below", lambda k: k < atm)):
+        source_full = sum(1 for k, sides in raw_pairs.items()
+                          if test(k) and sides == {"CE", "PE"})
+        verified_full = sum(1 for k, sides in valid_pairs.items()
+                            if test(k) and sides == {"CE", "PE"})
+        result[f"source_pairs_{wing}"] = source_full
+        result["rejection_explanations"][wing] = (
+            f"{min(verified_full, 50)}/50 strike pairs verified against the "
+            f"official master; {source_full} complete CE/PE strike pairs "
+            f"returned by the nearest-expiry chain.")
+    return result
+
+
+def _record_original_pairs(index: int, books: list[tuple[dict, dict]],
+                           received: datetime) -> None:
+    """Track actual original packet receipt regardless of disk sampling."""
+    if not books:
+        return
+    stamp = received.isoformat()
+    with auto.LOCK:
+        auto.STATE["received_pairs"] += len(books)
+        auto.STATE["last_packet_utc"] = stamp
+        timestamps = auto.STATE.setdefault("observed_by_contract", {})
+        for _, candidate in books:
+            timestamps[candidate["identity"]] = stamp
+        socket_times = auto.STATE.setdefault("socket_last_paired_utc", {})
+        socket_times[str(index)] = stamp
+
+
+def _stalled_socket(now: float, last_original_pair: float, timeout: int = 120) -> bool:
+    """Reconnect a socket with no original book pairs, even if peers are busy."""
+    return now - last_original_pair > timeout
 
 
 def socket_groups(selected: list[dict]) -> list[list[dict]]:
@@ -141,6 +210,7 @@ def _read_socket(index: int, group: list[dict], url: str,
     chosen = {c["security_id"]: c for c in group}
     pending: dict = {}
     last_emitted: dict[str, float] = {}
+    last_pair = time.monotonic()
     try:
         with connect(url, open_timeout=12, close_timeout=3,
                      max_size=SOCKET_RECV_LIMIT) as socket:
@@ -154,16 +224,19 @@ def _read_socket(index: int, group: list[dict], url: str,
                 try:
                     raw = socket.recv(timeout=1)
                 except TimeoutError:
+                    if _stalled_socket(time.monotonic(), last_pair):
+                        raise TimeoutError("No source book pairs on Dhan socket")
                     continue
                 if not isinstance(raw, bytes):
                     continue
                 now = auto._now()
                 books = auto._paired_books(raw, chosen, pending, now)
                 if not books:
+                    if _stalled_socket(time.monotonic(), last_pair):
+                        raise TimeoutError("No original book pairs on Dhan socket")
                     continue
-                with auto.LOCK:
-                    auto.STATE["received_pairs"] += len(books)
-                    auto.STATE["last_packet_utc"] = now.isoformat()
+                last_pair = time.monotonic()
+                _record_original_pairs(index, books, now)
                 stamp = time.monotonic()
                 for book, candidate in books:
                     interval = (NEAR_ATM_FAST_SECONDS if candidate["priority_depth"]
@@ -201,13 +274,17 @@ def _select(cfg: dict, previous_ids=()) -> list[dict]:
     if age > 90:
         raise ValueError("Original Dhan BANKNIFTY chain is stale")
     selected = select_atm_contracts(chain, cfg, previous_ids)
+    diagnostic = _coverage_diagnostics(chain, selected)
     counts = {"above": 0, "below": 0}
     for c in selected:
         counts[c["wing"]] += 1
     missing = []
     for wing in ("above", "below"):
         if counts[wing] < CONTRACTS_PER_WING:
-            missing.append(wing + ": " + str(counts[wing]) + "/100 verified contracts")
+            missing.append(
+                wing + ": " + str(counts[wing]) + "/100 verified contracts; " +
+                diagnostic["rejection_explanations"].get(
+                    wing, "No source-verified CE/PE strike pairs"))
     auto._status_update(
         last_chain_utc=chain["received_utc"],
         chain_spot=chain["underlying_spot"],
@@ -215,6 +292,9 @@ def _select(cfg: dict, previous_ids=()) -> list[dict]:
         atm_strike=selected[0]["atm_strike"] if selected else None,
         contracts_above=counts["above"],
         contracts_below=counts["below"],
+        source_pairs_above=diagnostic["source_pairs_above"],
+        source_pairs_below=diagnostic["source_pairs_below"],
+        missing_ltp_selected=diagnostic["missing_ltp_selected"],
         selection_warning=(
             "Incomplete source-verified ATM wings (" + ", ".join(missing) +
             "); missing depth is never fabricated" if missing else None),
@@ -248,7 +328,10 @@ def run(stop: Event) -> None:
                 session_id=session_id, snapshots_saved=0, received_pairs=0,
                 selection_events=0, invalid_pairs=0, latest={},
                 contracts=[], sockets_connected=0, dropped_depth_samples=0,
-                contracts_above=0, contracts_below=0, last_error=None)
+                contracts_above=0, contracts_below=0, last_error=None,
+                observed_by_contract={}, socket_last_paired_utc={},
+                source_pairs_above=0, source_pairs_below=0,
+                missing_ltp_selected=0)
         if daily_saved >= auto.MAX_DAILY_SNAPSHOTS:
             auto._status_update(state="daily_storage_limit_reached",
                                 connected=False)
@@ -269,6 +352,12 @@ def run(stop: Event) -> None:
             previous = selected
             with auto.LOCK:
                 auto.STATE["contracts"] = selected
+                # Prune old expiry/strike identities after an ATM rollover.
+                active = {c["identity"] for c in selected}
+                auto.STATE["observed_by_contract"] = {
+                    key: value for key, value in
+                    auto.STATE.get("observed_by_contract", {}).items()
+                    if key in active}
                 auto.STATE["selection_events"] += 1
                 auto.STATE["last_error"] = None
                 auto.STATE["sockets_requested"] = len(groups)

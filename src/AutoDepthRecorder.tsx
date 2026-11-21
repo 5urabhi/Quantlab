@@ -19,6 +19,7 @@ type Latest={
   bid_quantity_20:number;ask_quantity_20:number
   bid_levels:number;ask_levels:number;full_20_levels:boolean
   best_bid:number;best_ask:number
+  feed_age_seconds?:number|null;feed_fresh?:boolean
   buy_vwap_for_units:number|null;sell_vwap_for_units:number|null
 }
 type Recorder={
@@ -29,7 +30,9 @@ type Recorder={
   last_packet_utc:string|null;last_chain_utc:string|null
   current_expiry?:string;chain_spot?:number;atm_strike?:number
   contracts_above?:number;contracts_below?:number
-  sockets_connected?:number;sockets_requested?:number
+  source_pairs_above?:number;source_pairs_below?:number;missing_ltp_selected?:number
+  contracts_with_saved_books?:number;contracts_with_recent_packets?:number
+  sockets_connected?:number;sockets_requested?:number;sockets_with_recent_pairs?:number
   dropped_depth_samples?:number
   selection_warning?:string|null;contracts:Candidate[]
   latest:Record<string,Latest>;read_only:boolean
@@ -215,7 +218,10 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{n(state?.received_pairs)}</strong> observed source packet pairs</span>
       <span><strong>{state?.contracts.length??0}/200</strong> verified contracts selected</span>
       <span><strong>{state?.contracts_above??0} / {state?.contracts_below??0}</strong> above / below ATM</span>
-      <span><strong>{state?.sockets_connected??0} / {state?.sockets_requested??0}</strong> live Dhan depth sockets</span>
+      <span><strong>{n(state?.contracts_with_saved_books)}</strong> contracts with saved source books</span>
+      <span><strong>{n(state?.contracts_with_recent_packets)}</strong> contracts with paired packets in last 10s</span>
+      <span><strong>{state?.sockets_connected??0} / {state?.sockets_requested??0}</strong> connected depth sockets</span>
+      <span><strong>{n(state?.sockets_with_recent_pairs)} / {state?.sockets_requested??0}</strong> sockets with original depth in last 60s</span>
       <span><strong>{state?.current_expiry||'—'}</strong> Dhan-listed expiry</span>
       <span><strong>{clock(state?.last_packet_utc)}</strong> most recent paired packet (IST)</span>
     </div>
@@ -232,9 +238,13 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     </p>
     <div className="ad-contracts">
       {state?.contracts.length?<><p className="ad-armed-note">
-        Showing the eight nearest subscribed CE/PE contracts. All {state.contracts.length}
-        selected contracts are recorded in the shared Market Library; open
-        Market Replay to review their saved 20-level depth.
+        Showing the eight nearest subscribed CE/PE contracts. {state.contracts.length}
+        original Dhan security IDs are subscribed; {n(state.contracts_with_saved_books)}
+        have produced stored original 20-level books this session.
+        Only actual received books are saved in Market Replay.
+        {Boolean(state.missing_ltp_selected)&&<>
+        {' '}{n(state.missing_ltp_selected)} verified contracts have no last traded
+        premium in the source chain; only live order-book packets can supply their depth.</>}
         {Boolean(state.dropped_depth_samples)&&
           <> {n(state.dropped_depth_samples)} samples were skipped because
           local storage could not keep up.</>}
@@ -254,8 +264,9 @@ export default function AutoDepthRecorder({onOpenSaved}:{
             <span>20-level bid share <strong>{n((live.book_imbalance_20+1)*50,1)}%</strong></span>
             <span>Buy {live.units} units <strong>{inr(live.buy_vwap_for_units)}</strong></span>
             <span>Sell {live.units} units <strong>{inr(live.sell_vwap_for_units)}</strong></span>
-            <span>Packet age <strong className={live.fresh?'ad-fresh':'ad-stale'}>
-              {n(live.age_seconds,0)}s · {live.fresh?'fresh':'stale'}</strong></span>
+            <span>Latest source packet <strong className={live.feed_fresh?'ad-fresh':'ad-stale'}>
+              {live.feed_age_seconds==null?'—':n(live.feed_age_seconds,0)+'s'} · {live.feed_fresh?'active':'quiet / unavailable'}</strong></span>
+            <span>Saved book age <strong>{n(live.age_seconds,0)}s</strong></span>
           </div>:<p className="ad-empty-contract">
             Waiting for an original bid+ask 20-level packet; selection alone does not prove depth access.
           </p>}
