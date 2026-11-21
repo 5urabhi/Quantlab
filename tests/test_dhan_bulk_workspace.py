@@ -385,6 +385,33 @@ class BulkDhanWorkstationTests(unittest.TestCase):
             cached=dw.run_batch(batch["id"])
         self.assertEqual(cached["counts"]["complete"],1)
 
+    def test_missing_timestamp_keeps_source_audit_but_never_marks_window_complete(self):
+        from index_research.dhan_data import download_candles as real_download
+        batch=dw.create_batch("selected",["NSE_EQ:1333"],[],
+                              "2024-01-01","2024-02-01",1,False)
+        raw={"timestamp":[1705289400,None],
+             "open":[100,110],"high":[110,120],"low":[95,105],
+             "close":[105,115],"volume":[1000,2000]}
+        def vendor(inst,start,stop,**kwargs):
+            return real_download(inst,start,stop,interval=kwargs["interval"],
+                                 token="TEST_ONLY",post=lambda *_:raw,pause_seconds=0)
+        with patch.object(dw,"download_candles",side_effect=vendor):
+            done=dw.run_batch(batch["id"])
+        self.assertEqual(done["counts"]["failed"],1)
+        self.assertEqual(done["failure_examples"][0]["code"],"SOURCE TIMESTAMPS")
+        self.assertIn("coverage was NOT marked complete",
+                      dw._load_batch(batch["id"])["items"][0]["error"])
+        source=service.DATA/"dhan"/"history"/"NSE_EQ"/"1333"/"1m.csv"
+        self.assertFalse(source.is_file())
+        self.assertFalse(source.with_suffix(".json").is_file())
+        quality=source.parent/(source.stem+"_rejected")
+        audit_files=list(quality.glob("*.csv"))
+        self.assertEqual(len(audit_files),1)
+        audit=pd.read_csv(audit_files[0])
+        self.assertEqual(audit.iloc[0]["reason"],
+                         "missing_or_invalid_provider_timestamp")
+        self.assertTrue(pd.isna(audit.iloc[0]["provider_timestamp"]))
+
     def test_conflicting_duplicate_source_fails_without_checkpoint(self):
         from index_research.dhan_data import download_candles as real_download
         batch = dw.create_batch("selected", ["NSE_EQ:1333"], [],
