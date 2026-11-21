@@ -10,7 +10,7 @@ import math
 import re
 from typing import Literal
 
-from . import research_next, result_evidence
+from . import research_next, result_evidence, research_insights, source_anomalies
 
 Kind = Literal["model_run", "research_run"]
 Level = Literal["beginner", "researcher", "mathematical"]
@@ -164,6 +164,160 @@ def _references(kind: Kind, run_id: str, *, metrics: bool = False,
         refs.append({"title": "Compare archived runs on compatible inputs", "tab": "compare",
                      "locator": f"{kind}/{run_id}: run_comparison"})
     return refs
+
+
+def investigate(kind: Kind, run_id: str) -> dict:
+    """Run a bounded, read-only chain of evidence tools on an archived result.
+
+    Unlike the one-question explainer, this workflow actually checks current
+    local dataset quality and anomaly candidates. Its receipts distinguish
+    checks made *today* from archived facts; it never claims source certification,
+    live brokerage availability, an LLM inference, or an investment signal.
+    """
+    if kind not in ("model_run", "research_run") or not re.fullmatch(
+            r"[a-zA-Z0-9_.-]{1,90}", run_id):
+        raise ValueError("Select a valid archived model or index research run")
+    report = result_evidence.summarize(kind, run_id)
+    explanation = research_next.explain_saved(kind, run_id, "researcher")
+    src = report.get("source") or {}
+    if not isinstance(src, dict):
+        src = {}
+    dataset_id = src.get("dataset_id")
+    classification = str(report.get("evidence_class") or "unknown")
+    steps = [
+        {
+            "tool": "archived_run_evidence",
+            "status": "complete",
+            "summary": "Loaded saved numerical evidence and archived model context",
+            "locator": f"{kind}/{run_id}: saved_evidence",
+        }
+    ]
+    checks = [c for c in report.get("checks") or []
+              if c.get("status") in {"blocked", "warning", "failed"}]
+    actions = []
+    for check in checks:
+        action = str(check.get("next_action") or "").strip()
+        if action and action not in actions:
+            actions.append(action)
+    if classification == "synthetic_demo":
+        actions.insert(0, "Use licensed observed historical inputs for any real-market claim.")
+    findings = {
+        "archived_evidence_class": classification,
+        "archived_observations": report.get("observations"),
+        "flagged_evidence_checks": len(checks),
+        "model": str(explanation.get("model") or report.get("model") or "Archived model"),
+    }
+    anomaly_preview = []
+    if (not isinstance(dataset_id, str) or not dataset_id or
+            classification in {"synthetic_demo", "theoretical"}):
+        steps.append({
+            "tool": "current_source_quality", "status": "not_applicable",
+            "summary": "No real observed source dataset is eligible for an independent current-data check",
+            "locator": f"{kind}/{run_id}: saved_evidence.source",
+        })
+        steps.append({
+            "tool": "chronological_anomaly_scan", "status": "not_applicable",
+            "summary": "Synthetic/theoretical results cannot be certified by a market anomaly detector",
+            "locator": f"{kind}/{run_id}: saved_evidence.source",
+        })
+    else:
+        try:
+            current = research_insights.inspect_quality(dataset_id, max_assets=12)
+            if not current.get("ready", True):
+                raise ValueError("Selected dataset does not currently have a usable price panel")
+            source_hashes = src.get("source_hashes") or {}
+            filename = current.get("source_file")
+            archived_hash = (source_hashes.get(filename)
+                             if isinstance(source_hashes, dict) else None)
+            live_hash = current.get("sha256")
+            hash_comparable = bool(archived_hash and live_hash)
+            changed = bool(hash_comparable and archived_hash != live_hash)
+            findings.update({
+                "current_source_file": filename,
+                "current_source_sha256": live_hash,
+                "archived_source_sha256": archived_hash,
+                "source_hash_compared": hash_comparable,
+                "source_changed_since_archive": changed if hash_comparable else None,
+                "current_quality_issues": current.get("issues") or {},
+                "source_assets_unassessed": current.get("unassessed_assets", 0),
+            })
+            steps.append({
+                "tool": "current_source_quality", "status": "warning" if changed else "complete",
+                "summary": (
+                    "Original panel SHA differs from the saved run; archived and current "
+                    "observations are not interchangeable."
+                    if changed else
+                    "Inspected current local original-price quality. "
+                    + ("Archived hash matches this file." if hash_comparable else
+                       "No comparable saved file hash, so source identity remains unverified.")
+                ),
+                "locator": f"dataset/{dataset_id}: {filename} SHA-256 {live_hash}",
+            })
+            if changed:
+                actions.insert(0, "Reinspect source version and rerun with a newly locked file hash.")
+            elif not hash_comparable:
+                actions.append("Match archived source hashes with current original files.")
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            steps.append({
+                "tool": "current_source_quality", "status": "unavailable",
+                "summary": "Current original-source quality check unavailable: "
+                           + str(exc)[:190],
+                "locator": f"dataset/{dataset_id}: current source",
+            })
+            actions.append("Open Data Quality to diagnose source availability.")
+        try:
+            detector = source_anomalies.scan(dataset_id, max_assets=4,
+                                             max_events=8)
+            findings.update({
+                "anomaly_candidates_inspected": detector["candidate_count"],
+                "anomaly_assets_inspected": len(detector["inspected_assets"]),
+                "anomaly_assets_not_assessed": detector["assets_not_assessed"],
+                "anomaly_source_sha256": detector["source_sha256"],
+                "anomaly_detector": detector["detector"],
+            })
+            anomaly_preview = [{
+                "symbol": event["symbol"], "date": event["date"],
+                "type": event["type"], "return_fraction": event["return_fraction"],
+                "reason": event["reason"],
+            } for event in detector["events"][:5]]
+            steps.append({
+                "tool": "chronological_anomaly_scan",
+                "status": "review" if detector["candidate_count"] else "complete",
+                "summary": (
+                    str(detector["candidate_count"])
+                    + " potential source-review candidates across "
+                    + str(len(detector["inspected_assets"]))
+                    + " inspected securities; not verified errors or trading predictions."
+                ),
+                "locator": f"dataset/{dataset_id}: anomaly_scan {detector['source_sha256']}",
+            })
+            if detector["candidate_count"]:
+                actions.append("Review dated anomaly candidates against original provider and corporate actions.")
+        except (ValueError, OSError, KeyError, TypeError, ImportError) as exc:
+            steps.append({
+                "tool": "chronological_anomaly_scan", "status": "unavailable",
+                "summary": "Causal detector unavailable: " + str(exc)[:190],
+                "locator": f"dataset/{dataset_id}: anomaly scan",
+            })
+            actions.append("Use Data Quality to identify missing or incompatible source observations.")
+    actions.append(
+        "If empirical performance matters, freeze a later unseen evaluation window "
+        "and use a matched-price/total-return benchmark with declared costs."
+    )
+    return {
+        "kind": kind, "run_id": run_id,
+        "title": "Source-grounded research investigation",
+        "evidence_label": EVIDENCE_LABELS.get(classification, EVIDENCE_LABELS["unknown"]),
+        "steps": steps, "findings": findings,
+        "anomaly_preview": anomaly_preview,
+        "next_actions": list(dict.fromkeys(actions))[:6],
+        "engine": "offline_multi_tool_evidence_investigator",
+        "limitations": [
+            "Current source findings are NOT a rerun or verification of archived results.",
+            "Statistical anomalies are not confirmed data errors, certified exchange events or forecasts.",
+            "No external LLM, broker data retrieval, file mutation or trading order is performed.",
+        ],
+    }
 
 
 def answer(kind: Kind, run_id: str, question: str,
