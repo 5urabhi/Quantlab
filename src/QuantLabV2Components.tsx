@@ -182,7 +182,7 @@ export function ConnectionsLandingV2({apiHealthy,tokenConfigured,onConfigure,
     aria-label="Connections overview">
     <div className="v2-section-head"><div>
       <span className="v2-eyebrow">LOCAL DATA ACCESS</span>
-      <h2>Connections</h2>
+      <h2>Your connections</h2>
       <p>Manage only what needs attention. QuantLab keeps collection independent
         of which screen you open.</p>
     </div></div>
