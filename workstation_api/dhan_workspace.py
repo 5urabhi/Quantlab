@@ -660,13 +660,25 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
             if not isinstance(raw_rejected,pd.DataFrame) or len(raw_rejected)!=discarded:
                 raise ValueError("Rejected Dhan OHLCV rows must be recorded for source audit")
             quality_dir=target.parent/(target.stem+"_rejected")
+            if quality_dir.is_symlink():
+                raise ValueError("Unsafe symlink in Dhan source reject audit directory")
             quality_dir.mkdir(parents=True,exist_ok=True)
-            quality_file=quality_dir/(first.isoformat()+"_"+last.isoformat()+".csv")
-            quality_temp=quality_file.with_name(quality_file.name+"."+uuid.uuid4().hex[:8]+".tmp")
+            window_name=first.isoformat()+"_"+last.isoformat()
+            quality_temp=quality_dir/("."+window_name+"."+uuid.uuid4().hex[:8]+".tmp")
             try:
                 raw_rejected.to_csv(quality_temp,index=False)
                 quality_digest=hashlib.sha256(quality_temp.read_bytes()).hexdigest()
-                os.replace(quality_temp,quality_file)
+                # Every distinct source response gets its OWN immutable audit
+                # filename. A later provider retry must never overwrite
+                # evidence from a previously rejected CANBK window.
+                quality_file=quality_dir/(window_name+"_"+quality_digest[:16]+".csv")
+                if quality_file.is_symlink():
+                    raise ValueError("Unsafe Dhan source reject audit symlink")
+                if quality_file.is_file():
+                    if dhan_checkpoint.digest(quality_file)!=quality_digest:
+                        raise ValueError("Existing Dhan reject audit SHA mismatch")
+                else:
+                    os.replace(quality_temp,quality_file)
             finally:
                 quality_temp.unlink(missing_ok=True)
             rejected_windows=[x for x in rejected_windows
