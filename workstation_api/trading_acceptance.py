@@ -37,50 +37,70 @@ def _iso(stamp: str | None) -> str | None:
         return None
 
 
-def _valid_pair(book: dict, feature: dict, stored_sha: str, derived_sha: str,
-                identity: str, session_id: str, received_utc: str) -> bool:
-    """Integrity check on original bid+ask SHA and matched stored feature."""
-    if not isinstance(book, dict) or not isinstance(feature, dict):
-        return False
+def _pair_rejection_reason(book: dict | None, feature: dict | None,
+                           stored_sha: str, derived_sha: str,
+                           identity: str, session_id: str,
+                           received_utc: str) -> str | None:
+    """Return one safe, aggregate-able reason; never reveal original book data.
+
+    Keep the original strict acceptance contract. These codes explain an
+    invalid historical receipt, but do not certify or repair it.
+    """
+    if book is None:
+        return "missing_original_book"
+    if not isinstance(book, dict):
+        return "invalid_book_structure"
+    if not isinstance(feature, dict):
+        return "invalid_feature_structure"
     if (book.get("identity") != identity
             or feature.get("identity") != identity
             or book.get("received_utc") != received_utc
-            or feature.get("received_utc") != received_utc
-            or book.get("collection_mode") != "auto_banknifty_20_level"
+            or feature.get("received_utc") != received_utc):
+        return "identity_or_timestamp_mismatch"
+    if (book.get("collection_mode") != "auto_banknifty_20_level"
             or book.get("source") != "original_Dhan_full_market_depth_websocket"
             or not book.get("full_depth")):
-        return False
+        return "source_provenance_mismatch"
     if not (isinstance(stored_sha, str) and isinstance(derived_sha, str)
             and len(stored_sha) == 64 and stored_sha == derived_sha):
-        return False
+        return "stored_receipt_digest_mismatch"
     raw_bid = book.get("bid_packet_sha256")
     raw_ask = book.get("ask_packet_sha256")
     if not (isinstance(raw_bid, str) and isinstance(raw_ask, str)
             and len(raw_bid) == 64 and len(raw_ask) == 64):
-        return False
+        return "missing_packet_digests"
     if sha256((raw_bid + raw_ask).encode()).hexdigest() != stored_sha:
-        return False
+        return "packet_pair_digest_mismatch"
     if (not isinstance(book.get("bid"), list)
             or not isinstance(book.get("ask"), list)
             or len(book["bid"]) != 20 or len(book["ask"]) != 20):
-        return False
+        return "incomplete_twenty_level_book"
     if feature.get("side") not in ("CE", "PE"):
-        return False
+        return "invalid_feature_side"
     if not isinstance(feature.get("units"), int) or feature["units"] <= 0:
-        return False
+        return "invalid_feature_units"
     for side in ("bid", "ask"):
         for level in book[side]:
             if not isinstance(level, dict):
-                return False
+                return "invalid_level_structure"
             price = level.get("price")
             qty = level.get("quantity")
             if (not isinstance(price, (int, float)) or
                     not isinstance(qty, int) or price <= 0 or qty < 0):
-                return False
+                return "invalid_level_values"
     if book["bid"][0]["price"] > book["ask"][0]["price"]:
-        return False
-    return bool(session_id.startswith("auto20_"))
+        return "crossed_top_of_book"
+    if not isinstance(session_id, str) or not session_id.startswith("auto20_"):
+        return "unexpected_session_id"
+    return None
 
+
+def _valid_pair(book: dict, feature: dict, stored_sha: str, derived_sha: str,
+                identity: str, session_id: str, received_utc: str) -> bool:
+    """Backward-compatible strict integrity gate."""
+    return _pair_rejection_reason(
+        book, feature, stored_sha, derived_sha,
+        identity, session_id, received_utc) is None
 
 def inspect_saved_books(db_path: Path | None = None) -> dict:
     """Read up to 200 of the latest original automatic 20-level samples.
@@ -94,6 +114,7 @@ def inspect_saved_books(db_path: Path | None = None) -> dict:
         "latest_book_utc": None, "sample_checked": 0,
         "valid_sample_books": 0, "invalid_sample_books": 0,
         "valid_ce_books": 0, "valid_pe_books": 0,
+        "invalid_reason_counts": {},
         "observed_trading_dates_in_sample": 0,
         "method": "read-only SQLite; recent paired original packets and SHA-256 receipts",
         "sample_limit": MAX_AUDIT_BOOKS,
@@ -131,20 +152,23 @@ def inspect_saved_books(db_path: Path | None = None) -> dict:
         ).fetchall()
         sides = Counter()
         dates = set()
-        invalid = 0
+        invalid_reasons = Counter()
         for identity, received, session_id, feat_raw, feat_sha, book_raw, book_sha in data:
             try:
                 feature = json.loads(feat_raw)
                 book = json.loads(book_raw) if book_raw else None
             except (ValueError, TypeError):
-                invalid += 1
+                invalid_reasons["unparseable_saved_json"] += 1
                 continue
-            if not _valid_pair(book, feature, book_sha, feat_sha,
-                               identity, session_id, received):
-                invalid += 1
+            reason = _pair_rejection_reason(
+                book, feature, book_sha, feat_sha,
+                identity, session_id, received)
+            if reason is not None:
+                invalid_reasons[reason] += 1
                 continue
             sides[feature["side"]] += 1
             dates.add(received[:10])
+        invalid = sum(invalid_reasons.values())
         return {
             **empty, "status": "verified_sample" if not invalid else "integrity_attention",
             "total_automatic_books": int(count),
@@ -153,6 +177,7 @@ def inspect_saved_books(db_path: Path | None = None) -> dict:
             "valid_sample_books": len(data) - invalid,
             "invalid_sample_books": invalid,
             "valid_ce_books": sides["CE"], "valid_pe_books": sides["PE"],
+            "invalid_reason_counts": dict(sorted(invalid_reasons.items())),
             "observed_trading_dates_in_sample": len(dates),
             "note": ("Integrity is verified only for the latest sampled records. "
                      "Saved packets prove historical receipt, not current entitlement, "
@@ -258,9 +283,14 @@ def report() -> dict:
     total = books["total_automatic_books"]
     if books["status"] == "integrity_attention":
         state = "action_needed"
+        counts = books.get("invalid_reason_counts") or {}
+        top_causes = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:4]
+        causes = ", ".join(f"{reason}={count}" for reason, count in top_causes)
         detail = (f"{books['invalid_sample_books']} of the latest "
-                  f"{books['sample_checked']} original book receipts failed integrity checks.")
-        action = "Inspect Data Manager > Activity & recovery. Preserve original data."
+                  f"{books['sample_checked']} original book receipts failed integrity checks."
+                  + (f" Causes: {causes}." if causes else ""))
+        action = ("Inspect Data Manager > Activity & recovery. Preserve original "
+                  "records; do not discard or reconstruct failed order books.")
     elif books["status"] == "inspection_unavailable":
         state = "not_verified"
         detail = "The local shared database could not be read safely."
