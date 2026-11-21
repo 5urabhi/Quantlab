@@ -163,3 +163,26 @@
 .rs-root .rs-bundle-link{display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:8px;border:1px solid #397e70;background:#1c4b45;color:#c4f6e4;padding:8px 10px;font:700 10px inherit;text-decoration:none}
 .rs-root .rs-bundle-link:hover{background:#296452}
 .rs-root .rs-bundle-link:focus-visible{outline:2px solid #7ce5c8;outline-offset:2px}
+
+/* V2 Results: compact hero, one clear focus, and small run-type filters. */
+.rs-run-filters{display:flex;align-items:center;gap:4px;background:#0c1d2a;
+  padding:4px;margin-bottom:10px;border-radius:8px;border:1px solid #263d4e}
+.rs-root .rs-run-filters button{flex:1;white-space:nowrap;font-size:10px;
+  padding:8px 5px;background:transparent;color:#a5bdc6;border-color:transparent}
+.rs-root .rs-run-filters button.active{background:#22504a;color:#caffea;
+  border-color:#387c6b}
+.rs-root .rs-run-filters button:focus-visible{outline:2px solid #79ecd0}
+.rs-root.v2-results-integrated .rs-hero{padding:19px 24px;border-radius:12px;
+  background:linear-gradient(115deg,#10303a,#122331)}
+.rs-root.v2-results-integrated .rs-hero:after{display:none}
+.rs-root.v2-results-integrated .rs-hero h2{font-size:24px;line-height:1.16;margin:8px 0}
+.rs-root.v2-results-integrated .rs-hero p{max-width:610px;line-height:1.55;font-size:12px}
+.rs-root.v2-results-integrated .rs-step{display:none}
+.rs-root.v2-results-integrated .rs-explorer{margin-top:14px}
+.rs-root.v2-results-integrated .rs-tabs{position:sticky;top:69px;z-index:8;
+  box-shadow:0 12px 24px #020a151c}
+@media(max-width:840px){
+  .rs-root.v2-results-integrated .rs-hero{flex-direction:column;align-items:flex-start}
+  .rs-root.v2-results-integrated .rs-hero-actions{justify-content:flex-start}
+  .rs-root.v2-results-integrated .rs-tabs{position:static}
+}

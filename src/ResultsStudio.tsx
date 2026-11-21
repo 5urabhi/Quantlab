@@ -232,6 +232,7 @@ export default function ResultsStudio({selectedIndexRunId,selectedModelRunId,onS
   const [index,setIndex]=useState<IndexDetail|null>(null)
   const [tab,setTab]=useState<View>('brief')
   const [search,setSearch]=useState('')
+  const [kindFilter,setKindFilter]=useState<'all'|'model_run'|'research_run'>('all')
   const [group,setGroup]=useState('All figures')
   const [splitName,setSplitName]=useState('')
   const [explainLevel,setExplainLevel]=useState('researcher')
@@ -392,7 +393,9 @@ export default function ResultsStudio({selectedIndexRunId,selectedModelRunId,onS
     setComparison(null);setPaired(null);setSaved('')
     setSelection(old=>old.includes(key)?old.filter(x=>x!==key):old.length>=8?old:[...old,key])
   }
-  const runList=runs.filter(r=>(r.title+' '+r.group+' '+r.id).toLowerCase().includes(search.toLowerCase()))
+  const runList=runs.filter(r=>
+    (kindFilter==='all'||r.kind===kindFilter)&&
+    (r.title+' '+r.group+' '+r.id).toLowerCase().includes(search.toLowerCase()))
   return <div className={'rs-root '+(integrated?'v2-results-integrated':'')}>
     <section className="rs-hero">
       <div><span className="rs-kicker"><Layers3 size={13}/> QUANTLAB / RESULTS INTELLIGENCE</span>
@@ -409,6 +412,13 @@ export default function ResultsStudio({selectedIndexRunId,selectedModelRunId,onS
       <aside className="rs-run-picker"><header><h3>Saved experiments</h3><span>{runs.length}</span></header>
         <label className="rs-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)}
           aria-label="Filter saved experiments" placeholder="Find a model or run…"/></label>
+        <div className="rs-run-filters" role="group" aria-label="Filter saved run types">
+          {([
+            ['all','All'],['model_run','Models'],['research_run','Index runs'],
+          ] as const).map(([filter,name])=><button type="button" key={filter}
+            aria-pressed={kindFilter===filter} className={kindFilter===filter?'active':''}
+            onClick={()=>setKindFilter(filter)}>{name}</button>)}
+        </div>
         <div className="rs-run-list">{loadingList?<div className="rs-empty"><LoaderCircle size={18}/> Reading local results…</div>:
           runList.map(r=><button key={r.key} type="button"
             className={r.key===selectedKey?'active':''} aria-current={r.key===selectedKey?'true':undefined}
