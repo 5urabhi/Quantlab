@@ -155,3 +155,40 @@
 .ws-titlebar.v2-titlebar-compact p{display:none}
 .ws-titlebar.v2-titlebar-compact .ws-title-actions{margin:0}
 @media(max-width:640px){.ws-titlebar.v2-titlebar-compact h1{font-size:18px}}
+
+
+/* Discoverable secondary workspaces: one drawer rather than a sprawling tab bar.
+   Actual route remains visible in the breadcrumb and active menu. */
+.ws-context-tabs{justify-content:space-between;position:relative;gap:12px}
+.ws-context-primary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.ws-context-more{position:relative;flex-shrink:0;min-width:120px}
+.ws-context-more summary{list-style:none;display:flex;gap:10px;align-items:center;
+  justify-content:space-between;cursor:pointer;min-width:120px;
+  border:1px solid #3c6370;background:#17333f;color:#c5e9e4;
+  border-radius:8px;padding:9px 12px;font-weight:700;font-size:12px}
+.ws-context-more summary::-webkit-details-marker{display:none}
+.ws-context-more summary svg{color:#76ddc5;transition:transform .15s}
+.ws-context-more[open] summary{border-color:#61d9bb;background:#1b4546}
+.ws-context-more[open] summary svg{transform:rotate(180deg)}
+.ws-context-more summary:focus-visible{outline:2px solid #7de7c8;outline-offset:2px}
+.ws-context-extra{position:absolute;right:0;top:calc(100% + 8px);z-index:24;
+  width:min(320px,calc(100vw - 44px));min-width:250px;max-height:400px;overflow:auto;
+  border:1px solid #487c78;border-radius:11px;padding:7px;
+  background:#122a38;box-shadow:0 18px 54px #061018b8;display:grid;gap:3px}
+.ws-context-tabs .ws-context-extra button{display:flex;align-items:center;
+  justify-content:space-between;width:100%;min-height:38px;text-align:left;
+  padding:10px 11px;border-color:transparent;background:transparent;
+  color:#c2d8e0;font-weight:650;font-size:12px;white-space:normal}
+.ws-context-tabs .ws-context-extra button:hover,
+.ws-context-tabs .ws-context-extra button.active{background:#20514b;
+  border-color:#408b79;color:#eafff6}
+.ws-context-extra button svg{color:#82d6c2;flex-shrink:0}
+@media(max-width:700px){
+ .ws-context-tabs{overflow:visible;flex-wrap:wrap}
+ .ws-context-primary{overflow-x:auto;flex-wrap:nowrap;max-width:100%;width:100%}
+ .ws-context-primary button{flex-shrink:0;white-space:nowrap}
+ .ws-context-more{width:100%}
+ .ws-context-more summary{width:100%}
+ .ws-context-extra{left:0;right:auto;width:100%;min-width:0}
+}
+@media(prefers-reduced-motion:reduce){.ws-context-more summary svg{transition:none}}
