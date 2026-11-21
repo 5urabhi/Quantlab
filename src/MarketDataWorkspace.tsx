@@ -124,6 +124,11 @@ const fault=(batch:Batch)=>{
   const f=batch.failure_examples?.[0]
   if(!f)return null
   const code=f.code.toUpperCase()
+  if(code.includes('SOURCE TIMESTAMPS'))
+    return {title:'Original Dhan candles have timestamp conflicts',
+      action:'QuantLab quarantines missing and numerically identical duplicate timestamps. '+
+        'If any conflicting OHLCV values remain, retry the failed stock; '+
+        'do not choose or fabricate a replacement candle.'}
   if(code.includes('401')||code.includes('403'))
     return {title:'Dhan access needs attention',
       action:'Verify your token and historical Data API entitlement before retrying.'}
