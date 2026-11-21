@@ -106,9 +106,18 @@ export default function IndexBuilderWorkspace({
   },[source,needsFundamentals,config.sector_cap,config.weighting])
   const settingsBlockers=useMemo(()=>{
     const messages:string[]=[]
+    if(!config.name.trim())messages.push('Name the index research experiment.')
+    if(config.top_n<2||config.top_n>300||!Number.isInteger(config.top_n))
+      messages.push('Select 2–300 whole-number constituents.')
+    if(!Number.isFinite(config.max_weight)||config.max_weight<=0||config.max_weight>1)
+      messages.push('Maximum security weight must be between 0% and 100%.')
     if(factorTotal<=0)messages.push('Select at least one factor with a positive contribution.')
     if(config.top_n*config.max_weight<1-1e-10)
       messages.push('Constituents × maximum weight must reach 100%.')
+    if(!Number.isInteger(config.rebalance_every)||config.rebalance_every<1||config.rebalance_every>12)
+      messages.push('Rebalance frequency must be 1–12 months.')
+    if(!Number.isFinite(config.cost_bps)||config.cost_bps<0||config.cost_bps>500)
+      messages.push('Transaction costs must be 0–500 basis points.')
     if(config.momentum_skip>=config.momentum_formation)
       messages.push('Momentum skip must be shorter than formation.')
     if(config.validation_start&&config.final_test_start&&
@@ -132,7 +141,7 @@ export default function IndexBuilderWorkspace({
     {name:'Run & analyze',ready:false},
   ]
 
-  return <div className="idx-shell" aria-label="Index Builder workspace">
+  return <div className="idx-shell" role="region" aria-label="Index Builder workspace">
     <div className="idx-intro">
       <div><span className="idx-eyebrow">EQUITY INDEX CONSTRUCTION / RESEARCH</span>
         <h2>Build a rules-based equity index</h2>
