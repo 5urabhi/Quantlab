@@ -136,7 +136,7 @@ export default function DataManager({
     void refresh()
     onChanged()
   },[onSelectDataset,onChanged,refresh])
-  return <div className="qm-root">
+  return <div className={'qm-root'+(integrated?' v2-integrated':'')}>
     <div className="qm-hero">
       <div><div className="qm-eyebrow"><Database size={15}/> QUANTLAB · DATA CONTROL CENTER</div>
         <h2>Database Manager</h2><p>Explore market data, inspect its provenance and monitor automatic recovery in one place.</p>
