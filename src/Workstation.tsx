@@ -584,7 +584,10 @@ function App(){
       <GlobalSearchV2 open={searchOpen} onClose={()=>setSearchOpen(false)}
         onOpen={destination=>begin(destination)}/>
       <main className="ws-content">
-        <div className="ws-titlebar">
+        <div className={'ws-titlebar '+(
+          ['mathematics','history','data','dataexplorer','workspace','chartstudio',
+           'models','research','dhan','dataquality'].includes(tab)?
+           'v2-titlebar-compact':'')}>
           <div><div className="ws-overline">LOCAL QUANTITATIVE RESEARCH WORKSTATION</div>
             <h1>{titles[tab]}</h1><p>{descriptions[tab]}</p></div>
           <div className="ws-title-actions">
