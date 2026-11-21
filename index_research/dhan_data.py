@@ -156,29 +156,68 @@ def candles_to_frame(response: dict, instrument: Instrument,
             "datetime","label","security_id","exchange_segment","instrument",
             "open","high","low","close","volume"
         ])
-    stamp=pd.to_datetime(frame["timestamp"],unit="s",utc=True,errors="raise")
+    # Successful HTTP does not imply valid timestamps. Quarantine missing
+    # stamps and exact duplicated observations, preserving a source audit.
+    # Never choose first/last when same-time OHLCV values conflict.
+    parsed=pd.to_numeric(frame["timestamp"],errors="coerce")
+    stamp=pd.to_datetime(parsed,unit="s",utc=True,errors="coerce")
     frame["datetime"]=stamp.dt.tz_convert(timezone)
-    if frame["datetime"].isna().any() or frame["datetime"].duplicated().any():
-        raise ValueError("Dhan supplied missing or duplicate timestamps")
+    audit_columns=["timestamp","datetime","open","high","low","close","volume"]
+    if "open_interest" in frame.columns:
+        audit_columns.append("open_interest")
+    audit_parts=[]
+    rejected=0
+
+    def quarantine(mask, reason):
+        nonlocal frame,rejected
+        rows=frame.loc[mask,audit_columns].copy()
+        if rows.empty:
+            return
+        rows["reason"]=reason
+        audit_parts.append(rows.rename(columns={"timestamp":"provider_timestamp"}))
+        rejected+=len(rows)
+        frame=frame.loc[~mask].copy()
+
+    invalid_stamp=frame["datetime"].isna()
+    if invalid_stamp.any():
+        quarantine(invalid_stamp, "missing_or_invalid_provider_timestamp")
+    if frame.empty:
+        raise ValueError("Dhan returned no timestamp-valid OHLCV bars; source coverage not saved")
+
     for col in ("open","high","low","close","volume"):
-        frame[col]=pd.to_numeric(frame[col],errors="raise")
-    if not np.isfinite(frame[["open","high","low","close","volume"]].to_numpy()).all():
-        raise ValueError("nonfinite OHLCV")
-    # Dhan sometimes returns zero-price placeholder bars within otherwise
-    # usable intraday arrays. Never manufacture prices or treat these as
-    # legitimate market observations. Quarantine only invalid rows, retain
-    # the exact observed good OHLCV values and audit rejected counts.
+        frame[col]=pd.to_numeric(frame[col],errors="coerce")
+    matching_columns=["open","high","low","close","volume"]
+    if "open_interest" in frame.columns:
+        matching_columns.append("open_interest")
+    duplicates=frame.loc[frame["datetime"].duplicated(keep=False)]
+    if not duplicates.empty:
+        conflict=(duplicates.groupby("datetime",sort=False)[matching_columns]
+                  .nunique(dropna=False).gt(1).any(axis=1))
+        if bool(conflict.any()):
+            raise ValueError(
+                "Dhan supplied conflicting OHLCV for duplicate timestamps "
+                f"({int(conflict.sum())} distinct dates). No conflicting "
+                "bar is selected; retry source or review with Dhan.")
+        quarantine(frame["datetime"].duplicated(keep="first"),
+                   "identical_provider_timestamp_duplicate")
+
+    nonfinite=pd.Series(
+        ~np.isfinite(frame[["open","high","low","close","volume"]]
+                     .to_numpy(dtype=float)).all(axis=1),
+        index=frame.index)
     invalid_price=(frame[["open","high","low","close"]]<=0).any(axis=1)
     invalid_volume=frame["volume"]<0
     impossible_high=frame["high"]+1e-8<frame[["open","low","close"]].max(axis=1)
     impossible_low=frame["low"]-1e-8>frame[["open","high","close"]].min(axis=1)
-    bad=invalid_price|invalid_volume|impossible_high|impossible_low
-    rejected=int(bad.sum())
-    rejected_rows=frame.loc[bad, ["datetime","open","high","low","close","volume"]].copy()
-    if rejected:
+    bad=nonfinite|invalid_price|invalid_volume|impossible_high|impossible_low
+    quality_rejected=int(bad.sum())
+    if quality_rejected:
+        rows=frame.loc[bad,audit_columns].copy()
         reasons=[]
-        for idx in rejected_rows.index:
+        for idx in rows.index:
             flags=[]
+            if nonfinite.at[idx]:
+                flags.append("nonfinite_OHLCV")
             if invalid_price.at[idx]:
                 flags.append("nonpositive_OHLC")
             if invalid_volume.at[idx]:
@@ -188,15 +227,26 @@ def candles_to_frame(response: dict, instrument: Instrument,
             if impossible_low.at[idx]:
                 flags.append("impossible_low")
             reasons.append("|".join(flags))
-        rejected_rows["reason"]=reasons
+        rows["reason"]=reasons
+        audit_parts.append(rows.rename(columns={"timestamp":"provider_timestamp"}))
+        rejected+=quality_rejected
         LOG.warning("Dhan returned invalid bars: security_id=%s total=%s rejected=%s "
                     "zero_price=%s negative_volume=%s bad_high=%s bad_low=%s",
-                    instrument.security_id,len(frame),rejected,int(invalid_price.sum()),
-                    int(invalid_volume.sum()),int(impossible_high.sum()),int(impossible_low.sum()))
-        if rejected==len(frame):
-            raise ValueError("Dhan returned no valid OHLCV bars in this window; "
-                             f"all {rejected} observations failed quality checks")
+                    instrument.security_id,len(data["timestamp"]),quality_rejected,
+                    int(invalid_price.sum()),int(invalid_volume.sum()),
+                    int(impossible_high.sum()),int(impossible_low.sum()))
         frame=frame.loc[~bad].copy()
+    if frame.empty:
+        raise ValueError("Dhan returned no valid OHLCV bars in this window; "
+                         f"all {rejected} observations failed quality checks")
+    rejected_rows=(pd.concat(audit_parts,ignore_index=True) if audit_parts
+                   else pd.DataFrame(columns=[
+                       "provider_timestamp","datetime","open","high","low",
+                       "close","volume","reason"]))
+    if rejected:
+        LOG.warning("Dhan candle source audit: security_id=%s total=%s quarantined=%s "
+                    "reason_counts=%s",instrument.security_id,len(data["timestamp"]),
+                    rejected,rejected_rows["reason"].value_counts().to_dict())
     frame["label"]=instrument.label
     frame["security_id"]=instrument.security_id
     frame["exchange_segment"]=instrument.exchange_segment
