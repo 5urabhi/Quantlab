@@ -677,9 +677,23 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
             })
             LOG.warning("Dhan window contained rejected provider OHLCV rows: "
                         "security_id=%s first=%s last=%s rejected=%d accepted=%d "
-                        "quality_file=%s",
+                        "quality_file=%s sha256=%s",
                         row["security_id"],first.isoformat(),last.isoformat(),
-                        discarded,len(frame),quality_file.relative_to(service.DATA))
+                        discarded,len(frame),quality_file.relative_to(service.DATA),
+                        quality_digest)
+            # We cannot date a vendor row with a missing timestamp. Preserving
+            # remaining good bars is not enough to certify FULL window coverage.
+            # The rejected-source CSV remains locally inspectable, but the
+            # normal candle checkpoint/manifest is not updated for this window.
+            unknown_time=raw_rejected["reason"].astype(str).str.contains(
+                "missing_or_invalid_provider_timestamp",regex=False).any()
+            if unknown_time:
+                raise ValueError(
+                    "Dhan source contains missing or unparseable timestamps. "
+                    "The exact rejected source rows were retained for audit at "
+                    +quality_file.relative_to(service.DATA).as_posix()
+                    +"; date-window coverage was NOT marked complete. "
+                    "Resume after provider correction.")
         incoming = normalize(frame)
         incoming = incoming.sort_values("datetime")
         if incoming["datetime"].duplicated().any():
