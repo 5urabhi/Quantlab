@@ -20,6 +20,7 @@ import sys
 
 from workstation_api import (
     model_registry, option_quotes, recorded_chain_model_quotes, service,
+    trading_acceptance,
 )
 from . import audit_all_models
 
@@ -229,9 +230,29 @@ def write_digest(output: Path, summary: dict) -> None:
                 + audit_all_models.safe_message(issue["reason"]) + extra +
                 ". **Next:** " + audit_all_models.safe_message(issue["next_action"])
             )
-    lines += [
-        "",
-        "## Evidence boundaries",
+    market=summary.get("trading_readiness") or {}
+    lines += ["", "## Saved BANKNIFTY trading-source readiness", ""]
+    if market.get("status")=="available":
+        lines += [
+            "These are read-only checks of *this machine's* local original "
+            "BANKNIFTY candles, contract master and stored full-depth receipts. "
+            "They do NOT replay historical CE/PE P&L or verify exchange-time "
+            "freshness outside market hours.",
+            "",
+            "| Source check | Status | Action / explanation |",
+            "| --- | --- | --- |",
+        ]
+        for check in market.get("checks",[]):
+            explanation=(str(check.get("detail") or "")+" — "+
+                         str(check.get("next_action") or "")).replace("|","/")
+            lines.append(
+                "| "+str(check.get("title") or check["code"]).replace("|","/")
+                +" | "+str(check["status"])+" | "+explanation+" |"
+            )
+    else:
+        lines.append("Local BANKNIFTY readiness could not be examined: "+
+                     audit_all_models.safe_message(market.get("reason","unavailable")))
+    lines += ["", "## Evidence boundaries",
         "",
         "No network market requests, live brokerage orders or original market "
         "file edits were performed by this verification command.",
@@ -264,6 +285,32 @@ def verify(*, dataset_ids: list[str] | None, output: Path,
             newline="", encoding="utf-8") as handle:
         detail = list(csv.DictReader(handle))
     summary = verification_summary(report, detail, quote_link)
+    # Existing BANKNIFTY acceptance functions inspect only local prepared
+    # candles, local master and saved SHA-checked 20+20 depth receipts.
+    # They neither authenticate a broker profile nor fetch market data.
+    try:
+        source_report=trading_acceptance.report()
+        if not source_report.get("read_only") or source_report.get("external_api_requests")!=0:
+            raise ValueError("Trading acceptance did not provide read-only evidence")
+        (output/"FULL_TRADING_READINESS.json").write_text(
+            json.dumps(source_report,indent=2,ensure_ascii=False,allow_nan=False)+"\n",
+            encoding="utf-8")
+        summary["trading_readiness"]={
+            "status":"available","checks":source_report.get("checks") or [],
+            "saved_books_total":(source_report.get("saved_books") or {}).get(
+                "total_automatic_books",0),
+            "market_regular_hours_ist":source_report.get("market_regular_hours_ist"),
+            "recorder_armed":source_report.get("recorder_armed"),
+            "provider_calls":0,"orders":0,
+        }
+    except (ValueError,OSError,KeyError,TypeError) as exc:
+        # A missing/corrupt BANKNIFTY database does not invalidate a
+        # completely separate saved-stock numerical model calculation.
+        summary["trading_readiness"]={
+            "status":"unavailable",
+            "reason":audit_all_models.safe_message(exc),
+            "provider_calls":0,"orders":0,
+        }
     write_digest(output, summary)
     return summary
 
@@ -301,6 +348,13 @@ def main(argv: list[str] | None = None) -> int:
               str(row["missing_original_inputs"]) + " blocked; " +
               str(row["software_failures"]) + " errors")
     print("Stored option chains:", summary["saved_chain_reuse"]["status"])
+    market=summary.get("trading_readiness") or {}
+    print("Trading source readiness:", market.get("status","unavailable"))
+    if market.get("status")=="available":
+        for check in market.get("checks",[]):
+            print("  "+check["code"]+": "+check["status"]+" — "+
+                  str(check.get("detail") or "")[:125])
+        print("Trading evidence:", output / "FULL_TRADING_READINESS.json")
     print("Report:", output / "FULL_SAVED_VERIFICATION.md")
     print("Model matrix:", output / "ALL_MODEL_RESULTS.csv")
     print("Source rights / market accuracy / actual P&L: NOT CERTIFIED")
