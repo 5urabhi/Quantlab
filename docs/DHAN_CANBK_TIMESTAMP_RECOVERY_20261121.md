@@ -13,7 +13,11 @@ message does **not** mean full 15-of-15 data acceptance.
 ## Recovery behavior
 
 - Convert Dhan's original Unix-second timestamps to timezone-aware IST.
-- Quarantine rows whose timestamp is absent, unparsable or out of range.
+- Segregate rows whose timestamp is absent, unparsable or out of range
+  into a dated source-audit CSV, **but reject that entire source window for
+  coverage purposes**: without a valid timestamp we cannot prove when the
+  undated observation occurred. Good rows in that response are not falsely
+  certified as a complete historical interval.
 - For two bars with the **same instant and exactly equal numeric OHLCV**
   (including open interest if present), keep one original observation and
   quarantine the repeated observation. Numeric equality is not a guarantee
@@ -23,11 +27,13 @@ message does **not** mean full 15-of-15 data acceptance.
   observations. Do not use first/last, interpolate, forward-fill, or invent
   a candle to complete the date window.
 - Keep a source-audit copy of quarantined rows in the existing
-  `*_rejected/` directory, including the source Unix timestamp, reason,
-  and SHA-256 in the window receipt. A partially rejected but valid original
-  window is marked `partial_source_anomalies`, not `all_returned_bars_valid`.
-  If **all** rows lack usable timestamps or all bars are invalid, no
-  verified window coverage is written.
+  `*_rejected/` directory, including the original Unix timestamp and
+  rejection reason. When a source window is otherwise valid (e.g. a repeated
+  *identical* observation), its receipt records the reject file and SHA-256,
+  and it is marked `partial_source_anomalies`. When even one original
+  timestamp is missing or unparsable, the audit CSV is retained and the
+  window fails **without changing the verified coverage manifest**. If all
+  bars are invalid, no verified coverage is written either.
 - Verified windows from other stocks and past CANBK downloads remain
   untouched. Running a failed batch again skips stock rows already marked
   complete/cached and downloads only uncovered failed windows.
