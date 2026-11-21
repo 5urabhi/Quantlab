@@ -345,6 +345,107 @@ class BulkDhanWorkstationTests(unittest.TestCase):
         self.assertEqual(reused["counts"]["cached"], 1)
         self.assertEqual(reused["rejected_provider_bars"], 1)
 
+    def test_repeated_identical_provider_timestamp_keeps_one_bar_and_receipt(self):
+        import json
+        from index_research.dhan_data import download_candles as real_download
+        batch = dw.create_batch("selected", ["NSE_EQ:1333"], [],
+                                "2024-01-01", "2024-02-01", 1, False)
+        raw = {
+            "timestamp": [1705289400, 1705289400, 1705375800],
+            "open": [100,100,110], "high": [110,110,120],
+            "low": [95,95,105], "close": [105,105,115],
+            "volume": [1000,1000,2000],
+        }
+        def vendor(inst, start, stop, **kwargs):
+            return real_download(
+                inst,start,stop,interval=kwargs["interval"],
+                token="TEST_ONLY",post=lambda *_:raw,pause_seconds=0)
+        with patch.object(dw,"download_candles",side_effect=vendor):
+            done=dw.run_batch(batch["id"])
+        self.assertEqual(done["counts"]["complete"],1)
+        self.assertEqual(done["rejected_provider_bars"],1)
+        source=service.DATA/"dhan"/"history"/"NSE_EQ"/"1333"/"1m.csv"
+        frame=pd.read_csv(source)
+        self.assertEqual(len(frame),2)
+        self.assertEqual(frame["datetime"].nunique(),2)
+        receipt=json.loads(source.with_suffix(".json").read_text())
+        self.assertEqual(receipt["quality"],"partial_source_anomalies")
+        self.assertEqual(receipt["rejected_provider_bars"],1)
+        audit=service.DATA/receipt["rejected_windows"][0]["file"]
+        self.assertTrue(audit.is_file())
+        discarded=pd.read_csv(audit)
+        self.assertEqual(len(discarded),1)
+        self.assertEqual(discarded.iloc[0]["reason"],
+                         "identical_provider_timestamp_duplicate")
+        import hashlib
+        self.assertEqual(hashlib.sha256(audit.read_bytes()).hexdigest(),
+                         receipt["rejected_windows"][0]["sha256"])
+        with patch.object(dw,"download_candles",
+                          side_effect=AssertionError("Already verified cache must be reused")):
+            cached=dw.run_batch(batch["id"])
+        self.assertEqual(cached["counts"]["complete"],1)
+
+    def test_missing_timestamp_keeps_source_audit_but_never_marks_window_complete(self):
+        from index_research.dhan_data import download_candles as real_download
+        batch=dw.create_batch("selected",["NSE_EQ:1333"],[],
+                              "2024-01-01","2024-02-01",1,False)
+        raw={"timestamp":[1705289400,None],
+             "open":[100,110],"high":[110,120],"low":[95,105],
+             "close":[105,115],"volume":[1000,2000]}
+        def vendor(inst,start,stop,**kwargs):
+            return real_download(inst,start,stop,interval=kwargs["interval"],
+                                 token="TEST_ONLY",post=lambda *_:raw,pause_seconds=0)
+        with patch.object(dw,"download_candles",side_effect=vendor):
+            done=dw.run_batch(batch["id"])
+        self.assertEqual(done["counts"]["failed"],1)
+        self.assertEqual(done["failure_examples"][0]["code"],"SOURCE TIMESTAMPS")
+        self.assertIn("coverage was NOT marked complete",
+                      dw._load_batch(batch["id"])["items"][0]["error"])
+        source=service.DATA/"dhan"/"history"/"NSE_EQ"/"1333"/"1m.csv"
+        self.assertFalse(source.is_file())
+        self.assertFalse(source.with_suffix(".json").is_file())
+        quality=source.parent/(source.stem+"_rejected")
+        audit_files=list(quality.glob("*.csv"))
+        self.assertEqual(len(audit_files),1)
+        audit=pd.read_csv(audit_files[0])
+        self.assertEqual(audit.iloc[0]["reason"],
+                         "missing_or_invalid_provider_timestamp")
+        self.assertTrue(pd.isna(audit.iloc[0]["provider_timestamp"]))
+        import hashlib
+        original_sha=hashlib.sha256(audit_files[0].read_bytes()).hexdigest()
+        # Provider retries might return DIFFERENT evidence. The first failed
+        # window audit must not be overwritten by the second failure.
+        raw["volume"][1]=3000
+        with patch.object(dw,"download_candles",side_effect=vendor):
+            retried=dw.run_batch(batch["id"])
+        self.assertEqual(retried["counts"]["failed"],1)
+        self.assertEqual(len(list(quality.glob("*.csv"))),2)
+        self.assertEqual(hashlib.sha256(audit_files[0].read_bytes()).hexdigest(),
+                         original_sha)
+        self.assertFalse(source.with_suffix(".json").exists())
+
+    def test_conflicting_duplicate_source_fails_without_checkpoint(self):
+        from index_research.dhan_data import download_candles as real_download
+        batch = dw.create_batch("selected", ["NSE_EQ:1333"], [],
+                                "2024-01-01", "2024-02-01", 1, False)
+        raw = {
+            "timestamp": [1705289400, 1705289400],
+            "open": [100,103], "high": [110,112],
+            "low": [95,95], "close": [105,108],
+            "volume": [1000,2000],
+        }
+        def vendor(inst,start,stop,**kwargs):
+            return real_download(
+                inst,start,stop,interval=kwargs["interval"],
+                token="TEST_ONLY",post=lambda *_:raw,pause_seconds=0)
+        with patch.object(dw,"download_candles",side_effect=vendor):
+            done=dw.run_batch(batch["id"])
+        self.assertEqual(done["counts"]["failed"],1)
+        self.assertEqual(done["failure_examples"][0]["code"],"SOURCE TIMESTAMPS")
+        self.assertEqual(done["status"],"completed")
+        self.assertFalse((service.DATA/"dhan"/"history"/"NSE_EQ"/"1333"/"1m.csv").exists())
+        self.assertIsNone(done["prepared_dataset_id"])
+
     def test_all_invalid_minute_bars_fail_without_false_cached_coverage(self):
         from index_research.dhan_data import download_candles as real_download
         made = dw.create_batch("selected", ["NSE_EQ:1333"], [],

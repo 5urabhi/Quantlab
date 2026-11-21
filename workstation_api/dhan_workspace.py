@@ -306,6 +306,16 @@ def _safe_batch_failure(item: dict) -> dict:
             "The Dhan historical-data endpoint rejected this request."
         )
         diagnostic = f"Dhan HTTP {status} (vendor response body hidden)"
+    elif ("conflicting ohlcv" in raw.lower()
+          or "timestamp-valid" in raw.lower()
+          or "missing or unparseable timestamps" in raw.lower()
+          or "duplicate timestamps" in raw.lower()):
+        code = "SOURCE TIMESTAMPS"
+        summary = ("Dhan supplied missing or conflicting original candle timestamps. "
+                   "Valid cached windows are preserved. Retry only the failed stock; "
+                   "if the same source anomaly recurs, contact Dhan rather than "
+                   "guessing a price or selecting conflicting bars.")
+        diagnostic = "Original Dhan OHLCV timestamps did not pass source validation"
     elif "network" in raw.lower() or "timeout" in raw.lower():
         code = "NETWORK"
         summary = "Could not reach Dhan's market-data service. Check connectivity and retry."
@@ -650,13 +660,25 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
             if not isinstance(raw_rejected,pd.DataFrame) or len(raw_rejected)!=discarded:
                 raise ValueError("Rejected Dhan OHLCV rows must be recorded for source audit")
             quality_dir=target.parent/(target.stem+"_rejected")
+            if quality_dir.is_symlink():
+                raise ValueError("Unsafe symlink in Dhan source reject audit directory")
             quality_dir.mkdir(parents=True,exist_ok=True)
-            quality_file=quality_dir/(first.isoformat()+"_"+last.isoformat()+".csv")
-            quality_temp=quality_file.with_name(quality_file.name+"."+uuid.uuid4().hex[:8]+".tmp")
+            window_name=first.isoformat()+"_"+last.isoformat()
+            quality_temp=quality_dir/("."+window_name+"."+uuid.uuid4().hex[:8]+".tmp")
             try:
                 raw_rejected.to_csv(quality_temp,index=False)
                 quality_digest=hashlib.sha256(quality_temp.read_bytes()).hexdigest()
-                os.replace(quality_temp,quality_file)
+                # Every distinct source response gets its OWN immutable audit
+                # filename. A later provider retry must never overwrite
+                # evidence from a previously rejected CANBK window.
+                quality_file=quality_dir/(window_name+"_"+quality_digest[:16]+".csv")
+                if quality_file.is_symlink():
+                    raise ValueError("Unsafe Dhan source reject audit symlink")
+                if quality_file.is_file():
+                    if dhan_checkpoint.digest(quality_file)!=quality_digest:
+                        raise ValueError("Existing Dhan reject audit SHA mismatch")
+                else:
+                    os.replace(quality_temp,quality_file)
             finally:
                 quality_temp.unlink(missing_ok=True)
             rejected_windows=[x for x in rejected_windows
@@ -668,9 +690,21 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
             })
             LOG.warning("Dhan window contained rejected provider OHLCV rows: "
                         "security_id=%s first=%s last=%s rejected=%d accepted=%d "
-                        "quality_file=%s",
+                        "quality_file=%s sha256=%s",
                         row["security_id"],first.isoformat(),last.isoformat(),
-                        discarded,len(frame),quality_file.relative_to(service.DATA))
+                        discarded,len(frame),quality_file.relative_to(service.DATA),
+                        quality_digest)
+            # We cannot date a vendor row with a missing timestamp. Preserving
+            # remaining good bars is not enough to certify FULL window coverage.
+            # The rejected-source CSV remains locally inspectable, but the
+            # normal candle checkpoint/manifest is not updated for this window.
+            unknown_time=raw_rejected["reason"].astype(str).str.contains(
+                "missing_or_invalid_provider_timestamp",regex=False).any()
+            if unknown_time:
+                raise ValueError(
+                    "Dhan source contains missing or unparseable timestamps; "
+                    "coverage was NOT marked complete. Source audit: "
+                    +quality_file.relative_to(service.DATA).as_posix())
         incoming = normalize(frame)
         incoming = incoming.sort_values("datetime")
         if incoming["datetime"].duplicated().any():
@@ -795,7 +829,17 @@ def run_batch(batch_id: str, cancel_event: threading.Event | None = None) -> dic
                 data["index_spot"] = index_spot.download(data)
                 _save_batch(data)
         data["status"] = "completed"
-        LOG.info("Dhan batch completed: batch_id=%s total=%d", batch_id, len(data["items"]))
+        failures=[item["symbol"] for item in data["items"]
+                  if item["status"]=="failed"]
+        if failures:
+            LOG.warning("Dhan batch finished with incomplete original-data coverage: "
+                        "batch_id=%s completed=%d failed=%d failed_symbols=%s; "
+                        "resume reuses completed windows.",
+                        batch_id,len(data["items"])-len(failures),
+                        len(failures),",".join(failures[:10]))
+        else:
+            LOG.info("Dhan batch completed successfully: batch_id=%s total=%d",
+                     batch_id,len(data["items"]))
         data["current_symbol"] = None
         _save_batch(data)
         return _summarize(data)
