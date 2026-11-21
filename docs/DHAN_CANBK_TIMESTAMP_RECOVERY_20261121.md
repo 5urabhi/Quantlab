@@ -14,7 +14,8 @@ message does **not** mean full 15-of-15 data acceptance.
 
 - Convert Dhan's original Unix-second timestamps to timezone-aware IST.
 - Segregate rows whose timestamp is absent, unparsable or out of range
-  into a dated source-audit CSV, **but reject that entire source window for
+  into a dated, source-SHA-named audit CSV that cannot overwrite earlier
+  failed retry evidence, **but reject that entire source window for
   coverage purposes**: without a valid timestamp we cannot prove when the
   undated observation occurred. Good rows in that response are not falsely
   certified as a complete historical interval.
