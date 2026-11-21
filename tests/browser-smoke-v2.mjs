@@ -136,6 +136,7 @@ try{
    await sub('Index Builder')
    await page.getByText('Experiment configuration',{exact:true}).waitFor()
    await page.getByRole('button',{name:/Run Python backtest/}).waitFor()
+   await shot('04-index-builder')
    // Hidden research modules are accessible without cluttering the main tab row.
    const modelExtras=page.getByRole('navigation',{
      name:'Modules within selected research destination'}).locator('details.ws-context-more')
@@ -144,7 +145,6 @@ try{
    await page.locator('.ws-titlebar h1').getByText('Risk Attribution',{exact:true}).waitFor()
    await sub('Model Catalog')
    await page.getByRole('heading',{name:'What would you like to explore?'}).waitFor()
-   await shot('04-index-builder')
  })
  await step('Data Center unified market library acquisition explorer quality and downloads',async()=>{
    await top('Data Center')
