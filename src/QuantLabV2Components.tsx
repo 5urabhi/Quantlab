@@ -131,28 +131,36 @@ function LaunchCard({title,subtitle,caption,icon:Icon,onOpen,readiness}:CardSpec
 export function StrategyLibraryV2({onEMA,onPython,onOptions,onData}:{
   onEMA:()=>void;onPython:()=>void;onOptions:()=>void;onData:()=>void
 }){
-  return <div className="v2-layout-section">
+  return <div className="v2-layout-section v2-strategy-home">
     <div className="v2-section-head">
-      <div><span className="v2-eyebrow">BUILD → BACKTEST → UNDERSTAND</span>
+      <div><span className="v2-eyebrow">SELECT A STRATEGY</span>
         <h2>Strategy Library</h2>
-        <p>Study BANKNIFTY signals against real recorded index candles, then
-          measure options outcomes only when genuine contract history is available.</p></div>
-      <button className="v2-secondary" onClick={onData}><Database size={15}/> Source readiness</button>
+        <p>Choose how to generate signals. Each strategy opens one focused research
+          workflow with its own parameters and saved results.</p></div>
+      <button className="v2-secondary" onClick={onData}>
+        <Database size={15}/> View saved data</button>
     </div>
     <div className="v2-launch-grid">
-      <LaunchCard title="EMA Crossover" subtitle="One pair, chosen values, or every 11,026 valid fast/slow combinations. Inspect the top five and trade timing."
-        caption="Open EMA Explorer" icon={TrendingUp} onOpen={onEMA} readiness="Ready for index research"/>
-      <LaunchCard title="Python Strategy Editor" subtitle="Paste your own signal(history) callback, run isolated index backtests and inspect charts without stopping market capture."
-        caption="Open Python Editor" icon={Code2} onOpen={onPython} readiness="Read-only sandbox"/>
-      <LaunchCard title="BANKNIFTY Options Backtest" subtitle="Map index signals to genuine CE/PE contract snapshots, verify lots and premium fills, and compare after-cost outcomes."
-        caption="Open Backtest" icon={BarChart3} onOpen={onOptions} readiness="Historical options evidence required"/>
+      <LaunchCard title="EMA Crossover"
+        subtitle="Choose two EMAs or compare every supported pair, then inspect dated entry and exit signals."
+        caption="Configure EMA" icon={TrendingUp} onOpen={onEMA}
+        readiness="Original index candles"/>
+      <LaunchCard title="Custom Python"
+        subtitle="Paste and test your strategy in an isolated process while the recorder continues."
+        caption="Open Python Editor" icon={Code2} onOpen={onPython}
+        readiness="Isolated research process"/>
+      <LaunchCard title="BANKNIFTY Options Backtest"
+        subtitle="Measure CE/PE outcomes only when exact historical contracts and option prices exist."
+        caption="Analyze option P&L" icon={BarChart3} onOpen={onOptions}
+        readiness="Actual option evidence required"/>
     </div>
-    <div className="v2-method-banner">
-      <ShieldCheck size={19}/>
-      <div><strong>Source-first research, never paper profits labeled as real trades.</strong>
-        <p>Index-directional P&L is a hypothetical reference; executable CE/PE performance
-          requires actual option-chain or historical contract observations.</p></div>
-    </div>
+    <details className="v2-strategy-source-details">
+      <summary>How signal research differs from an executable option trade</summary>
+      <p>Index-direction results use saved BANKNIFTY candle observations.
+        P&L for a purchased call or put requires actual dated contract prices,
+        lot sizes, costs and correct expiry assumptions. These studies
+        do not place broker orders or certify future profitability.</p>
+    </details>
   </div>
 }
 export function V2HomeLaunchers({onStrategy,onModel,onData}:{
