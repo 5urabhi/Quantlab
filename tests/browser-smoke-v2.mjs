@@ -136,6 +136,14 @@ try{
    await sub('Index Builder')
    await page.getByText('Experiment configuration',{exact:true}).waitFor()
    await page.getByRole('button',{name:/Run Python backtest/}).waitFor()
+   // Hidden research modules are accessible without cluttering the main tab row.
+   const modelExtras=page.getByRole('navigation',{
+     name:'Modules within selected research destination'}).locator('details.ws-context-more')
+   await modelExtras.locator('summary').click()
+   await modelExtras.getByRole('button',{name:'Risk Attribution'}).click()
+   await page.locator('.ws-titlebar h1').getByText('Risk Attribution',{exact:true}).waitFor()
+   await sub('Model Catalog')
+   await page.getByRole('heading',{name:'What would you like to explore?'}).waitFor()
    await shot('04-index-builder')
  })
  await step('Data Center unified market library acquisition explorer quality and downloads',async()=>{
@@ -164,6 +172,11 @@ try{
    await page.locator('.rw-anomaly-findings').waitFor({timeout:30000})
    await page.getByRole('button',{name:'Export anomaly evidence'}).waitFor()
    await shot('05-statistical-source-anomalies')
+   const sourceExtras=page.getByRole('navigation',{
+     name:'Modules within selected research destination'}).locator('details.ws-context-more')
+   await sourceExtras.locator('summary').click()
+   await sourceExtras.getByRole('button',{name:'NSE Source Evidence'}).click()
+   await page.locator('.ws-titlebar h1').getByText('NSE Source Evidence',{exact:true}).waitFor()
    await sub('Downloads')
    await page.getByRole('heading',{name:/See exactly what's happening/}).waitFor()
    await shot('05-downloads')
