@@ -600,13 +600,36 @@ function App(){
           </div>
         </div>
         {(()=>{
-          const visible=primarySections.find(section=>section.tabs.includes(tab))?.navTabs||[]
+          const section=primarySections.find(group=>group.tabs.includes(tab))
+          const visible=section?.navTabs||[]
+          const extra=(section?.tabs||[]).filter(module=>!visible.includes(module))
           return visible.length>1?<nav className="ws-context-tabs"
               aria-label="Modules within selected research destination">
-            {visible.map(module=><button type="button" key={module}
-              aria-current={tab===module?'page':undefined}
-              className={tab===module?'active':''} onClick={()=>begin(module)}>
-              {titles[module]}</button>)}
+            <div className="ws-context-primary">
+              {visible.map(module=><button type="button" key={module}
+                aria-current={tab===module?'page':undefined}
+                className={tab===module?'active':''} onClick={()=>begin(module)}>
+                {titles[module]}</button>)}
+            </div>
+            {extra.length>0&&<details key={section?.id} className="ws-context-more">
+              <summary aria-label={'More tools in '+section?.label}>
+                {extra.includes(tab)?titles[tab]:'More tools'}
+                <ChevronDown size={15}/>
+              </summary>
+              <div className="ws-context-extra" role="group"
+                aria-label="Additional research tools">
+                {extra.map(module=><button type="button" key={module}
+                  aria-current={tab===module?'page':undefined}
+                  className={tab===module?'active':''}
+                  onClick={event=>{
+                    event.currentTarget.closest('details')?.removeAttribute('open')
+                    begin(module)
+                  }}>
+                  <span>{titles[module]}</span>
+                  <ArrowRight size={14}/>
+                </button>)}
+              </div>
+            </details>}
           </nav>:null
         })()}
         {deletePlan&&<div className="ws-delete-overlay">
