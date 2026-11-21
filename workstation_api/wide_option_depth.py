@@ -70,14 +70,12 @@ def select_atm_contracts(chain: dict, cfg: dict, previous_ids=()) -> list[dict]:
         # Never select ambiguous duplicate source observations for one term.
         if side not in pairs.setdefault(strike, {}):
             pairs[strike][side] = q
-    # Anchor on the *listed* option strikes, not only contracts that have
-    # traded or passed master verification. A missing LTP must never move ATM.
+    # Anchor on *official-master-verified listed* strikes (including
+    # untraded contracts with missing LTP). An unverified/synthetic strike
+    # must never move ATM or shift the above/below wing selection.
     source_strikes = {
         float(q["strike"]) for q in chain.get("contracts", [])
-        if isinstance(q, dict) and q.get("expiry") == expiry
-        and q.get("option_type") in ("CE", "PE")
-        and isinstance(q.get("strike"), (int, float))
-        and math.isfinite(q["strike"]) and q["strike"] > 0
+        if isinstance(q, dict) and _verified(q, expiry)
     }
     if not source_strikes or not pairs:
         return []
