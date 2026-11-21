@@ -134,8 +134,14 @@ try{
    await top('Models')
    await page.getByRole('button',{name:'Open Geometric Brownian Motion'}).waitFor()
    await sub('Index Builder')
-   await page.getByText('Experiment configuration',{exact:true}).waitFor()
-   await page.getByRole('button',{name:/Run Python backtest/}).waitFor()
+   const indexWorkspace=page.getByRole('region',{name:'Index Builder workspace'})
+   await indexWorkspace.waitFor()
+   await page.getByRole('region',{name:'Index source and provenance'}).waitFor()
+   await page.getByRole('region',{name:'Index factor research'}).waitFor()
+   await page.getByRole('region',{name:'Index construction rules'}).waitFor()
+   await page.getByRole('slider',{name:'Momentum factor contribution'}).waitFor()
+   await page.getByRole('button',{name:'Get price history'}).waitFor()
+   await page.getByRole('button',{name:'Build & backtest index'}).waitFor()
    await shot('04-index-builder')
    // Hidden research modules are accessible without cluttering the main tab row.
    const modelExtras=page.getByRole('navigation',{
