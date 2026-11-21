@@ -358,6 +358,7 @@ function App(){
   const [dhan,setDhan]=useState<DhanStatus|null>(null)
   useEffect(()=>{if(tab!=='connections')setConnectionEditing(false)},[tab])
   const dataset=datasets.find(d=>d.id===selectedDataset)
+  const everydaySources=datasets.filter(d=>d.id==='dhan_shared'||d.kind!=='dhan'||d.id===selectedDataset)
   const selected=runs.find(r=>r.id===selectedRun)
   const metrics=detail?.meta.metrics_by_split??selected?.metrics_by_split??{}
   const split=Object.entries(metrics).at(-1)
@@ -514,6 +515,7 @@ function App(){
     }),()=>{void refresh();notify('Derived dataset permanently removed.')})
   }
   const downloadReport=()=>execute(()=>post<{job_id:string}>('/runs/'+selectedRun+'/reports',{}),r=>{setJob({id:r.job_id,kind:'reports',status:'queued'});notify('Report export queued.')})
+  const dataPicker=<select className="ws-select" aria-label="Select research dataset" value={selectedDataset} onChange={e=>{setSelectedDataset(e.target.value)}}><option value="">Choose market source</option>{everydaySources.map(d=><option key={d.id} value={d.id}>{d.label}{d.ready?'':' (additional model evidence needed)'}</option>)}</select>
   const runPicker=<select aria-label="Select completed experiment" className="ws-select" value={selectedRun} onChange={e=>setSelectedRun(e.target.value)}>{runs.length===0?<option value="">No runs yet</option>:runs.map(r=><option key={r.id} value={r.id}>{r.name} · {r.id}</option>)}</select>
   const withRun=(content:React.ReactNode)=><>{runs.length===0?<Empty title="No research run selected" onAction={()=>begin('research')} action="Run an experiment">All charts are generated from Python research outputs, not hardcoded sample performance.</Empty>:<>{runPicker}{content}</>}</>
   const classification=<Tag tone={detail?.source.dataset_kind==='synthetic'?'warn':'blue'}>{detail?.source.dataset_kind==='synthetic'?'SYNTHETIC DATA — DEMONSTRATION':detail?'USER DATA · NOT INDEPENDENTLY AUDITED':'NO RESEARCH RUN'}</Tag>
