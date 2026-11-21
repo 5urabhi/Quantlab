@@ -261,6 +261,7 @@ function App(){
   const [triConvention,setTriConvention]=useState('gross_total_return')
   const [runs,setRuns]=useState<Run[]>([])
   const [selectedRun,setSelectedRun]=useState('')
+  const [focusedModelRun,setFocusedModelRun]=useState('')
   const [detail,setDetail]=useState<Detail|null>(null)
   const [config,setConfig]=useState<RunConfig>(defaultConfig)
   const [job,setJob]=useState<Job|null>(null)
@@ -671,8 +672,9 @@ function App(){
         </>}
         {tab==='history'&&<ResultsStudio
           selectedIndexRunId={selectedRun}
+          selectedModelRunId={focusedModelRun||undefined}
           onSelectIndexRun={setSelectedRun}
-          onModels={()=>begin('models')}
+          onModels={()=>begin('mathematics')}
           onExperiments={()=>begin('research')}
           onWorkspace={()=>begin('workspace')}
           onData={()=>begin('data')}
@@ -687,7 +689,8 @@ function App(){
         {(tab==='mathematics'||tab==='models')&&<ModelLaboratory
           section={tab} datasets={datasets} selectedDataset={selectedDataset}
           onSelectDataset={setSelectedDataset} onOpenGuide={()=>begin('guide')} onDataChanged={refresh}
-          onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}/>}
+          onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}
+          onOpenResults={runId=>{setFocusedModelRun(runId||'');begin('history')}}/>}
         {tab==='guide'&&<ResearchGuide onNavigate={route=>begin(route as Tab)}/>}
         {tab==='reports'&&<>{withRun(<Card title="Generate reproducible research report"><p className="ws-caption">Generate an offline HTML report and PDF draft from selected saved Python run artifacts. Synthetic demonstrations are explicitly labeled.</p><div className="ws-actions"><button className="ws-button primary" disabled={!selectedRun||busy} onClick={downloadReport}><FileText size={15}/> Build HTML + PDF</button></div><div className="ws-artifact-list">{(detail?.artifacts||[]).map(name=><a key={name} href={'/api/runs/'+encodeURIComponent(selectedRun)+'/files/'+encodeURIComponent(name)} download><FileArchive size={16}/><span>{name}</span><ArrowDownToLine size={14}/></a>)}</div></Card>)}</>}
         {tab==='settings'&&<div className="ws-grid halves"><Card title="Backend and privacy"><div className="ws-data-audit"><div><span>API address</span><strong>127.0.0.1:8765</strong></div><div><span>Frontend address</span><strong>127.0.0.1:5173</strong></div><div><span>Data directory</span><strong>data/ (Git-ignored)</strong></div><div><span>Run artifacts</span><strong>results/workstation_runs/</strong></div><div><span>Authentication</span><strong>Loopback-only; not for public exposure</strong></div><div><span>Broker trading</span><strong>DISABLED</strong></div><div><span>Dhan token</span><strong>{health?.dhan_token_configured?'CONFIGURED (HIDDEN)':'MISSING'}</strong></div></div></Card><Card title="Integrity controls"><div className="ws-rule"><ShieldCheck size={18}/> Local data import, explicit dataset status, safe path allowlists, no broker order operations, no credential output, and no historical-performance fabrication.</div><p className="ws-caption">This is a local research environment, not an authenticated public server. Do not expose port 8765 on a network or deploy it as-is.</p><button className="ws-button secondary" onClick={()=>void refresh()}><RefreshCw size={16}/> Refresh engine status</button></Card></div>}

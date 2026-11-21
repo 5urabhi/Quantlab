@@ -356,6 +356,7 @@ function App(){
   const [triConvention,setTriConvention]=useState('gross_total_return')
   const [runs,setRuns]=useState<Run[]>([])
   const [selectedRun,setSelectedRun]=useState('')
+  const [focusedModelRun,setFocusedModelRun]=useState('')
   const [detail,setDetail]=useState<Detail|null>(null)
   const [config,setConfig]=useState<RunConfig>(defaultConfig)
   const [job,setJob]=useState<Job|null>(null)
@@ -898,8 +899,9 @@ function App(){
         </>}
         {tab==='history'&&<ResultsStudio integrated
           selectedIndexRunId={selectedRun}
+          selectedModelRunId={focusedModelRun||undefined}
           onSelectIndexRun={setSelectedRun}
-          onModels={()=>begin('models')}
+          onModels={()=>begin('mathematics')}
           onExperiments={()=>begin('research')}
           onWorkspace={()=>begin('workspace')}
           onData={()=>begin('data')}
@@ -916,7 +918,8 @@ function App(){
             section="mathematics" datasets={datasets} selectedDataset={selectedDataset}
             onSelectDataset={setSelectedDataset} onOpenGuide={()=>begin('guide')}
             onDataChanged={refresh}
-            onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}/>
+            onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}
+            onOpenResults={runId=>{setFocusedModelRun(runId||'');begin('history')}}/>
           <details className="v2-advanced-links">
             <summary>Specialized model diagnostics · factor exposures, risk, concentration & validation</summary>
             <div className="v2-action-row">

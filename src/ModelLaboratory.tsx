@@ -1,7 +1,8 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
-import {Activity, ArrowRight, BookOpen, CheckCircle2, CircleAlert, Database,
+import {Activity, ArrowRight, BarChart3, BookOpen, CheckCircle2, CircleAlert, Database,
   Copy, Download, FlaskConical, Heart, Layers, LoaderCircle, Play, Save, ShieldCheck, SlidersHorizontal, Trash2} from 'lucide-react'
 import ResearchPlot, {type ResearchPlotData} from './ResearchPlots'
+import ModelCatalogLanding, {catalogFamily} from './ModelCatalogLanding'
 import ModelResultBrief from './ModelResultBrief'
 import {formatMetric} from './metricDisplay'
 import './model-lab.css'
@@ -88,6 +89,7 @@ type Props={
   onOpenGuide:()=>void;
   onDataChanged?:()=>void;
   onOpenWorkspace?:()=>void;
+  onOpenResults?:(runId?:string)=>void;
   onOpenData?:()=>void;
   preferredModelId?:string;
   onRunSaved?:(runId:string)=>void
@@ -156,7 +158,12 @@ function exportResult(modelId:string,result:LabResult,format:'json'|'csv'){
   URL.revokeObjectURL(url)
 }
 export default function ModelLaboratory({section,datasets,selectedDataset,onSelectDataset,
-  onOpenGuide,onDataChanged,onOpenWorkspace,onOpenData,preferredModelId,onRunSaved}:Props){
+  onOpenGuide,onDataChanged,onOpenWorkspace,onOpenResults,onOpenData,preferredModelId,onRunSaved}:Props){
+  const [catalogScreen,setCatalogScreen]=useState<'catalog'|'detail'>('catalog')
+  const [aboutOpen,setAboutOpen]=useState(false)
+  const [inputsOpen,setInputsOpen]=useState(false)
+  const [showExtraParams,setShowExtraParams]=useState(false)
+  const [presetsOpen,setPresetsOpen]=useState(false)
   const [modelSearch,setModelSearch]=useState('')
   const [modelFilter,setModelFilter]=useState<'all'|'data'|'math'>('all')
   const [quoteSearch,setQuoteSearch]=useState('')
@@ -356,6 +363,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       if(requested){
         setGroup(requested.group)
         setModelId(requested.id)
+        setCatalogScreen('detail')
         setResult(null);setView('configure')
         try{window.localStorage.removeItem('ql-target-model')}catch{}
       }
@@ -365,6 +373,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
   useEffect(()=>{
     const next=section==='mathematics'?SECTIONS[0]:SECTIONS[3]
     setGroup(next)
+    setCatalogScreen('catalog')
     setModelId(section==='mathematics'?'gbm':'min_variance')
     setResult(null);setError(null);setView('configure')
   },[section])
@@ -374,6 +383,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
     const requested=catalog.find(m=>m.id===preferredModelId)
     if(requested){
       setGroup(requested.group);setModelId(requested.id)
+      setCatalogScreen('detail')
       setModelFilter('all');setModelSearch('')
     }
   },[preferredModelId,catalog])
@@ -481,6 +491,8 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
   }
   const changeModel=(id:string)=>{
     setModelId(id);setModelSearch('');setModelFilter('all');setResult(null);setError(null);setView('configure')
+    setCatalogScreen('detail');setInputsOpen(false);setShowExtraParams(false);setPresetsOpen(false)
+    window.scrollTo({top:0,behavior:'auto'})
   }
   const observedNeeded=selected?.mode==='historical'||selected?.mode==='market'
   // The shared source is a logical library, not another user-created dataset.
@@ -603,9 +615,12 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       })
       if(!response.ok)throw new Error(await errorText(response))
       const data=await response.json() as LabResult
-      setResult(data);setView('figures')
+      setResult(data);setView('numbers')
       void refreshSaved()
-      if(data.run_id)onRunSaved?.(data.run_id)
+      if(data.run_id){
+        onRunSaved?.(data.run_id)
+        onOpenResults?.(data.run_id)
+      }
     }catch(e){setError(e instanceof Error?e.message:String(e));setView('configure')}
     finally{setWorking(false)}
   }
@@ -618,7 +633,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       if(data.source?.dataset_id&&datasets.some(d=>d.id===data.source?.dataset_id)){
         onSelectDataset(data.source.dataset_id)
       }
-      setResult(data);setView('figures')
+      setResult(data);setView('numbers');setCatalogScreen('detail')
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setWorking(false)}
   }
@@ -664,15 +679,19 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
     if(kind==='run_math'||kind==='run'||(kind==='open_model'&&!insufficient)){
       if(!insufficient)void run()
     }else if(kind==='select_stock'){
+      setInputsOpen(true)
       if(singleSeries&&params.target==='benchmark_tri')
         setParams(prev=>({...prev,target:'stock',ticker:''}))
       focus('[aria-label="Select a stock to run or complete"]')
     }else if(kind==='select_quote'){
+      setInputsOpen(true)
       focus('[aria-label="Select an original option quote contract"]')
     }else if(kind==='option_quotes'){
       if(!selectedDataset){onOpenData?.();return}
+      setInputsOpen(true)
       focus('[aria-label="Import original provider option quotes"]')
     }else if(kind==='select_dataset'){
+      setInputsOpen(true)
       if(!datasets.length){onOpenData?.();return}
       focus('[aria-label="Model laboratory source dataset"]')
     }else if(kind==='get_history'){
@@ -724,7 +743,141 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
     return (readiness.frequency||'unknown')+' observations · '+readiness.observed_dates+
       ' recorded dates · at least '+min+' common returns required.'
   },[observedNeeded,selected?.mode,selectedDataset,readiness,min,singleSeries,params.target,params.ticker])
-  return <div className="ql-workbench">
+  const focusedFamily=selected?catalogFamily(selected):''
+  const quoteAutoChoice=quoteRefs[0]?.value
+  const missingHistory=!!singleSeries&&!!recommendedStock?.extendable&&
+    (recommendedStock.missing_to_target??0)>0
+  const pendingData=!!extensionJob&&['queued','running'].includes(extensionJob.status)
+  const canCompute=!!selected&&(!observedNeeded||(!insufficient&&!!dataPlan?.runnable))
+  const primaryLabel=resultReady?'View results & charts':
+    pendingData?'Preparing original data…':
+    canCompute?'Run model':
+    selected?.mode==='market'&&selectedDataset==='dhan_shared'&&recordedChains.length>0&&
+      !quoteRefs.length?'Use saved option quote':
+    missingHistory?'Complete historical data':
+    selected?.mode==='market'&&!quoteRefs.length?'Choose option data':
+    'Review data inputs'
+  const handlePrimary=()=>{
+    if(resultReady){if(result?.run_id&&onOpenResults)onOpenResults(result.run_id);
+      else setView('numbers');return}
+    if(canCompute){void run();return}
+    if(selected?.mode==='market'&&selectedDataset==='dhan_shared'&&recordedChains.length&&
+        !quoteRefs.length){void reuseRecordedChain();return}
+    if(missingHistory&&recommendedStock){void extendHistory(recommendedStock.ticker);return}
+    setInputsOpen(true)
+    performModelStep(nextAction)
+  }
+  // Choose the first existing saved quote as a form default. No broker request,
+  // source modification, or order is involved. The exact contract remains editable.
+  useEffect(()=>{
+    if(catalogScreen!=='detail'||selected?.mode!=='market'||!quoteAutoChoice)return
+    if(quoteRefs.some(ref=>ref.value===params.quote))return
+    setParams(prev=>({...prev,quote:quoteAutoChoice}))
+  },[catalogScreen,selected?.id,selected?.mode,quoteAutoChoice,params.quote])
+  useEffect(()=>{
+    if(!aboutOpen)return
+    const closeOnEscape=(event:KeyboardEvent)=>{if(event.key==='Escape')setAboutOpen(false)}
+    window.addEventListener('keydown',closeOnEscape)
+    return()=>window.removeEventListener('keydown',closeOnEscape)
+  },[aboutOpen])
+
+  if(catalogScreen==='catalog')return <ModelCatalogLanding
+    models={catalog} readiness={matrix?.models||[]} recent={savedRuns}
+    sourceLabel={matrix?.dataset_label||datasets.find(d=>d.id===selectedDataset)?.label||''}
+    onOpen={changeModel}
+    onReopen={id=>{
+      const saved=savedRuns.find(run=>run.id===id)
+      if(saved&&onOpenResults)onOpenResults(saved.id)
+      else if(saved)void reopen(saved)
+    }} onOpenResults={onOpenResults?()=>onOpenResults():undefined}/>
+
+  return <div className={'ql-workbench ql-model-focused'+
+    (inputsOpen?' show-input-details':'')+(presetsOpen?' show-presets':'')}>
+    <header className="ql-model-focus-head">
+      <div className="ql-model-focus-topline">
+        <button type="button" className="ql-model-back"
+          onClick={()=>{setCatalogScreen('catalog');setAboutOpen(false);window.scrollTo({top:0})}}>
+          ← All models</button>
+        <span>{focusedFamily}</span>
+      </div>
+      <div className="ql-model-focus-head-row">
+        <div><span className="ql-focus-kind">{selected?.mode==='synthetic'?'Simulation':
+          selected?.mode==='theoretical'?'Mathematical calculation':
+          selected?.mode==='market'?'Observed option quote':'Historical market data'}</span>
+          <h2>{selected?.title}</h2>
+          <p>{selected?.mode==='historical'?'Fit this model to recorded market observations.':
+            selected?.mode==='market'?'Calculate using an existing dated option quote.':
+            'Explore the model with adjustable assumptions.'}</p>
+        </div>
+        <button type="button" className="ql-model-about"
+          onClick={()=>setAboutOpen(true)}><BookOpen size={16}/> About & equation</button>
+      </div>
+      {modelPair&&<div className="ql-focus-mode" role="group" aria-label="Choose calculation input type">
+        <button type="button" aria-pressed={selected?.id===modelPair.base}
+          className={selected?.id===modelPair.base?'active':''}
+          onClick={()=>changeModel(modelPair.base)}>Simulation</button>
+        <button type="button" aria-pressed={selected?.id===modelPair.market}
+          className={selected?.id===modelPair.market?'active':''}
+          onClick={()=>changeModel(modelPair.market)}>
+          {selected?.mode==='market'||['black_scholes','binomial','implied_vol',
+            'mc_option','option_surface'].includes(modelPair.base)?
+            'Use saved option quote':'Use market history'}</button>
+      </div>}
+    </header>
+    <div className="ql-focus-actionbar">
+      <div className="ql-focus-status">
+        {resultReady?<CheckCircle2 size={17}/>:
+          selected?.mode==='historical'||selected?.mode==='market'?<Database size={17}/>:
+          <FlaskConical size={17}/>}
+        <span>{resultReady?'Calculation saved':
+          canCompute?'Ready to calculate':
+          pendingData?'Preparing source data':
+          selected?.mode==='historical'&&missingHistory?
+            (recommendedStock?.display_name||recommendedStock?.ticker||'Selected stock')+
+            ' · '+(recommendedStock?.missing_to_target??0)+' returns to preferred target':
+          selected?.mode==='market'&&recordedChains.length>0&&!quoteRefs.length?
+            recordedChains.length+' saved BANKNIFTY recordings available':
+          observedNeeded?'Choose or complete observed inputs':'Ready to calculate'}</span>
+      </div>
+      <div className="ql-focus-actions">
+        {observedNeeded&&<button type="button" onClick={()=>setInputsOpen(open=>!open)}
+          aria-expanded={inputsOpen} className={inputsOpen?'is-active':''}>
+          <Database size={15}/>{inputsOpen?'Hide data details':'Data options'}</button>}
+        <button type="button" onClick={()=>setPresetsOpen(open=>!open)}
+          aria-expanded={presetsOpen}><Save size={15}/> Saved setups</button>
+        <button type="button" className="ql-focus-primary" onClick={handlePrimary}
+          disabled={!selected||working||planLoading||pendingData}>
+          {working?<LoaderCircle size={16} className="ql-spinning"/>:
+            resultReady?<BarChart3 size={16}/>:
+            canCompute?<Play size={16}/>:
+            <ArrowRight size={16}/>}
+          {working?'Calculating…':primaryLabel}</button>
+      </div>
+    </div>
+    {aboutOpen&&selected&&<div className="ql-about-backdrop"
+      onMouseDown={event=>{if(event.target===event.currentTarget)setAboutOpen(false)}}>
+      <section className="ql-about-dialog" role="dialog" aria-modal="true"
+        aria-label={'About '+selected.title}>
+        <header><div><small>MODEL REFERENCE</small><h2>{selected.title}</h2></div>
+          <button type="button" autoFocus onClick={()=>setAboutOpen(false)}
+            aria-label="Close model explanation">×</button></header>
+        <h3>Mathematical equation</h3>
+        <div className="ql-about-equation">{selected.formula}</div>
+        <h3>What this calculation does</h3><p>{selected.description}</p>
+        <h3>What its inputs mean</h3>
+        <dl>{selected.parameters.map(param=><div key={param.key}>
+          <dt>{param.key.replaceAll('_',' ')}</dt>
+          <dd>{param.description||'Adjustable model parameter.'}</dd>
+        </div>)}</dl>
+        <p className="ql-about-source-note">{selected.mode==='synthetic'?
+          'Simulation creates reproducible hypothetical paths, not observed trades.':
+          selected.mode==='theoretical'?
+          'Outputs are mathematical estimates based on selected assumptions.':
+          selected.mode==='market'?
+          'Vendor bid/ask inputs are observations; valuation and expiry-time assumptions remain model outputs.':
+          'A fitted model uses actual dated returns, subject to the documented source limitations.'}</p>
+      </section>
+    </div>}
     <header className="ql-intro">
       <div><span className="ql-kicker">QUANTLAB / MODEL LABORATORY</span>
         <h2>Research the model. Inspect the evidence.</h2>
@@ -930,7 +1083,14 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
               <Icon size={15}/>{title}</button>)}
         </nav>
         {view==='configure'&&<section className="ql-card" id="ql-experiment-setup">
-          <div className="ql-panel-title"><FlaskConical size={18}/><h3>Experiment setup</h3></div>
+          <div className="ql-panel-title ql-focus-parameter-title">
+            <SlidersHorizontal size={18}/><h3>Model settings</h3>
+            <button type="button" onClick={()=>setShowExtraParams(show=>!show)}
+              aria-expanded={showExtraParams}>
+              {showExtraParams?'Fewer settings':
+                'More settings ('+Math.max(0,selected.parameters.length-4)+')'}
+              <ArrowRight size={14}/></button>
+          </div>
           {observedNeeded&&<label className="ql-field"><span>1 · Market data source (shared library preferred)</span>
             <select aria-label="Model laboratory source dataset" value={selectedDataset} onChange={e=>onSelectDataset(e.target.value)}>
               <option value="">No dataset selected</option>
@@ -1222,7 +1382,10 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
               <small>{matchedStocks.length} matching stock(s), including incomplete histories.
                 Choose one to activate +20% automatic completion.</small>
             </label>}
-          <div className="ql-param-grid">{selected.parameters.map(spec=><label className="ql-field" key={spec.key}>
+          <div className="ql-param-grid">{selected.parameters
+            .filter((spec,index)=>showExtraParams||index<4||
+              ['quote','symbol'].includes(spec.type)||spec.key==='target')
+            .map(spec=><label className="ql-field" key={spec.key} title={spec.description||undefined}>
             <span>{spec.key.replaceAll('_',' ')}</span>
             {spec.type==='select'?<select value={String(params[spec.key]??spec.default)}
               onChange={e=>setParams({...params,[spec.key]:e.target.value})}>
