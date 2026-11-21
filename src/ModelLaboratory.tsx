@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
-import {Activity, ArrowRight, BookOpen, CheckCircle2, CircleAlert, Database,
+import {Activity, ArrowRight, BarChart3, BookOpen, CheckCircle2, CircleAlert, Database,
   Copy, Download, FlaskConical, Heart, Layers, LoaderCircle, Play, Save, ShieldCheck, SlidersHorizontal, Trash2} from 'lucide-react'
 import ResearchPlot, {type ResearchPlotData} from './ResearchPlots'
 import ModelCatalogLanding, {catalogFamily} from './ModelCatalogLanding'
