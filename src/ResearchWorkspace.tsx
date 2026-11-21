@@ -764,6 +764,7 @@ function ProjectsPanel({records,runs,busy,perform,onMessage,startJob,onOpenCompa
   const notebooks=records.filter(r=>r.kind==='notebook'&&!r.trashed)
   const charts=records.filter(r=>r.kind==='chart'&&!r.trashed)
   const [name,setName]=useState('')
+  const [creationKind,setCreationKind]=useState<'project'|'notebook'>('project')
   const [projectId,setProjectId]=useState('')
   const [notebookId,setNotebookId]=useState('')
   const [cells,setCells]=useState<NotebookCell[]>([])
@@ -904,21 +905,53 @@ function ProjectsPanel({records,runs,busy,perform,onMessage,startJob,onOpenCompa
   const exportNotebook=()=>safeDownload((notebookTitle||'research_notebook')+'.json',
     JSON.stringify({title:notebookTitle,project_id:projectId,cells},null,2),'application/json')
   return <div className="rw-stack">
-    <div className="rw-two">
-      <Box title="Research projects">
-        <p className="rw-help">Group related studies, model references, figures and reports. Organizing a project never creates duplicate market-price data.</p>
-        <div className="rw-inline-actions"><input value={name} onChange={e=>setName(e.target.value)}
-          placeholder="Project or notebook title"/>
-          <button disabled={busy||saving} onClick={createProject}><Plus size={14}/> Project</button>
-          <button disabled={busy||saving} onClick={createNotebook}><Plus size={14}/> Notebook</button></div>
+    <header className="rw-projects-welcome">
+      <div><span>RESEARCH LIBRARY</span>
+        <h2>Organize your studies</h2>
+        <p>Choose a project, collect saved model results in a notebook, and export a report.
+          Market data stays in the shared library.</p>
+      </div>
+      <div className="rw-projects-counts"><strong>{projects.length}</strong> projects
+        <strong>{notebooks.length}</strong> notebooks</div>
+    </header>
+    <div className="rw-two rw-projects-columns">
+      <Box title="Projects">
+        <div className="rw-project-create">
+          <div className="rw-project-create-types" role="group" aria-label="Create research artifact">
+            <button type="button" className={creationKind==='project'?'active':''}
+              aria-pressed={creationKind==='project'} onClick={()=>setCreationKind('project')}>
+              New project</button>
+            <button type="button" className={creationKind==='notebook'?'active':''}
+              aria-pressed={creationKind==='notebook'}
+              disabled={!projects.length} onClick={()=>setCreationKind('notebook')}>
+              Notebook</button>
+          </div>
+          <div className="rw-inline-actions">
+            <input aria-label="New research name" value={name}
+              onChange={e=>setName(e.target.value)}
+              placeholder={creationKind==='project'?'Name your research project':'Notebook title'}/>
+            <button className="rw-primary" disabled={busy||saving||!name.trim()||
+              (creationKind==='notebook'&&!projectId)}
+              onClick={creationKind==='project'?createProject:createNotebook}>
+              <Plus size={14}/> {creationKind==='project'?'Create project':'Create notebook'}
+            </button>
+          </div>
+          {creationKind==='notebook'&&!projectId&&
+            <p className="rw-help">Choose a project below before creating a notebook.</p>}
+        </div>
+        <p className="rw-help">Select a project to inspect its notebooks and editable research question.</p>
         {projects.map(p=><button key={p.id} className={'rw-row '+(p.id===projectId?'active':'')}
           onClick={()=>{setProjectId(p.id);setNotebookId('');initialized.current=true}}>
           <Folder size={17}/><span><strong>{p.title}</strong><small>{p.id}</small></span></button>)}
         {!projects.length&&<Empty title="No projects yet">Create a project for a research question or thesis chapter.</Empty>}
-        <label className="rw-file-button"><Upload size={15}/> Import portable project ZIP
-          <input hidden type="file" accept=".zip" onChange={e=>{
-            const file=e.target.files?.[0];if(file)void importPortable(file);e.target.value=''}}/>
-        </label>
+        <details className="rw-project-portable">
+          <summary>Import an existing project ZIP</summary>
+          <p className="rw-help">Import saved research settings and notes without duplicating raw market data.</p>
+          <label className="rw-file-button"><Upload size={15}/> Choose portable project ZIP
+            <input hidden type="file" accept=".zip" onChange={e=>{
+              const file=e.target.files?.[0];if(file)void importPortable(file);e.target.value=''}}/>
+          </label>
+        </details>
         {project&&<div className="rw-project-detail">
           <Field label="Research question / goal" value={goal} onChange={setGoal}/>
           <label className="rw-field"><span>Hypothesis and scope</span>
@@ -947,15 +980,19 @@ function ProjectsPanel({records,runs,busy,perform,onMessage,startJob,onOpenCompa
       <Field label="Notebook name" value={notebookTitle} onChange={v=>{
         revision.current+=1;setNotebookTitle(v);setDirty(true)
       }}/>
-      <div className="rw-button-group">
-        <button onClick={()=>addCell('markdown')}><Plus size={14}/> Text / equations</button>
-        <button onClick={()=>addCell('run')} disabled={!runs.some(r=>r.kind==='model_run')}>
-          <Plus size={14}/> Saved model run</button>
-        <button onClick={()=>addCell('chart')} disabled={!charts.length}><Plus size={14}/> Saved chart figure</button>
-        {!charts.length&&<button onClick={onOpenCompare}>
-          <BarChart3 size={14}/> Create chart first</button>}
-        <button onClick={()=>addCell('table')}><Plus size={14}/> Findings table</button>
-      </div>
+      <details className="rw-notebook-insert">
+        <summary><Plus size={15}/> Add notebook content</summary>
+        <div className="rw-button-group">
+          <button onClick={()=>addCell('markdown')}><Plus size={14}/> Text / equations</button>
+          <button onClick={()=>addCell('run')} disabled={!runs.some(r=>r.kind==='model_run')}>
+            <Plus size={14}/> Saved model run</button>
+          <button onClick={()=>addCell('chart')} disabled={!charts.length}>
+            <Plus size={14}/> Saved chart figure</button>
+          {!charts.length&&<button onClick={onOpenCompare}>
+            <BarChart3 size={14}/> Create chart first</button>}
+          <button onClick={()=>addCell('table')}><Plus size={14}/> Findings table</button>
+        </div>
+      </details>
       <div className="rw-cell-stack">{cells.map((cell,i)=><div key={cell.id} className="rw-cell">
         <div className="rw-cell-head"><span>{String(i+1).padStart(2,'0')} / {cell.type}</span>
           <div className="rw-row-actions">
@@ -991,7 +1028,10 @@ function ProjectsPanel({records,runs,busy,perform,onMessage,startJob,onOpenCompa
       <div className="rw-button-group">
         <button className="rw-primary" onClick={save} disabled={busy||saving}>
           <Save size={15}/> Save notebook</button>
-        <button onClick={exportNotebook}><Download size={15}/> Export source JSON</button>
+        <details className="rw-notebook-export">
+          <summary>Export notebook JSON</summary>
+          <button onClick={exportNotebook}><Download size={15}/> Download source JSON</button>
+        </details>
         <button disabled={busy||saving||dirty} onClick={()=>perform(
           ()=>api<{job_id:string;status:string}>('/workspace/reports',
             {notebook_id:notebookId,format:'html'},'POST'),
