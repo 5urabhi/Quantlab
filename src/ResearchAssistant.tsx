@@ -14,6 +14,14 @@ type Reply={
   references:Ref[];next_actions:string[];limitations:string[];
   engine:string;warning:string
 }
+type Investigation={
+  kind:Kind;run_id:string;title:string;evidence_label:string;
+  steps:{tool:string;status:string;summary:string;locator:string}[];
+  findings:Record<string,unknown>;
+  anomaly_preview:{symbol:string;date:string;type:string;
+    return_fraction:number|null;reason:string}[];
+  next_actions:string[];limitations:string[];engine:string
+}
 type Turn={id:number;question:string;reply:Reply}
 type Props={run:{kind:Kind;id:string;title:string};onTab:(tab:Target)=>void;
   onData:()=>void;onModels:()=>void;onExperiments:()=>void}
@@ -40,9 +48,30 @@ export default function ResearchAssistant({run,onTab,onData,onModels,onExperimen
   const [turns,setTurns]=useState<Turn[]>([])
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
+  const [investigation,setInvestigation]=useState<Investigation|null>(null)
+  const [investigating,setInvestigating]=useState(false)
   const controller=useRef<AbortController|null>(null)
   const nextTurn=useRef(0)
   useEffect(()=>()=>{controller.current?.abort()},[])
+  useEffect(()=>{setInvestigation(null);setTurns([])},[run.kind,run.id])
+  const investigate=async()=>{
+    if(investigating)return
+    setInvestigating(true);setError('');setInvestigation(null)
+    try{
+      const response=await fetch('/api/workspace/results/'+run.kind+'/'+
+        encodeURIComponent(run.id)+'/investigate',{
+        method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},body:'{}',
+      })
+      const data=await response.json() as Investigation|{detail?:unknown}
+      if(!response.ok)throw new Error(detailFromError(data,response.status))
+      const report=data as Investigation
+      if(report.kind!==run.kind||report.run_id!==run.id)
+        throw new Error('Research context changed. Select the archived run again.')
+      setInvestigation(report)
+    }catch(e){setError(e instanceof Error?e.message:String(e))}
+    finally{setInvestigating(false)}
+  }
   const ask=async(text:string)=>{
     const question=text.trim()
     if(question.length<2||question.length>400){
@@ -84,7 +113,49 @@ export default function ResearchAssistant({run,onTab,onData,onModels,onExperimen
       <div className="rqa-context"><ShieldCheck size={15}/>
         <span><strong>Current run:</strong> {run.title} <small>({run.kind} · {run.id})</small></span>
       </div>
+      <div className="rqa-investigate-entry">
+        <div><strong>Investigate this result</strong>
+          <p>Read the saved evidence, check current local source integrity and
+            flag unusual observations. No market download or trade is triggered.</p></div>
+        <button type="button" className="rs-primary"
+          disabled={investigating} onClick={()=>void investigate()}>
+          {investigating?<LoaderCircle className="rqa-spin" size={15}/>:<Search size={15}/>}
+          {investigating?'Checking evidence…':'Investigate evidence'}
+        </button>
+      </div>
     </div>
+    {investigation&&<section className="rqa-investigation" aria-label="Multi-step research investigation">
+      <div className="rqa-answer-header"><h4>{investigation.title}</h4>
+        <span>{investigation.evidence_label}</span></div>
+      <div className="rqa-audit-steps">
+        {investigation.steps.map(step=><div key={step.tool}
+          className="rqa-audit-step">
+          <span>{step.status==='complete'?<ShieldCheck size={16}/>:<ShieldAlert size={16}/>}</span>
+          <div><strong>{step.tool.replaceAll('_',' ')} · {step.status}</strong>
+            <p>{step.summary}</p><small>{step.locator}</small></div>
+        </div>)}
+      </div>
+      {investigation.anomaly_preview.length>0&&<div className="rqa-next">
+        <h5>Original-source observations for review</h5>
+        {investigation.anomaly_preview.map((event,i)=>
+          <p key={event.symbol+event.date+i}>
+            <ShieldAlert size={13}/>{event.symbol} · {event.date} ·
+            {' '}{event.return_fraction===null?'Missing/invalid close':
+              (event.return_fraction*100).toFixed(2)+'% close-to-close'}
+            {' · '}{event.reason}</p>)}
+      </div>}
+      <section className="rqa-next"><h5>Research follow-up</h5>
+        {investigation.next_actions.map((item,i)=>
+          <p key={i}><CheckCircle2 size={13}/>{item}</p>)}
+      </section>
+      <div className="rqa-investigation-actions">
+        <button type="button" onClick={onData}><Database size={14}/> Inspect Data Quality</button>
+        <button type="button" onClick={()=>onTab('evidence')}>
+          <BookOpen size={14}/> Open archived evidence</button>
+      </div>
+      <small>Offline evidence tools only. Statistical flags are not certified source errors.
+        No external LLM, broker queries or order placement.</small>
+    </section>}
     <div className="rqa-prompts" aria-label="Suggested research questions">
       {QUESTIONS.map(q=><button type="button" key={q} onClick={()=>void ask(q)}
         disabled={busy}>{q}<ArrowRight size={12}/></button>)}
