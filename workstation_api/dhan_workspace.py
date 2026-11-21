@@ -308,6 +308,7 @@ def _safe_batch_failure(item: dict) -> dict:
         diagnostic = f"Dhan HTTP {status} (vendor response body hidden)"
     elif ("conflicting ohlcv" in raw.lower()
           or "timestamp-valid" in raw.lower()
+          or "missing or unparseable timestamps" in raw.lower()
           or "duplicate timestamps" in raw.lower()):
         code = "SOURCE TIMESTAMPS"
         summary = ("Dhan supplied missing or conflicting original candle timestamps. "
