@@ -158,6 +158,12 @@ try{
    await shot('05-explorer')
    await sub('Quality & Coverage')
    await page.getByText('Market-data evidence audit',{exact:true}).first().waitFor()
+   // Validate the dedicated anomaly detector end-to-end on isolated CI prices.
+   await page.getByLabel('Observed dataset').selectOption('upload_ci_browser_smoke')
+   await page.getByRole('button',{name:'Audit dataset',exact:true}).click()
+   await page.locator('.rw-anomaly-findings').waitFor({timeout:30000})
+   await page.getByRole('button',{name:'Export anomaly evidence'}).waitFor()
+   await shot('05-statistical-source-anomalies')
    await sub('Downloads')
    await page.getByRole('heading',{name:/See exactly what's happening/}).waitFor()
    await shot('05-downloads')
