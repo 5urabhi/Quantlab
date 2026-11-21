@@ -405,8 +405,16 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
       {error&&<div role="alert" className="tc-error">{error}</div>}
       {journalView==='trades'&&<>    <section className="tc-panel tc-ledger" aria-label="Manual options trade journal">
       <div className="tc-panel-title"><strong>Manual options journal</strong><span>Read-only research · you type actual prices</span></div>
-      <p className="tc-muted">Enter a new trade at the time you actually fill it. QuantLab stores server receipt times and computes P&amp;L only after you report an exit. The app cannot verify your broker fills, enforce a stop, or place orders.</p>
-      <p className="tc-confirm">The underlying signal comes from BANKNIFTY spot candles. Contract selection, lot size and current Dhan option bid/ask can be previewed under Live Trading → Option Chain; they are not verified broker fills.</p>
+      <p className="tc-muted">Record the price you actually received from your broker.
+        This saves a journal entry, not a broker order. Profit or loss is calculated after
+        you enter the exit price.</p>
+      <details className="tc-journal-explanation">
+        <summary>How fills, timestamps and option quotes are interpreted</summary>
+        <p>QuantLab stores the time the local server receives your entry, which may differ
+          from the real execution time. Index signals come from BANKNIFTY candles.
+          Dhan option-chain bid/ask values and quantities are previews, not broker fills;
+          this journal cannot enforce stop-losses or independently verify trades.</p>
+      </details>
       {optionDraftNote&&<p role="status" className="tc-warning">{optionDraftNote} Enter your actual broker fill premium before recording anything.</p>}
       {optionLotSize!==null&&<p className="tc-muted">Selected contract lot size: <strong>{optionLotSize} units</strong>.
         Quantity is entered in units (lots × lot size). Current entry quantity:
@@ -441,8 +449,9 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
         <button type="submit" className="tc-primary" disabled={journalBusy}>Close manual record</button>
         <button type="button" onClick={()=>setClosingId('')}>Cancel</button>
       </form>}
-      <div className="tc-table-scroll"><table><thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Holding</th><th>Over 6m?</th><th>Net P&amp;L</th></tr></thead><tbody>{journal?.trades.map(trade=><tr key={trade.id}><td>{trade.symbol}</td><td>{trade.status}</td><td>{trade.direction}</td><td>{trade.quantity}</td><td>₹{fmt(trade.entry_price)}</td><td>{fmt(trade.exit_price)}</td><td>{Math.floor(trade.holding_seconds/60)}m</td><td>{trade.holding_rule_exceeded?'YES':'No'}</td><td>{trade.net_pnl_inr===null?'—':'₹'+fmt(trade.net_pnl_inr)}</td></tr>)}{!journal?.trades.length&&<tr><td colSpan={9}>No manual positions recorded.</td></tr>}</tbody></table></div>
-      <p className="tc-warning">Unverified manual entries: the time starts when this local server receives your request, not the broker execution timestamp. This is a discipline journal, not an account reconciliation or evidence of actual fills.</p>
+      <div className="tc-table-scroll"><table><thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>Holding</th><th>Net P&amp;L</th></tr></thead><tbody>{journal?.trades.map(trade=><tr key={trade.id}><td>{trade.symbol}</td><td>{trade.status}</td><td>{trade.direction}</td><td>{trade.quantity}</td><td>₹{fmt(trade.entry_price)}</td><td>{fmt(trade.exit_price)}</td><td>{Math.floor(trade.holding_seconds/60)}m</td><td>{trade.net_pnl_inr===null?'—':'₹'+fmt(trade.net_pnl_inr)}</td></tr>)}{!journal?.trades.length&&<tr><td colSpan={8}>No manual positions recorded.</td></tr>}</tbody></table></div>
+      <p className="tc-muted">Unverified manual entries are research notes, not broker
+        account reconciliation. See fill interpretation above for source limitations.</p>
     </section></>}
       {journalView==='accuracy'&&<>
         <div className="tc-toolbar tc-journal-source"><label>Prediction ledger index

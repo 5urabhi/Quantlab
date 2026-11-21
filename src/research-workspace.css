@@ -203,3 +203,48 @@
 .rw-job-progress progress{width:100%;height:11px;accent-color:var(--rw-accent)}
 .rw-job-progress progress::-webkit-progress-bar{background:#30495a;border-radius:7px}
 .rw-job-progress progress::-webkit-progress-value{background:#55d6b8;border-radius:7px}
+
+
+/* Projects: pick a research artifact and open only the editor you need. */
+.rw-projects-welcome{display:flex;align-items:center;justify-content:space-between;gap:20px;
+  background:linear-gradient(118deg,#10313d,#142838);border:1px solid #315b64;
+  padding:23px 25px;border-radius:14px;margin-bottom:2px}
+.rw-projects-welcome>div:first-child{max-width:630px}
+.rw-projects-welcome span{display:block;font-size:10px;letter-spacing:.12em;
+  color:#72d8c5;font-weight:780}
+.rw-projects-welcome h2{margin:7px 0 5px;font-size:24px;letter-spacing:-.03em}
+.rw-projects-welcome p{color:#a6c3cb;font-size:12px;line-height:1.5;margin:0}
+.rw-projects-counts{display:flex;align-items:center;gap:8px;white-space:nowrap;
+  color:#9db9c5;font-size:11px}
+.rw-projects-counts strong{font-size:22px;color:#83ead0;font-weight:780}
+.rw-projects-counts strong:not(:first-child){margin-left:14px}
+.rw-project-create{background:#112d37;padding:14px 15px;
+  border:1px solid #345e65;border-radius:10px;margin-bottom:15px}
+.rw-project-create-types{display:flex;gap:5px;padding:4px;margin-bottom:11px;
+  border:1px solid #335567;border-radius:8px;background:#0d202c;width:max-content;
+  max-width:100%;flex-wrap:wrap}
+.rw-root .rw-project-create-types button{font-size:11px;background:transparent;
+  border-color:transparent;padding:8px 13px}
+.rw-root .rw-project-create-types button.active{background:#1e5651;
+  border-color:#3e8175;color:#e3fff4}
+.rw-project-create>.rw-inline-actions input{flex:1 1 220px}
+.rw-project-create>.rw-inline-actions button{white-space:nowrap}
+.rw-project-portable{margin:13px 0;padding:10px 13px;background:#102836;
+  border:1px solid #365565;border-radius:8px}
+.rw-project-portable summary,.rw-notebook-insert summary,.rw-notebook-export summary{
+  cursor:pointer;font-size:12px;font-weight:710;color:#9edfcf;
+}
+.rw-project-portable>.rw-help{margin-top:10px}
+.rw-notebook-insert{background:#0f2a36;border:1px solid #37665f;
+  border-radius:10px;padding:13px 15px;margin:15px 0 8px}
+.rw-notebook-insert summary{display:flex;align-items:center;gap:8px}
+.rw-notebook-insert .rw-button-group{margin-top:14px}
+.rw-notebook-export{padding:10px 12px;border:1px solid #32505c;
+  border-radius:8px;background:#102835}
+.rw-notebook-export button{margin-top:10px}
+.rw-notebook-insert summary:focus-visible,.rw-project-portable summary:focus-visible,
+.rw-notebook-export summary:focus-visible{outline:2px solid #73e8c9;outline-offset:2px}
+@media(max-width:790px){
+  .rw-projects-welcome{flex-direction:column;align-items:flex-start;padding:18px}
+  .rw-project-create>.rw-inline-actions button{width:100%}
+}
