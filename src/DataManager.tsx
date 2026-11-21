@@ -141,15 +141,37 @@ export default function DataManager({
       <div><div className="qm-eyebrow"><Database size={15}/> QUANTLAB · DATA CONTROL CENTER</div>
         <h2>Database Manager</h2><p>Explore market data, inspect its provenance and monitor automatic recovery in one place.</p>
       </div>
-      <div className="qm-hero-actions">
+      {!integrated&&<div className="qm-hero-actions">
         <button type="button" className="ws-button secondary" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button>
         <button type="button" className="ws-button primary" disabled={busy} onClick={()=>void repair()}>
           <Wrench size={15}/>{busy?'Checking...':'Check & repair safely'}
         </button>
-      </div>
+      </div>}
     </div>
     {error&&<div role="alert" className="qm-alert"><AlertTriangle size={16}/>{error}</div>}
     {notice&&<div role="status" className="qm-notice"><CheckCircle2 size={16}/>{notice}</div>}
+    {integrated&&<section className="qm-task-overview" aria-label="Choose a data task">
+      <div className="qm-task-head"><h3>What would you like to do?</h3>
+        <p>Pick one task. Your data stays in the shared library.</p></div>
+      <div className="qm-task-grid">
+        {([
+          {id:'library',title:'Browse market data',detail:'Search instruments, indexes and sectors.',
+            icon:Database},
+          {id:'acquire',title:'Get missing data',detail:'Reuse saved history or append what a model needs.',
+            icon:ArrowRight},
+          {id:'explorer',title:'Inspect stored records',detail:'Open real prices, tables, and original files.',
+            icon:Search},
+          {id:'activity',title:'Health & recovery',detail:'Check local data quality and interrupted jobs.',
+            icon:ShieldCheck},
+        ] as const).map(task=><button key={task.id} type="button"
+          className={'qm-task-card '+(section===task.id?'active':'')}
+          aria-current={section===task.id?'step':undefined}
+          onClick={()=>setSection(task.id)}>
+          <task.icon size={20}/>
+          <span><strong>{task.title}</strong><small>{task.detail}</small></span>
+          <ArrowRight size={16}/></button>)}
+      </div>
+    </section>}
     <div className="qm-stat-grid">
       <div><Database size={18}/><span>Source snapshots</span><strong>{overview?fmt(overview.statistics.datasets):'…'}</strong></div>
       <div><ShieldCheck size={18}/><span>Files ready</span><strong>{overview?fmt(overview.statistics.file_ready):'…'}</strong></div>
@@ -249,10 +271,16 @@ export default function DataManager({
     </div></>}
     {section==='activity'&&<div className="qm-panel">
       <div className="qm-panel-title"><h3><ShieldCheck size={18}/> Whole-workstation health</h3>
-        <button className="ws-button secondary" disabled={healthBusy}
-          onClick={()=>void checkHealth()}>
-          <RefreshCw size={14}/>{healthBusy?'Checking…':'Run integrity checks'}
-        </button></div>
+        <div className="qm-hero-actions">
+          <button className="ws-button secondary" disabled={healthBusy}
+            onClick={()=>void checkHealth()}>
+            <RefreshCw size={14}/>{healthBusy?'Checking…':'Run integrity checks'}
+          </button>
+          <button className="ws-button primary" disabled={busy}
+            onClick={()=>void repair()}>
+            <Wrench size={14}/>{busy?'Running safe maintenance…':'Repair local indexes'}
+          </button>
+        </div></div>
       <p className="qm-caption">Read-only local checks of research databases, disk space,
         source-mirror freshness and interrupted jobs. No broker calls, no automatic
         source rewrite and no claim of verified historical market evidence.</p>
