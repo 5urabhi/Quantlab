@@ -76,9 +76,11 @@ type DataPlan={model_id:string;mode:string;status:string;runnable:boolean;min_re
   estimated_vendor_daily_requests?:number;
   next_action?:{kind:string;label:string;detail:string}}
 type ExtensionJob={id:string;status:string;kind:string;percent?:number;stage?:string;cancellable?:boolean;
+   requested_model_id?:string;
   error?:string;result?:{dataset_id?:string;status:string;message:string;after?:DataPlan;
     selected_ticker?:string;original_ticker?:string;buffer_complete?:boolean;
-    missing_to_target?:number;actual_returns?:number;target_returns?:number}}
+    missing_to_target?:number;actual_returns?:number;target_returns?:number;
+    run_id?:string|null}}
 type ConfigRecord={id:string;title:string;payload:{model_id?:string;dataset_id?:string;params?:Record<string,number|string>};
   favorite:boolean;tags:string[]}
 type Props={
@@ -543,21 +545,31 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       void getJSON<ExtensionJob>('/jobs/'+encodeURIComponent(extensionJob.id))
         .then(next=>{
           if(!active)return
-          setExtensionJob(next)
+          setExtensionJob(previous=>({...next,
+            requested_model_id:previous?.requested_model_id||extensionJob.requested_model_id}))
+          const sameModel=selected?.id===extensionJob.requested_model_id
           if(next.status==='complete'){
             const response=next.result
             setExtensionMessage(response?.message??'Shared history preparation completed.')
             // The original prepared batch remains immutable. Shared prices
             // use the broker security ID as the ticker. Keep the EXACT
             // chosen instrument in sync after switching datasets.
-            if(response?.selected_ticker)
+            if(response?.selected_ticker&&sameModel)
               setParams(prev=>({...prev,ticker:response.selected_ticker!,target:'stock'}))
             if(response?.dataset_id){
               onDataChanged?.()
-              onSelectDataset(response.dataset_id)
+              if(sameModel)onSelectDataset(response.dataset_id)
             }
             setRefreshHistory(n=>n+1)
             void refreshMatrix()
+            // The explicit primary action can request download + run as one
+            // background job. Open the exact saved result, not a stale setup
+            // parameter snapshot, after the Python model has finished.
+            if(response?.run_id){
+              void refreshSaved()
+              onRunSaved?.(response.run_id)
+              if(sameModel)onOpenResults?.(response.run_id)
+            }
           }
           if(next.status==='error')setExtensionError(next.error||'Historical download failed.')
           if(next.status==='cancelled')setExtensionError('Historical download cancelled.')
@@ -565,8 +577,8 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
         .catch(e=>{if(active)setExtensionError(e instanceof Error?e.message:String(e))})
     },1250)
     return()=>{active=false;window.clearTimeout(timer)}
-  },[extensionJob,onSelectDataset,onDataChanged,refreshMatrix])
-  const extendHistory=async(recommendedTicker?:string)=>{
+  },[extensionJob,selected?.id,onSelectDataset,onDataChanged,refreshMatrix,refreshSaved,onRunSaved,onOpenResults])
+  const extendHistory=async(recommendedTicker?:string,runAfterDownload=false)=>{
     if(!selected||!selectedDataset||
       (extensionJob&&['queued','running'].includes(extensionJob.status)))return
     // A direct click on "Complete recommended [TICKER]" is an explicit
@@ -580,11 +592,13 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       const reply=await fetch('/api/lab/data-requirements/extend',{
         method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model_id:selected.id,dataset_id:selectedDataset,
-          params:requestParams,confirm_download:true})})
+          params:requestParams,confirm_download:true,
+          run_after_download:runAfterDownload})})
       if(!reply.ok)throw new Error(await errorText(reply))
       const job=await reply.json() as {job_id:string;status:string}
-      setExtensionJob({id:job.job_id,kind:'lab_shared_data_extension',status:job.status,
-        stage:'Using cached candles before missing Dhan requests',percent:0})
+      setExtensionJob({id:job.job_id,requested_model_id:selected.id,
+        kind:runAfterDownload?'lab_shared_data_extension_and_run':'lab_shared_data_extension',
+        status:job.status,stage:'Using cached candles before missing Dhan requests',percent:0})
     }catch(e){setExtensionError(e instanceof Error?e.message:String(e))}
   }
   const cancelExtension=async()=>{
@@ -749,21 +763,28 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
     (recommendedStock.missing_to_target??0)>0
   const pendingData=!!extensionJob&&['queued','running'].includes(extensionJob.status)
   const canCompute=!!selected&&(!observedNeeded||(!insufficient&&!!dataPlan?.runnable))
+  // Prefer the agreed +20% research buffer on a single user-triggered run.
+  // Merely browsing a model never sends any market-data request.
+  const canCompleteAndRun=selected?.mode==='historical'&&!!selectedDataset&&
+    !!dataPlan?.can_download&&(dataPlan.missing_to_target??0)>0
   const primaryLabel=resultReady?'View results & charts':
     pendingData?'Preparing original data…':
+    canCompleteAndRun||missingHistory?'Get missing history (+20%) & run':
     canCompute?'Run model':
     selected?.mode==='market'&&selectedDataset==='dhan_shared'&&recordedChains.length>0&&
       !quoteRefs.length?'Use saved option quote':
-    missingHistory?'Complete historical data':
     selected?.mode==='market'&&!quoteRefs.length?'Choose option data':
     'Review data inputs'
   const handlePrimary=()=>{
     if(resultReady){if(result?.run_id&&onOpenResults)onOpenResults(result.run_id);
       else setView('numbers');return}
+    if(canCompleteAndRun){void extendHistory(undefined,true);return}
+    // The user sees the exact recommended instrument before approving any
+    // provider access; no stock is silently substituted during a model fit.
+    if(missingHistory&&recommendedStock){void extendHistory(recommendedStock.ticker,true);return}
     if(canCompute){void run();return}
     if(selected?.mode==='market'&&selectedDataset==='dhan_shared'&&recordedChains.length&&
         !quoteRefs.length){void reuseRecordedChain();return}
-    if(missingHistory&&recommendedStock){void extendHistory(recommendedStock.ticker);return}
     setInputsOpen(true)
     performModelStep(nextAction)
   }
