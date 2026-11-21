@@ -43,7 +43,8 @@ collector or modify the original daily data/provenance files.
 
 ## Automatic reuse of recorded BANKNIFTY option chain
 
-If `dhan_shared` has **no source-bound saved quote catalog entry**, the
+If `dhan_shared` has **no runnable source-bound saved option quote** (even
+if unusable catalog rows exist), the
 verification checks its existing, checksum-protected BANKNIFTY SQLite chain
 recordings. When an eligible historical observation exists, it explicitly
 creates an **idempotent derived quote entry** from the *locally recorded*
