@@ -70,6 +70,9 @@ class WideDepthContractsTests(TestCase):
             "option_type": "CE", "expiry": "2026-11-23",
             "ltp": 300., "lot_size": 30, "contract_master_verified": False})
         selected = wide.select_atm_contracts(source, auto.DEFAULTS)
+        # Invalid unverified strike at 63050 must not move the genuine
+        # 63000 ATM anchor (which previously inflated below coverage).
+        self.assertTrue(all(x["atm_strike"] == 63000. for x in selected))
         self.assertEqual(sum(x["wing"] == "above" for x in selected), 92)
         self.assertEqual(sum(x["wing"] == "below" for x in selected), 64)
         self.assertFalse(any(x["security_id"] == "999999" for x in selected))
