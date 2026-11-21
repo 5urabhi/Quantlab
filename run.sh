@@ -7,6 +7,27 @@ case "${1:-workstation}" in
   workstation|research|web|both)
     exec bash scripts/run_workstation.sh
     ;;
+  verify-saved|verify-all-saved)
+    if [ ! -x .venv/bin/python ]; then
+      printf 'Python environment missing. First run: bash run.sh setup\n' >&2
+      exit 2
+    fi
+    shift
+    # Never stop or restart the live Dhan recorder; inspect saved sources only.
+    # Keep numerical regressions independent of available source data.
+    for case_file in \
+      test_every_registered_model_runs.py \
+      test_math_acceptance.py \
+      test_model_validation.py \
+      test_audit_all_models.py \
+      test_recorded_chain_model_quotes.py \
+      test_verify_saved_models.py
+    do
+      nice -n 10 .venv/bin/python -m unittest discover \
+        -s tests -p "$case_file" -q
+    done
+    exec nice -n 10 .venv/bin/python -m scripts.verify_saved_models "$@"
+    ;;
   audit-models|check-models)
     if [ ! -x .venv/bin/python ]; then
       printf 'Python environment missing. First run: bash run.sh setup\n' >&2
@@ -51,6 +72,9 @@ bash run.sh both             Same workstation (API + React)
 bash run.sh setup            Install local Python and Node dependencies
 bash run.sh check            Existing research acceptance checks
 bash run.sh evaluate         Existing synthetic evaluation and reports
+bash run.sh verify-saved     Run all 35 models against saved original datasets; reuse saved chain
+bash run.sh verify-saved --dataset dhan_shared  Verify shared Dhan data only
+bash run.sh verify-saved --strict  Nonzero exit if any original inputs remain missing
 bash run.sh audit-models     Read-only audit of every model and active dataset
 bash run.sh audit-models --dataset dhan_shared  Audit shared Dhan only
 bash run.sh audit-models --preflight-only  Check inputs without running models
