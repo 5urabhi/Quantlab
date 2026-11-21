@@ -108,6 +108,42 @@ class LocalAcceptanceTests(unittest.TestCase):
         self.assertEqual(report["status"], "integrity_attention")
         self.assertEqual(report["valid_sample_books"], 0)
 
+    def test_integrity_diagnostics_classify_bad_receipt_without_prices(self):
+        self.create_db()
+        self.store("CE", "NSE_FNO:111", corrupt=True)
+        result = doctor.inspect_saved_books(self.path)
+        self.assertEqual(result["invalid_sample_books"], 1)
+        self.assertEqual(result["invalid_reason_counts"],
+                         {"stored_receipt_digest_mismatch": 1})
+        encoded = json.dumps(result)
+        self.assertNotIn("NSE_FNO:111", encoded)
+        self.assertNotIn("300.0", encoded)
+
+    def test_missing_book_reports_exact_reason_without_repair(self):
+        self.create_db()
+        book, feature, digest = original()
+        with sqlite3.connect(self.path) as db:
+            db.execute("INSERT INTO auto_banknifty_depth_features VALUES(?,?,?,?,?)",
+                       ("NSE_FNO:111", STAMP, SID, json.dumps(feature), digest))
+        result = doctor.inspect_saved_books(self.path)
+        self.assertEqual(result["invalid_reason_counts"],
+                         {"missing_original_book": 1})
+        self.assertEqual(result["status"], "integrity_attention")
+
+    def test_rejection_reasons_preserve_original_validator_acceptance(self):
+        book, feature, digest = original()
+        values = ("NSE_FNO:111", SID, STAMP)
+        self.assertIsNone(doctor._pair_rejection_reason(
+            book, feature, digest, digest, *values))
+        self.assertTrue(doctor._valid_pair(
+            book, feature, digest, digest, *values))
+        changed = {**book, "bid": [{**level} for level in book["bid"]]}
+        changed["bid"][0]["price"] = 999
+        self.assertEqual(doctor._pair_rejection_reason(
+            changed, feature, digest, digest, *values), "crossed_top_of_book")
+        self.assertFalse(doctor._valid_pair(
+            changed, feature, digest, digest, *values))
+
     def test_local_report_is_actionable_and_does_not_call_dhan(self):
         book_summary = {**doctor.inspect_saved_books(self.path),
                         "status": "verified_sample",
