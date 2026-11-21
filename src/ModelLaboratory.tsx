@@ -76,6 +76,7 @@ type DataPlan={model_id:string;mode:string;status:string;runnable:boolean;min_re
   estimated_vendor_daily_requests?:number;
   next_action?:{kind:string;label:string;detail:string}}
 type ExtensionJob={id:string;status:string;kind:string;percent?:number;stage?:string;cancellable?:boolean;
+   requested_model_id?:string;
   error?:string;result?:{dataset_id?:string;status:string;message:string;after?:DataPlan;
     selected_ticker?:string;original_ticker?:string;buffer_complete?:boolean;
     missing_to_target?:number;actual_returns?:number;target_returns?:number;
@@ -544,18 +545,20 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       void getJSON<ExtensionJob>('/jobs/'+encodeURIComponent(extensionJob.id))
         .then(next=>{
           if(!active)return
-          setExtensionJob(next)
+          setExtensionJob(previous=>({...next,
+            requested_model_id:previous?.requested_model_id||extensionJob.requested_model_id}))
+          const sameModel=selected?.id===extensionJob.requested_model_id
           if(next.status==='complete'){
             const response=next.result
             setExtensionMessage(response?.message??'Shared history preparation completed.')
             // The original prepared batch remains immutable. Shared prices
             // use the broker security ID as the ticker. Keep the EXACT
             // chosen instrument in sync after switching datasets.
-            if(response?.selected_ticker)
+            if(response?.selected_ticker&&sameModel)
               setParams(prev=>({...prev,ticker:response.selected_ticker!,target:'stock'}))
             if(response?.dataset_id){
               onDataChanged?.()
-              onSelectDataset(response.dataset_id)
+              if(sameModel)onSelectDataset(response.dataset_id)
             }
             setRefreshHistory(n=>n+1)
             void refreshMatrix()
@@ -565,7 +568,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
             if(response?.run_id){
               void refreshSaved()
               onRunSaved?.(response.run_id)
-              onOpenResults?.(response.run_id)
+              if(sameModel)onOpenResults?.(response.run_id)
             }
           }
           if(next.status==='error')setExtensionError(next.error||'Historical download failed.')
@@ -574,7 +577,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
         .catch(e=>{if(active)setExtensionError(e instanceof Error?e.message:String(e))})
     },1250)
     return()=>{active=false;window.clearTimeout(timer)}
-  },[extensionJob,onSelectDataset,onDataChanged,refreshMatrix,refreshSaved,onRunSaved,onOpenResults])
+  },[extensionJob,selected?.id,onSelectDataset,onDataChanged,refreshMatrix,refreshSaved,onRunSaved,onOpenResults])
   const extendHistory=async(recommendedTicker?:string,runAfterDownload=false)=>{
     if(!selected||!selectedDataset||
       (extensionJob&&['queued','running'].includes(extensionJob.status)))return
@@ -593,7 +596,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
           run_after_download:runAfterDownload})})
       if(!reply.ok)throw new Error(await errorText(reply))
       const job=await reply.json() as {job_id:string;status:string}
-      setExtensionJob({id:job.job_id,
+      setExtensionJob({id:job.job_id,requested_model_id:selected.id,
         kind:runAfterDownload?'lab_shared_data_extension_and_run':'lab_shared_data_extension',
         status:job.status,stage:'Using cached candles before missing Dhan requests',percent:0})
     }catch(e){setExtensionError(e instanceof Error?e.message:String(e))}
