@@ -103,7 +103,7 @@ class Github:
         raise RuntimeError("GitHub pagination safety limit reached")
 
     def branch(self, name: str):
-        return self.request("/branches/" + quote(name, safe=""))
+        return self.request("/branches/" + quote(name, safe="/"))
 
     def delete_branch(self, name: str):
         # Explicit refs/heads namespace only; never touch tags.
