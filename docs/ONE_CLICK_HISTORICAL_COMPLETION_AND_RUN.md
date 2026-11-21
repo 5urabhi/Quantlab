@@ -1,4 +1,4 @@
-# One-click original historical history completion and model run
+# One-click historical data completion and model run
 
 ## Purpose
 
@@ -77,7 +77,7 @@ The Models one-click path does not silently activate that optional fallback.
 
 ## Regression coverage
 
-- `python -m unittest -v tests.test_lab_auto_history_run` validates
+- `python -m unittest discover -s tests -p 'test_lab_auto_history_run.py' -v` validates
   user authorization, the source identity passed to the model, bounded
   status reporting and failure-closed behavior with mocked acquisition.
 - `npm run build` checks the actual React action and job-result typings.
