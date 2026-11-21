@@ -173,6 +173,46 @@ export function V2HomeLaunchers({onStrategy,onModel,onData}:{
     </div>
   </section>
 }
+export function ConnectionsLandingV2({apiHealthy,tokenConfigured,onConfigure,
+  onRecording,onDiagnostics,onData}:{
+  apiHealthy:boolean;tokenConfigured:boolean;onConfigure:()=>void;
+  onRecording:()=>void;onDiagnostics:()=>void;onData:()=>void
+}){
+  return <section className="v2-layout-section v2-connections-home"
+    aria-label="Connections overview">
+    <div className="v2-section-head"><div>
+      <span className="v2-eyebrow">LOCAL DATA ACCESS</span>
+      <h2>Connections</h2>
+      <p>Manage only what needs attention. QuantLab keeps collection independent
+        of which screen you open.</p>
+    </div></div>
+    <div className="v2-connection-status" role="status">
+      <div><span>Local Python engine</span><strong>
+        {apiHealthy?'Available':'Unavailable'}
+      </strong><small>127.0.0.1:8765 · local computer only</small></div>
+      <div><span>Dhan credentials</span><strong>
+        {tokenConfigured?'Configured':'Not configured'}
+      </strong><small>Presence does not guarantee an unexpired token</small></div>
+      <div><span>Trading permissions</span><strong>Orders disabled</strong>
+        <small>Read-only market research</small></div>
+    </div>
+    <div className="v2-launch-grid">
+      <LaunchCard title="Manage Dhan connection"
+        subtitle="Inspect token validity or supply a new authorized market-data token."
+        caption="Open connection details" icon={Database} onOpen={onConfigure}/>
+      <LaunchCard title="Automatic recording"
+        subtitle="Choose original 20-level BANKNIFTY depth capture and check packet coverage."
+        caption="Recorder settings" icon={Activity} onOpen={onRecording}/>
+      <LaunchCard title="Check system health"
+        subtitle="Review backend, saved jobs, source integrity and recent market packets."
+        caption="Open diagnostics" icon={ShieldCheck} onOpen={onDiagnostics}/>
+    </div>
+    <button type="button" className="v2-secondary v2-connection-data-action"
+      onClick={onData}><Database size={15}/> Browse saved market data
+      <ArrowRight size={15}/></button>
+  </section>
+}
+
 export function SettingsPreferencesV2(){
   const [density,setDensity]=useState(()=>{
     try{return localStorage.getItem('ql-v2-density')==='compact'?'compact':'comfortable'}
