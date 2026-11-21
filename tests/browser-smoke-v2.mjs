@@ -151,7 +151,7 @@ try{
    await dataTasks.getByRole('button',{name:/Browse market data/}).waitFor()
    await dataTasks.getByRole('button',{name:/Get missing data/}).click()
    await dataTasks.getByRole('button',{name:/Inspect stored records/}).click()
-   await page.getByRole('heading',{name:'Data Explorer',exact:true}).waitFor()
+   await page.locator('.qm-panel-title').getByRole('heading',{name:'Data Explorer',exact:true}).waitFor()
    await dataTasks.getByRole('button',{name:/Health & recovery/}).click()
    await page.getByRole('heading',{name:'Whole-workstation health'}).waitFor()
    await dataTasks.getByRole('button',{name:/Inspect stored records/}).click()
