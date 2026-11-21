@@ -156,8 +156,8 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
       await post('/api/trading-cockpit/trades',{
         symbol:optionSymbol.trim().toUpperCase(),direction:optionSide,
         quantity:Number(optionQty),entry_price:Number(optionEntry),note:tradeNote})
-      setOptionEntry('');setTradeNote('');setOptionDraftNote('');setStartTime(Date.now())
-      setRecordMessage('Manual position opened. Six-minute timer started. No broker order submitted.')
+      setOptionEntry('');setTradeNote('');setOptionDraftNote('')
+      setRecordMessage('Manual position opened. No forced holding timer or broker order.')
       await loadJournal()
     }catch(e){setError(readableError(e))}
     finally{setJournalBusy(false)}
@@ -404,7 +404,7 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
       </nav>
       {error&&<div role="alert" className="tc-error">{error}</div>}
       {journalView==='trades'&&<>    <section className="tc-panel tc-ledger" aria-label="Manual options trade journal">
-      <div className="tc-panel-title"><strong>Manual options journal · six-minute discipline</strong><span>Read-only research · you type actual prices</span></div>
+      <div className="tc-panel-title"><strong>Manual options journal</strong><span>Read-only research · you type actual prices</span></div>
       <p className="tc-muted">Enter a new trade at the time you actually fill it. QuantLab stores server receipt times and computes P&amp;L only after you report an exit. The app cannot verify your broker fills, enforce a stop, or place orders.</p>
       <p className="tc-confirm">The underlying signal comes from BANKNIFTY spot candles. Contract selection, lot size and current Dhan option bid/ask can be previewed under Live Trading → Option Chain; they are not verified broker fills.</p>
       {optionDraftNote&&<p role="status" className="tc-warning">{optionDraftNote} Enter your actual broker fill premium before recording anything.</p>}
@@ -420,14 +420,18 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
         <button className="tc-primary" disabled={journalBusy||
           (optionLotSize!==null&&(Number(optionQty)<optionLotSize||
             Number(optionQty)%optionLotSize!==0))} type="submit">
-          Record actual broker fill manually + start six-minute timer
+          Record actual broker fill manually
         </button>
       </form>
-      <div className="tc-ledger-summary"><span>Open positions <strong>{journal?.summary.open??0}</strong></span><span>Closed trades <strong>{journal?.summary.closed??0}</strong></span><span>Net realized from entered fills <strong>₹{fmt(journal?.summary.closed_net_pnl_inr)}</strong></span><span>Over six minutes <strong>{journal?.summary.holding_violations??0}</strong></span></div>
+      <div className="tc-ledger-summary"><span>Open positions <strong>{journal?.summary.open??0}</strong></span><span>Closed trades <strong>{journal?.summary.closed??0}</strong></span><span>Net realized from entered fills <strong>₹{fmt(journal?.summary.closed_net_pnl_inr)}</strong></span></div>
+      <details className="tc-optional-hold-metrics"><summary>Optional six-minute review statistics</summary>
+        <p className="tc-muted">Historical timing metadata only. This is not a fixed exit rule or trade limit.</p>
+        <strong>{journal?.summary.holding_violations??0}</strong> manually recorded trades exceeded six minutes.
+      </details>
       {journal?.trades.some(trade=>trade.status==='OPEN')&&<div className="tc-trade-active"><strong>Currently open (manual records)</strong>
         {journal.trades.filter(trade=>trade.status==='OPEN').map(trade=><div className="tc-open-trade" key={trade.id}>
           <span>{trade.symbol} · {trade.direction} · {trade.quantity} × ₹{fmt(trade.entry_price)}</span>
-          <span className={now-Date.parse(trade.entry_recorded_utc)>360000?'tc-overdue':'tc-muted'}>Elapsed {Math.floor(Math.max(0,now-Date.parse(trade.entry_recorded_utc))/60000)}m</span>
+          <span className="tc-muted">Elapsed {Math.floor(Math.max(0,now-Date.parse(trade.entry_recorded_utc))/60000)}m</span>
           <button onClick={()=>{setClosingId(trade.id);setExitPremium('')}} disabled={journalBusy}>Record exit</button></div>)}
       </div>}
       {closingId&&<form className="tc-trade-form tc-exit" onSubmit={event=>void recordExit(event)}>
