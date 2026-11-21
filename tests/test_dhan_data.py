@@ -138,11 +138,51 @@ class DhanOfflineTests(unittest.TestCase):
             self.assertEqual(instruments[0].security_id,"1333")
             self.assertEqual(instruments[0].exchange_segment,"NSE_EQ")
 
-    def test_duplicate_timestamp_rejected(self):
+    def test_identical_duplicate_timestamp_is_quarantined_and_audited(self):
         values=response(2)
         values["timestamp"][1]=values["timestamp"][0]
-        with self.assertRaises(ValueError):
-            candles_to_frame(values,Instrument("A","1333"))
+        for key in ("open","high","low","close","volume"):
+            values[key][1]=values[key][0]
+        frame=candles_to_frame(values,Instrument("CANBK","10794"))
+        self.assertEqual(len(frame),1)
+        self.assertEqual(frame.iloc[0]["close"],105)
+        self.assertEqual(frame.attrs["rejected_provider_bars"],1)
+        self.assertEqual(frame.attrs["total_provider_bars"],2)
+        reject=frame.attrs["rejected_provider_rows"]
+        self.assertEqual(len(reject),1)
+        self.assertEqual(reject.iloc[0]["provider_timestamp"],values["timestamp"][0])
+        self.assertEqual(reject.iloc[0]["reason"],"identical_provider_timestamp_duplicate")
+
+    def test_missing_timestamp_is_quarantined_without_inferred_date(self):
+        values=response(2)
+        values["timestamp"][1]=None
+        frame=candles_to_frame(values,Instrument("CANBK","10794"))
+        self.assertEqual(len(frame),1)
+        self.assertEqual(frame.attrs["rejected_provider_bars"],1)
+        self.assertEqual(frame.attrs["rejected_provider_rows"].iloc[0]["reason"],
+                         "missing_or_invalid_provider_timestamp")
+        values["timestamp"]=[None,None]
+        with self.assertRaisesRegex(ValueError,"no timestamp-valid"):
+            candles_to_frame(values,Instrument("CANBK","10794"))
+
+    def test_duplicate_timestamp_with_conflicting_ohlcv_fails_closed(self):
+        values=response(2)
+        values["timestamp"][1]=values["timestamp"][0]
+        with self.assertRaisesRegex(ValueError,"conflicting OHLCV"):
+            candles_to_frame(values,Instrument("CANBK","10794"))
+
+    def test_download_retains_exact_duplicate_audit_counts(self):
+        raw=response(2)
+        raw["timestamp"][1]=raw["timestamp"][0]
+        for key in ("open","high","low","close","volume"):
+            raw[key][1]=raw[key][0]
+        frame=download_candles(
+            Instrument("CANBK","10794"),
+            "2024-01-01","2024-02-01",token="TEST",post=lambda *_:raw,
+            pause_seconds=0)
+        self.assertEqual(len(frame),1)
+        self.assertEqual(frame.attrs["rejected_provider_bars"],1)
+        self.assertEqual(len(frame.attrs["rejected_provider_rows"]),1)
 
 
 if __name__=="__main__":
