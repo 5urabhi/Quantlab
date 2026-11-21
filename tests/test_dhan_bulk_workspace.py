@@ -411,6 +411,18 @@ class BulkDhanWorkstationTests(unittest.TestCase):
         self.assertEqual(audit.iloc[0]["reason"],
                          "missing_or_invalid_provider_timestamp")
         self.assertTrue(pd.isna(audit.iloc[0]["provider_timestamp"]))
+        import hashlib
+        original_sha=hashlib.sha256(audit_files[0].read_bytes()).hexdigest()
+        # Provider retries might return DIFFERENT evidence. The first failed
+        # window audit must not be overwritten by the second failure.
+        raw["volume"][1]=3000
+        with patch.object(dw,"download_candles",side_effect=vendor):
+            retried=dw.run_batch(batch["id"])
+        self.assertEqual(retried["counts"]["failed"],1)
+        self.assertEqual(len(list(quality.glob("*.csv"))),2)
+        self.assertEqual(hashlib.sha256(audit_files[0].read_bytes()).hexdigest(),
+                         original_sha)
+        self.assertFalse(source.with_suffix(".json").exists())
 
     def test_conflicting_duplicate_source_fails_without_checkpoint(self):
         from index_research.dhan_data import download_candles as real_download
