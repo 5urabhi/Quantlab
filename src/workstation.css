@@ -146,3 +146,12 @@
 .ws-data-library-card .ws-dataset-manage-row .ws-button{flex:1 1 auto}
 .ws-data-setup .ws-cardhead .ws-select{width:100%}
 }
+
+/* Keep a breadcrumb/title reference without repeating every nested page's hero. */
+.ws-titlebar.v2-titlebar-compact{margin-bottom:13px;align-items:center}
+.ws-titlebar.v2-titlebar-compact .ws-overline{display:none}
+.ws-titlebar.v2-titlebar-compact h1{font-size:20px;line-height:1.25;margin:0;
+  letter-spacing:-.02em;color:#d7e8ee}
+.ws-titlebar.v2-titlebar-compact p{display:none}
+.ws-titlebar.v2-titlebar-compact .ws-title-actions{margin:0}
+@media(max-width:640px){.ws-titlebar.v2-titlebar-compact h1{font-size:18px}}
