@@ -54,9 +54,16 @@ def link_existing_chain(selected: list[str], *, enabled: bool) -> dict:
         return result
     try:
         original = option_quotes.list_for("dhan_shared")
-        if any(snapshot.get("contracts") for snapshot in original):
+        # A saved quote row is not necessarily usable for the five models
+        # (e.g. stale, crossed, or incompatible with model assumptions).
+        # Mirror the source admissibility inspection used by the real audit:
+        # do not skip a usable original chain merely because a dead quote
+        # catalog row exists.
+        references = audit_all_models.actual_quote_refs("dhan_shared")
+        if references:
             result["status"] = "already_saved_quotes_available"
             result["saved_quote_snapshots"] = len(original)
+            result["runnable_saved_contracts_inspected"] = len(references)
             return result
         stock = recorded_chain_model_quotes.available()
         digest = stock.get("recommended_snapshot_sha256")
