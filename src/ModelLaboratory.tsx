@@ -1083,7 +1083,14 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
               <Icon size={15}/>{title}</button>)}
         </nav>
         {view==='configure'&&<section className="ql-card" id="ql-experiment-setup">
-          <div className="ql-panel-title"><FlaskConical size={18}/><h3>Experiment setup</h3></div>
+          <div className="ql-panel-title ql-focus-parameter-title">
+            <SlidersHorizontal size={18}/><h3>Model settings</h3>
+            <button type="button" onClick={()=>setShowExtraParams(show=>!show)}
+              aria-expanded={showExtraParams}>
+              {showExtraParams?'Fewer settings':
+                'More settings ('+Math.max(0,selected.parameters.length-4)+')'}
+              <ArrowRight size={14}/></button>
+          </div>
           {observedNeeded&&<label className="ql-field"><span>1 · Market data source (shared library preferred)</span>
             <select aria-label="Model laboratory source dataset" value={selectedDataset} onChange={e=>onSelectDataset(e.target.value)}>
               <option value="">No dataset selected</option>
@@ -1375,7 +1382,10 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
               <small>{matchedStocks.length} matching stock(s), including incomplete histories.
                 Choose one to activate +20% automatic completion.</small>
             </label>}
-          <div className="ql-param-grid">{selected.parameters.map(spec=><label className="ql-field" key={spec.key}>
+          <div className="ql-param-grid">{selected.parameters
+            .filter((spec,index)=>showExtraParams||index<4||
+              ['quote','symbol'].includes(spec.type)||spec.key==='target')
+            .map(spec=><label className="ql-field" key={spec.key} title={spec.description||undefined}>
             <span>{spec.key.replaceAll('_',' ')}</span>
             {spec.type==='select'?<select value={String(params[spec.key]??spec.default)}
               onChange={e=>setParams({...params,[spec.key]:e.target.value})}>
