@@ -452,13 +452,141 @@ def scenario(book: dict, lots: int = 1,
     return output
 
 
+
+def execution_risk(book: dict, projection: dict, *,
+                   executed_orders_per_side: int = 1,
+                   brokerage_inr: float | None = None,
+                   broker_profile: str = "zerodha",
+                   adverse_move_bps: float = 25.0,
+                   exit_slippage_bps: float = 10.0,
+                   buy_fill_probability: float | None = None,
+                   sell_fill_probability_given_buy: float | None = None) -> dict:
+    """Price three explicit outcomes; never infer fill rates from one book.
+
+    A passive buy at the recorded bid may not fill. If it does and the
+    passive ask exit does not, model *forced liquidation* by walking recorded
+    bids and applying user-specified adverse price movement and exit
+    slippage. Both conditional paths include the complete chosen broker
+    fee schedule. No exchange queue, trade prints or actual fills exist.
+    """
+    if not isinstance(exit_slippage_bps, (float, int)) or (
+            not isfinite(exit_slippage_bps) or
+            not 0 <= exit_slippage_bps <= 1000):
+        raise ValueError("Choose exit slippage between 0 and 1000 bps")
+    if not isinstance(adverse_move_bps, (float, int)) or (
+            not isfinite(adverse_move_bps) or
+            not 0 <= adverse_move_bps <= 1000):
+        raise ValueError("Choose adverse movement between 0 and 1000 bps")
+    supplied = (buy_fill_probability is not None,
+                sell_fill_probability_given_buy is not None)
+    if supplied[0] != supplied[1]:
+        raise ValueError("Supply both hypothetical fill probabilities or neither")
+    if all(supplied):
+        for probability in (buy_fill_probability,
+                            sell_fill_probability_given_buy):
+            if (isinstance(probability, bool) or
+                    not isinstance(probability, (int, float)) or
+                    not isfinite(probability) or not 0 <= probability <= 1):
+                raise ValueError("Hypothetical fill probabilities must be 0 to 1")
+
+    units = projection["units"]
+    entry_turnover = _money(projection["observed_bid"] * units)
+    best_case = projection["passive_capture_upper_bound"]
+    both_fill_net = best_case["upper_bound_net_inr_before_unmodelled_costs"]
+    top_sufficient = best_case["top_of_book_quantity_sufficient_both_sides"]
+    bid_walk = _walk(book["bid"], units)
+    forced_exit_net = None
+    forced_exit_fees = None
+    stressed_exit_turnover = None
+    if bid_walk["fillable"]:
+        mid = (projection["observed_bid"] + projection["observed_ask"]) / 2
+        haircut_per_unit = mid * (
+            adverse_move_bps + exit_slippage_bps) / 10_000
+        # Haircut is an explicit shock to recorded bid liquidity, NOT an
+        # observation of a future quote or a synthetic order-book level.
+        stressed_exit_turnover = _money(
+            max(0.0, bid_walk["premium_turnover"] -
+                units * haircut_per_unit))
+        forced_exit_fees = fee_schedule(
+            entry_turnover, stressed_exit_turnover,
+            executed_orders_per_side=executed_orders_per_side,
+            brokerage_inr=brokerage_inr, broker_profile=broker_profile)
+        forced_exit_net = _money(
+            stressed_exit_turnover - entry_turnover -
+            forced_exit_fees["total_estimated"])
+
+    break_even = None
+    if forced_exit_net is not None and top_sufficient:
+        if both_fill_net > 0 and forced_exit_net < 0:
+            break_even = round(
+                -forced_exit_net / (both_fill_net - forced_exit_net), 6)
+        elif both_fill_net > 0 and forced_exit_net >= 0:
+            break_even = 0.0
+
+    modeled_ev = None
+    buy_probability = buy_fill_probability
+    sell_probability = sell_fill_probability_given_buy
+    if (all(supplied) and forced_exit_net is not None and
+            top_sufficient):
+        modeled_ev = _money(buy_probability * (
+            sell_probability * both_fill_net +
+            (1 - sell_probability) * forced_exit_net))
+
+    status = (
+        "INSUFFICIENT_RECORDED_EXIT_DEPTH" if forced_exit_net is None
+        else "TOP_OF_BOOK_INSUFFICIENT" if not top_sufficient
+        else "FILL_PROBABILITIES_UNKNOWN" if not all(supplied)
+        else "USER_ASSUMPTIONS_ONLY_NOT_CALIBRATED")
+    entry_fees = best_case["fees"]["buy_leg"]
+    return {
+        "status": status,
+        "no_buy_fill_net_inr": 0.0,
+        "both_passive_fills_net_inr": both_fill_net,
+        "buy_fills_sell_misses_forced_exit_net_inr": forced_exit_net,
+        "forced_exit_turnover_inr": stressed_exit_turnover,
+        "forced_exit_fees": forced_exit_fees,
+        "premium_at_risk_inr": entry_fees["cash_debit"],
+        "break_even_sell_fill_probability_given_buy": break_even,
+        "scenario_weighted_net_inr": modeled_ev,
+        "buy_fill_probability_assumed": buy_probability,
+        "sell_fill_probability_given_buy_assumed": sell_probability,
+        "probability_no_buy_fill": (
+            round(1 - buy_probability, 6) if all(supplied) else None),
+        "probability_both_fill": (
+            round(buy_probability * sell_probability, 6)
+            if all(supplied) else None),
+        "probability_buy_fill_exit_fails": (
+            round(buy_probability * (1 - sell_probability), 6)
+            if all(supplied) else None),
+        "adverse_move_bps_assumption": adverse_move_bps,
+        "forced_exit_slippage_bps_assumption": exit_slippage_bps,
+        "recorded_bid_depth_sufficient_for_liquidation": bid_walk["fillable"],
+        "top_book_quantity_sufficient": top_sufficient,
+        "fill_probabilities_calibrated": False,
+        "partial_fills_and_queue_position_modeled": False,
+        "realized_pnl_inr": None,
+        "read_only": True,
+        "explanation": "All P&L paths are conditional on unobserved fills. "
+            "The failed-exit branch liquidates against the SAME saved "
+            "20-level bid book with explicit adverse-move and slippage "
+            "haircuts; it is not a future executable price. Scenario "
+            "weighted P&L appears ONLY after both user-entered probabilities "
+            "are supplied, and is not a statistical expected return. "
+            "Unfilled/partial orders, cancellation, expiry, market gaps, "
+            "queue priority and future depth changes are not observed.",
+    }
+
+
 def simulate(identity: str, lots: int = 1,
              day: str | None = None,
              received_utc: str | None = None,
              executed_orders_per_side: int = 1,
              brokerage_inr: float | None = None,
              adverse_move_bps: float = 0,
-             broker_profile: str = "dhan") -> dict:
+             broker_profile: str = "dhan",
+             buy_fill_probability: float | None = None,
+             sell_fill_probability_given_buy: float | None = None,
+             exit_slippage_bps: float = 10.0) -> dict:
     books, meta = _read_books(identity, day=day, limit=300)
     if not books:
         return {"status": "ORIGINAL_BOOK_MISSING", "identity": identity,
@@ -475,14 +603,64 @@ def simulate(identity: str, lots: int = 1,
         "identity": identity,
         "computed_features": {"lot_size_verified": selected["lot_size"]},
     }
+    projection = scenario(
+        original, lots, executed_orders_per_side, brokerage_inr,
+        adverse_move_bps, broker_profile=broker_profile)
+    projection["execution_risk"] = execution_risk(
+        original, projection,
+        executed_orders_per_side=executed_orders_per_side,
+        brokerage_inr=brokerage_inr, broker_profile=broker_profile,
+        adverse_move_bps=adverse_move_bps,
+        exit_slippage_bps=exit_slippage_bps,
+        buy_fill_probability=buy_fill_probability,
+        sell_fill_probability_given_buy=sell_fill_probability_given_buy)
+
+    # Observed future quotes are useful for studying price paths, but are
+    # NOT simulated executions. Missing data stays missing.
+    markouts = []
+    selected_time = datetime.fromisoformat(selected["received_utc"])
+    entry_turnover = _money(projection["units"] * projection["observed_bid"])
+    for horizon in (60, 300):
+        eligible = [b for b in books
+                    if (datetime.fromisoformat(b["received_utc"]) -
+                        selected_time).total_seconds() >= horizon]
+        row = {"horizon_seconds": horizon,
+               "status": "NO_TIMELY_FUTURE_RECEIPT",
+               "received_utc": None, "elapsed_seconds": None,
+               "observed_exit_bid_vwap": None,
+               "quote_markout_net_if_entry_filled_inr": None}
+        if eligible:
+            future = eligible[0]
+            elapsed = (datetime.fromisoformat(future["received_utc"]) -
+                       selected_time).total_seconds()
+            if elapsed <= horizon + max(120, horizon):
+                row["received_utc"] = future["received_utc"]
+                row["elapsed_seconds"] = round(elapsed, 1)
+                walked = _walk(future["bid_levels"], projection["units"])
+                if walked["fillable"]:
+                    fees = fee_schedule(
+                        entry_turnover, walked["premium_turnover"],
+                        executed_orders_per_side=executed_orders_per_side,
+                        brokerage_inr=brokerage_inr, broker_profile=broker_profile)
+                    row.update({
+                        "status": "FUTURE_SAVED_QUOTE_ONLY",
+                        "observed_exit_bid_vwap": walked["vwap"],
+                        "quote_markout_net_if_entry_filled_inr": _money(
+                            walked["premium_turnover"] -
+                            entry_turnover - fees["total_estimated"]),
+                    })
+                else:
+                    row["status"] = "INSUFFICIENT_FUTURE_RECORDED_BID_DEPTH"
+        markouts.append(row)
     return {
         "status": "ORIGINAL_BOOK_SCENARIO_ONLY",
         "identity": identity, "selected_book_received_utc": selected["received_utc"],
         "source_age_is_historical": True,
         "packet_pair_sha256": selected["packet_pair_sha256"],
-        "assumptions": scenario(original, lots,
-            executed_orders_per_side, brokerage_inr, adverse_move_bps,
-            broker_profile=broker_profile),
+        "assumptions": projection,
+        "future_saved_quote_markouts": markouts,
+        "markout_disclaimer": "Historical bid quotes after the selected receipt "
+            "do not prove that the passive buy filled or an exit order executed.",
         "read_only": True,
     }
 

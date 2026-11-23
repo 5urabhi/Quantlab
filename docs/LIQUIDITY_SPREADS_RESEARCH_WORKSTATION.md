@@ -189,3 +189,57 @@ original saved source IDs per scan and reports any cap. It refuses
 unverifiable books and never guesses a missing contract's bid or ask.
 The formula is a *source-book scenario*, not an out-of-sample execution
 backtest, risk-adjusted expected value, or advice to initiate a trade.
+
+## Execution-risk simulator: 2026-11-23
+
+**Location:** Trading → Liquidity & Spreads → Execution Simulator.
+
+The execution workbench now distinguishes three long-option order outcomes:
+(1) passive entry never fills (zero P&L if canceled without execution),
+(2) passive buy and passive sell both fill at saved best quotes (optimistic
+conditional upper bound), and (3) passive buy fills but the passive sell does
+not, forcing a modeled exit at the saved bid-depth VWAP after a configurable
+adverse price movement plus exit-slippage haircut. The third path prices the
+*entire transaction* with the chosen Zerodha/Dhan charge profile, rather than
+treating the attractive quoted spread as income. It is **not** a forecast or
+a realized trade: all fill paths are conditional, and the forced exit uses the
+original saved book plus an explicit price haircut, not an observed future
+execution.
+
+The workbench displays the long-option entry cash debit, conditional P&L
+for both successful fills and a failed exit, and the **conditional sell-fill
+break-even threshold** (given that entry filled), where it is mathematically
+defined. When saved books exist after the chosen receipt, it also shows
+source-quote exit markouts around 60 s and 300 s; these are future *quotes*
+and not proof of entry/exit fills. Missing, distant or insufficient-depth
+receipts remain unavailable, never interpolated.
+
+Fill probabilities are **unknown by default**. If the user explicitly
+activates the sensitivity toggle and enters both (a) entry fill probability
+and (b) sell fill probability conditional on entry, the UI displays only a
+**scenario-weighted net under those user assumptions**, not a calibrated
+expected return or a trading recommendation. The weighting is
+
+`p_buy * (p_sell_given_buy * P&L_both_fill +
+(1 - p_sell_given_buy) * P&L_forced_exit)`.
+
+The model assumes zero cash P&L for an entry that never executes. It neither
+models partial fills and queue priority nor claims that quote timestamps
+identify executable latency. The scanner's hypothetical positive upper
+bounds are highlighted **amber**, never green, to avoid suggesting that
+executing them produces guaranteed profit. Its lot auto-selection remains
+explicitly hypothetical; no order placement or broker authorization was
+introduced.
+
+### Validation
+
+`python -m unittest tests.test_liquidity_spreads -v`
+
+`npm run build`
+
+Tests cover missing probabilities (no expected value), explicitly supplied
+probabilities, transaction fees and missed exits, insufficient top-depth,
+bounded request parameters, and availability of saved-quote markouts. Future
+work for a calibrated strategy includes passive order placement/cancel
+timestamps, exchange trade prints, queue estimation, partial fills,
+position aging and quote-change replay, plus out-of-sample evaluation.

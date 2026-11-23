@@ -50,11 +50,33 @@ type Passive={hypothetical_buy_at_bid:number;hypothetical_sell_at_ask:number
   after_adverse_move_stress_inr:number;adverse_move_bps_assumption:number
   top_of_book_quantity_sufficient_both_sides:boolean
   fills_observed:boolean;fill_probability:null;classification:string;caveat:string}
+type ExecutionRisk={
+  status:string;no_buy_fill_net_inr:number
+  both_passive_fills_net_inr:number
+  buy_fills_sell_misses_forced_exit_net_inr:number|null
+  forced_exit_turnover_inr:number|null;premium_at_risk_inr:number
+  break_even_sell_fill_probability_given_buy:number|null
+  scenario_weighted_net_inr:number|null
+  buy_fill_probability_assumed:number|null
+  sell_fill_probability_given_buy_assumed:number|null
+  probability_no_buy_fill:number|null;probability_both_fill:number|null
+  probability_buy_fill_exit_fails:number|null
+  adverse_move_bps_assumption:number;forced_exit_slippage_bps_assumption:number
+  recorded_bid_depth_sufficient_for_liquidation:boolean
+  top_book_quantity_sufficient:boolean
+  fill_probabilities_calibrated:boolean
+  realized_pnl_inr:null;explanation:string
+}
+type QuoteMarkout={horizon_seconds:number;status:string
+  received_utc:string|null;elapsed_seconds:number|null
+  observed_exit_bid_vwap:number|null
+  quote_markout_net_if_entry_filled_inr:number|null}
 type SimResult={status:string;identity:string;selected_book_received_utc:string
+  future_saved_quote_markouts?:QuoteMarkout[];markout_disclaimer?:string
   assumptions?:{units:number;lots:number;lot_size:number;observed_bid:number
     observed_ask:number;spread_bps:number;marketable_buy:SideFill
     marketable_sell:SideFill;marketable_roundtrip:Marketable
-    passive_capture_upper_bound:Passive;read_only:boolean}
+    passive_capture_upper_bound:Passive;execution_risk:ExecutionRisk;read_only:boolean}
   note?:string}
 type Research={identity:string;day_ist:string;lots:number
   status:string;observed_saved_books:number;observed_spread_bps_mean:number|null
@@ -192,6 +214,10 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
     setSim(null);setResearch(null)
   },[])
   const [adverseBps,setAdverseBps]=useState(25)
+  const [exitSlippage,setExitSlippage]=useState(10)
+  const [assumeFills,setAssumeFills]=useState(false)
+  const [buyProbability,setBuyProbability]=useState(50)
+  const [sellProbability,setSellProbability]=useState(50)
   const [sim,setSim]=useState<SimResult|null>(null)
   const [research,setResearch]=useState<Research|null>(null)
   const [running,setRunning]=useState(false)
@@ -248,7 +274,11 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
           ...(current?{received_utc:current.received_utc}:{}),
           executed_orders_per_side:orders,
           brokerage_inr:brokerage,adverse_move_bps:adverseBps,
-          broker_profile:brokerProfile,
+          broker_profile:brokerProfile,exit_slippage_bps:exitSlippage,
+          ...(assumeFills?{
+            buy_fill_probability:buyProbability/100,
+            sell_fill_probability_given_buy:sellProbability/100,
+          }:{}),
         }))
     }catch(e){setError(readableError(e))}
     finally{setRunning(false)}
@@ -445,6 +475,24 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
         <label>Adverse selection stress (bps)<input type="number" min="0" max="1000"
           value={adverseBps} onChange={e=>setAdverseBps(Math.max(0,
             Math.min(1000,Number(e.target.value)||0)))}/></label>
+        <label>Forced-exit slippage (bps)<input type="number" min="0" max="1000"
+          value={exitSlippage} onChange={e=>setExitSlippage(Math.max(0,
+            Math.min(1000,Number(e.target.value)||0)))}/></label>
+        <label>Assume fill probabilities?
+          <select value={assumeFills?'yes':'no'}
+            onChange={e=>setAssumeFills(e.target.value==='yes')}>
+            <option value="no">No — unknown (recommended)</option>
+            <option value="yes">Yes — hypothetical sensitivity only</option>
+          </select>
+        </label>
+        {assumeFills&&<>
+          <label>Assumed buy-fill chance (%)<input type="number" min="0" max="100"
+            value={buyProbability} onChange={e=>setBuyProbability(Math.max(0,
+              Math.min(100,Number(e.target.value)||0)))}/></label>
+          <label>Assumed sell-fill given buy (%)<input type="number" min="0" max="100"
+            value={sellProbability} onChange={e=>setSellProbability(Math.max(0,
+              Math.min(100,Number(e.target.value)||0)))}/></label>
+        </>}
         <label>Original saved book<select value={current?.received_utc||''}
           onChange={e=>setBookIndex(activeBooks.findIndex(
             b=>b.received_utc===e.target.value))}>
@@ -484,6 +532,50 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
           <Metric name="Order size" value={num(sim.assumptions.units)+' units'}
             caption={num(sim.assumptions.lot_size)+' / lot · '+num(lots)+' lot(s)'}/>
         </div>
+        <section className="lq-risk-panel" aria-label="Execution and missed-exit risk">
+          <div><strong>Execution outcome paths</strong><small>
+            No probabilities inferred from a static order book.
+            Conditional estimates include estimated {brokerProfile} charges.</small></div>
+          <div className="lq-results">
+            <Metric name="Buy never fills" value={money(sim.assumptions.execution_risk.no_buy_fill_net_inr)}
+              caption="₹0 assumes unfilled orders are canceled without fees"/>
+            <Metric name="Buy and sell both fill" value={money(
+              sim.assumptions.execution_risk.both_passive_fills_net_inr)}
+              caption="Best-quote conditional estimate, not expected profit"/>
+            <Metric name="Buy fills, sell misses" value={money(
+              sim.assumptions.execution_risk.buy_fills_sell_misses_forced_exit_net_inr)}
+              caption="Forced bid exit with adverse move and slippage; same-book stress"/>
+            <Metric name="Long-option premium at risk" value={money(
+              sim.assumptions.execution_risk.premium_at_risk_inr)}
+              caption="Entry cash debit, not a stop-loss or maximum total exposure"/>
+            <Metric name="Break-even conditional sell fill" value={
+              sim.assumptions.execution_risk.break_even_sell_fill_probability_given_buy===null
+                ?'Unavailable':num(
+                  sim.assumptions.execution_risk.break_even_sell_fill_probability_given_buy*100,1)+'%'}
+              caption="Required given buy filled, for this two-outcome model"/>
+            <Metric name="Scenario-weighted net (user assumptions)" value={
+              money(sim.assumptions.execution_risk.scenario_weighted_net_inr)}
+              caption={assumeFills?'Not calibrated — not a profit forecast':
+                'Fill rates unknown; no expected P&L calculated'}/>
+          </div>
+          {sim.assumptions.execution_risk.status!=='USER_ASSUMPTIONS_ONLY_NOT_CALIBRATED'&&
+            <p className="lq-alert" role="status">
+              {sim.assumptions.execution_risk.status.replaceAll('_',' ')}.
+              We cannot classify this contract as profitable without verified fills
+              and a calibrated execution model.</p>}
+          <p className="lq-hint">{sim.assumptions.execution_risk.explanation}</p>
+          <div className="lq-section-title"><strong>Saved-quote future markouts</strong></div>
+          <div className="lq-results">
+            {(sim.future_saved_quote_markouts||[]).map(mark=>
+              <Metric key={mark.horizon_seconds}
+                name={num(mark.horizon_seconds)+'s later bid exit quote'}
+                value={money(mark.quote_markout_net_if_entry_filled_inr)}
+                caption={mark.status==='FUTURE_SAVED_QUOTE_ONLY'?
+                  'Quote only · '+localTime(mark.received_utc):
+                  mark.status.replaceAll('_',' ')}/>)}
+          </div>
+          <p className="lq-hint">{sim.markout_disclaimer}</p>
+        </section>
         {!sim.assumptions.passive_capture_upper_bound.top_of_book_quantity_sufficient_both_sides&&
           <p className="lq-alert" role="status">Top-of-book displayed quantity is insufficient
             for this lot count on at least one side. Passive spread capture

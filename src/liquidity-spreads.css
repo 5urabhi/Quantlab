@@ -161,3 +161,11 @@
 .lq-transaction-grid strong{color:#d3ffee}
 .lq-transaction-grid span{color:#acd1df}
 @media(max-width:750px){.lq-transaction-grid{grid-template-columns:1fr}}
+
+.lq-risk-panel{display:grid;gap:13px;background:#10374a;border:1px solid #597d90;border-radius:9px;padding:15px}
+.lq-risk-panel>div:first-child{display:grid;gap:5px}
+.lq-risk-panel>div:first-child strong{font-size:15px;color:#f2d9a5}
+.lq-risk-panel>div:first-child small{font-size:11px;color:#a6c7d3}
+.lq-risk-panel .lq-results{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:840px){.lq-risk-panel .lq-results{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.lq-risk-panel .lq-results{grid-template-columns:1fr}}

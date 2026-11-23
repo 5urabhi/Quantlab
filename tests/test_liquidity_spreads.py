@@ -299,6 +299,84 @@ class LiquiditySpreadResearchTests(TestCase):
         self.assertEqual(res.status_code,200,res.text)
         self.assertIn("NOT a backtest",res.json()["warning"])
 
+    def test_execution_risk_missed_exit_has_full_costs_and_no_fabricated_ev(self):
+        original = original_book(self.t0, bid=100., ask=110., quantity=150)
+        projection = spreads.scenario(
+            original, lots=1, broker_profile="zerodha",
+            adverse_move_bps=25)
+        r = spreads.execution_risk(
+            original, projection, broker_profile="zerodha",
+            adverse_move_bps=25, exit_slippage_bps=10)
+        self.assertEqual(r["status"], "FILL_PROBABILITIES_UNKNOWN")
+        self.assertIsNone(r["scenario_weighted_net_inr"])
+        self.assertIsNone(r["realized_pnl_inr"])
+        self.assertGreater(r["both_passive_fills_net_inr"], 0)
+        self.assertLess(r["buy_fills_sell_misses_forced_exit_net_inr"], 0)
+        self.assertGreater(r["premium_at_risk_inr"], 0)
+        self.assertGreater(r["break_even_sell_fill_probability_given_buy"], 0)
+        self.assertLess(r["break_even_sell_fill_probability_given_buy"], 1)
+
+    def test_user_assumed_probabilities_are_sensitivity_not_predictions(self):
+        original = original_book(self.t0, bid=249., ask=250., quantity=150)
+        projection = spreads.scenario(original, lots=1,
+                                      broker_profile="zerodha")
+        r = spreads.execution_risk(
+            original, projection, broker_profile="zerodha",
+            buy_fill_probability=.5, sell_fill_probability_given_buy=.8)
+        expected = .5 * (.8 * r["both_passive_fills_net_inr"] +
+                         .2 * r["buy_fills_sell_misses_forced_exit_net_inr"])
+        self.assertAlmostEqual(r["scenario_weighted_net_inr"], expected, places=2)
+        self.assertEqual(r["probability_no_buy_fill"], .5)
+        self.assertEqual(r["probability_both_fill"], .4)
+        self.assertEqual(r["probability_buy_fill_exit_fails"], .1)
+        self.assertFalse(r["fill_probabilities_calibrated"])
+        self.assertRaises(ValueError, spreads.execution_risk,
+            original, projection, buy_fill_probability=.5)
+        self.assertRaises(ValueError, spreads.execution_risk,
+            original, projection, buy_fill_probability=-.1,
+            sell_fill_probability_given_buy=.2)
+
+    def test_exit_depth_shortfall_disables_expected_value(self):
+        original = original_book(self.t0, bid=249., ask=250., quantity=2)
+        projection = spreads.scenario(original, lots=1,
+                                      broker_profile="zerodha")
+        r = spreads.execution_risk(
+            original, projection, broker_profile="zerodha",
+            buy_fill_probability=.8, sell_fill_probability_given_buy=.9)
+        self.assertIsNone(r["scenario_weighted_net_inr"])
+        self.assertEqual(r["status"], "TOP_OF_BOOK_INSUFFICIENT")
+
+    def test_api_sensitivity_and_saved_quote_markouts_not_real_fills(self):
+        response = self.client.post(
+            "/api/trading-cockpit/liquidity/simulate", json={
+                "identity": "NSE_FNO:62539", "day": "2026-11-23",
+                "lots": 1, "received_utc": self.sample[0]["received_utc"],
+                "broker_profile": "zerodha",
+                "buy_fill_probability": .5,
+                "sell_fill_probability_given_buy": .8,
+                "exit_slippage_bps": 15})
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        risk = body["assumptions"]["execution_risk"]
+        self.assertFalse(risk["fill_probabilities_calibrated"])
+        self.assertIsNotNone(risk["scenario_weighted_net_inr"])
+        self.assertEqual(risk["realized_pnl_inr"], None)
+        marks = body["future_saved_quote_markouts"]
+        self.assertEqual([m["horizon_seconds"] for m in marks], [60, 300])
+        self.assertEqual(marks[0]["status"], "FUTURE_SAVED_QUOTE_ONLY")
+        self.assertEqual(marks[1]["status"], "NO_TIMELY_FUTURE_RECEIPT")
+        self.assertNotIn("executed", str(marks).lower())
+        for invalid in (
+                {"buy_fill_probability": .4},
+                {"buy_fill_probability": 2.,
+                 "sell_fill_probability_given_buy": .4},
+                {"exit_slippage_bps": -1}):
+            res = self.client.post(
+                "/api/trading-cockpit/liquidity/simulate",
+                json={"identity": "NSE_FNO:62539",
+                      "day": "2026-11-23", **invalid})
+            self.assertIn(res.status_code, (400, 422))
+
     def test_live_selected_source_summary_does_not_invent_stale_quotes(self):
         fake={
           "contracts":[
