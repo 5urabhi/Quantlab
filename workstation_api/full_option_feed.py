@@ -72,8 +72,64 @@ def _set(**fields) -> None:
         STATUS.update(fields)
 
 
+def _consent_path() -> Path:
+    return auto._root() / "banknifty_all_option_quote_consent.json"
+
+
+def _consented() -> bool:
+    path = _consent_path()
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        return isinstance(record, dict) and record.get("enabled") is True
+    except (ValueError, OSError, UnicodeError):
+        return False
+
+
+def _set_consent(enabled: bool) -> None:
+    path = _consent_path()
+    if path.is_symlink():
+        raise ValueError("Unsafe Dhan full-option consent path")
+    temporary = path.with_name(path.name+".tmp")
+    if temporary.is_symlink():
+        raise ValueError("Unsafe temporary Dhan consent path")
+    descriptor = os.open(str(temporary), os.O_CREAT|os.O_WRONLY|os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump({"enabled": enabled,
+                       "read_only_quote_and_oi": True}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary,path)
+        os.chmod(path,0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _armed() -> bool:
-    return bool(auto._config()["enabled"])
+    return bool(_consented() and auto._config()["enabled"])
+
+
+def enable(*, confirm_live_quote_stream: bool) -> dict:
+    """Separate opt-in; does not restart or disarm existing depth sockets."""
+    if not confirm_live_quote_stream:
+        raise ValueError("Explicitly approve the full Dhan options Quote/OI stream")
+    if not auto._config()["enabled"]:
+        raise ValueError("Arm existing Dhan read-only automatic recording first")
+    if live_market.status().get("active"):
+        raise ValueError("Stop the separate manual live feed before using the fifth Dhan connection")
+    if not os.getenv("DHAN_ACCESS_TOKEN","").strip():
+        raise ValueError("Configure a local Dhan token before starting the option feed")
+    _set_consent(True)
+    resume_if_armed()
+    return status()
+
+
+def disable() -> dict:
+    _set_consent(False)
+    disarmed()
+    return status()
 
 
 def _safe_master_contracts(master: dict, expiries: list[str],
@@ -511,6 +567,12 @@ def _run(stop: Event) -> None:
         os.close(fd)
 
 
+def _restart_after_stopped(previous: Thread) -> None:
+    previous.join()
+    if not SHUTTING_DOWN and _armed():
+        resume_if_armed()
+
+
 def resume_if_armed() -> None:
     global WORKER,STOP,SHUTTING_DOWN
     if not _armed():
@@ -518,6 +580,9 @@ def resume_if_armed() -> None:
     with LOCK:
         SHUTTING_DOWN=False
         if WORKER is not None and WORKER.is_alive():
+            if STOP.is_set():
+                Thread(target=_restart_after_stopped,args=(WORKER,),
+                       daemon=True,name="quantlab-full-option-rearm").start()
             return
         STOP=Event()
         WORKER=Thread(target=_run,args=(STOP,),daemon=True,
@@ -552,7 +617,10 @@ def status() -> dict:
         snapshot["opportunity_count"] = sum(
             item.get("score",0)>=12 and bool(item.get("quote_received_utc"))
             for item in LATEST.values())
-    return {**snapshot,"armed":_armed(),"market_regular_hours":auto._market_open(),
+    return {**snapshot,"armed":_armed(),
+            "full_universe_consent":_consented(),
+            "depth_armed":bool(auto._config()["enabled"]),
+            "market_regular_hours":auto._market_open(),
             "source":"Dhan v2 original NSE_FNO Quote(4) and OI(5) packets",
             "read_only":True,"shared_library":"dhan_shared",
             "continuous_20_depth_for_all":False,
