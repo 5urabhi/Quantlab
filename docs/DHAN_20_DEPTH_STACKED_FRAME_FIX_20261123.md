@@ -48,11 +48,13 @@ https://dhanhq.co/docs/v2/full-market-depth/
 - The code does not create historical 20-level books for gaps, enable
   additional subscriptions, modify broker orders, or change saved
   source-market evidence.
-- Original protocol-valid message stacks that exceed the **old 16,600-byte
-  cutoff** increment `valid_depth_stacks_above_old_cutoff`. This makes
-  the next live session's decoder improvement measurable without exposing
-  vendor packets. A positive result is direct evidence that the old cutoff
-  would have discarded those source-valid packets.
+- Message stacks exceeding the **old 16,600-byte cutoff** increment
+  `valid_depth_stacks_above_old_cutoff` **only if one or more books pass
+  strict original bid/ask validation**. The companion
+  `valid_book_pairs_above_old_cutoff` counts exactly how many genuine
+  validated book pairs those frames delivered. This makes the next live
+  session's decoder improvement measurable without exposing vendor
+  packets or implying malformed data is usable.
 - Decoding errors caused by messages above the **new actual** 100-packet
   limit now increment `oversized_depth_stack_frames` instead of being
   conflated with genuinely truncated/wrong-size packets.
