@@ -337,7 +337,7 @@ class LiquiditySpreadResearchTests(TestCase):
             sell_fill_probability_given_buy=.2)
 
     def test_exit_depth_shortfall_disables_expected_value(self):
-        original = original_book(self.t0, bid=249., ask=250., quantity=1)
+        original = original_book(self.t0, bid=249., ask=250., quantity=2)
         projection = spreads.scenario(original, lots=1,
                                       broker_profile="zerodha")
         r = spreads.execution_risk(
