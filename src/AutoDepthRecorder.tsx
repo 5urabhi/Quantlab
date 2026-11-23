@@ -227,7 +227,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       {state.selection_warning}; historical books are never fabricated.</p>}
     {state?.coverage_gap_warning&&<p className="ad-warning" role="status">
       <AlertTriangle size={15}/>{state.coverage_gap_warning}
-      {' '}Last detected: {clock(state.last_boundary_escape_utc)} IST.</p>
+      {' '}Last detected: {clock(state.last_boundary_escape_utc)} IST.</p>}
     <div className="ad-summary">
       <span><strong>{n(state?.snapshots_saved)}</strong> books stored this session</span>
       <span><strong>{n(state?.received_pairs)}</strong> observed source packet pairs</span>
