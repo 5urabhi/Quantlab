@@ -26,3 +26,26 @@ Screenshots of Settings → Automatic Recording show:
 After this PR is merged and an existing capture is safely stopped, update `main` and start `bash run.sh`. In the next live session inspect the new **Original price and OI coverage by expiry** table and the reason-specific depth parser counters. For option price movers inspect their **Observed move / Trade span** versus strictly measured **60s / 5m** returns. Confirm no penny-option contract with insufficient source volume wins the limited 20-level depth promotion slots. Confirm a real original ₹99→₹500 case remains observable and eligible after adequate evidence.
 
 Offline tests use synthetic packet fixtures. They cannot certify Dhan connection acknowledgments, continuous coverage of all 2,850 contracts, or trading execution.
+
+## Broker packet delivery versus last-trade freshness
+
+The initial 380/2,850 count came from contracts with a **validated recent
+Dhan last-trade timestamp**, not a count of every contract for which a
+source Quote packet arrived. In particular, a far-expiry option may be
+correctly subscribed and Dhan can send a Quote message carrying a last
+trade from several hours earlier. Treating that as a trade at the *receive*
+time would fabricate a market event, while reporting that there was no
+packet at all would also be inaccurate.
+
+The recorder now tracks `last_quote_packet_received_utc` in **volatile
+source-delivery diagnostics** separately from `quote_received_utc` used
+for accepted live-trade activity and saved price histories. Per-expiry
+fields include `received_quote_packet_ids`, `with_any_quote` (accepted
+last trade), `stale_quote_packet_only`, and
+`never_received_quote_packet`. These fields are not substitutions for
+exchange acknowledgments or genuine live prints. Stale last trades are
+still excluded from false fresh-trade/momentum claims and are not inserted
+as if they traded at the current receive timestamp.
+
+This enhancement helps distinguish an illiquid but transmitting option
+from a contract that has never delivered even one original Quote packet.
