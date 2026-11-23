@@ -378,7 +378,7 @@ def _select(cfg: dict, previous_ids=(), rotation_step: int = 0) -> list[dict]:
     selected = select_full_chain_rotation(chain, cfg, rotation_step)
     coverage = _full_chain_coverage(chain, selected)
     diagnostic = _coverage_diagnostics(chain, selected)
-    counts = {"above": 0, "below": 0}
+    counts = {"above": 0, "below": 0, "atm": 0}
     for c in selected:
         counts[c["wing"]] += 1
     missing_unverified = (coverage["source_contracts_reported"] -
