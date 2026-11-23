@@ -1176,6 +1176,29 @@ def banknifty_auto_chain_status():
     return auto_option_chain.status()
 
 
+class DhanFullOptionStreamConsent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm_live_quote_stream: bool = False
+
+
+@app.post("/api/trading-cockpit/option-feed/enable")
+def banknifty_full_option_feed_enable(body: DhanFullOptionStreamConsent):
+    """Independent local opt-in: existing 20-level sockets remain running."""
+    try:
+        return full_option_feed.enable(
+            confirm_live_quote_stream=body.confirm_live_quote_stream)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/option-feed/disable")
+def banknifty_full_option_feed_disable():
+    try:
+        return full_option_feed.disable()
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/option-feed/status")
 def banknifty_full_option_feed_status():
     """No network call: local source receipt counters, never broker tokens."""
