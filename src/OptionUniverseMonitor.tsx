@@ -1,10 +1,11 @@
 import {useCallback,useEffect,useState} from 'react'
 import {Activity,AlertTriangle,ChevronLeft,ChevronRight,Database,Radio} from 'lucide-react'
-import {marketApi,readableError} from './tradingCockpitApi'
+import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './option-universe-monitor.css'
 
 type FeedState={
-  state:string;armed:boolean;connected:boolean;market_regular_hours:boolean
+  state:string;armed:boolean;depth_armed:boolean
+  full_universe_consent:boolean;connected:boolean;market_regular_hours:boolean
   requested_contracts:number;source_contracts:number
   unsubscribed_due_to_capacity:number;observed_contracts:number
   recent_price_contracts:number;quote_packets:number;oi_packets:number
@@ -74,6 +75,8 @@ export default function OptionUniverseMonitor(){
   const [history,setHistory]=useState<History|null>(null)
   const [showUniverse,setShowUniverse]=useState(false)
   const [warning,setWarning]=useState('')
+  const [confirmed,setConfirmed]=useState(false)
+  const [busy,setBusy]=useState(false)
   const refresh=useCallback(async()=>{
     const [a,b]=await Promise.allSettled([
       marketApi<FeedState>('/api/trading-cockpit/option-feed/status'),
@@ -104,6 +107,18 @@ export default function OptionUniverseMonitor(){
     return()=>window.clearInterval(interval)
   },[refresh])
   useEffect(()=>{if(showUniverse)void loadPage(offset)},[showUniverse,offset,loadPage])
+  const changeConsent=async(enabled:boolean)=>{
+    if(busy)return
+    setBusy(true);setWarning('')
+    try{
+      const result=await marketPost<FeedState>(
+        '/api/trading-cockpit/option-feed/'+(enabled?'enable':'disable'),
+        enabled?{confirm_live_quote_stream:true}:{})
+      setState(result);setConfirmed(false)
+      await refresh()
+    }catch(e){setWarning(readableError(e))}
+    finally{setBusy(false)}
+  }
   const metrics=[
     ['Original listed contracts',state?.source_contracts],
     ['Requested live subscriptions',state?.requested_contracts],
@@ -125,6 +140,22 @@ export default function OptionUniverseMonitor(){
       <span className={'ofu-state '+(state?.connected?'connected':'pending')}>
         <Radio size={14}/>{state?.state||'Checking source'}</span>
     </header>
+    <div className="ofu-consent">
+      {!state?.full_universe_consent?<label><input type="checkbox"
+        checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>
+        I authorize Dhan-only, read-only Quote/OI subscriptions for all
+        currently listed BANKNIFTY CE/PE contracts while local QuantLab
+        is running. Up to 5,000 instruments use one additional feed socket.
+        Original event storage may grow substantially.</label>:<span>
+        Full-universe streaming has separate saved permission.
+        Disabling it leaves the four 20-level recording sockets untouched.</span>}
+      <button type="button" disabled={busy||(state?.full_universe_consent?
+        false:!confirmed||!state?.depth_armed)}
+        onClick={()=>void changeConsent(!state?.full_universe_consent)}>
+        {busy?'Applying…':state?.full_universe_consent?
+          'Stop full-universe price stream':'Start all-contract price stream'}
+      </button>
+    </div>
     <div className="ofu-summary">
       {metrics.map(([label,value])=><div key={label}>
         <strong>{typeof value==='number'?nf(value):value||'—'}</strong>
