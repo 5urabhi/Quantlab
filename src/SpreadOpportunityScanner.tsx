@@ -152,7 +152,7 @@ export default function SpreadOpportunityScanner({
   return <section className="sos-workspace" aria-label="Automatic spread profit and loss scanner">
     <div className="sos-title">
       <div><span className="sos-overline"><ArrowDownUp size={13}/> AUTO-EVALUATE SAVED DHAN BOOKS</span>
-        <h3>Spread Execution Feasibility Scanner</h3>
+        <h3>Spread P&amp;L Opportunity Scanner</h3>
         <p>Automatically test 1–{maxLots} lots for every source-validated
           saved option order book, under your capital budget. All net results
           below are <strong>conditional bounds, not forecasts of trade profit.</strong></p>
