@@ -101,7 +101,7 @@ const todayIST=()=>new Intl.DateTimeFormat('sv-SE',{
   timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'
 }).format(new Date())
 const tabs:{id:PageTab;name:string;caption:string;icon:typeof Activity}[]=[
-  {id:'live',name:'Bid–Ask Capture',caption:'Automatic quote-spread scanning',icon:Activity},
+  {id:'live',name:'Live Spread Monitor',caption:'Bid–ask capture & automatic ranking',icon:Activity},
   {id:'multileg',name:'Multi-Leg Option Spreads',caption:'Auto discover, build, payoff',icon:Layers3},
   {id:'execution',name:'Execution Simulator',caption:'Depth-weighted cost estimates',icon:SlidersHorizontal},
   {id:'history',name:'Historical Spread Analysis',caption:'Original saved book timeline',icon:BarChart3},
