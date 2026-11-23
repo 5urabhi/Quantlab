@@ -336,7 +336,10 @@ def _ingest(event: dict, received: datetime, session: str) -> None:
                 entry["oi_received_utc"] = received_iso
             STATUS["oi_packets"] += 1
         LATEST[identity] = entry
-        if _armed() and should_store:
+        # The owning read-only socket worker already checks persisted consent
+        # before decoding the frame. Avoid opening a JSON settings file once
+        # per instrument packet across thousands of active contracts.
+        if should_store:
             row = (
                 identity, received_iso,
                 _iso(datetime.fromtimestamp(event["trade_epoch"],timezone.utc))
@@ -563,7 +566,12 @@ def _run(stop: Event) -> None:
                 _set(state="storage_flush_incomplete",
                      last_error="Pending original price events are still flushing; keep local server running")
     finally:
-        _set(connected=False,state="stopped" if not stop.is_set() else "stopping")
+        with LOCK:
+            flushing = STATUS.get("state") == "storage_flush_incomplete"
+        if flushing:
+            _set(connected=False)
+        else:
+            _set(connected=False,state="stopped" if not stop.is_set() else "stopping")
         os.close(fd)
 
 
@@ -616,6 +624,8 @@ def status() -> dict:
         snapshot["queue_depth"] = WRITES.qsize()
         snapshot["opportunity_count"] = sum(
             item.get("score",0)>=12 and bool(item.get("quote_received_utc"))
+            and 0 <= (now-datetime.fromisoformat(
+                item["quote_received_utc"])).total_seconds() <= 45
             for item in LATEST.values())
     return {**snapshot,"armed":_armed(),
             "full_universe_consent":_consented(),
