@@ -50,3 +50,13 @@
 @media(max-width:700px){.ofu-head{flex-direction:column}.ofu-section-head{align-items:flex-start;
   flex-direction:column}.ofu-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:450px){.ofu-summary{grid-template-columns:1fr}}
+
+
+.ofu-consent{display:flex;gap:14px;align-items:center;flex-wrap:wrap;background:#153d40;
+  border:1px solid #3f887f;border-radius:9px;padding:13px}
+.ofu-consent label,.ofu-consent span{flex:1;min-width:240px;color:#bee8db;
+  display:flex;gap:10px;align-items:flex-start;font-size:11px;line-height:1.65}
+.ofu-consent label input{accent-color:#55d7b3;margin-top:3px}
+.ofu-consent button{padding:10px 12px;border:1px solid #54ac9a;border-radius:7px;
+  color:#e5fff7;background:#246358;cursor:pointer;font-weight:700;font-size:12px}
+.ofu-consent button:disabled{opacity:.45;cursor:not-allowed}
