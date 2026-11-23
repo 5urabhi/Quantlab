@@ -871,6 +871,82 @@ def contracts_page(offset: int = 0, limit: int = 100) -> dict:
             "original_source_only":True}
 
 
+def audit_saved_quote_history(identity: str, day: str | None = None) -> dict:
+    """Read-only daily source receipt audit for one observed contract.
+
+    A gap between SOURCE RECEIPTS is not evidence a trade occurred or
+    broker data was lost. A contract may be silent. Avoid claiming that
+    a stored quote time series is a complete execution tape.
+    """
+    if not isinstance(identity, str) or not auto.SAFE_ID.fullmatch(identity):
+        raise ValueError("Choose an exact NSE_FNO instrument identity")
+    chosen = day or _utc().astimezone(auto.IST).date().isoformat()
+    try:
+        selected_day = date.fromisoformat(chosen)
+    except (ValueError, TypeError):
+        raise ValueError("Audit day must be ISO YYYY-MM-DD") from None
+    if chosen != selected_day.isoformat():
+        raise ValueError("Audit day must be ISO YYYY-MM-DD")
+    beginning = datetime.combine(
+        selected_day, datetime.min.time(), tzinfo=auto.IST)
+    start = _iso(beginning)
+    end = _iso(beginning + timedelta(days=1))
+    _init_storage()
+    with live_market._database() as db:
+        rows = db.execute(
+            "SELECT received_utc, exchange_trade_utc, kind "
+            "FROM dhan_option_live_events "
+            "WHERE identity=? AND received_utc>=? AND received_utc<? "
+            "ORDER BY received_utc LIMIT 50001",
+            (identity, start, end)).fetchall()
+    truncated = len(rows) > 50_000
+    if truncated:
+        rows = rows[:50_000]
+    quote_times = []
+    original_trade_times = []
+    oi_count = 0
+    for received_utc, trade_utc, kind in rows:
+        if kind == "oi":
+            oi_count += 1
+        elif kind == "quote":
+            stamp = datetime.fromisoformat(received_utc)
+            quote_times.append(stamp)
+            if trade_utc:
+                original_trade_times.append(datetime.fromisoformat(trade_utc))
+    gaps = sorted(
+        ((later-earlier).total_seconds()
+         for earlier, later in zip(quote_times, quote_times[1:])),
+        reverse=True)
+    received_minutes = len({
+        stamp.replace(second=0,microsecond=0) for stamp in quote_times})
+    return {
+        "identity": identity, "day_ist": chosen,
+        "saved_quote_receipts": len(quote_times),
+        "saved_oi_events": oi_count,
+        "first_quote_received_utc": _iso(quote_times[0])
+            if quote_times else None,
+        "last_quote_received_utc": _iso(quote_times[-1])
+            if quote_times else None,
+        "first_original_trade_utc": _iso(min(original_trade_times))
+            if original_trade_times else None,
+        "last_original_trade_utc": _iso(max(original_trade_times))
+            if original_trade_times else None,
+        "minutes_with_saved_quotes": received_minutes,
+        "largest_inter_receipt_gap_seconds": round(gaps[0], 1)
+            if gaps else None,
+        "inter_receipt_gaps_over_60s": sum(g > 60 for g in gaps),
+        "inter_receipt_gaps_over_300s": sum(g > 300 for g in gaps),
+        "scan_complete": not truncated,
+        "max_original_events_scanned": 50_000,
+        "read_only": True,
+        "note": "Only original received, saved Dhan option Quote/OI events "
+                "are audited. A quiet contract, no trade, disconnected "
+                "source, deduplicated quote or limited storage may create "
+                "gaps. This cannot prove loss or reconstruct unobserved "
+                "market movement or execution fills.",
+    }
+
+
 def saved_history(identity: str, limit: int = 250) -> dict:
     if not auto.SAFE_ID.fullmatch(identity) or not 1<=limit<=1000:
         raise ValueError("Choose an exact verified NSE_FNO identity and <=1000 records")
