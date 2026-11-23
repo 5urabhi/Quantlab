@@ -40,6 +40,8 @@ type Recorder={
   subscribed_strike_min?:number|null;subscribed_strike_max?:number|null
   rotating_contracts?:number;not_currently_depth_subscribed?:number
   rotation_step?:number;chain_refresh_seconds?:number
+  boundary_escape_events?:number;last_boundary_escape_utc?:string|null
+  coverage_gap_warning?:string|null
   latest:Record<string,Latest>;read_only:boolean
   historical_depth_download_supported:boolean
 }
@@ -223,6 +225,9 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <AlertTriangle size={15}/>{state.last_error}</p>}
     {state?.selection_warning&&<p className="ad-warning" role="status">
       {state.selection_warning}; historical books are never fabricated.</p>}
+    {state?.coverage_gap_warning&&<p className="ad-warning" role="status">
+      <AlertTriangle size={15}/>{state.coverage_gap_warning}
+      {' '}Last detected: {clock(state.last_boundary_escape_utc)} IST.</p>
     <div className="ad-summary">
       <span><strong>{n(state?.snapshots_saved)}</strong> books stored this session</span>
       <span><strong>{n(state?.received_pairs)}</strong> observed source packet pairs</span>
@@ -232,6 +237,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{n(state?.rotating_contracts)}</strong> currently rotating depth IDs</span>
       <span><strong>{state?.contracts_above??0} / {state?.contracts_below??0}</strong> subscribed above / below ATM</span>
       <span><strong>{n(state?.rotation_step)}</strong> distant strike rotation cycle</span>
+      <span><strong>{n(state?.boundary_escape_events)}</strong> observed prior-depth-range breakouts</span>
       <span><strong>{n(state?.subscribed_strike_min)} – {n(state?.subscribed_strike_max)}</strong> subscribed strikes</span>
       <span><strong>{n(state?.source_strike_min)} – {n(state?.source_strike_max)}</strong> verified source strikes</span>
       <span><strong>{n(state?.contracts_with_saved_books)}</strong> contracts with saved source books</span>
