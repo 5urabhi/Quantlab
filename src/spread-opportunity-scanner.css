@@ -79,3 +79,5 @@
   .sos-options,.sos-toolbar,.sos-summary{grid-template-columns:1fr}
   .sos-workspace{padding:11px}
 }
+
+.sos-conditional{color:#f4cf83!important;font-weight:750}
