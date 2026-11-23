@@ -325,13 +325,17 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
         if assessment["paper_research_qualified"]:
             counters["source_fresh_risk_screened"] += 1
         outcomes.append(result)
-    # Rank source-fresh, risk-screened research first; never sort stale
-    # inflated theoretical spread capture ahead of evidence quality.
+    # Never rank blocked penny options by large optimistic spread-capture
+    # rupees. For rejected rows, surface those *nearest* to passing first,
+    # and then the least extreme relative spread. Only qualified sources
+    # receive an actual research priority score.
     outcomes.sort(key=lambda row: (
         not row["source_fresh_risk_screened"],
+        len(row["feasibility"]["reasons"]) if not
+        row["source_fresh_risk_screened"] else 0,
         -(row["risk_screen_score"] or 0),
-        row["passive_stressed_upper_net_inr"] is None,
-        -(row["passive_stressed_upper_net_inr"] or 0),
+        not row["fresh_original_saved_book"],
+        row["spread_bps"],
         row["identity"],
     ))
     decision = gate.decision_summary(outcomes)
