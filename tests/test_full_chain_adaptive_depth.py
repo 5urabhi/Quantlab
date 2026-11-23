@@ -150,6 +150,36 @@ class CompleteDhanStrikeCoverageTests(TestCase):
         self.assertGreater(state["subscribed_strike_max"], 74100)
         self.assertEqual(auto.CHAIN_REFRESH_SECONDS, 20)
 
+    def test_small_spot_flicker_preserves_four_existing_sockets(self):
+        original = full_source(spot=63000., above=170, below=170)
+        selected = wide.select_full_chain_rotation(original, auto.DEFAULTS)
+        move = {**original, "underlying_spot": 63100.}
+        kept = wide._retain_if_market_inside_core(move, selected)
+        self.assertEqual([row["identity"] for row in kept],
+                         [row["identity"] for row in selected])
+        self.assertEqual(len(kept), 200)
+        jumped = {**original, "underlying_spot": 67500.}
+        self.assertEqual(wide._retain_if_market_inside_core(
+            jumped, selected), [], "large index move must recenter")
+        expired = {**original, "expiry": "2026-11-30"}
+        self.assertEqual(wide._retain_if_market_inside_core(expired, selected), [])
+        mismatched = {**original, "contracts": original["contracts"][:-1]}
+        self.assertEqual(wide._retain_if_market_inside_core(
+            mismatched, selected), [], "missing current source identity must not persist")
+
+    def test_source_refreshed_quote_metadata_on_preserved_depth_ids(self):
+        original = full_source(spot=63000., above=170, below=170)
+        chosen = wide.select_full_chain_rotation(original, auto.DEFAULTS)
+        improved = {**original, "underlying_spot": 63200.,
+                    "received_utc": "2026-11-22T05:01:00+00:00",
+                    "contracts": [{**row, "ltp": 397.0}
+                                  for row in original["contracts"]]}
+        kept = wide._retain_if_market_inside_core(improved, chosen)
+        self.assertEqual(kept[0]["ltp"], 397.0)
+        self.assertEqual(kept[0]["chain_received_utc"],
+                         improved["received_utc"])
+        self.assertEqual(kept[0]["identity"], chosen[0]["identity"])
+
     def test_true_breakout_detection_does_not_invent_depth(self):
         original = wide.select_full_chain_rotation(
             full_source(spot=63000., above=170, below=170),
