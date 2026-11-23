@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from hashlib import sha256
+from hmac import compare_digest
 from math import isfinite
 from zoneinfo import ZoneInfo
 import json
@@ -116,10 +118,18 @@ def _read_books(identity: str, *, day: str | None = None,
     for stamp, raw, packet_digest in fetched:
         try:
             entry = json.loads(raw)
+            bid_digest = entry.get("bid_packet_sha256")
+            ask_digest = entry.get("ask_packet_sha256")
             if (entry.get("identity") != identity or
+                entry.get("received_utc") != stamp or
                 entry.get("collection_mode") != "auto_banknifty_20_level" or
                 entry.get("source") != "original_Dhan_full_market_depth_websocket" or
-                not isinstance(packet_digest, str) or len(packet_digest) != 64):
+                not isinstance(packet_digest, str) or len(packet_digest) != 64 or
+                not isinstance(bid_digest, str) or len(bid_digest) != 64 or
+                not isinstance(ask_digest, str) or len(ask_digest) != 64 or
+                not compare_digest(
+                    sha256((bid_digest + ask_digest).encode()).hexdigest(),
+                    packet_digest)):
                 skipped += 1
                 continue
             feature = entry.get("computed_features") or {}
