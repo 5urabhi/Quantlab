@@ -334,6 +334,9 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
         -(row["passive_stressed_upper_net_inr"] or 0),
         row["identity"],
     ))
+    decision = gate.decision_summary(outcomes)
+    if rejected_original:
+        decision["rejection_reason_counts"]["INVALID_OR_UNVERIFIED_SOURCE_BOOK"] = rejected_original
     return {
         "day_ist": selected_day, "broker_profile": broker_profile,
         "broker_profile_name": spreads.BROKER_PROFILES[broker_profile]["name"],
@@ -347,7 +350,7 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
         "source_scan_truncated": scan_limited,
         "invalid_or_nonoriginal_books": rejected_original,
         **counters, "rows": outcomes,
-        "execution_decision": gate.decision_summary(outcomes),
+        "execution_decision": decision,
         "execution_policy": dict(gate.CAPTURE_POLICY),
         "total_rows": len(outcomes),
         "scan_completed_utc": now.isoformat(),
