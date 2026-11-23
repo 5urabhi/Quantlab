@@ -13,7 +13,7 @@ from hmac import compare_digest
 from math import isfinite
 import json
 
-from . import live_market, liquidity_spreads as spreads
+from . import live_market, liquidity_spreads as spreads, spread_execution_gate as gate
 
 MAX_SOURCE_IDENTITIES = 3000
 MAX_LOTS = 10
@@ -96,8 +96,20 @@ def _lot_outcomes(book: dict, stats: dict, budget: float, max_lots: int,
             calc["marketable_buy"]["fillable"] and
             calc["marketable_sell"]["fillable"])
         top_depth = passive["top_of_book_quantity_sufficient_both_sides"]
+        severe_sell = spreads._money(stats["bid"] * lots * stats["lot_size"] * 0.5)
+        severe_fees = spreads.fee_schedule(
+            spreads._money(stats["bid"] * lots * stats["lot_size"]),
+            severe_sell, executed_orders_per_side=orders,
+            broker_profile=profile)
         trace.append({
             "lots": lots, "units": lots * stats["lot_size"],
+            "half_premium_exit_net_inr": spreads._money(
+                severe_sell - stats["bid"] * lots * stats["lot_size"] -
+                severe_fees["total_estimated"]),
+            "loss_if_option_worthless_inr": spreads._money(-required),
+            "sell_fill_hurdle_if_zero_recovery": round(
+                required / (required + passive["after_adverse_move_stress_inr"]), 6)
+                if passive["after_adverse_move_stress_inr"] > 0 else None,
             "capital_required_inr": required,
             "within_budget": under_budget,
             "marketable_full_depth": marketable_full,
@@ -138,7 +150,9 @@ def _lot_outcomes(book: dict, stats: dict, budget: float, max_lots: int,
     # Optimize conditional surplus per rupee of entry capital and the
     # break-even exit-fill hurdle, not the largest absolute quoted spread.
     # These are *structural* heuristics, never observed fill probabilities.
-    best = max(eligible, key=lambda row: (
+    bounded = [row for row in eligible if row["capital_required_inr"] <=
+               budget * gate.CAPTURE_POLICY["max_loss_to_zero_fraction_of_budget"]]
+    best = max(bounded or eligible, key=lambda row: (
         row["passive_stressed_upper_net_inr"] /
         max(1.0, row["capital_required_inr"]),
         -(row["break_even_exit_fill_probability"] if
@@ -178,6 +192,9 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             not 0 <= exit_slippage_bps <= 1000):
         raise ValueError("Exit slippage must be 0–1000 bps")
     selected_day, source_rows, scan_limited = _last_books_on_date(day)
+    activity = gate.recent_depth_receipts(
+        day=selected_day, window_seconds=gate.CAPTURE_POLICY[
+            "receipt_window_seconds"])
     now = datetime.now(timezone.utc)
     outcomes = []
     rejected_original = 0
@@ -222,21 +239,10 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             else:
                 counters["negative_even_optimistic"] += 1
         hurdle = best["break_even_exit_fill_probability"] if best else None
-        quote_age_ok = fresh and isinstance(features.get("expiry"), str) and (
-            features["expiry"] >= now.astimezone(spreads.IST).date().isoformat())
-        screened = bool(best and quote_age_ok and
-                        best["passive_stressed_upper_net_inr"] > 0 and
-                        hurdle is not None and 0 <= hurdle <= 0.75)
-        if screened:
-            counters["source_fresh_risk_screened"] += 1
+        # The old two-outcome hurdle uses a small same-book haircut. It is
+        # informational; the shared feasibility gate uses full loss-to-zero.
+        screened = False
         score = None
-        if screened:
-            ratio = best["passive_stressed_upper_net_inr"] / max(
-                1.0, best["capital_required_inr"])
-            score = round(max(0., min(100.,
-                (1 - hurdle) * 60 +
-                max(-10., min(25., ratio * 1000)) +
-                max(0., 15 - stats["spread_bps"] / 200))), 2)
         # For unavailable lots we still expose truthful source quote data,
         # but not a fabricated P&L ranking.
         result = {
@@ -279,6 +285,12 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             "break_even_sell_fill_given_buy": hurdle,
             "failed_exit_net_inr": (
                 best["failed_exit_net_inr"] if best else None),
+            "loss_if_option_worthless_inr": (
+                best["loss_if_option_worthless_inr"] if best else None),
+            "half_premium_exit_net_inr": (
+                best["half_premium_exit_net_inr"] if best else None),
+            "conservative_sell_fill_hurdle": (
+                best["sell_fill_hurdle_if_zero_recovery"] if best else None),
             "risk_screen_reason": (
                 "MISSING_BUDGET_OR_DEPTH" if best is None else
                 "STALE_OR_EXPIRED_SOURCE" if not quote_age_ok else
@@ -296,6 +308,18 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             "actual_profit_inr": None,
             "read_only": True,
         }
+        assessment = gate.capture_feasibility(
+            result, capital_inr=capital_inr, receipt=activity.get(identity))
+        result["feasibility"] = assessment
+        result["source_fresh_risk_screened"] = assessment[
+            "paper_research_qualified"]
+        result["risk_screen_score"] = assessment[
+            "research_priority_score"]
+        result["risk_screen_reason"] = (
+            "PAPER_RESEARCH_ONLY" if assessment["paper_research_qualified"]
+            else assessment["reasons"][0])
+        if assessment["paper_research_qualified"]:
+            counters["source_fresh_risk_screened"] += 1
         outcomes.append(result)
     # Rank source-fresh, risk-screened research first; never sort stale
     # inflated theoretical spread capture ahead of evidence quality.
@@ -319,13 +343,21 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
         "source_scan_truncated": scan_limited,
         "invalid_or_nonoriginal_books": rejected_original,
         **counters, "rows": outcomes,
+        "execution_decision": gate.decision_summary(outcomes),
+        "execution_policy": dict(gate.CAPTURE_POLICY),
         "total_rows": len(outcomes),
         "scan_completed_utc": now.isoformat(),
         "read_only": True,
         "fills_observed": False,
         "net_realized_profit_inr": None,
         "source": "Dhan original 20-level saved depth books (not all Quote/OI subscriptions)",
-        "warning": "Research priority is an explainable heuristic based on "
+        "warning": "NO TRADE is the only live action. The risk gate excludes "
+                   "extreme percentage spreads, penny premiums, stale books, "
+                   "thin depth, insufficient repeated source packets, "
+                   "and premium loss-to-zero above the exposure budget. "
+                   "A paper-research-qualified row is NOT broker approved "
+                   "or an estimated profitable trade. "
+                   "Research priority is an explainable heuristic based on "
                    "capital-normalized two-fill bounds, stressed failed-exit "
                    "loss and required conditional sell-fill hurdle. It is "
                    "NOT a calibrated profit forecast. POSITIVE is only an "
