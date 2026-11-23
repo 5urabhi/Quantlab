@@ -195,6 +195,9 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
     activity = gate.recent_depth_receipts(
         day=selected_day, window_seconds=gate.CAPTURE_POLICY[
             "receipt_window_seconds"])
+    trades = gate.recent_trade_activity(
+        day=selected_day, window_seconds=gate.CAPTURE_POLICY[
+            "receipt_window_seconds"])
     now = datetime.now(timezone.utc)
     outcomes = []
     rejected_original = 0
@@ -309,7 +312,8 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             "read_only": True,
         }
         assessment = gate.capture_feasibility(
-            result, capital_inr=capital_inr, receipt=activity.get(identity))
+            result, capital_inr=capital_inr, receipt=activity.get(identity),
+            trade=trades.get(identity))
         result["feasibility"] = assessment
         result["source_fresh_risk_screened"] = assessment[
             "paper_research_qualified"]
@@ -353,7 +357,8 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
         "source": "Dhan original 20-level saved depth books (not all Quote/OI subscriptions)",
         "warning": "NO TRADE is the only live action. The risk gate excludes "
                    "extreme percentage spreads, penny premiums, stale books, "
-                   "thin depth, insufficient repeated source packets, "
+                   "thin depth, missing fresh Dhan exchange-trade times "
+                   "or session volume growth, insufficient repeated packets, "
                    "and premium loss-to-zero above the exposure budget. "
                    "A paper-research-qualified row is NOT broker approved "
                    "or an estimated profitable trade. "
