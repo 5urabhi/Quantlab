@@ -5,8 +5,12 @@ import './option-chain-live.css'
 
 type Expiries={
   underlying:string;expiries:string[];nearest_expiry:string;
-  received_utc:string;source:string
+  received_utc:string;source:string;expiry_sources?:Record<string,string[]>;
+  providers_used?:string[];provider_errors?:Record<string,string>
 }
+type ProviderConnection={id:string;label:string;configured:boolean;session_verified:boolean;
+  mode:string;note:string}
+type CoverageConnections={read_only:boolean;providers:ProviderConnection[];underlyings:string[];warning:string}
 export type OptionContract={
   identity:string|null;symbol:string;strike:number;expiry:string;option_type:'CE'|'PE'
   lot_size:number|null;contract_master_verified:boolean
@@ -16,6 +20,9 @@ export type OptionContract={
   delta:number|null;theta:number|null;gamma:number|null;vega:number|null
   quote_valid:boolean;one_lot_ask_inr:number|null
   one_lot_bid_inr:number|null;spread_inr_per_lot:number|null
+  quote_provider?:string;available_sources?:string[];source_received_utc?:string
+  provider_lot_size?:number|null;provider_instrument_key?:string
+  source_identity_conflict?:boolean
 }
 type Chain={
   underlying:string;underlying_spot:number;expiry:string;received_utc:string
@@ -23,6 +30,10 @@ type Chain={
   market_master_fresh:boolean;master_message:string;master_age_hours:number|null
   contracts:OptionContract[];quote_count:number;read_only:boolean
   warning:string;cache_hit:boolean
+  providers_used?:string[];provider_errors?:Record<string,string>
+  provider_contract_counts?:Record<string,number>
+  source_identity_conflicts?:number
+  secondary_verified_quote_replacements?:number
 }
 const money=(value:number|null|undefined)=>value===null||value===undefined?'—':
   new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',
@@ -41,6 +52,14 @@ type Props={
 }
 export default function OptionChainLive({feedActive,depthIdentity,
   onSelectDepth,onDraftJournal,openConnections,currentIndexDirection}:Props){
+  const [underlying,setUnderlying]=useState<'BANKNIFTY'|'NIFTY50'>('BANKNIFTY')
+  const [providerChoice,setProviderChoice]=useState<'all'|'dhan'|'upstox'>('all')
+  const [connections,setConnections]=useState<CoverageConnections|null>(null)
+  const [upstoxToken,setUpstoxToken]=useState('')
+  const [upstoxConsent,setUpstoxConsent]=useState(false)
+  const [upstoxOpen,setUpstoxOpen]=useState(false)
+  const [upstoxBusy,setUpstoxBusy]=useState(false)
+  const [connectionNotice,setConnectionNotice]=useState('')
   const [dates,setDates]=useState<Expiries|null>(null)
   const [expiry,setExpiry]=useState('')
   const [chain,setChain]=useState<Chain|null>(null)
@@ -58,30 +77,69 @@ export default function OptionChainLive({feedActive,depthIdentity,
   const [masterJobId,setMasterJobId]=useState('')
   const [masterNotice,setMasterNotice]=useState('')
   const [now,setNow]=useState(Date.now())
+  const refreshConnections=useCallback(async()=>{
+    const data=await marketApi<CoverageConnections>(
+      '/api/trading-cockpit/options/providers')
+    setConnections(data)
+  },[])
+  useEffect(()=>{void refreshConnections().catch(e=>setConnectionNotice(readableError(e)))},
+    [refreshConnections])
+  const connectUpstox=async(event:React.FormEvent<HTMLFormElement>)=>{
+    event.preventDefault()
+    if(upstoxBusy||!upstoxConsent||!upstoxToken.trim())return
+    setUpstoxBusy(true);setConnectionNotice('')
+    try{
+      await marketPost('/api/trading-cockpit/options/upstox/connect',{
+        access_token:upstoxToken,confirm_local_storage:true})
+      setUpstoxToken('');setUpstoxConsent(false);setUpstoxOpen(false)
+      setConnectionNotice('Upstox access token saved privately on this local machine. Refresh the expiry list to verify entitlement.')
+      await refreshConnections()
+      await getExpiries()
+    }catch(e){setConnectionNotice(readableError(e))}
+    finally{setUpstoxBusy(false)}
+  }
+  const disconnectUpstox=async()=>{
+    if(upstoxBusy)return
+    if(!window.confirm('Disconnect the private locally saved Upstox token? This does not affect Dhan, Zerodha or original saved observations.'))return
+    setUpstoxBusy(true);setConnectionNotice('')
+    try{
+      const response=await marketPost<{environment_token_still_configured:boolean}>(
+        '/api/trading-cockpit/options/upstox/disconnect',{confirm_disconnect:true})
+      setConnectionNotice(response.environment_token_still_configured
+        ?'Local Upstox token removed. A separately configured environment token is still active.'
+        :'Local Upstox token removed. Dhan and Zerodha were not changed.')
+      await refreshConnections()
+      await getExpiries()
+    }catch(e){setConnectionNotice(readableError(e))}
+    finally{setUpstoxBusy(false)}
+  }
   const getExpiries=useCallback(async()=>{
     setExpiryBusy(true);setExpiryError('')
     try{
-      const data=await marketApi<Expiries>('/api/trading-cockpit/options/expiries')
+      const data=await marketApi<Expiries>(
+        '/api/trading-cockpit/options/coverage/expiries?'+
+        new URLSearchParams({underlying,provider:providerChoice}))
       setDates(data)
       setExpiry(last=>data.expiries.includes(last)?last:data.nearest_expiry)
     }catch(e){setExpiryError(readableError(e))}
     finally{setExpiryBusy(false)}
-  },[])
+  },[underlying,providerChoice])
   useEffect(()=>{void getExpiries()},[getExpiries])
   const getChain=useCallback(async(forceRefresh=false)=>{
     if(!expiry)return
     setBusy(true);setError('')
     try{
       const data=await marketApi<Chain>(
-        '/api/trading-cockpit/options/chain?'+new URLSearchParams({
-          expiry,...(forceRefresh?{force_refresh:'true'}:{}),
+        '/api/trading-cockpit/options/coverage/chain?'+new URLSearchParams({
+          expiry,underlying,provider:providerChoice,
+          ...(forceRefresh?{force_refresh:'true'}:{}),
         }))
       setChain(data)
       setSelected(previous=>data.contracts.some(c=>c.identity===previous&&c.contract_master_verified)
         ?previous:'')
     }catch(e){setError(readableError(e))}
     finally{setBusy(false)}
-  },[expiry])
+  },[expiry,underlying,providerChoice])
   useEffect(()=>{
     if(!expiry)return
     void getChain()
@@ -130,7 +188,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
     return()=>window.clearInterval(clock)
   },[])
   const filtered=useMemo(()=>{
-    const rows=(chain?.expiry===expiry?chain.contracts:[]).filter(c=>
+    const rows=(chain?.expiry===expiry&&chain.underlying===underlying?chain.contracts:[]).filter(c=>
       (side==='ALL'||c.option_type===side)&&
       (!nearTargetOnly||(c.ltp!==null&&Math.abs(c.ltp-targetPremium)<=premiumTolerance)))
     return [...rows].sort((a,b)=>{
@@ -139,8 +197,8 @@ export default function OptionChainLive({feedActive,depthIdentity,
       const bPrice=b.ltp===null?Number.POSITIVE_INFINITY:Math.abs(b.ltp-targetPremium)
       return aPrice-bPrice||a.strike-b.strike||a.option_type.localeCompare(b.option_type)
     })
-  },[chain,expiry,side,nearTargetOnly,targetPremium,premiumTolerance])
-  const picked=chain?.expiry===expiry
+  },[chain,expiry,underlying,side,nearTargetOnly,targetPremium,premiumTolerance])
+  const picked=chain?.expiry===expiry&&chain.underlying===underlying
     ?chain.contracts.find(c=>c.identity&&c.identity===selected):null
   const valid=Boolean(picked?.contract_master_verified&&picked?.quote_valid&&
     picked.ask!==null&&picked.lot_size!==null)
@@ -150,13 +208,13 @@ export default function OptionChainLive({feedActive,depthIdentity,
   const spread=totalAsk!==null&&totalBid!==null?totalAsk-totalBid:null
   const maxLots=(picked&&valid&&picked.ask&&picked.lot_size)
     ?Math.floor(capital/(picked.ask*picked.lot_size)):0
-  const matchingPremiumCount=(chain?.expiry===expiry?chain.contracts:[]).filter(c=>
+  const matchingPremiumCount=(chain?.expiry===expiry&&chain.underlying===underlying?chain.contracts:[]).filter(c=>
     (side==='ALL'||c.option_type===side)&&c.ltp!==null&&
     Math.abs(c.ltp-targetPremium)<=premiumTolerance).length
   const age=chain?.received_utc?Math.max(0,Math.round((now-Date.parse(chain.received_utc))/1000)):null
   const bookCurrent=Boolean(picked?.identity&&picked.identity===depthIdentity)
-  const mapSignal=currentIndexDirection==='UP'?'CE':
-    currentIndexDirection==='DOWN'?'PE':null
+  const mapSignal=underlying==='BANKNIFTY'&&currentIndexDirection==='UP'?'CE':
+    underlying==='BANKNIFTY'&&currentIndexDirection==='DOWN'?'PE':null
   return <section className="oc-root" aria-label="BANKNIFTY option chain and lot calculator">
     <header className="oc-head"><div><span className="tc-page-kicker">TRADE THE CONTRACT, NOT THE INDEX</span>
       <h3>BANKNIFTY CE / PE option chain</h3>
