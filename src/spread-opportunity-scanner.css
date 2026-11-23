@@ -1,0 +1,81 @@
+.sos-workspace{display:grid;gap:13px;min-width:0;background:#0f2f40;
+  border:1px solid #3d7282;border-radius:11px;padding:16px;color:#d7eaf0}
+.sos-title{display:flex;justify-content:space-between;align-items:start;
+  gap:14px;flex-wrap:wrap}
+.sos-title h3{color:#e1fff3;font-size:19px;margin:7px 0}
+.sos-title p{font-size:11px;line-height:1.6;color:#a8cedb;margin:0;max-width:750px}
+.sos-overline{display:flex;align-items:center;gap:5px;font-size:10px;
+  letter-spacing:1.2px;font-weight:750;color:#8be8c8}
+.sos-title button,.sos-table button,.sos-pagination button{
+  cursor:pointer;border:1px solid #4f8796;border-radius:7px;
+  background:#225165;color:#e0fcf5;font-size:11px;font-weight:700;
+  padding:8px 10px;display:inline-flex;align-items:center;gap:5px}
+.sos-title button:disabled,.sos-pagination button:disabled{
+  opacity:.46;cursor:not-allowed}
+.sos-options{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:9px;background:#153c4e;border:1px solid #3c6379;
+  border-radius:9px;padding:12px}
+.sos-options label,.sos-toolbar label{display:grid;gap:7px;color:#bbd9e4;
+  font-size:10px;font-weight:650}
+.sos-options input,.sos-options select,.sos-toolbar select{
+  background:#143346;border:1px solid #477183;color:#e4f8fc;
+  border-radius:6px;min-width:0;width:100%;padding:9px 11px;font-size:11px}
+.sos-options input:focus,.sos-options select:focus,.sos-toolbar select:focus{
+  outline:2px solid #68cba7;outline-offset:1px}
+.sos-summary{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.sos-summary>div{display:grid;gap:7px;padding:12px;background:#1a4155;
+  border:1px solid #41647b;border-radius:9px}
+.sos-summary strong{font-size:19px;color:#ddfff5;font-variant-numeric:tabular-nums}
+.sos-summary small{color:#9ac0cf;font-size:10px;line-height:1.45}
+.sos-toolbar{display:grid;grid-template-columns:2fr 1.3fr 1fr 1.5fr;gap:10px;
+  align-items:end}
+.sos-toolbar .sos-check{display:flex;align-items:center;gap:7px;
+  flex-wrap:wrap;padding:0 6px 10px}
+.sos-check input{width:15px;height:15px;accent-color:#5ac7a6}
+.sos-warning{display:flex;gap:10px;align-items:flex-start;background:#1a464b;
+  color:#c4ebdd;border:1px solid #407d77;border-radius:8px;
+  padding:12px;font-size:11px;line-height:1.65}
+.sos-warning svg{flex:none;margin-top:2px}
+.sos-scroll{overflow:auto;max-width:100%;max-height:660px;
+  border:1px solid #315b6d;border-radius:7px}
+.sos-table{width:100%;border-collapse:collapse;min-width:1100px;
+  font-size:11px;background:#103143}
+.sos-table th{position:sticky;top:0;z-index:1;
+  background:#1e4659;color:#bde3ec;text-align:left;
+  font-size:10px;font-weight:750;padding:11px 10px;white-space:nowrap}
+.sos-table td{padding:10px;border-top:1px solid #305367;
+  color:#d4eef1;vertical-align:middle;white-space:nowrap}
+.sos-table tbody tr:hover,.sos-table tbody tr.sos-open{background:#204958}
+.sos-table small{display:block;color:#9cbcca;font-size:9px;margin-top:5px}
+.sos-contract{font-weight:750;color:#dcfff2}
+.sos-positive{color:#70f1b9!important;font-weight:800}
+.sos-negative{color:#f4a9a2!important;font-weight:750}
+.sos-unknown{color:#98b5c6!important}
+.sos-fresh{color:#9ff2d0;font-weight:650}
+.sos-older{color:#f6b18d;font-weight:650}
+.sos-table td:last-child button{margin:2px}
+.sos-ledger{background:#123749;border:1px solid #477383;
+  border-radius:8px;padding:13px;display:grid;gap:12px}
+.sos-ledger>div{display:grid;gap:10px;min-width:0}
+.sos-ledger-head{display:flex;flex-wrap:wrap;justify-content:space-between;
+  align-items:center;gap:10px}
+.sos-ledger-head strong{font-size:13px;color:#c4ffe5}
+.sos-ledger-head small{font-size:10px;color:#a3c6d2}
+.sos-muted{color:#9fc6d2;font-size:10px;line-height:1.6;margin:0}
+.sos-error{background:#513831;border:1px solid #b07e5a;color:#ffe0ca;
+  padding:10px;border-radius:7px;font-size:11px}
+.sos-pagination{display:flex;justify-content:space-between;align-items:center;
+  flex-wrap:wrap;gap:12px;color:#a8d0db;font-size:11px}
+.sos-pagination>div{display:flex;align-items:center;gap:12px}
+@media(max-width:1350px){
+  .sos-options{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .sos-summary{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media(max-width:850px){
+  .sos-options,.sos-toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .sos-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:560px){
+  .sos-options,.sos-toolbar,.sos-summary{grid-template-columns:1fr}
+  .sos-workspace{padding:11px}
+}
