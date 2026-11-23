@@ -171,7 +171,7 @@ class AutomaticDepthRecorderTests(unittest.TestCase):
             oversized, selected, {}, now, diagnostics=error_counts)
         self.assertEqual(rejected, [])
         self.assertEqual(error_counts["rejected_frame_count"], 1)
-        self.assertEqual(error_counts["truncated_or_wrong_size_frames"], 1)
+        self.assertEqual(error_counts["oversized_depth_stack_frames"], 1)
 
     def test_three_lot_depth_weighted_prices_require_real_90_units(self):
         now = datetime(2026, 11, 19, 4, 15, tzinfo=timezone.utc)
