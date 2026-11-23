@@ -79,7 +79,9 @@ const time=(s:string)=>new Date(s).toLocaleString('en-IN',{
   timeZone:'Asia/Kolkata',day:'2-digit',month:'short',
   hour:'2-digit',minute:'2-digit',second:'2-digit'})
 const sortValue=(row:Candidate,sort:SortKey):number|null=>{
-  if(sort==='risk')return row.risk_screen_score??null
+  if(sort==='risk')return row.risk_screen_score??(
+    -1000-(row.feasibility?.reasons.length??10)*100-
+    Math.min(500,row.spread_bps/10))
   if(sort==='hurdle')return row.break_even_sell_fill_given_buy??null
   if(sort==='failed_exit')return row.failed_exit_net_inr??null
   if(sort==='stressed')return row.passive_stressed_upper_net_inr
