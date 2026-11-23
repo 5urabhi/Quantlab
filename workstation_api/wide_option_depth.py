@@ -1,13 +1,13 @@
-"""Wide read-only BANKNIFTY 20-level capture: 100 contracts per ATM wing.
+"""Wide read-only BANKNIFTY 20-level capture, adaptive to the full Dhan chain.
 
-100 *option contracts* above the nearest listed ATM strike and 100 below,
-each wing balanced 50 CE + 50 PE across 50 real strike levels. Never infer
-or fabricate contracts, quotes, prices, depth packets, or broker fills.
+The nearest 120 eligible options remain subscribed; 80 bounded slots rotate
+across other original listed contracts, without inventing prices or order books.
+Original complete CE/PE chain snapshots cover every reported active expiry
+separately. These are NOT 20-level books for unsampled contracts.
 
-Dhan permits 50 instruments per twentydepth WebSocket. At most FOUR sockets
-are opened (200 instruments total), leaving a fifth connection for another
-live feed. All selected instruments are subscribed simultaneously; updates
-are stored at bounded, per-contract rates in the existing shared database.
+Dhan permits 50 instruments per twentydepth socket. Four sockets cover up to
+200 at once, leaving a fifth connection for an existing live feed. Genuine
+received books are stored at bounded rates in the one shared market library.
 """
 from __future__ import annotations
 
@@ -29,6 +29,12 @@ MAX_CONNECTIONS = 4
 PER_CONNECTION = 50
 MAX_CONTRACTS = MAX_CONNECTIONS * PER_CONNECTION
 NEAR_ATM_FAST_SECONDS = 3
+# Keep the nearest 120 genuine contracts continuously subscribed. Rotate the
+# remaining 80 slots across EVERY OTHER verified contract of the active expiry.
+# No combination of sockets can observe all instruments continuously.
+CORE_CONTRACTS = 120
+ROTATING_CONTRACTS = MAX_CONTRACTS - CORE_CONTRACTS
+ROTATION_SECONDS = 90
 SOCKET_RECV_LIMIT = 1_000_000
 QUEUE_MAX = 2500
 
@@ -115,6 +121,102 @@ def select_atm_contracts(chain: dict, cfg: dict, previous_ids=()) -> list[dict]:
                 })
     # Deterministic packing and no hidden substitution across wings.
     return selected
+
+
+def select_full_chain_rotation(chain: dict, cfg: dict,
+                               rotation_step: int = 0) -> list[dict]:
+    """Cover every Dhan-listed, master-verified option *over time*.
+
+    The original complete option-chain snapshots cover all source strikes and
+    expiries independently. This chooses <=200 simultaneous 20-level books,
+    retaining the 120 closest verified CE/PE contracts and cyclically
+    visiting up to 80 more original contracts. The ATM strike IS included.
+    One-sided listings remain eligible; no phantom CE/PE partner is created.
+    """
+    spot = chain.get("underlying_spot")
+    expiry = chain.get("expiry")
+    if (not isinstance(spot, (int, float)) or not math.isfinite(spot)
+            or spot <= 0 or not isinstance(expiry, str) or not expiry):
+        raise ValueError("BANKNIFTY original chain has no valid spot/expiry")
+    if not isinstance(rotation_step, int) or rotation_step < 0:
+        raise ValueError("Rotation step must be a nonnegative integer")
+    by_term: dict[tuple[float, str], list[dict]] = {}
+    for row in chain.get("contracts", []):
+        if not isinstance(row, dict) or not _verified(row, expiry):
+            continue
+        term = (float(row["strike"]), row["option_type"])
+        by_term.setdefault(term, []).append(row)
+    # Do not select ambiguous source terms or a reused exchange security ID.
+    unique_terms = [rows[0] for rows in by_term.values() if len(rows) == 1]
+    appearances: dict[str, int] = {}
+    for row in unique_terms:
+        ident = row["identity"]
+        appearances[ident] = appearances.get(ident, 0) + 1
+    verified = [row for row in unique_terms if appearances[row["identity"]] == 1]
+    verified.sort(key=lambda row: (
+        abs(float(row["strike"]) - spot), float(row["strike"]),
+        row["option_type"]))
+    if not verified:
+        return []
+    core = verified[:CORE_CONTRACTS]
+    outer = verified[CORE_CONTRACTS:]
+    if len(outer) <= ROTATING_CONTRACTS:
+        visiting = outer
+    else:
+        # Cyclic traversal (not a fixed ±50 strike fence): every valid remote
+        # contract is eventually selected if the exchange keeps listing it.
+        offset = (rotation_step * ROTATING_CONTRACTS) % len(outer)
+        visiting = (outer[offset:] + outer[:offset])[:ROTATING_CONTRACTS]
+    chosen = (core + visiting)[:MAX_CONTRACTS]
+    atm = min({float(row["strike"]) for row in verified},
+              key=lambda strike: (abs(strike - spot), strike))
+    result = []
+    for rank, row in enumerate(chosen):
+        strike = float(row["strike"])
+        ident = row["identity"]
+        ltp = row.get("ltp")
+        result.append({
+            "identity": ident, "security_id": ident.split(":")[1],
+            "side": row["option_type"], "strike": strike, "expiry": expiry,
+            "lot_size": row["lot_size"],
+            "ltp": (float(ltp) if isinstance(ltp, (int, float))
+                    and math.isfinite(ltp) and ltp > 0 else None),
+            "bid": row.get("bid"), "ask": row.get("ask"),
+            "volume": (row.get("volume") if isinstance(row.get("volume"), int)
+                       else 0),
+            "chain_received_utc": chain.get("received_utc"),
+            "wing": ("above" if strike > atm else
+                     "below" if strike < atm else "atm"),
+            "atm_strike": atm,
+            "priority_depth": rank < 6,
+            "coverage_role": "core" if rank < len(core) else "rotating",
+        })
+    return result
+
+
+def _full_chain_coverage(chain: dict, selected: list[dict]) -> dict:
+    """Source/active subscription coverage, not invented price history."""
+    source = [row for row in chain.get("contracts", [])
+              if isinstance(row, dict) and _verified(row, chain.get("expiry"))]
+    verified_ids = {row["identity"] for row in source}
+    selected_ids = {row["identity"] for row in selected}
+    strikes = [float(row["strike"]) for row in source]
+    active = [row["strike"] for row in selected]
+    rotating = sum(row.get("coverage_role") == "rotating" for row in selected)
+    return {
+        "source_contracts_reported": len(chain.get("contracts", [])),
+        "source_verified_depth_contracts": len(verified_ids),
+        "source_strike_min": min(strikes) if strikes else None,
+        "source_strike_max": max(strikes) if strikes else None,
+        "subscribed_strike_min": min(active) if active else None,
+        "subscribed_strike_max": max(active) if active else None,
+        "subscribed_contracts": len(selected_ids),
+        "rotating_contracts": rotating,
+        "not_currently_depth_subscribed": len(verified_ids - selected_ids),
+        "depth_is_all_contracts_simultaneously":
+            not bool(verified_ids - selected_ids),
+        "all_strikes_chain_snapshot_archived_separately": True,
+    }
 
 
 def _coverage_diagnostics(chain: dict, selected: list[dict]) -> dict:
@@ -266,25 +368,21 @@ def _read_socket(index: int, group: list[dict], url: str,
                                 connected=bool(connected))
 
 
-def _select(cfg: dict, previous_ids=()) -> list[dict]:
+def _select(cfg: dict, previous_ids=(), rotation_step: int = 0) -> list[dict]:
     auto._refresh_master_if_needed()
     expiries = option_chain_live.expiries()
     chain = option_chain_live.chain(expiries["nearest_expiry"], force_refresh=True)
     age = abs((auto._now() - datetime.fromisoformat(chain["received_utc"])).total_seconds())
     if age > 90:
         raise ValueError("Original Dhan BANKNIFTY chain is stale")
-    selected = select_atm_contracts(chain, cfg, previous_ids)
+    selected = select_full_chain_rotation(chain, cfg, rotation_step)
+    coverage = _full_chain_coverage(chain, selected)
     diagnostic = _coverage_diagnostics(chain, selected)
     counts = {"above": 0, "below": 0}
     for c in selected:
         counts[c["wing"]] += 1
-    missing = []
-    for wing in ("above", "below"):
-        if counts[wing] < CONTRACTS_PER_WING:
-            missing.append(
-                wing + ": " + str(counts[wing]) + "/100 verified contracts; " +
-                diagnostic["rejection_explanations"].get(
-                    wing, "No source-verified CE/PE strike pairs"))
+    missing_unverified = (coverage["source_contracts_reported"] -
+                          coverage["source_verified_depth_contracts"])
     auto._status_update(
         last_chain_utc=chain["received_utc"],
         chain_spot=chain["underlying_spot"],
@@ -295,19 +393,25 @@ def _select(cfg: dict, previous_ids=()) -> list[dict]:
         source_pairs_above=diagnostic["source_pairs_above"],
         source_pairs_below=diagnostic["source_pairs_below"],
         missing_ltp_selected=diagnostic["missing_ltp_selected"],
+        rotation_step=rotation_step,
+        **coverage,
         selection_warning=(
-            "Incomplete source-verified ATM wings (" + ", ".join(missing) +
-            "); missing depth is never fabricated" if missing else None),
+            str(missing_unverified) + " source contracts lack an unambiguous "
+            "current Dhan master mapping; all observed chain quotes are "
+            "still archived separately, but unverified 20-level IDs "
+            "cannot be subscribed" if missing_unverified > 0 else None),
     )
     return selected
 
 
 def run(stop: Event) -> None:
-    """Record 100 contracts above and 100 below ATM; stop on quota or errors."""
+    """Record nearby options continuously and visit more verified depth IDs over time."""
     failures = 0
     previous: list[dict] = []
     session_id: str | None = None
     daily_saved = 0
+    rotation_step = 0
+    next_rotation_due = 0.
     from uuid import uuid4
     while not stop.is_set():
         cfg = auto._config()
@@ -324,6 +428,8 @@ def run(stop: Event) -> None:
             session_id = "auto20_" + day + "_" + uuid4().hex[:10]
             daily_saved = auto._daily_count(auto._now())
             previous = []
+            rotation_step = 0
+            next_rotation_due = 0.
             auto._status_update(
                 session_id=session_id, snapshots_saved=0, received_pairs=0,
                 selection_events=0, invalid_pairs=0, latest={},
@@ -339,7 +445,8 @@ def run(stop: Event) -> None:
             continue
         try:
             auto._status_update(state="selecting_verified_ce_pe", connected=False)
-            selected = _select(cfg, [c["identity"] for c in previous])
+            selected = _select(cfg, [c["identity"] for c in previous],
+                               rotation_step=rotation_step)
             if not selected:
                 auto._status_update(state="no_eligible_option_contracts",
                                     contracts=[], last_error=(
@@ -377,6 +484,8 @@ def run(stop: Event) -> None:
                 worker.start()
             started = time.monotonic()
             next_refresh = started + auto.CHAIN_REFRESH_SECONDS
+            if not next_rotation_due:
+                next_rotation_due = started + ROTATION_SECONDS
             last_seen = started
             try:
                 while not stop.is_set() and not abort.is_set() and auto._market_open():
@@ -385,14 +494,22 @@ def run(stop: Event) -> None:
                         break
                     if os.getenv("DHAN_ACCESS_TOKEN", "").strip() != token:
                         break  # Reconnect using explicitly renewed Dhan credentials.
-                    if time.monotonic() >= next_refresh or auto._config() != cfg:
+                    tick = time.monotonic()
+                    if (tick >= next_refresh or tick >= next_rotation_due
+                            or auto._config() != cfg):
                         updated_cfg = auto._config()
+                        rotate = tick >= next_rotation_due
+                        requested_step = rotation_step + int(rotate)
                         updated = _select(updated_cfg,
-                                          tuple(c["identity"] for c in selected))
+                                          tuple(c["identity"] for c in selected),
+                                          rotation_step=requested_step)
+                        rotation_step = requested_step
+                        if rotate:
+                            next_rotation_due = time.monotonic() + ROTATION_SECONDS
                         if ([c["identity"] for c in updated] !=
                             [c["identity"] for c in selected] or updated_cfg != cfg):
                             previous = selected
-                            break  # Close old sockets before subscribing new IDs.
+                            break  # Reopen 4 bounded sockets for verified new IDs.
                         for old, newer in zip(selected, updated):
                             old.update(newer)
                         next_refresh = time.monotonic() + auto.CHAIN_REFRESH_SECONDS
