@@ -1,0 +1,13 @@
+.ofs-health{display:flex;align-items:flex-start;gap:12px;
+  padding:12px 14px;border:1px solid #5a7785;
+  border-radius:10px;background:#133d4b;color:#c9eaf1}
+.ofs-health svg{flex-shrink:0;margin-top:2px}
+.ofs-health>div{display:grid;gap:6px}
+.ofs-health strong{font-size:13px;color:#e8fcf4}
+.ofs-health p{margin:0;font-size:11px;line-height:1.65}
+.ofs-health small{font-size:10px;line-height:1.6;opacity:.9}
+.ofs-health.healthy{border-color:#397965;background:#164438;color:#c5f1d9}
+.ofs-health.problem{border-color:#9b7160;background:#46352f;color:#fce0cc}
+.ofs-health.problem strong{color:#ffe2ce}
+.ofs-health .ofs-caution{font-weight:700;color:#ffcfb9}
+.ofs-health.unknown{border-color:#7e7182;background:#333844;color:#eddaec}

@@ -374,6 +374,88 @@ class DhanFullUniverseTests(TestCase):
         self.assertEqual(feed.STATUS["stored_events"],3)
         self.assertTrue(all(x["exchange_trade_utc"] for x in saved["events"]))
 
+    def test_option_feed_continues_past_legacy_daily_event_cap(self):
+        """A preexisting daily event count must not block new source packets.
+
+        Uses a tiny fixture and a deliberately tiny legacy constant, not
+        two million DB rows; no real market data or broker socket needed.
+        """
+        self.assertEqual(feed.MAX_DAILY_EVENTS, 0)
+        original, _ = master(2)
+        contract = original["by_id"]["61000"]
+        feed.CATALOG[contract["identity"]] = contract
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        feed._init_storage()
+        with live_market._database() as db:
+            for index in range(2):
+                previous = now - timedelta(seconds=30-index)
+                db.execute("""
+                    INSERT INTO dhan_option_live_events(
+                      identity,received_utc,exchange_trade_utc,kind,price,
+                      volume,open_interest,last_trade_quantity,packet_sha256,session_id)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""", (
+                    contract["identity"], previous.isoformat(),
+                    previous.isoformat(), "quote", 99.0, 1+index,
+                    None, 30, "existing"+str(index), "prior_source_run"))
+        for index in range(3):
+            received = now - timedelta(seconds=5-index)
+            event = feed.decode_quote_frames(
+                quote_packet(61000, 100.+index, 10+index, received))[0]
+            feed._ingest(event, received, "new_source_run")
+        stopped = Event()
+        stopped.set()
+        with patch.object(feed, "_storage_disk_capacity",
+                          return_value=(True, 50*1024**3, 2*1024**3)), \
+             patch.object(feed, "MAX_DAILY_EVENTS", 2):
+            feed._write_batches(stopped)
+        self.assertEqual(feed.STATUS["stored_events"], 3)
+        self.assertEqual(feed.STATUS["storage_daily_events"], 5)
+        self.assertEqual(feed.STATUS["storage_state"], "recording")
+        self.assertIsNone(feed.STATUS["storage_daily_limit"])
+        self.assertEqual(feed.STATUS["dropped_events"], 0)
+        self.assertEqual(len(feed.saved_history(contract["identity"])["events"]), 5)
+
+    def test_full_option_writer_disk_guard_reports_durable_gap(self):
+        original, _ = master(2)
+        contract = original["by_id"]["61000"]
+        feed.CATALOG[contract["identity"]] = contract
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        event = feed.decode_quote_frames(
+            quote_packet(61000, 120., 300, now))[0]
+        feed._ingest(event, now, "insufficient_disk_fixture")
+        stopped = Event()
+        stopped.set()
+        with patch.object(feed, "_storage_disk_capacity",
+                          return_value=(False, 50, 1000)):
+            feed._write_batches(stopped)
+        self.assertEqual(feed.STATUS["storage_state"],
+                         "insufficient_free_disk_space")
+        self.assertEqual(feed.STATUS["dropped_events"], 1)
+        self.assertTrue(feed.STATUS["storage_gap_detected"])
+        log = auto._root()/"option_feed_storage_gaps.jsonl"
+        self.assertTrue(log.is_file())
+        entries = [json.loads(row) for row in log.read_text().splitlines()]
+        self.assertEqual(entries[-1]["dropped_events"], 1)
+        self.assertEqual(entries[-1]["reason"], "insufficient_free_disk_space")
+        self.assertTrue(entries[-1]["not_recoverable_from_source_snapshot"])
+        # The network thread can report streaming, but cannot overwrite
+        # independent writer error state or its durable incident.
+        feed._set(state="streaming_original_quotes")
+        self.assertEqual(feed.STATUS["storage_state"],
+                         "insufficient_free_disk_space")
+
+    def test_option_feed_capacity_floor_reserves_disk(self):
+        with patch.object(feed.shutil, "disk_usage") as usage:
+            usage.return_value.total = 250 * 1024**3
+            usage.return_value.free = 120 * 1024**3
+            healthy, free, reserve = feed._storage_disk_capacity()
+            self.assertTrue(healthy)
+            self.assertEqual(free, 120*1024**3)
+            self.assertEqual(reserve, 7.5*1024**3)
+            usage.return_value.free = 100 * 1024**2
+            healthy, _, _ = feed._storage_disk_capacity()
+            self.assertFalse(healthy)
+
     def test_independent_opt_in_permissions_and_safe_loopback_endpoint(self):
         with patch.dict(os.environ,{"DHAN_ACCESS_TOKEN":"fixture-not-a-real-dhan-token"}), \
              patch.object(auto,"_config",return_value={**auto.DEFAULTS,"enabled":True}), \

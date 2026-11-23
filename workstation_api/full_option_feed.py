@@ -21,6 +21,7 @@ import json
 import math
 import os
 import sqlite3
+import shutil
 import struct
 import time
 
@@ -29,12 +30,16 @@ from . import auto_option_depth as auto, dhan_option_chain, live_market, option_
 LOCK = RLock()
 STOP = Event()
 WORKER: Thread | None = None
+WRITER: Thread | None = None
 SHUTTING_DOWN = False
 MAX_INSTRUMENTS = 5000
 BATCH_SIZE = 100
 MAX_FRAME_BYTES = 2_000_000
 MAX_QUEUE = 25_000
-MAX_DAILY_EVENTS = 2_000_000
+MAX_DAILY_EVENTS = 0  # No artificial event cap; guarded by real free disk space.
+STORAGE_DISK_CHECK_SECONDS = 10
+STORAGE_MIN_RESERVE_BYTES = 512 * 1024**2
+STORAGE_MAX_RESERVE_BYTES = 10 * 1024**3
 DISCOVER_SECONDS = 600
 MAX_TRADE_LAG_SECONDS = 120
 SCORE_WINDOW_SECONDS = 300
@@ -50,6 +55,16 @@ STATUS = {
     "unchanged_quote_packets": 0, "unchanged_oi_packets": 0,
     "last_quote_received_utc": None, "last_error": None,
     "session_id": None, "opportunity_count": 0,
+    # Independent writer health; the quote socket must never mask disk errors.
+    "storage_state": "not_started",
+    "storage_last_error": None,
+    "storage_daily_events": None,
+    "storage_daily_limit": None,  # Unlimited until the disk-safety floor.
+    "storage_last_saved_received_utc": None,
+    "storage_free_gb": None, "storage_reserve_gb": None,
+    "storage_gap_detected": False, "storage_gap_started_utc": None,
+    "storage_last_drop_utc": None, "storage_gap_log_failed": False,
+    "storage_write_retries": 0,
 }
 CATALOG: dict[str, dict] = {}
 LATEST: dict[str, dict] = {}
@@ -370,6 +385,12 @@ def _ingest(event: dict, received: datetime, session: str) -> None:
                 WRITES.put_nowait(row)
             except Full:
                 STATUS["dropped_events"] += 1
+                STATUS["storage_state"] = "ingest_queue_overflow"
+                STATUS["storage_last_error"] = "Event queue full; source event lost"
+                STATUS["storage_gap_detected"] = True
+                if STATUS["storage_gap_started_utc"] is None:
+                    STATUS["storage_gap_started_utc"] = received_iso
+                STATUS["storage_last_drop_utc"] = received_iso
 
 
 def _opportunity(history: deque) -> dict:
@@ -550,10 +571,19 @@ def ranked_active_depth(limit: int = 80) -> list[dict]:
 
 
 def _write_batches(stop: Event) -> None:
+    """Persist original Dhan Quote/OI records for the full market session.
+
+    No two-million-row ceiling: maintain loss accounting and a disk reserve.
+    Retry transient SQLite contention before admitting an irreversible gap.
+    Only the writer thread writes the event table; scanner reads are separate.
+    """
     saved = 0
     day = None
+    disk_check_at = 0.
+    disk_safe = True
     try:
         _init_storage()
+        _set(storage_state="initializing", storage_daily_limit=None)
         while not stop.is_set() or not WRITES.empty():
             current_day = _utc().astimezone(auto.IST).date()
             if current_day != day:
@@ -561,11 +591,17 @@ def _write_batches(stop: Event) -> None:
                 midnight_ist = datetime.combine(
                     day, datetime.min.time(), tzinfo=auto.IST)
                 with live_market._database() as db:
-                    saved = int(db.execute(
-                        "SELECT COUNT(*) FROM dhan_option_live_events "
+                    count, last = db.execute(
+                        "SELECT COUNT(*), MAX(received_utc) "
+                        "FROM dhan_option_live_events "
                         "WHERE received_utc>=? AND received_utc<?",
                         (_iso(midnight_ist), _iso(midnight_ist +
-                            timedelta(days=1)))).fetchone()[0])
+                            timedelta(days=1)))).fetchone()
+                saved = int(count)
+                _set(storage_daily_events=saved,
+                     storage_last_saved_received_utc=last,
+                     storage_state="recording_with_prior_gaps"
+                        if STATUS.get("storage_gap_detected") else "recording")
             batch = []
             try:
                 batch.append(WRITES.get(timeout=.25))
@@ -576,30 +612,108 @@ def _write_batches(stop: Event) -> None:
                     batch.append(WRITES.get_nowait())
                 except Empty:
                     break
-            if saved + len(batch) > MAX_DAILY_EVENTS:
-                with LOCK:
-                    STATUS["dropped_events"] += len(batch)
-                    STATUS["state"] = "recording_storage_cap_reached"
+            if time.monotonic() >= disk_check_at:
+                disk_check_at = time.monotonic() + STORAGE_DISK_CHECK_SECONDS
+                try:
+                    disk_safe, free_bytes, reserve_bytes = _storage_disk_capacity()
+                    _set(storage_free_gb=round(free_bytes / 1024**3, 2),
+                         storage_reserve_gb=round(reserve_bytes / 1024**3, 2))
+                except OSError:
+                    disk_safe = False
+                    _set(storage_last_error="Unable to check storage capacity")
+            if not disk_safe:
+                _record_storage_drop(batch, "insufficient_free_disk_space")
                 continue
-            try:
-                with live_market._database() as db:
-                    before = db.total_changes
-                    db.executemany("""
-                      INSERT OR IGNORE INTO dhan_option_live_events
-                      (identity,received_utc,exchange_trade_utc,kind,price,
-                       volume,open_interest,last_trade_quantity,packet_sha256,session_id)
-                      VALUES(?,?,?,?,?,?,?,?,?,?)""",batch)
-                    inserted = db.total_changes-before
-                saved += inserted
-                with LOCK:
-                    STATUS["stored_events"] += inserted
-            except sqlite3.Error:
-                # Fail closed and count what this process could not persist.
-                with LOCK:
-                    STATUS["dropped_events"] += len(batch)
-                    STATUS["state"] = "storage_write_error"
-    except (OSError, sqlite3.Error, ValueError):
-        _set(state="storage_unavailable",last_error="Original option stream storage unavailable")
+
+            inserted = None
+            for attempt in range(3):
+                try:
+                    with live_market._database() as db:
+                        before = db.total_changes
+                        db.executemany("""
+                          INSERT OR IGNORE INTO dhan_option_live_events
+                          (identity,received_utc,exchange_trade_utc,kind,price,
+                           volume,open_interest,last_trade_quantity,packet_sha256,session_id)
+                          VALUES(?,?,?,?,?,?,?,?,?,?)""", batch)
+                        inserted = db.total_changes - before
+                    break
+                except sqlite3.OperationalError:
+                    if attempt < 2:
+                        with LOCK:
+                            STATUS["storage_write_retries"] += 1
+                        time.sleep(0.2 * (2 ** attempt))
+                except sqlite3.Error:
+                    break
+            if inserted is None:
+                _record_storage_drop(batch, "sqlite_storage_write_failure")
+                continue
+            saved += inserted
+            with LOCK:
+                STATUS["stored_events"] += inserted
+                STATUS["storage_daily_events"] = saved
+                if inserted:
+                    STATUS["storage_last_saved_received_utc"] = batch[-1][1]
+                STATUS["storage_state"] = (
+                    "recording_with_prior_gaps" if
+                    STATUS["storage_gap_detected"] else "recording")
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        _set(storage_state="storage_unavailable",
+             storage_last_error="Original option stream storage unavailable: " +
+                                type(exc).__name__)
+
+
+def _storage_disk_capacity() -> tuple[bool, int, int]:
+    """Protect free space without halting at an arbitrary row-count ceiling.
+
+    Reserve 3% of filesystem size, bounded between 512 MiB and 10 GiB.
+    Both current shared-market DB and any WAL/journal share this filesystem.
+    """
+    target = live_market.shared_market_data.database_path()
+    usage = shutil.disk_usage(target.parent)
+    reserve = min(STORAGE_MAX_RESERVE_BYTES,
+                  max(STORAGE_MIN_RESERVE_BYTES, int(usage.total * 0.03)))
+    return usage.free > reserve, usage.free, reserve
+
+
+def _record_storage_drop(batch: list[tuple], reason: str) -> None:
+    """Account for missing data explicitly; never promote a gap to trade data.
+
+    Append a small durable loss ledger independently of the market DB.
+    It records only source receipt times and counts, never credentials.
+    """
+    if not batch:
+        return
+    first = batch[0][1]
+    last = batch[-1][1]
+    with LOCK:
+        STATUS["dropped_events"] += len(batch)
+        STATUS["storage_gap_detected"] = True
+        if STATUS["storage_gap_started_utc"] is None:
+            STATUS["storage_gap_started_utc"] = first
+        STATUS["storage_last_drop_utc"] = last
+        STATUS["storage_state"] = reason
+        STATUS["storage_last_error"] = reason
+    try:
+        path = auto._root() / "option_feed_storage_gaps.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "recorded_utc": _iso(_utc()),
+            "session_id": batch[0][-1],
+            "reason": reason,
+            "dropped_events": len(batch),
+            "first_source_received_utc": first,
+            "last_source_received_utc": last,
+            "not_recoverable_from_source_snapshot": True,
+        }
+        fd = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        try:
+            payload = (json.dumps(event, separators=(",", ":")) + "\n").encode()
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+    except OSError:
+        with LOCK:
+            STATUS["storage_gap_log_failed"] = True
 
 
 def _session_rollover() -> None:
@@ -616,6 +730,7 @@ def _session_rollover() -> None:
 
 
 def _run(stop: Event) -> None:
+    global WRITER
     root = auto._root()
     root.mkdir(parents=True, exist_ok=True)
     lock_path = root / "banknifty_full_option_feed.lock"
@@ -631,6 +746,7 @@ def _run(stop: Event) -> None:
         writer_stop = Event()
         writer = Thread(target=_write_batches,args=(writer_stop,),
                         daemon=True,name="quantlab-full-option-feed-writer")
+        WRITER = writer
         writer.start()
         try:
             while not stop.is_set():
@@ -715,6 +831,8 @@ def _run(stop: Event) -> None:
             writer.join(timeout=15)
             if writer.is_alive():
                 _set(state="storage_flush_incomplete",
+                     storage_state="storage_flush_incomplete",
+                     storage_last_error="Pending original quote events are not fully flushed",
                      last_error="Pending original price events are still flushing; keep local server running")
     finally:
         with LOCK:
@@ -822,6 +940,14 @@ def status() -> dict:
         snapshot["requested_not_yet_quoted"] = sum(
             row["never_quoted"] for row in by_expiry.values())
         snapshot["queue_depth"] = WRITES.qsize()
+        snapshot["storage_writer_alive"] = bool(WRITER and WRITER.is_alive())
+        snapshot["storage_gap_ledger"] = str(auto._root() /
+                                             "option_feed_storage_gaps.jsonl")
+        snapshot["storage_coverage_complete"] = (
+            not snapshot["storage_gap_detected"] and
+            snapshot["dropped_events"] == 0 and
+            snapshot["storage_state"] in ("recording",))
+        snapshot["storage_event_limit_removed"] = True
         snapshot["coverage_by_expiry"] = sorted(
             by_expiry.values(), key=lambda row: row["expiry"])
         snapshot["opportunity_count"] = sum(
