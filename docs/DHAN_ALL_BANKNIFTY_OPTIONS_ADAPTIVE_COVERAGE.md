@@ -72,6 +72,10 @@ Book**. The recorder reports:
   verified source strike min/max vs active subscribed min/max, and rotation cycle.
 - Source-reported strike-range limitations, current WebSocket health,
   last received paired packet, and saved original 20-level book counts.
+- **Prior subscribed-range breakout counter** and timestamp when the next
+  authenticated Dhan chain spot shows BANKNIFTY has moved outside the earlier
+  active 20-level strike range. This explicitly labels the unobserved book
+  interval as an irrecoverable source gap, not an estimated depth history.
 - Complete-chain recorder's number of active expiries observed, full chain
   quotes per snapshot and source timestamp.
 
