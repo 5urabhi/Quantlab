@@ -70,3 +70,87 @@ After merging and pulling the branch:
 Run repository-wide Python and browser CI as well.
 
 To progress from research ranking toward actual profitability evaluation, collect order acknowledgments, cancellations, fills, passive queue estimates, partial-fill events, broker basket margin responses and time-synchronized historical replay, then measure out-of-sample execution P&L. Do not label a large saved spread as guaranteed or expected income.
+
+
+## 2026-11-23: Shared execution-feasibility negative gate
+
+**Important correction:** In the earlier automatic scanner a ₹1.50/₹2.70
+option could rank first because the two-passive-fill counterfactual showed
+₹311 profit after fees, while the simulated missed-exit loss was only
+₹50.78. This does **not** mean the option can be profitably market-made.
+A long option can become worthless; if entry costs ₹473.79, the zero
+recovery exposure is approximately **₹473.79**, excluding any additional
+expiry costs. The tiny mild-stress loss cannot replace tail risk.
+
+A shared backend module, `spread_execution_gate.py`, is now the decisive
+source-quality filter for **both** bid–ask capture and multi-leg options.
+Both engines retain *all structurally modeled quotes* for inspection but
+only place **PAPER-RESEARCH-QUALIFIED** candidates in the automatic
+shortlist. Neither engine can authorize live orders: the global action is
+**NO TRADE** until independently verified fills and broker information
+exist. High scores are research heuristics, never win probabilities.
+
+### Default bid–ask restrictions
+
+- Saved original book age ≤ **8 seconds** and unexpired contract;
+- best bid premium ≥ **₹20** per unit;
+- quoted relative spread ≤ **250 bps** (2.5% of mid);
+- first-level bid AND ask size at least **2 × intended units**;
+- at least **3 saved packet receipts** and **2 distinct packet hashes**
+  spanning at least **15 seconds** within the latest **120 seconds**;
+- long option's full **entry cash debit** (loss-to-zero scenario) ≤
+  **25%** of the user-selected capital;
+- positive hypothetical cost-adjusted, adverse-stressed two-fill bound
+  and a recorded quantity-sufficient failed-exit path.
+
+Lot sizing now prefers a size inside this risk budget when available,
+instead of maximizing optimistic absolute rupees. The existing mild
+failed-exit hurdle remains visible but must be read next to a
+**zero-recovery break-even conditional exit-fill hurdle**:
+`premium_cash_at_risk / (premium_cash_at_risk + conditional_stressed_gain)`.
+Neither hurdle is a calibrated actual fill probability. A second
+illustration is a **50% premium drop exit** with estimated entry/exit
+fees. Unknown costs and unobservable queue events remain unknown.
+
+### Default multi-leg restrictions
+
+- Each exact source leg ≤ **8 seconds** old, and maximum receipt-time
+  skew ≤ **2 seconds**;
+- every leg's bid ≥ **₹5** and relative spread ≤ **1000 bps**;
+- each leg has top-of-book bid and ask quantity ≥ **2 × position units**;
+- each leg has the same minimum original packet receipt history
+  described above;
+- theoretical maximum loss after entry fees ≤ **25%** of the selected
+  capital;
+- hypothetical same-book immediate round-trip drag ≤ **50%** of
+  maximum theoretical terminal gain.
+
+The multi-leg source gate is necessary but **not sufficient**:
+Zerodha's required and final basket margin, sequential order acceptance,
+partial fills and expiry settlement are still unverified. The UI labels
+unqualified contracts **NO TRADE**, shows their rejection reasons, and
+does not present historical sources as live opportunities. Changing
+reference display windows does not loosen these hard requirements.
+
+### Performance and data provenance
+
+Both engines use the existing local database. A **single bounded
+GROUP BY** query obtains per-contract receipt counts/distinct packet
+hashes over the last 120 seconds; this read does not change live Dhan
+subscriptions or stop their recording. Receipt counts are *not trade
+prints, exchanges fills or independent evidence of queue priority*.
+
+No source quotes, broker acknowledgements, or profits are synthesized.
+The new `execution_decision` API object explicitly returns
+`live_action=NO_TRADE`, paper-study candidate counts, top rejection
+reasons, no calibrated fill probability, and no expected-profit figure.
+
+Run:
+
+    python -m unittest tests.test_spread_execution_gate tests.test_liquidity_spreads tests.test_option_spread_studio -v
+    npm run build
+
+Next milestone remains **measured paper/execution event collection**,
+with order acknowledgments and fully time-aligned market data. This
+change is a risk-rejection and prioritization layer, **not** proof the
+strategies make money.
