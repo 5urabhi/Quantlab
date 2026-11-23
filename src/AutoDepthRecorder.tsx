@@ -1,6 +1,7 @@
 import {useCallback,useEffect,useRef,useState} from 'react'
 import {Activity,AlertTriangle,Database,History,PauseCircle,Radio,ShieldCheck} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
+import OptionUniverseMonitor from './OptionUniverseMonitor'
 import './auto-depth-recorder.css'
 
 type Settings={
@@ -10,7 +11,7 @@ type Settings={
 }
 type Candidate={
   identity:string;side:'CE'|'PE';strike:number;expiry:string
-  wing?:'above'|'below'|'atm';atm_strike?:number;coverage_role?:'core'|'rotating'
+  wing?:'above'|'below'|'atm';atm_strike?:number;coverage_role?:'core'|'opportunity'|'rotating'
   lot_size:number;ltp:number;chain_received_utc:string;volume:number
 }
 type Latest={
@@ -52,7 +53,8 @@ type Recorder={
   source_contracts_reported?:number;source_verified_depth_contracts?:number
   source_strike_min?:number|null;source_strike_max?:number|null
   subscribed_strike_min?:number|null;subscribed_strike_max?:number|null
-  rotating_contracts?:number;not_currently_depth_subscribed?:number
+  rotating_contracts?:number;opportunity_depth_contracts?:number
+  not_currently_depth_subscribed?:number
   rotation_step?:number;chain_refresh_seconds?:number
   boundary_escape_events?:number;last_boundary_escape_utc?:string|null
   coverage_gap_warning?:string|null
@@ -196,10 +198,11 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         <span className="tc-page-kicker">AUTOMATIC LIVE DATA COLLECTION</span>
         <h3><Activity size={19}/> Record BANKNIFTY CE &amp; PE order books</h3>
         <p>Dhan-only automatic coverage. Archive every source-returned
-          CE/PE strike for all listed expiries. Four 20-level depth sockets
-          continuously monitor the 120 nearest verified contracts and rotate
-          80 slots across distant strikes. Large spot moves trigger recentering
-          on the next Dhan chain refresh. No orders.</p>
+          CE/PE chain for all listed expiries. The separately authorized fifth
+          WebSocket can record live prices across the full verified universe.
+          Four 20-level sockets monitor the 120 nearest contracts, promote
+          rapidly moving verified contracts, then rotate spare distant slots.
+          No orders.</p>
       </div>
       <span className={'ad-status '+(connected?'active':armed?'armed':'stopped')}>
         <Radio size={15}/>{STATE_NAME[state?.state||'disabled']||state?.state||'Stopped'}
@@ -209,10 +212,10 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     <div className="ad-controls" aria-label="Automatic order-book recording configuration">
       <div className="ad-armed-note" role="note">
         <strong>Full Dhan option chains + 200 concurrent depth subscriptions</strong>
-        <div>120 nearest CE/PE contracts stay subscribed; 80 rotate across
-          the remaining verified nearest-expiry contracts every 90 seconds.
-          Distant inactive strikes have original chain quotes, but no
-          continuous 20-level book history.</div>
+        <div>120 nearest CE/PE contracts remain subscribed. Up to 40
+          source-confirmed premium movers can take deep-book slots, while
+          remaining distant slots rotate every 90 seconds. The separate
+          all-contract Quote/OI monitor is optional and independent of depth.</div>
       </div>
       <label>Lots to evaluate
         <input aria-label="Auto depth lots" type="number" min={1} max={20} step={1}
@@ -278,6 +281,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{n(state?.source_verified_depth_contracts)}</strong> verified options in source chain</span>
       <span><strong>{n(state?.not_currently_depth_subscribed)}</strong> waiting for a distant depth rotation slot</span>
       <span><strong>{n(state?.rotating_contracts)}</strong> currently rotating depth IDs</span>
+      <span><strong>{n(state?.opportunity_depth_contracts)}</strong> original moving options promoted to 20-level</span>
       <span><strong>{state?.contracts_above??0} / {state?.contracts_below??0}</strong> subscribed above / below ATM</span>
       <span><strong>{n(state?.rotation_step)}</strong> distant strike rotation cycle</span>
       <span><strong>{n(state?.boundary_escape_events)}</strong> observed prior-depth-range breakouts</span>
@@ -305,6 +309,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       {chainCapture?.last_error&&<span className="ad-warning"> {chainCapture.last_error}</span>}
       {chainCapture?.token_renewal_opted_in&&<span> Token maintenance: {chainCapture.token_maintenance_message||"checking"}.</span>}
     </p>
+    <OptionUniverseMonitor/>
     {Boolean(state?.socket_health?.length)&&<section className="ad-socket-health"
       aria-label="Original Dhan depth receipt health by socket">
       <strong>Original 20-level delivery by socket</strong>
