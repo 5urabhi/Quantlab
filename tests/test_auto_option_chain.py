@@ -20,8 +20,8 @@ from workstation_api import auto_option_depth as depth
 
 class AutomaticCompleteChainTests(TestCase):
     def test_cadences_keep_near_expiries_fresher_than_distant(self):
-        self.assertEqual(chains._period(0), 90)
-        self.assertEqual(chains._period(1), 90)
+        self.assertEqual(chains._period(0), 30)
+        self.assertEqual(chains._period(1), 60)
         self.assertEqual(chains._period(2), 300)
         self.assertEqual(chains._period(5), 300)
         self.assertEqual(chains._period(6), 1800)
