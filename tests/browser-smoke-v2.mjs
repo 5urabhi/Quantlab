@@ -106,6 +106,51 @@ try{
        source:'original_Dhan_20_level_fixture',read_only:true,warning:'Research only',
      }),
    }))
+   await page.route('**/api/trading-cockpit/liquidity/scan?*',route=>{
+     // UI-only fixture. Does not assert that any real Zerodha orders filled.
+     const q=new URL(route.request().url()).searchParams
+     const profile=q.get('broker_profile')||'zerodha'
+     const lot={lots:3,units:90,capital_required_inr:22500,
+       within_budget:true,marketable_full_depth:true,
+       top_of_book_both_sides_sufficient:true,
+       hypothetical_buy_cash_debit_inr:22500,
+       hypothetical_sell_cash_credit_inr:22560,
+       buy_fees_inr:22,sell_fees_inr:30,total_fees_inr:52,
+       passive_gross_inr:112,passive_upper_net_inr:60,
+       passive_stressed_upper_net_inr:4,marketable_net_inr:-150,
+       marketable_buy_cash_debit_inr:22580,
+       marketable_sell_cash_credit_inr:22430,
+       marketable_buy_fees_inr:22,marketable_sell_fees_inr:30}
+     const row={identity:'NSE_FNO:62539',expiry:'2026-11-23',strike:63400,
+       option_type:'CE',lot_size:30,received_utc:'2026-11-23T04:05:00+00:00',
+       saved_book_age_seconds:9,fresh_original_saved_book:true,
+       best_bid:249,best_ask:250,spread_inr:1,spread_bps:40.08,
+       top_bid_quantity:150,top_ask_quantity:150,
+       bid_quantity_20:3000,ask_quantity_20:3000,
+       best_hypothetical_lots:3,required_capital_inr:22500,
+       passive_upper_net_inr:60,passive_stressed_upper_net_inr:4,
+       marketable_net_inr:-150,estimated_buy_fees_inr:22,
+       estimated_sell_fees_inr:30,estimated_total_fees_inr:52,
+       lot_scenarios:[lot],classification:'POSITIVE_HYPOTHETICAL_STRESS_BOUND',
+       two_passive_fills_observed:false,actual_executed_orders:0,
+       actual_profit_inr:null}
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({
+         day_ist:'2026-11-23',broker_profile:profile,
+         broker_profile_name:'Zerodha regular retail',
+         capital_inr:50000,max_lots:10,executed_orders_per_side:1,
+         adverse_move_bps:25,original_depth_contracts_found:1,
+         source_scan_truncated:false,invalid_or_nonoriginal_books:0,
+         evaluated_source_books:1,rankable_with_budget_and_depth:1,
+         positive_stressed_upper_bounds:1,negative_stressed_upper_bounds:0,
+         positive_even_without_stress:1,negative_even_optimistic:0,
+         no_feasible_lots:0,recent_saved_books_60s:1,
+         total_rows:1,scan_completed_utc:'2026-11-23T04:05:00+00:00',
+         read_only:true,fills_observed:false,net_realized_profit_inr:null,
+         source:'Dhan synthetic 20-level fixture',
+         warning:'not actual fill evidence',rows:[row],
+       })})
+   })
    await page.route('**/api/trading-cockpit/liquidity/history?*',route=>{
      const book={identity:'NSE_FNO:62539',
        received_utc:'2026-11-23T04:05:00+00:00',expiry:'2026-11-23',
@@ -152,6 +197,13 @@ try{
            caveat:'No passive order fills observed.',
            fees:{brokerage:40,exchange_indicative:4.5,sebi:.1,gst:8,
              stt_sell:34,stamp_buy:1,total_estimated:87.6,
+             broker_profile:'zerodha',broker_profile_name:'Zerodha regular retail',
+             buy_leg:{brokerage:20,exchange_indicative:2.25,sebi:.05,
+               gst:4.01,stt_sell:0,stamp_buy:1,premium_turnover:22410,
+               fees_total:27.31,cash_debit:22437.31},
+             sell_leg:{brokerage:20,exchange_indicative:2.25,sebi:.05,
+               gst:3.99,stt_sell:34,stamp_buy:0,premium_turnover:22500,
+               fees_total:60.29,cash_credit:22439.71},
              assumptions:'Illustrative source-only fixture',version:'fixture'},
          },
        },
@@ -173,6 +225,20 @@ try{
    }))
    await sub('Liquidity & Spreads')
    await page.getByRole('tablist',{name:'Liquidity & Spreads modules'}).waitFor()
+   const scanner=page.getByRole('region',{
+     name:'Automatic spread profit and loss scanner'})
+   await scanner.getByText('Spread P&L Opportunity Scanner').waitFor()
+   await scanner.getByText('Positive stressed upper bounds').waitFor()
+   await scanner.getByRole('button',{name:'All lots'}).click()
+   await scanner.getByRole('region',{name:'Per-lot transaction cashflow ledger'}).waitFor()
+   await scanner.getByText('Cash left after buy').waitFor()
+   await scanner.getByText('Cash after hypothetical sell').waitFor()
+   await scanner.getByLabel('Sort by').selectOption('marketable')
+   await scanner.getByLabel('Show outcomes').selectOption('positive')
+   await scanner.getByLabel('Charge profile').selectOption('dhan')
+   await scanner.getByText('Conditional positive only').waitFor()
+   await shot('02-spread-auto-scanner')
+
    await page.getByRole('tabpanel',{name:'Live Spread Monitor'}).waitFor()
    await page.getByRole('button',{name:'Inspect'}).first().waitFor()
    await page.getByText('Original 20-level order book').waitFor()
@@ -188,6 +254,7 @@ try{
    await page.getByText('NOT a backtest of filled orders').waitFor()
    assert.equal(await page.getByText('Verified realized P&L').count(),1)
    assert.equal(await page.getByRole('button',{name:/Place live order/}).count(),0)
+   await page.unroute('**/api/trading-cockpit/liquidity/scan?*')
    await page.unroute('**/api/trading-cockpit/liquidity/overview?*')
    await page.unroute('**/api/trading-cockpit/liquidity/history?*')
    await page.unroute('**/api/trading-cockpit/liquidity/simulate')

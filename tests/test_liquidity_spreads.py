@@ -69,6 +69,119 @@ class LiquiditySpreadResearchTests(TestCase):
                   sha256(("a"*64+"b"*64).encode()).hexdigest())
                  for book in self.sample])
 
+    def test_zerodha_tariffs_and_exact_account_side_cashflow_ledger(self):
+        source=spreads.fee_schedule(249.0*90,250.0*90,
+                                    broker_profile="zerodha")
+        debit=source["buy_leg"];credit=source["sell_leg"]
+        self.assertEqual(source["brokerage"],40.0)
+        self.assertEqual(source["broker_profile"],"zerodha")
+        self.assertEqual(debit["brokerage"],20.0)
+        self.assertEqual(credit["brokerage"],20.0)
+        self.assertEqual(debit["stt_sell"],0.0)
+        self.assertGreater(credit["stt_sell"],0.0)
+        self.assertGreater(debit["cash_debit"],debit["premium_turnover"])
+        self.assertLess(credit["cash_credit"],credit["premium_turnover"])
+        self.assertAlmostEqual(
+            debit["fees_total"]+credit["fees_total"],
+            source["total_estimated"],places=2)
+        self.assertAlmostEqual(
+            credit["cash_credit"]-debit["cash_debit"],
+            90.0-source["total_estimated"],places=2)
+        special=spreads.fee_schedule(249.0*90,250.0*90,
+                      broker_profile="zerodha_debit_balance")
+        self.assertEqual(special["brokerage"],80.0)
+        self.assertGreater(special["total_estimated"],
+                           source["total_estimated"])
+        dhan=spreads.fee_schedule(249.0*90,250.0*90,
+                                 broker_profile="dhan")
+        self.assertEqual(dhan["brokerage"],40.0)
+        self.assertEqual(dhan["broker_profile_name"],"Dhan regular retail")
+        self.assertRaises(ValueError,spreads.fee_schedule,1000.,1000.,
+                          broker_profile="unverified")
+
+    def test_scanner_auto_tests_affordable_lots_and_marks_unavailable(self):
+        from workstation_api import spread_scanner
+        wide=original_book(
+            self.t0+timedelta(minutes=5),
+            "NSE_FNO:62540",bid=100,ask=110,quantity=300)
+        expensive=original_book(
+            self.t0+timedelta(minutes=5),
+            "NSE_FNO:62541",bid=2000,ask=2500,quantity=300)
+        extra=[wide,expensive]
+        with live_market._database() as db:
+            db.executemany(
+                "INSERT INTO live_depth_books "
+                "(identity,received_utc,session_id,book_json,packet_pair_sha256)"
+                " VALUES(?,?,?,?,?)",
+                [(row["identity"],row["received_utc"],
+                 "auto20_synthetic_fixture",json.dumps(row),
+                 sha256(("a"*64+"b"*64).encode()).hexdigest())
+                 for row in extra])
+        scan=spread_scanner.scan(
+            day="2026-11-23",broker_profile="zerodha",
+            capital_inr=50000,max_lots=10,adverse_move_bps=25)
+        self.assertEqual(scan["original_depth_contracts_found"],3)
+        self.assertEqual(scan["evaluated_source_books"],3)
+        self.assertEqual(scan["total_rows"],3)
+        self.assertEqual(scan["brokerage_per_executed_order_inr"],20.)
+        self.assertEqual(scan["fills_observed"],False)
+        self.assertIsNone(scan["net_realized_profit_inr"])
+        self.assertFalse(scan["source_scan_truncated"])
+        self.assertGreater(scan["positive_stressed_upper_bounds"],0)
+        rows={x["identity"]:x for x in scan["rows"]}
+        pos=rows["NSE_FNO:62540"]
+        self.assertGreater(pos["passive_stressed_upper_net_inr"],0)
+        self.assertEqual(pos["classification"],
+            "POSITIVE_HYPOTHETICAL_STRESS_BOUND")
+        self.assertFalse(pos["two_passive_fills_observed"])
+        self.assertTrue(pos["best_hypothetical_lots"]<=10)
+        self.assertGreater(len(pos["lot_scenarios"]),1)
+        best=next(x for x in pos["lot_scenarios"]
+                  if x["lots"]==pos["best_hypothetical_lots"])
+        self.assertLessEqual(best["capital_required_inr"],50000)
+        self.assertAlmostEqual(
+            best["hypothetical_sell_cash_credit_inr"]-
+            best["hypothetical_buy_cash_debit_inr"],
+            best["passive_upper_net_inr"],places=2)
+        self.assertIsNone(rows["NSE_FNO:62541"]["best_hypothetical_lots"])
+        self.assertEqual(rows["NSE_FNO:62541"]["classification"],
+                         "NO_AFFORDABLE_VERIFIED_DEPTH")
+        self.assertEqual(
+            scan["rankable_with_budget_and_depth"]+
+            scan["no_feasible_lots"],scan["evaluated_source_books"])
+        # A Dhan Quote/OI ID with no original 20-level book is not
+        # invented as a fourth execution opportunity.
+        self.assertNotIn("NSE_FNO:999999",rows)
+
+        response=self.client.get("/api/trading-cockpit/liquidity/scan",params={
+            "day":"2026-11-23","broker_profile":"zerodha",
+            "capital_inr":50000,"max_lots":10,"adverse_move_bps":25})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()["evaluated_source_books"],3)
+        invalid=self.client.get("/api/trading-cockpit/liquidity/scan",params={
+            "day":"2026-11-23","capital_inr":999,"max_lots":10})
+        self.assertEqual(invalid.status_code,400)
+        invalid_profile=self.client.get(
+            "/api/trading-cockpit/liquidity/scan",
+            params={"day":"2026-11-23","broker_profile":"unknown"})
+        self.assertEqual(invalid_profile.status_code,422)
+
+    def test_scanner_keeps_invalid_original_books_out_of_profit_list(self):
+        from workstation_api import spread_scanner
+        value=original_book(self.t0+timedelta(minutes=5),
+                            "NSE_FNO:62543",bid=100,ask=110)
+        with live_market._database() as db:
+            db.execute(
+                "INSERT INTO live_depth_books "
+                "(identity,received_utc,session_id,book_json,packet_pair_sha256)"
+                " VALUES(?,?,?,?,?)",
+                (value["identity"],value["received_utc"],
+                 "auto20_invalid_fixture",json.dumps(value),"f"*64))
+        report=spread_scanner.scan(day="2026-11-23")
+        self.assertEqual(report["invalid_or_nonoriginal_books"],1)
+        self.assertNotIn("NSE_FNO:62543",
+                         {row["identity"] for row in report["rows"]})
+
     def test_original_only_daily_history_and_exact_20_level_rows(self):
         data=spreads.book_history("NSE_FNO:62539","2026-11-23",limit=300)
         self.assertEqual(data["count"],3)
