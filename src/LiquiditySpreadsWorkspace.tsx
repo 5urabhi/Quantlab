@@ -4,6 +4,7 @@ import {Activity,ArrowRight,BarChart3,BookOpen,Database,Info,
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import SpreadOpportunityScanner,{type BrokerProfile} from './SpreadOpportunityScanner'
 import MultiLegSpreadStudio from './MultiLegSpreadStudio'
+import OptionFeedStorageHealth from './OptionFeedStorageHealth'
 import './liquidity-spreads.css'
 
 type PageTab='live'|'multileg'|'execution'|'history'|'lab'
@@ -320,6 +321,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
         <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button>
       </div>
     </div>
+    <OptionFeedStorageHealth/>
     <div className="lq-disclaimer"><ShieldCheck size={16}/>
       <span><strong>Research only — no orders sent.</strong> Bid/ask books are saved original Dhan
         observations, not executable commitments. Passive order fills, queue priority
