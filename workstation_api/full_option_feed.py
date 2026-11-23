@@ -158,8 +158,19 @@ def _safe_master_contracts(master: dict, expiries: list[str],
         key = (row["expiry"], round(float(strike), 4), option_type)
         by_term.setdefault(key, []).append(row)
         by_id.setdefault(ident, []).append(row)
+    # Preserve the original instrument master term provenance: by_id can
+    # overwrite repeated IDs, while its by_terms map retains ambiguities.
+    source_terms = master.get("by_terms", {})
+    source_ids: dict[str, int] = {}
+    for original_rows in source_terms.values():
+        for original in original_rows:
+            identity = original.get("identity") if isinstance(original, dict) else None
+            if isinstance(identity, str):
+                source_ids[identity] = source_ids.get(identity, 0) + 1
     qualified = [rows[0] for key, rows in by_term.items()
-                 if len(rows) == 1 and len(by_id[rows[0]["identity"]]) == 1]
+                 if len(rows) == 1 and len(by_id[rows[0]["identity"]]) == 1
+                 and (not source_terms or len(source_terms.get(key, [])) == 1)
+                 and source_ids.get(rows[0]["identity"], 1) == 1]
     def order(row: dict):
         return (row["expiry"],
                 abs(row["strike"] - spot) if spot and math.isfinite(spot) else 0,
