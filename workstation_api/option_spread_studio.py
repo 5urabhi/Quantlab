@@ -408,6 +408,9 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
         if choice is None:
             rejections["risk_capital_budget_or_depth"] += 1
             continue
+        if choice["max_profit_inr"] <= 0:
+            rejections["no_positive_terminal_payoff_after_entry_fees"] += 1
+            continue
         age = (now - min(b["stamp"] for b in books)).total_seconds()
         fresh = (chosen == today and
                  0 <= age <= max_source_age_seconds)
