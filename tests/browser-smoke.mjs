@@ -261,6 +261,17 @@ try {
     assert.equal(await armDepth.isDisabled(),true,
       'Automatic recording must require explicit consent')
     await autoDepth.getByText('Full Dhan option chains + 200 concurrent depth subscriptions').waitFor()
+    const fullOptions=autoDepth.getByRole('region',{
+      name:'Full BANKNIFTY option universe monitor',
+    })
+    await fullOptions.waitFor()
+    await fullOptions.getByRole('button',{name:'Start all-contract price stream'}).waitFor()
+    assert.equal(await fullOptions.getByRole('button',{
+      name:'Start all-contract price stream',
+    }).isDisabled(),true,
+      'Full-universe stream must require separate explicit consent and armed depth recorder')
+    await fullOptions.getByRole('button',{name:'Browse all contracts'}).click()
+    await fullOptions.getByRole('button',{name:'Hide contract catalog'}).waitFor()
     assert.equal(await autoDepth.getByRole('combobox',{
       name:'Auto depth sample interval',
     }).inputValue(),'30')
