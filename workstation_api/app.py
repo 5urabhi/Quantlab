@@ -1209,6 +1209,9 @@ class LiquiditySpreadScenarioRequest(BaseModel):
     brokerage_inr: float | None = Field(default=None,ge=0,le=1000)
     adverse_move_bps: float = Field(default=0.0,ge=0,le=1000)
     broker_profile: Literal["dhan","zerodha","zerodha_debit_balance"] = "zerodha"
+    buy_fill_probability: float | None = Field(default=None,ge=0,le=1)
+    sell_fill_probability_given_buy: float | None = Field(default=None,ge=0,le=1)
+    exit_slippage_bps: float = Field(default=10,ge=0,le=1000)
 
 
 @app.get("/api/trading-cockpit/liquidity/overview")
@@ -1262,7 +1265,10 @@ def liquidity_spreads_simulate(body: LiquiditySpreadScenarioRequest):
         return liquidity_spreads.simulate(
             body.identity,body.lots,body.day,body.received_utc,
             body.executed_orders_per_side,body.brokerage_inr,
-            body.adverse_move_bps,body.broker_profile)
+            body.adverse_move_bps,body.broker_profile,
+            body.buy_fill_probability,
+            body.sell_fill_probability_given_buy,
+            body.exit_slippage_bps)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
