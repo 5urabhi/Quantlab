@@ -731,7 +731,7 @@ def status() -> dict:
             row["fresh_quote_60s"] += int(
                 recent(item.get("quote_received_utc"), 60))
             row["with_any_oi"] += int(has_oi)
-            row["oi_only"] += int(has_oi and not has_quote)
+            row["oi_only"] += int(has_oi and not has_source_packet)
             row["never_quoted"] += int(not has_quote)
             eligible, _ = _eligible_for_depth(item)
             row["activity_screen_passed_45s"] += int(
