@@ -89,3 +89,6 @@
   border-radius:6px;font-size:10px;color:#9fcbd0;line-height:1.6}
 @media(max-width:1000px){.ad-socket-health>div{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:550px){.ad-socket-health>div{grid-template-columns:1fr}}
+
+/* The explanation belongs above the two-column cards, not in its first cell. */
+.ad-contracts>.ad-armed-note,.ad-contracts>.ad-empty-contract{grid-column:1/-1}
