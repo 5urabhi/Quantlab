@@ -65,3 +65,30 @@
 @media(max-width:520px){
   .ad-controls,.ad-summary,.ad-contracts,.ad-book-grid{grid-template-columns:1fr}
 }
+
+
+/* Original per-socket receipt diagnostics; never implies that a socket
+   connection means all of its selected instruments supply complete books. */
+.ad-socket-health{display:grid;gap:10px;border:1px solid #335c6d;
+  background:#102c3a;border-radius:10px;padding:13px}
+.ad-socket-health>strong{font-size:13px;color:#c7f5e9}
+.ad-socket-health>p{font-size:11px;line-height:1.5;color:#a4c3d0;margin:0}
+.ad-socket-health>div{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.ad-socket-health>div>span{display:grid;gap:7px;border:1px solid #385d70;
+  border-radius:8px;padding:10px;background:#17384a}
+.ad-socket-health b{font-size:11px;color:#bcdce7}
+.ad-socket-health span strong{font-size:15px;color:#a5f1ce}
+.ad-socket-health small{font-size:11px;color:#a8cbd3}
+.ad-view-tabs{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.ad-view-tabs button{min-height:38px;padding:8px 12px;cursor:pointer;
+  border:1px solid #476a7d;background:#152c3a;color:#c9e3ed;
+  border-radius:8px;font-size:12px;font-weight:650}
+.ad-view-tabs button.selected{border-color:#43a690;background:#1b514b;color:#e6fff5}
+.ad-view-tabs button:focus-visible{outline:2px solid #8de6d4;outline-offset:2px}
+.ad-contract .ad-receipt-meta{padding:8px 9px;border:1px solid #385a69;
+  border-radius:6px;font-size:10px;color:#9fcbd0;line-height:1.6}
+@media(max-width:1000px){.ad-socket-health>div{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:550px){.ad-socket-health>div{grid-template-columns:1fr}}
+
+/* The explanation belongs above the two-column cards, not in its first cell. */
+.ad-contracts>.ad-armed-note,.ad-contracts>.ad-empty-contract{grid-column:1/-1}

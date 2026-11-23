@@ -155,6 +155,13 @@ def status() -> dict:
         state["latest"] = {k: dict(v) for k, v in STATE.get("latest", {}).items()}
         state["observed_by_contract"] = dict(STATE.get("observed_by_contract", {}))
         state["socket_last_paired_utc"] = dict(STATE.get("socket_last_paired_utc", {}))
+        state["observed_sides_by_contract"] = {
+            key: dict(value) for key, value in
+            STATE.get("observed_sides_by_contract", {}).items()}
+        state["connected_socket_indices"] = list(
+            STATE.get("connected_socket_indices", []))
+        state["depth_parser_diagnostics"] = dict(
+            STATE.get("depth_parser_diagnostics", {}))
     now = _now()
     market_open = _market_open(now)
     def _age(stamp) -> float:
@@ -185,9 +192,77 @@ def status() -> dict:
     state["sockets_with_recent_pairs"] = sum(
         1 for ts in state["socket_last_paired_utc"].values()
         if _age(ts) <= 60 and state.get("connected") and market_open)
-    # Aggregate only; no broker credentials or raw packet data are exposed.
+    # Per-selected-contract provenance: distinguish a missing original Dhan
+    # packet from missing/invalid bid/ask pairing and a saved sampled book.
+    # Only computed ages and status labels leave the server. Raw packets,
+    # prices from rejected books, and provider credentials are never exposed.
+    if wide:
+        receipts = {}
+        selected = state["contracts"]
+        sides = state["observed_sides_by_contract"]
+        for index, contract in enumerate(selected):
+            identity = contract["identity"]
+            stamps = sides.get(identity, {})
+            bid_age = _age(stamps.get("bid"))
+            ask_age = _age(stamps.get("ask"))
+            pair_age = _age(observed.get(identity))
+            saved_age = _age(state["latest"].get(identity, {}).get("received_utc"))
+            recent_bid = bid_age <= 60
+            recent_ask = ask_age <= 60
+            recent_pair = pair_age <= 60
+            if recent_pair and saved_age < 999999:
+                label = "valid_book_saved"
+            elif recent_pair:
+                label = "valid_pair_not_yet_saved"
+            elif recent_bid and recent_ask:
+                label = "bid_ask_seen_no_valid_pair"
+            elif recent_bid:
+                label = "bid_only"
+            elif recent_ask:
+                label = "ask_only"
+            elif saved_age < 999999:
+                label = "previously_saved_feed_quiet"
+            else:
+                label = "no_decoded_depth_yet"
+            def readable_age(value: float) -> float | None:
+                return round(value, 1) if value < 999999 else None
+            receipts[identity] = {
+                "status": label,
+                "socket": index // 50 + 1,
+                "bid_age_seconds": readable_age(bid_age),
+                "ask_age_seconds": readable_age(ask_age),
+                "pair_age_seconds": readable_age(pair_age),
+                "saved_age_seconds": readable_age(saved_age),
+                "has_ever_saved_book": saved_age < 999999,
+            }
+        connected_indices = set(state["connected_socket_indices"])
+        state["socket_health"] = [{
+            "socket": slot + 1,
+            "connected": slot in connected_indices,
+            "subscribed": len(selected[slot*50:(slot+1)*50]),
+            "with_recent_pairs_60s": sum(
+                receipts[row["identity"]]["pair_age_seconds"] is not None
+                and receipts[row["identity"]]["pair_age_seconds"] <= 60
+                for row in selected[slot*50:(slot+1)*50]),
+            "with_recent_bids_60s": sum(
+                receipts[row["identity"]]["bid_age_seconds"] is not None
+                and receipts[row["identity"]]["bid_age_seconds"] <= 60
+                for row in selected[slot*50:(slot+1)*50]),
+            "with_recent_asks_60s": sum(
+                receipts[row["identity"]]["ask_age_seconds"] is not None
+                and receipts[row["identity"]]["ask_age_seconds"] <= 60
+                for row in selected[slot*50:(slot+1)*50]),
+        } for slot in range((len(selected)+49)//50)]
+        state["contract_receipts"] = receipts
+        state["active_contracts_with_no_valid_pairs_60s"] = sum(
+            receipt["pair_age_seconds"] is None
+            or receipt["pair_age_seconds"] > 60
+            for receipt in receipts.values())
+    # No unrestricted per-security receipt store or raw packet data in API.
     state.pop("observed_by_contract", None)
     state.pop("socket_last_paired_utc", None)
+    state.pop("observed_sides_by_contract", None)
+    state.pop("connected_socket_indices", None)
     return {
         **state, "settings": cfg, "armed": cfg["enabled"],
         "requested_contracts_above": None,
@@ -421,12 +496,23 @@ def _store_book(session_id: str, book: dict, feature: dict) -> bool:
 
 
 def _paired_books(blob: bytes, chosen: dict[str, dict],
-                  pending: dict, received: datetime) -> list[tuple[dict,dict]]:
-    """Pair only source bids/asks of the SAME contract within one second."""
+                  pending: dict, received: datetime, *,
+                  observed_sides: dict | None = None,
+                  diagnostics: dict | None = None) -> list[tuple[dict, dict]]:
+    """Pair source bid+ask from the SAME security within one second.
+
+    Optional bounded metadata reports decoded half-book availability without
+    changing pairing thresholds, saving prices, or accepting invalid snapshots.
+    Callers aggregate instrumentation outside the decoder to avoid per-packet
+    locks. No raw packet, credential, or rejected price leaves this function.
+    """
     output = []
     try:
         packets = market_depth.packet_stream(blob, 20)
     except ValueError:
+        if diagnostics is not None:
+            diagnostics["rejected_frame_count"] = (
+                diagnostics.get("rejected_frame_count", 0) + 1)
         return output
     for packet in packets:
         if packet["segment_code"] != 2:
@@ -434,6 +520,9 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
         security = packet["security_id"]
         if security not in chosen:
             continue
+        if observed_sides is not None:
+            identity = chosen[security]["identity"]
+            observed_sides.setdefault(identity, set()).add(packet["side"])
         key = (security, packet["side"])
         pending[key] = (packet, received)
         opposite = (security, "ask" if packet["side"] == "bid" else "bid")
@@ -441,6 +530,9 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
             continue
         other, last_received = pending[opposite]
         if abs((received - last_received).total_seconds()) > 1.0:
+            if diagnostics is not None:
+                diagnostics["unpaired_time_window_count"] = (
+                    diagnostics.get("unpaired_time_window_count", 0) + 1)
             continue
         bid = packet if packet["side"] == "bid" else other
         ask = packet if packet["side"] == "ask" else other
@@ -449,7 +541,9 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
             book = market_depth._snapshot(bid, ask, identity, received, 20)
             output.append((book, chosen[security]))
         except (ValueError, KeyError, TypeError):
-            pass
+            if diagnostics is not None:
+                diagnostics["rejected_book_pair_count"] = (
+                    diagnostics.get("rejected_book_pair_count", 0) + 1)
         pending.pop(key, None)
         pending.pop(opposite, None)
     # Unpaired half-books are never retained across long disconnects.

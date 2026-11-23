@@ -22,6 +22,17 @@ type Latest={
   feed_age_seconds?:number|null;feed_fresh?:boolean
   buy_vwap_for_units:number|null;sell_vwap_for_units:number|null
 }
+type ContractReceipt={
+  status:'valid_book_saved'|'valid_pair_not_yet_saved'|'bid_ask_seen_no_valid_pair'|
+    'bid_only'|'ask_only'|'previously_saved_feed_quiet'|'no_decoded_depth_yet'
+  socket:number;bid_age_seconds:number|null;ask_age_seconds:number|null
+  pair_age_seconds:number|null;saved_age_seconds:number|null
+  has_ever_saved_book:boolean
+}
+type SocketHealth={
+  socket:number;connected:boolean;subscribed:number
+  with_recent_pairs_60s:number;with_recent_bids_60s:number;with_recent_asks_60s:number
+}
 type Recorder={
   armed:boolean;state:string;connected:boolean
   market_regular_hours:boolean;settings:Settings;session_id:string|null
@@ -34,6 +45,9 @@ type Recorder={
   contracts_with_saved_books?:number;contracts_with_recent_packets?:number
   sockets_connected?:number;sockets_requested?:number;sockets_with_recent_pairs?:number
   dropped_depth_samples?:number
+  contract_receipts?:Record<string,ContractReceipt>
+  socket_health?:SocketHealth[];active_contracts_with_no_valid_pairs_60s?:number
+  depth_parser_diagnostics?:Record<string,number>
   selection_warning?:string|null;contracts:Candidate[]
   source_contracts_reported?:number;source_verified_depth_contracts?:number
   source_strike_min?:number|null;source_strike_max?:number|null
@@ -68,6 +82,25 @@ const clock=(value?:string|null)=>value
   ?new Date(value).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',
     month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})
   :'—'
+const receiptMessage=(receipt?:ContractReceipt)=>{
+  if(!receipt)return 'Receipt diagnostics unavailable until the recorder refreshes.'
+  switch(receipt.status){
+    case 'valid_pair_not_yet_saved':
+      return 'Verified original bid + ask pair received; waiting for its scheduled saved sample.'
+    case 'bid_ask_seen_no_valid_pair':
+      return 'Original bid and ask halves were decoded, but not validated as one same-ID book within one second.'
+    case 'bid_only':
+      return 'Original bid half decoded, but no recent matching ask half.'
+    case 'ask_only':
+      return 'Original ask half decoded, but no recent matching bid half.'
+    case 'previously_saved_feed_quiet':
+      return 'A real order book was saved earlier; no complete recent source pair is available.'
+    case 'valid_book_saved':
+      return 'Validated order book is saved.'
+    default:
+      return 'No original 20-level bid or ask packet has been decoded for this subscribed contract in the last 60 seconds.'
+  }
+}
 const STATE_NAME:Record<string,string>={
   disabled:'Stopped',
   stopping:'Stopping feed',
@@ -94,6 +127,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
+  const [contractView,setContractView]=useState<'nearby'|'recording'|'rotating'>('nearby')
   const refresh=useCallback(async()=>{
     const [depth,chains]=await Promise.allSettled([
       marketApi<Recorder>('/api/trading-cockpit/auto-depth/status'),
@@ -147,6 +181,15 @@ export default function AutoDepthRecorder({onOpenSaved}:{
   }
   const armed=Boolean(state?.armed)
   const connected=Boolean(state?.connected)
+  const displayedContracts=state?.contracts
+    ?contractView==='recording'
+      ?state.contracts.filter(c=>Boolean(state.latest[c.identity]))
+        .sort((a,b)=>Date.parse(state.latest[b.identity].received_utc)-
+          Date.parse(state.latest[a.identity].received_utc)).slice(0,8)
+      :contractView==='rotating'
+        ?state.contracts.filter(c=>c.coverage_role==='rotating').slice(0,8)
+        :state.contracts.filter(c=>c.coverage_role==='core').slice(0,8)
+    :[]
   return <section className="ad-root" aria-label="Automatic BANKNIFTY 20-level order-book recorder">
     <header className="ad-head">
       <div>
@@ -242,6 +285,10 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{n(state?.source_strike_min)} – {n(state?.source_strike_max)}</strong> verified source strikes</span>
       <span><strong>{n(state?.contracts_with_saved_books)}</strong> contracts with saved source books</span>
       <span><strong>{n(state?.contracts_with_recent_packets)}</strong> contracts with paired packets in last 10s</span>
+      <span><strong>{n(state?.active_contracts_with_no_valid_pairs_60s)}</strong> selected IDs without a valid pair in last 60s</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.rejected_frame_count)}</strong> rejected Dhan binary frames this session</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.unpaired_time_window_count)}</strong> source bid/ask halves outside 1s pairing window</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.rejected_book_pair_count)}</strong> decoded pairs rejected by original-book validation</span>
       <span><strong>{state?.sockets_connected??0} / {state?.sockets_requested??0}</strong> connected depth sockets</span>
       <span><strong>{n(state?.sockets_with_recent_pairs)} / {state?.sockets_requested??0}</strong> sockets with original depth in last 60s</span>
       <span><strong>{state?.current_expiry||'—'}</strong> Dhan-listed expiry</span>
@@ -258,22 +305,45 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       {chainCapture?.last_error&&<span className="ad-warning"> {chainCapture.last_error}</span>}
       {chainCapture?.token_renewal_opted_in&&<span> Token maintenance: {chainCapture.token_maintenance_message||"checking"}.</span>}
     </p>
+    {Boolean(state?.socket_health?.length)&&<section className="ad-socket-health"
+      aria-label="Original Dhan depth receipt health by socket">
+      <strong>Original 20-level delivery by socket</strong>
+      <p>A connected socket can still have instruments with no complete bid + ask pairs.
+        Counts reflect distinct subscribed contracts observed in the past 60 seconds.</p>
+      <div>{state?.socket_health?.map(socket=><span key={socket.socket}>
+        <b>Socket {socket.socket} · {socket.connected?'Connected':'Disconnected'}</b>
+        <strong>{socket.with_recent_pairs_60s}/{socket.subscribed} valid books</strong>
+        <small>{socket.with_recent_bids_60s} bid IDs · {socket.with_recent_asks_60s} ask IDs</small>
+      </span>)}</div>
+    </section>}
+    <div className="ad-view-tabs" role="group" aria-label="Inspect Dhan 20-level contract coverage">
+      <button type="button" className={contractView==='nearby'?'selected':''}
+        aria-pressed={contractView==='nearby'} onClick={()=>setContractView('nearby')}>
+        Nearest contracts</button>
+      <button type="button" className={contractView==='recording'?'selected':''}
+        aria-pressed={contractView==='recording'} onClick={()=>setContractView('recording')}>
+        Actually saved ({n(state?.contracts_with_saved_books)})</button>
+      <button type="button" className={contractView==='rotating'?'selected':''}
+        aria-pressed={contractView==='rotating'} onClick={()=>setContractView('rotating')}>
+        Rotating depth</button>
+    </div>
     <div className="ad-contracts">
       {state?.contracts.length?<><p className="ad-armed-note">
-        Showing six nearest and two rotating subscribed contracts.
-        {state.contracts.length} original Dhan IDs are subscribed;
-        {n(state.contracts_with_saved_books)}
-        have produced stored original 20-level books this session.
-        Only actual received books are saved in Market Replay.
+        {contractView==='nearby'?'Nearest eight subscribed contracts':
+         contractView==='recording'?'Eight most recently saved source books':
+         'Eight currently subscribed far-strike contracts'}.
+        {' '}{state.contracts.length} original Dhan IDs are subscribed;
+        {' '}{n(state.contracts_with_saved_books)} have produced saved original
+        20-level books this session. These are not reconstructed historical packets.
         {Boolean(state.missing_ltp_selected)&&<>
         {' '}{n(state.missing_ltp_selected)} verified contracts have no last traded
-        premium in the source chain; only live order-book packets can supply their depth.</>}
+        premium in the source chain.</>}
         {Boolean(state.dropped_depth_samples)&&
           <> {n(state.dropped_depth_samples)} samples were skipped because
           local storage could not keep up.</>}
-      </p>{[...state.contracts.filter(x=>x.coverage_role==='core').slice(0,6),
-        ...state.contracts.filter(x=>x.coverage_role==='rotating').slice(0,2)].map(contract=>{
+      </p>{displayedContracts.map(contract=>{
         const live=state.latest[contract.identity]
+        const receipt=state.contract_receipts?.[contract.identity]
         return <article className="ad-contract" key={contract.identity}>
           <div className="ad-contract-title">
             <strong className={contract.side==='CE'?'ce':'pe'}>{contract.side}</strong>
@@ -290,13 +360,21 @@ export default function AutoDepthRecorder({onOpenSaved}:{
             <span>Latest source packet <strong className={live.feed_fresh?'ad-fresh':'ad-stale'}>
               {live.feed_age_seconds==null?'—':n(live.feed_age_seconds,0)+'s'} · {live.feed_fresh?'active':'quiet / unavailable'}</strong></span>
             <span>Saved book age <strong>{n(live.age_seconds,0)}s</strong></span>
-          </div>:<p className="ad-empty-contract">
-            Waiting for an original bid+ask 20-level packet; selection alone does not prove depth access.
-          </p>}
+          </div>:<p className="ad-empty-contract">{receiptMessage(receipt)}</p>}
+          {receipt&&<small className="ad-receipt-meta">
+            Socket {receipt.socket} · decoded bid {receipt.bid_age_seconds==null?'not seen':
+              n(receipt.bid_age_seconds,0)+'s ago'} · ask {receipt.ask_age_seconds==null?'not seen':
+              n(receipt.ask_age_seconds,0)+'s ago'} · last valid pair {receipt.pair_age_seconds==null?
+              'not seen':n(receipt.pair_age_seconds,0)+'s ago'}
+          </small>}
           <small className="ad-lot-note">{settings.lots} lots × verified {contract.lot_size}
             {' '}units = {settings.lots*contract.lot_size} units · local receive clock</small>
         </article>
-      })}</>:<div className="ad-empty-contract">
+      })}
+        {displayedContracts.length===0&&<p className="ad-empty-contract">
+          No subscribed contracts have saved a validated original book in this view.
+          Check the per-socket bid/ask receipt counts above.
+        </p>}</>:<div className="ad-empty-contract">
         <Database size={16}/> No current verified CE/PE subscriptions.
         {!armed?' Arm the recorder to begin when the NSE market is open.':
           ' QuantLab will select contracts automatically from the official Dhan chain.'}
