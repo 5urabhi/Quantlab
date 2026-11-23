@@ -492,6 +492,15 @@ def start(index_identity: str, depth_identity: str = "", auto_audit: bool = Fals
     client=dhan_option_chain._client_id(token)
     if not client.isdigit() or not 4<=len(client)<=20 or len(token)>4096:
         raise ValueError("Invalid locally stored Dhan live market credentials")
+    # Dhan limits active sockets per account. Automatic four-socket depth plus
+    # all-option quote feed already consumes the reserved five. Do not open a
+    # sixth manual feed even if its optional depth box is not selected.
+    from . import auto_option_depth
+    if auto_option_depth._config()["enabled"]:
+        raise ValueError(
+            "Automatic BANKNIFTY recording is armed (four 20-level sockets "
+            "+ one all-contract quote feed). Stop and disarm that recording "
+            "before starting the separate manual Trading Cockpit live session.")
     with LOCK:
         if any(worker.is_alive() for worker in WORKERS):
             raise ValueError("A live stream is already active or shutting down; stop it before restarting")
