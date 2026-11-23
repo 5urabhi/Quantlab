@@ -165,6 +165,43 @@ class DhanSideReceiptObservabilityTests(TestCase):
         self.assertNotIn("connected_socket_indices", status)
         self.assertNotIn("trading_password", str(status))
 
+    def test_original_large_stack_counter_audit_is_bounded_not_overwritten(self):
+        cfg={**auto.DEFAULTS,"enabled":True}
+        base={
+            "contracts":[],"latest":{},"connected":False,
+            "received_pairs":254442,
+            "depth_parser_diagnostics":{
+                "valid_depth_stacks_above_old_cutoff":4698,
+                "valid_book_pairs_above_old_cutoff":207238,
+            },
+        }
+        with patch.object(auto,"STATE",base), \
+             patch.object(auto,"_config",return_value=cfg), \
+             patch.object(auto,"_market_open",return_value=False):
+            status=auto.status()
+        self.assertTrue(status["depth_counter_audit"]["consistent"])
+        self.assertAlmostEqual(
+            status["depth_counter_audit"]["mean_pairs_per_large_message"],
+            207238/4698,places=2)
+        self.assertEqual(status["depth_counter_audit"][
+            "validated_pairs_in_large_messages"],207238)
+
+        bad={
+            **base,
+            "depth_parser_diagnostics":{
+                "valid_depth_stacks_above_old_cutoff":4698,
+                "valid_book_pairs_above_old_cutoff":2071238,
+            },
+        }
+        with patch.object(auto,"STATE",bad), \
+             patch.object(auto,"_config",return_value=cfg), \
+             patch.object(auto,"_market_open",return_value=False):
+            status=auto.status()
+        self.assertFalse(status["depth_counter_audit"]["consistent"])
+        # Evidence must never be silently changed to make an invariant pass.
+        self.assertEqual(status["depth_parser_diagnostics"][
+            "valid_book_pairs_above_old_cutoff"],2071238)
+
     def test_legacy_small_subscription_status_unchanged(self):
         contract = _contract(62539)
         cfg = {**auto.DEFAULTS, "selection_mode": "premium"}
