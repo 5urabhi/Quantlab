@@ -28,6 +28,16 @@ NSE_OPTION_EXCHANGE_RATE = 0.0003553  # Indicative 2026; verify contract note
 SEBI_RATE = 0.000001
 STAMP_BUY_RATE = 0.00003
 FEE_VERSION = "research_illustration_nse_options_2026_11"
+BROKER_PROFILES = {
+    "dhan": {"name": "Dhan regular retail", "brokerage": 20.0,
+             "source": "https://dhan.co/pricing/"},
+    "zerodha": {"name": "Zerodha regular retail", "brokerage": 20.0,
+                "source": "https://zerodha.com/charges/"},
+    "zerodha_debit_balance": {
+        "name": "Zerodha debit-balance/collateral-shortfall scenario",
+        "brokerage": 40.0,
+        "source": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/what-is-the-brokerage-at-zerodha-for-equity"},
+}
 SOURCE_NOTES = [
     "https://dhan.co/pricing/",
     "https://www.nseindia.in/static/products-services/equity-derivatives-securities-transaction-tax",
@@ -288,7 +298,12 @@ def _walk(levels: list[dict], units: int) -> dict:
 
 def fee_schedule(buy_turnover: float, sell_turnover: float,
                  *, executed_orders_per_side: int = 1,
-                 brokerage_inr: float = BROKERAGE_INR_PER_ORDER) -> dict:
+                 brokerage_inr: float | None = None,
+                 broker_profile: str = "dhan") -> dict:
+    if broker_profile not in BROKER_PROFILES:
+        raise ValueError("Broker profile must be Dhan or a listed Zerodha tariff")
+    if brokerage_inr is None:
+        brokerage_inr = BROKER_PROFILES[broker_profile]["brokerage"]
     if not (0 <= buy_turnover <= 1e10 and 0 <= sell_turnover <= 1e10):
         raise ValueError("Invalid option premium turnover")
     if (not isinstance(executed_orders_per_side, int) or
@@ -308,15 +323,57 @@ def fee_schedule(buy_turnover: float, sell_turnover: float,
         "sebi": sebi, "gst": gst, "stt_sell": stt,
         "stamp_buy": stamp,
     }
-    return {**fee, "total_estimated": _money(sum(fee.values())),
-            "version": FEE_VERSION, "additional_charges_excluded": True,
-            "assumptions": WARN_FEES, "references": SOURCE_NOTES}
+    total = _money(sum(fee.values()))
+    # Split already-rounded combined charges across two hypothetical order
+    # sides. The final sell-side remainder preserves the original fee total
+    # even if rounding each side independently would move one paisa.
+    per_order_brokerage = _money(executed_orders_per_side * brokerage_inr)
+    buy_exch = _money(buy_turnover * NSE_OPTION_EXCHANGE_RATE)
+    buy_sebi = _money(buy_turnover * SEBI_RATE)
+    buy_gst = _money((per_order_brokerage + buy_exch + buy_sebi)*GST_RATE)
+    buy_fees = {
+        "brokerage": per_order_brokerage,
+        "exchange_indicative": buy_exch, "sebi": buy_sebi,
+        "gst": buy_gst, "stt_sell": 0.0, "stamp_buy": stamp,
+    }
+    sell_fees = {
+        "brokerage": _money(brokerage - per_order_brokerage),
+        "exchange_indicative": _money(exchange - buy_exch),
+        "sebi": _money(sebi - buy_sebi),
+        "gst": _money(gst - buy_gst),
+        "stt_sell": stt, "stamp_buy": 0.0,
+    }
+    buy_total = _money(sum(buy_fees.values()))
+    sell_total = _money(total - buy_total)
+    return {
+        **fee, "total_estimated": total,
+        "broker_profile": broker_profile,
+        "broker_profile_name": BROKER_PROFILES[broker_profile]["name"],
+        "brokerage_inr_per_executed_order": brokerage_inr,
+        "buy_leg": {
+            **buy_fees, "premium_turnover": _money(buy_turnover),
+            "fees_total": buy_total,
+            "cash_debit": _money(buy_turnover + buy_total),
+        },
+        "sell_leg": {
+            **sell_fees, "premium_turnover": _money(sell_turnover),
+            "fees_total": sell_total,
+            "cash_credit": _money(sell_turnover - sell_total),
+        },
+        "version": FEE_VERSION, "additional_charges_excluded": True,
+        "assumptions": WARN_FEES + (
+            " Zerodha ₹40/order applies in specified debit-balance or "
+            "collateral-shortfall conditions when that profile is selected. "
+            "Check actual account-specific contract notes and order fills."),
+        "references": SOURCE_NOTES + [BROKER_PROFILES[broker_profile]["source"]],
+    }
 
 
 def scenario(book: dict, lots: int = 1,
              executed_orders_per_side: int = 1,
-             brokerage_inr: float = BROKERAGE_INR_PER_ORDER,
-             adverse_move_bps: float = 0) -> dict:
+             brokerage_inr: float | None = None,
+             adverse_move_bps: float = 0,
+             broker_profile: str = "dhan") -> dict:
     if not isinstance(lots, int) or not 1 <= lots <= 10:
         raise ValueError("Choose 1–10 lots for bounded research")
     if not isfinite(adverse_move_bps) or not 0 <= adverse_move_bps <= 1000:
@@ -335,7 +392,7 @@ def scenario(book: dict, lots: int = 1,
     passive_sell = stats["ask"] * units
     passive_fees = fee_schedule(passive_buy, passive_sell,
         executed_orders_per_side=executed_orders_per_side,
-        brokerage_inr=brokerage_inr)
+        brokerage_inr=brokerage_inr, broker_profile=broker_profile)
     passive_gross = passive_sell - passive_buy
     penalty = units * (stats["mid"] * adverse_move_bps / 10_000)
     optimistic = _money(passive_gross - passive_fees["total_estimated"])
@@ -352,6 +409,9 @@ def scenario(book: dict, lots: int = 1,
             "hypothetical_sell_at_ask": stats["ask"],
             "gross_inr": _money(passive_gross),
             "fees": passive_fees,
+            "buy_cash_debit": passive_fees["buy_leg"]["cash_debit"],
+            "sell_cash_credit": passive_fees["sell_leg"]["cash_credit"],
+            "premium_capital_required": passive_fees["buy_leg"]["cash_debit"],
             "upper_bound_net_inr_before_unmodelled_costs": optimistic,
             "after_adverse_move_stress_inr": _money(optimistic - penalty),
             "adverse_move_bps_assumption": adverse_move_bps,
@@ -364,15 +424,18 @@ def scenario(book: dict, lots: int = 1,
                       "filled or never filled, even if top-book size appears large.",
         },
         "read_only": True, "broker_orders_sent": 0,
+        "broker_profile": broker_profile,
         "source": "original Dhan 20-level saved book, local receive-time",
     }
     if buy["fillable"] and sell["fillable"]:
         gross = sell["premium_turnover"] - buy["premium_turnover"]
         fees = fee_schedule(buy["premium_turnover"], sell["premium_turnover"],
             executed_orders_per_side=executed_orders_per_side,
-            brokerage_inr=brokerage_inr)
+            brokerage_inr=brokerage_inr, broker_profile=broker_profile)
         output["marketable_roundtrip"] = {
             "gross_inr": _money(gross), "fees": fees,
+            "buy_cash_debit": fees["buy_leg"]["cash_debit"],
+            "sell_cash_credit": fees["sell_leg"]["cash_credit"],
             "estimated_net_inr": _money(gross - fees["total_estimated"]),
             "status": "COUNTERFACTUAL_IMMEDIATE_CROSS_THE_SPREAD",
             "fills_observed": False,
@@ -393,8 +456,9 @@ def simulate(identity: str, lots: int = 1,
              day: str | None = None,
              received_utc: str | None = None,
              executed_orders_per_side: int = 1,
-             brokerage_inr: float = BROKERAGE_INR_PER_ORDER,
-             adverse_move_bps: float = 0) -> dict:
+             brokerage_inr: float | None = None,
+             adverse_move_bps: float = 0,
+             broker_profile: str = "dhan") -> dict:
     books, meta = _read_books(identity, day=day, limit=300)
     if not books:
         return {"status": "ORIGINAL_BOOK_MISSING", "identity": identity,
@@ -417,14 +481,16 @@ def simulate(identity: str, lots: int = 1,
         "source_age_is_historical": True,
         "packet_pair_sha256": selected["packet_pair_sha256"],
         "assumptions": scenario(original, lots,
-            executed_orders_per_side, brokerage_inr, adverse_move_bps),
+            executed_orders_per_side, brokerage_inr, adverse_move_bps,
+            broker_profile=broker_profile),
         "read_only": True,
     }
 
 
 def research(identity: str, day: str | None = None,
              lots: int = 1, limit: int = 300,
-             adverse_move_bps: float = 25) -> dict:
+             adverse_move_bps: float = 25,
+             broker_profile: str = "dhan") -> dict:
     books, meta = _read_books(identity, day=day, limit=limit)
     sampled = []
     for book in books:
@@ -433,7 +499,8 @@ def research(identity: str, day: str | None = None,
             "computed_features": {"lot_size_verified": book["lot_size"]},
         }
         projection = scenario(orig, lots=lots,
-                              adverse_move_bps=adverse_move_bps)
+                              adverse_move_bps=adverse_move_bps,
+                              broker_profile=broker_profile)
         upper = projection["passive_capture_upper_bound"]
         market = projection["marketable_roundtrip"]
         sampled.append({
@@ -452,7 +519,8 @@ def research(identity: str, day: str | None = None,
     viable = [x for x in sampled
               if x["optimistic_net_if_two_passive_fills_inr"] > 0]
     return {
-        "identity": identity, "lots": lots, "adverse_move_bps": adverse_move_bps,
+        "identity": identity, "lots": lots, "broker_profile": broker_profile,
+        "adverse_move_bps": adverse_move_bps,
         "observed_saved_books": len(sampled),
         "observed_spread_bps_mean": (
             round(sum(spreads) / len(spreads), 2) if spreads else None),
