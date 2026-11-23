@@ -150,6 +150,18 @@ class CompleteDhanStrikeCoverageTests(TestCase):
         self.assertGreater(state["subscribed_strike_max"], 74100)
         self.assertEqual(auto.CHAIN_REFRESH_SECONDS, 20)
 
+    def test_true_breakout_detection_does_not_invent_depth(self):
+        original = wide.select_full_chain_rotation(
+            full_source(spot=63000., above=170, below=170),
+            auto.DEFAULTS)
+        hi = max(item["strike"] for item in original)
+        lo = min(item["strike"] for item in original)
+        self.assertTrue(wide._escaped_previous_range(hi + 100, original))
+        self.assertTrue(wide._escaped_previous_range(lo - 100, original))
+        self.assertFalse(wide._escaped_previous_range(63000., original))
+        self.assertFalse(wide._escaped_previous_range(float("nan"), original))
+        self.assertFalse(wide._escaped_previous_range(120000., []))
+
     def test_invalid_spot_or_rotation_is_blocked(self):
         source = full_source()
         self.assertEqual(wide.select_full_chain_rotation(
