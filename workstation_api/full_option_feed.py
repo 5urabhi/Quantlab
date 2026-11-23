@@ -482,6 +482,73 @@ def ranked_depth_candidates(limit: int = 40) -> list[dict]:
     return _ranked_candidates(limit, for_depth=True)
 
 
+def ranked_active_depth(limit: int = 80) -> list[dict]:
+    """Rank fresh original trade activity, even without a large price move.
+
+    Only affects WHICH of the scarce Dhan 20-level slots are subscribed.
+    Full-universe Quote/OI recording stays completely unfiltered. Do not
+    infer actual exchange liquidity or execution probability from volume.
+    """
+    if not isinstance(limit, int) or not 0 <= limit <= 80:
+        raise ValueError("Choose up to 80 original active depth candidates")
+    now = _utc()
+    qualified = {"CE": [], "PE": []}
+    with LOCK:
+        for row in LATEST.values():
+            identity = row.get("identity")
+            if not isinstance(identity, str) or identity not in CATALOG:
+                continue
+            price = row.get("price")
+            volume = row.get("volume")
+            receipt = row.get("quote_received_utc")
+            side = row.get("option_type")
+            if (side not in qualified or not receipt
+                    or not isinstance(price, (int, float))
+                    or not 25 <= price <= 2000
+                    or not isinstance(volume, (int, float)) or volume <= 0):
+                continue
+            try:
+                seconds = (now - datetime.fromisoformat(receipt)).total_seconds()
+            except (ValueError, TypeError):
+                continue
+            if not 0 <= seconds <= 60:
+                continue
+            # More recent ORIGINAL trade observations and actual volume
+            # rank above stale or illiquid options. A stable premium may
+            # still deserve depth coverage; momentum is not mandatory.
+            activity = (
+                max(0, 60-int(seconds)) * 10
+                + min(500, float(row.get("volume_increase") or 0) / 200)
+                + min(300, float(volume) / 1000)
+                + min(100, float(row.get("last_trade_quantity") or 0))
+            )
+            qualified[side].append({
+                "identity": identity, "expiry": row.get("expiry"),
+                "strike": row.get("strike"), "option_type": side,
+                "price": price, "volume": volume,
+                "last_trade_utc": receipt,
+                "activity_rank": round(activity, 2),
+                "source": "observed_original_Dhan_trade",
+            })
+    for side in qualified:
+        qualified[side].sort(
+            key=lambda item: (-item["activity_rank"], item["identity"]))
+    # Interleave call/put preference to avoid filling every available
+    # slot from a single wing during one-sided BANKNIFTY movement.
+    result = []
+    offset = 0
+    while len(result) < limit:
+        added = False
+        for side in ("CE", "PE"):
+            if offset < len(qualified[side]) and len(result) < limit:
+                result.append(qualified[side][offset])
+                added = True
+        if not added:
+            break
+        offset += 1
+    return result
+
+
 def _write_batches(stop: Event) -> None:
     saved = 0
     day = None
