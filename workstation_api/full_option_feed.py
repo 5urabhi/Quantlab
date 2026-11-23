@@ -303,6 +303,10 @@ def _ingest(event: dict, received: datetime, session: str) -> None:
         })
         should_store = True
         if event["kind"] == "quote":
+            # A source Quote packet may legitimately carry a Dhan last trade
+            # from hours ago. Distinguish packet DELIVERY from a RECENT trade.
+            # Do not turn old last-trade prices into new timestamped trades.
+            entry["last_quote_packet_received_utc"] = received_iso
             if event["packet_sha256"] == previous.get("packet_sha256"):
                 should_store = False
                 STATUS["unchanged_quote_packets"] += 1
@@ -708,13 +712,22 @@ def status() -> dict:
             row = by_expiry.setdefault(expiry, {
                 "expiry": expiry, "subscribed": 0, "with_any_quote": 0,
                 "fresh_quote_60s": 0, "with_any_oi": 0,
+                "received_quote_packet_ids": 0, "source_quote_60s": 0,
+                "stale_quote_packet_only": 0, "never_received_quote_packet": 0,
                 "oi_only": 0, "never_quoted": 0,
                 "activity_screen_passed_45s": 0})
             row["subscribed"] += 1
             item = LATEST.get(identity, {})
             has_quote = bool(item.get("quote_received_utc"))
+            has_source_packet = bool(item.get("last_quote_packet_received_utc"))
             has_oi = bool(item.get("oi_received_utc"))
             row["with_any_quote"] += int(has_quote)
+            row["received_quote_packet_ids"] += int(has_source_packet)
+            row["source_quote_60s"] += int(
+                recent(item.get("last_quote_packet_received_utc"), 60))
+            row["stale_quote_packet_only"] += int(
+                has_source_packet and not has_quote)
+            row["never_received_quote_packet"] += int(not has_source_packet)
             row["fresh_quote_60s"] += int(
                 recent(item.get("quote_received_utc"), 60))
             row["with_any_oi"] += int(has_oi)
@@ -729,6 +742,14 @@ def status() -> dict:
             row["with_any_quote"] for row in by_expiry.values())
         snapshot["recent_price_contracts"] = sum(
             row["fresh_quote_60s"] for row in by_expiry.values())
+        snapshot["source_quote_delivered_contracts"] = sum(
+            row["received_quote_packet_ids"] for row in by_expiry.values())
+        snapshot["recent_source_quote_contracts"] = sum(
+            row["source_quote_60s"] for row in by_expiry.values())
+        snapshot["stale_source_quote_only_contracts"] = sum(
+            row["stale_quote_packet_only"] for row in by_expiry.values())
+        snapshot["never_received_source_quote_ids"] = sum(
+            row["never_received_quote_packet"] for row in by_expiry.values())
         snapshot["observed_oi_contracts"] = sum(
             row["with_any_oi"] for row in by_expiry.values())
         snapshot["requested_not_yet_quoted"] = sum(
