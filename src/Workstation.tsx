@@ -15,6 +15,7 @@ import IndexBuilderWorkspace from './IndexBuilderWorkspace'
 import GlobalSearchV2 from './GlobalSearchV2'
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
+const LiquiditySpreadsWorkspace = lazy(() => import('./LiquiditySpreadsWorkspace'))
 const ModelLaboratory = lazy(() => import('./ModelLaboratory'))
 const ResearchGuide = lazy(() => import('./ResearchGuide'))
 const ResearchWorkspace = lazy(() => import('./ResearchWorkspace'))
@@ -46,7 +47,7 @@ type RunConfig = {
 }
 const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momentum:1,low_volatility:0,value:0,quality:0,size:0},top_n:10,weighting:'equal',max_weight:.2,rebalance_every:3,cost_bps:10,execution_lag:1,momentum_formation:12,momentum_skip:1,volatility_lookback:12,validation_start:'',final_test_start:'',sector_cap:null}
 type Tab =
-  'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingreplay'|'tradingjournal'|
+  'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingspreads'|'tradingreplay'|'tradingjournal'|
   'strategies'|'strategyema'|'strategypython'|'strategybacktest'|
   'mathematics'|'models'|'research'|'factors'|'construction'|'risk'|'rolling'|'robustness'|'modelgrids'|'indexstudio'|
   'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|'evidence'|
@@ -57,8 +58,8 @@ type PrimarySection={id:Tab;label:string;icon:typeof Activity;tabs:Tab[];navTabs
 const primarySections:PrimarySection[]=[
   {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
   {id:'trading',label:'Trading',icon:Activity,
-    tabs:['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal'],
-    navTabs:['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal']},
+    tabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal'],
+    navTabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal']},
   {id:'strategies',label:'Strategies',icon:TrendingUp,
     tabs:['strategies','strategyema','strategypython','strategybacktest'],
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
@@ -79,7 +80,8 @@ const primarySections:PrimarySection[]=[
 ]
 const titles:Record<Tab,string>={
   overview:'Home',trading:'Live Market',tradingchain:'Option Chain',
-  tradingdepth:'20-Level Order Book',tradingreplay:'Market Replay',
+  tradingdepth:'20-Level Order Book',tradingspreads:'Liquidity & Spreads',
+  tradingreplay:'Market Replay',
   tradingjournal:'Trade Journal',strategies:'Strategy Library',
   strategyema:'EMA Explorer',strategypython:'Python Editor',
   strategybacktest:'BANKNIFTY Backtests',
@@ -107,6 +109,7 @@ const descriptions:Record<Tab,string>={
   trading:'Monitor real BANKNIFTY index packets and signals without submitting broker orders.',
   tradingchain:'Inspect source-backed BANKNIFTY CE/PE strikes, expiries, premium and lot sizes.',
   tradingdepth:'Inspect original Dhan 20-bid/20-ask books and actual recorded source packets.',
+  tradingspreads:'Compare actual Dhan bid/ask liquidity, estimate execution costs and investigate spread research without orders.',
   tradingreplay:'Explore recorded BANKNIFTY, option quotes and original market-depth observations.',
   tradingjournal:'Review manually entered fills and prospective signal accuracy separately.',
   strategies:'Choose a strategy, test real index signals, then study historical CE/PE contracts.',
@@ -577,7 +580,7 @@ function App(){
           <div><div className="ws-overline">LOCAL QUANTITATIVE RESEARCH WORKSTATION</div>
             <h1>{titles[tab]}</h1><p>{descriptions[tab]}</p></div>
           <div className="ws-title-actions">
-            {(['trading','tradingchain','tradingdepth','tradingreplay','tradingjournal'].includes(tab))&&
+            {(['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal'].includes(tab))&&
               <button className="ws-button secondary" onClick={()=>begin('recordingsettings')}>
                 <Activity size={15}/> Recorder settings</button>}
             {(['strategies','strategyema','strategypython','strategybacktest'].includes(tab))&&
@@ -697,6 +700,9 @@ function App(){
               journal:'tradingjournal',setup:'connections',
             } as const)[view])}
           />}
+        {tab==='tradingspreads'&&<LiquiditySpreadsWorkspace
+          onOpenRecording={()=>begin('recordingsettings')}
+          onOpenReplay={()=>begin('tradingreplay')}/>}
         {tab==='connections'&&!connectionEditing&&
           <ConnectionsLandingV2 apiHealthy={Boolean(health?.ok)}
             tokenConfigured={Boolean(health?.dhan_token_configured)}
