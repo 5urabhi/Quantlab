@@ -260,7 +260,7 @@ try {
     })
     assert.equal(await armDepth.isDisabled(),true,
       'Automatic recording must require explicit consent')
-    await autoDepth.getByText('Automatic coverage: 100 contracts above + 100 below ATM').waitFor()
+    await autoDepth.getByText('Full Dhan option chains + 200 concurrent depth subscriptions').waitFor()
     assert.equal(await autoDepth.getByRole('combobox',{
       name:'Auto depth sample interval',
     }).inputValue(),'30')
