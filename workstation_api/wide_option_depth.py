@@ -203,7 +203,11 @@ def _full_chain_coverage(chain: dict, selected: list[dict]) -> dict:
     strikes = [float(row["strike"]) for row in source]
     active = [row["strike"] for row in selected]
     rotating = sum(row.get("coverage_role") == "rotating" for row in selected)
+    spot = float(chain["underlying_spot"])
+    out_of_listed_range = bool(strikes and
+                               (spot < min(strikes) or spot > max(strikes)))
     return {
+        "source_spot_outside_listed_strikes": out_of_listed_range,
         "source_contracts_reported": len(chain.get("contracts", [])),
         "source_verified_depth_contracts": len(verified_ids),
         "source_strike_min": min(strikes) if strikes else None,
@@ -383,6 +387,13 @@ def _select(cfg: dict, previous_ids=(), rotation_step: int = 0) -> list[dict]:
         counts[c["wing"]] += 1
     missing_unverified = (coverage["source_contracts_reported"] -
                           coverage["source_verified_depth_contracts"])
+    warnings = []
+    if missing_unverified > 0:
+        warnings.append(str(missing_unverified) + " source entries cannot be "
+                        "mapped to unique fresh Dhan instrument IDs")
+    if coverage["source_spot_outside_listed_strikes"]:
+        warnings.append("BANKNIFTY spot is outside Dhan's verified listed "
+                        "strike range; no unlisted options can be invented")
     auto._status_update(
         last_chain_utc=chain["received_utc"],
         chain_spot=chain["underlying_spot"],
@@ -395,11 +406,7 @@ def _select(cfg: dict, previous_ids=(), rotation_step: int = 0) -> list[dict]:
         missing_ltp_selected=diagnostic["missing_ltp_selected"],
         rotation_step=rotation_step,
         **coverage,
-        selection_warning=(
-            str(missing_unverified) + " source contracts lack an unambiguous "
-            "current Dhan master mapping; all observed chain quotes are "
-            "still archived separately, but unverified 20-level IDs "
-            "cannot be subscribed" if missing_unverified > 0 else None),
+        selection_warning="; ".join(warnings) if warnings else None,
     )
     return selected
 
