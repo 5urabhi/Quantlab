@@ -219,7 +219,7 @@ def _full_chain_coverage(chain: dict, selected: list[dict]) -> dict:
         "not_currently_depth_subscribed": len(verified_ids - selected_ids),
         "depth_is_all_contracts_simultaneously":
             not bool(verified_ids - selected_ids),
-        "all_strikes_chain_snapshot_archived_separately": True,
+        "full_chain_archive_is_separate_from_depth": True,
     }
 
 
