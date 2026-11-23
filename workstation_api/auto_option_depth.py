@@ -534,6 +534,12 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
             diagnostics["rejected_frame_count"] = (
                 diagnostics.get("rejected_frame_count", 0) + 1)
         return output
+    if diagnostics is not None and packets and len(blob) > 332 * 50:
+        # Every packet has already passed Dhan's exact original header/length
+        # validation. This directly measures real accepted messages that the
+        # previous incorrect 16,600-byte limit would have thrown away.
+        diagnostics["valid_depth_stacks_above_old_cutoff"] = (
+            diagnostics.get("valid_depth_stacks_above_old_cutoff", 0) + 1)
     for packet in packets:
         if packet["segment_code"] != 2:
             continue
