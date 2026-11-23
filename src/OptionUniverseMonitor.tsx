@@ -43,6 +43,16 @@ type Row={
   kind:'quote'|'oi'
 }
 type History={identity:string;events:Row[];source:string}
+type QuoteQuality={
+  identity:string;day_ist:string;saved_quote_receipts:number
+  saved_oi_events:number;first_quote_received_utc:string|null
+  last_quote_received_utc:string|null
+  minutes_with_saved_quotes:number
+  largest_inter_receipt_gap_seconds:number|null
+  inter_receipt_gaps_over_60s:number
+  inter_receipt_gaps_over_300s:number
+  scan_complete:boolean;note:string
+}
 const nf=(v:number|null|undefined,d=0)=>v==null||!Number.isFinite(v)
   ?'—':v.toLocaleString('en-IN',{maximumFractionDigits:d})
 const time=(v:string|null|undefined)=>v
@@ -87,7 +97,9 @@ export default function OptionUniverseMonitor(){
   const [offset,setOffset]=useState(0)
   const [chosen,setChosen]=useState<string|null>(null)
   const [history,setHistory]=useState<History|null>(null)
+  const [quality,setQuality]=useState<QuoteQuality|null>(null)
   const [showUniverse,setShowUniverse]=useState(false)
+  const [showAllMovers,setShowAllMovers]=useState(false)
   const [warning,setWarning]=useState('')
   const [confirmed,setConfirmed]=useState(false)
   const [busy,setBusy]=useState(false)
@@ -108,12 +120,17 @@ export default function OptionUniverseMonitor(){
     }catch(e){setWarning(readableError(e))}
   },[])
   const select=useCallback(async(identity:string)=>{
-    setChosen(identity);setHistory(null)
-    try{
-      const result=await marketApi<History>('/api/trading-cockpit/option-feed/history?'+
-        new URLSearchParams({identity,limit:'500'}))
-      setHistory(result)
-    }catch(e){setWarning(readableError(e))}
+    setChosen(identity);setHistory(null);setQuality(null)
+    const [events,audit]=await Promise.allSettled([
+      marketApi<History>('/api/trading-cockpit/option-feed/history?'+
+        new URLSearchParams({identity,limit:'500'})),
+      marketApi<QuoteQuality>('/api/trading-cockpit/option-feed/quality?'+
+        new URLSearchParams({identity}))
+    ])
+    if(events.status==='fulfilled')setHistory(events.value)
+    else setWarning(readableError(events.reason))
+    if(audit.status==='fulfilled')setQuality(audit.value)
+    else setWarning(readableError(audit.reason))
   },[])
   useEffect(()=>{
     void refresh()
@@ -175,15 +192,24 @@ export default function OptionUniverseMonitor(){
           'Stop full-universe price stream':'Start all-contract price stream'}
       </button>
     </div>
-    <div className="ofu-summary">
-      {metrics.map(([label,value])=><div key={label}>
+    <div className="ofu-summary" aria-label="Original Dhan quote stream headline">
+      {metrics.slice(0,6).map(([label,value])=><div key={label}>
         <strong>{typeof value==='number'?nf(value):value||'—'}</strong>
         <span>{label}</span>
       </div>)}
     </div>
-    {Boolean(state?.coverage_by_expiry?.length)&&<section className="ofu-expiries"
+    <details className="ofu-metrics">
+      <summary>More source receipt, storage and anomaly counters</summary>
+      <div className="ofu-summary">
+        {metrics.slice(6).map(([label,value])=><div key={label}>
+          <strong>{typeof value==='number'?nf(value):value||'—'}</strong>
+          <span>{label}</span>
+        </div>)}
+      </div>
+    </details>
+    {Boolean(state?.coverage_by_expiry?.length)&&<details className="ofu-expiries"
       aria-label="Original option quote and open interest coverage by expiry">
-      <strong>Original price and OI coverage by expiry</strong>
+      <summary>Original price and OI coverage by expiry — {state?.coverage_by_expiry?.length} expiries</summary>
       <p className="ofu-help">A source Quote packet can carry an old last-trade
         timestamp. The source-packet column counts delivery, while
         accepted-trade columns require a recent actual last trade. Options
@@ -203,7 +229,7 @@ export default function OptionUniverseMonitor(){
           <td>{nf(e.with_any_oi)}</td><td>{nf(e.never_quoted)}</td>
           <td>{nf(e.activity_screen_passed_45s)}</td></tr>)}</tbody>
       </table></div>
-    </section>}
+    </details>}
     {!!state?.unsubscribed_due_to_capacity&&<p className="ofu-warning" role="alert">
       <AlertTriangle size={15}/>{nf(state.unsubscribed_due_to_capacity)} contracts
       exceed Dhan's 5,000-per-connection limit and are NOT streamed.
@@ -232,7 +258,7 @@ export default function OptionUniverseMonitor(){
           <th>Observed move</th><th>Trade span</th>
           <th>60s return</th><th>5m return</th><th>Volume gain</th>
           <th>Depth research screen</th><th>Last quote IST</th><th></th></tr></thead>
-        <tbody>{alerts.map(row=><tr key={row.identity}>
+        <tbody>{alerts.slice(0,showAllMovers?15:6).map(row=><tr key={row.identity}>
           <td>{row.expiry} · {row.option_type}<small>{row.identity}</small></td>
           <td>{nf(row.strike)}</td><td>₹{nf(row.price,2)}</td>
           <td>{change(row.observed_change_pct)}</td>
@@ -253,6 +279,10 @@ export default function OptionUniverseMonitor(){
           options were active or unchanged.</td></tr>}</tbody>
       </table>
     </div>
+    {alerts.length>6&&<button className="ofu-view-all" type="button"
+      onClick={()=>setShowAllMovers(value=>!value)}>
+      {showAllMovers?'Show six leading movers':'Show all 15 observed movers'}
+    </button>}
     <div className="ofu-section-head">
       <div><strong>Every Dhan-listed option contract</strong>
         <small>Paginated verified identities. A silent contract stays listed
@@ -293,6 +323,21 @@ export default function OptionUniverseMonitor(){
       </div><button type="button" onClick={()=>void select(chosen)}>Refresh</button></div>
       {history&&<PriceTimeline events={history.events}/>}
       {!history&&<p className="ofu-help">Loading original saved receipts…</p>}
+      {quality&&<div className="ofu-audit" aria-label="Saved source packet continuity audit">
+        <strong>Read-only saved receipt audit · {quality.day_ist}</strong>
+        <p>{nf(quality.saved_quote_receipts)} saved Quote events ·
+          {' '}{nf(quality.saved_oi_events)} saved OI events ·
+          {' '}{nf(quality.minutes_with_saved_quotes)} observed quote-minutes.</p>
+        <p>Longest gap between saved quote receipts:
+          {' '}{quality.largest_inter_receipt_gap_seconds==null?'Not measurable':
+          nf(quality.largest_inter_receipt_gap_seconds,1)+' seconds'}.
+          {' '}{nf(quality.inter_receipt_gaps_over_60s)} gaps over one minute;
+          {' '}{nf(quality.inter_receipt_gaps_over_300s)} over five minutes.
+          {' '}{quality.scan_complete?'Day scan within 50,000-event limit.':
+          'Scan capped at 50,000 events; not a full-day result.'}
+        </p>
+        <small>{quality.note}</small>
+      </div>}
       <p className="ofu-help">OI packets carry local receive timestamps, not trade time.
         Price events include Dhan last-trade time and local receive time;
         missing intervals are never interpolated.</p>
