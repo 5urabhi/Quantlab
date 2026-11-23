@@ -32,7 +32,7 @@ ENDPOINTS = {
     "contracts": "/v2/option/contract",
     "chain": "/v2/option/chain",
 }
-TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._~+/-]{16,4096}$")
+TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._~+/=-]{16,4096}$")
 OPTION_KEY = re.compile(r"^NSE_FO\|[0-9]{1,12}$")
 MAX_RESPONSE_BYTES = 12 * 1024 * 1024
 MAX_CONTRACTS = 18_000
