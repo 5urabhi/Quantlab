@@ -48,7 +48,7 @@ DEFAULTS = {
 }
 MAX_INSTRUMENTS = 6
 MAX_DAILY_SNAPSHOTS = 200_000
-CHAIN_REFRESH_SECONDS = 75
+CHAIN_REFRESH_SECONDS = 20
 MAX_RECONNECT_DELAY_SECONDS = 60
 MAX_MASTER_BYTES = 100 * 1024 * 1024
 SAFE_ID = re.compile(r"^NSE_FNO:[0-9]{1,12}$")
@@ -190,16 +190,23 @@ def status() -> dict:
     state.pop("socket_last_paired_utc", None)
     return {
         **state, "settings": cfg, "armed": cfg["enabled"],
-        "requested_contracts_above": (100 if cfg["selection_mode"] == "atm_contracts_100_each" else None),
-        "requested_contracts_below": (100 if cfg["selection_mode"] == "atm_contracts_100_each" else None),
+        "requested_contracts_above": None,
+        "requested_contracts_below": None,
+        "max_simultaneous_depth_contracts": (200 if wide else MAX_INSTRUMENTS),
+        "continuous_nearby_contract_budget": (120 if wide else None),
+        "rotating_far_contract_budget": (80 if wide else None),
+        "chain_refresh_seconds": CHAIN_REFRESH_SECONDS,
+        "depth_covers_all_contracts_simultaneously": state.get(
+            "depth_is_all_contracts_simultaneously", False),
         "market_regular_hours": _market_open(now),
         "read_only": True, "historical_depth_download_supported": False,
         "shared_library": "dhan_shared",
-        "note": ("Source is Dhan 20-level original NSE_FNO packets. "
-                 "Captures run only while the local QuantLab server is running "
-                 "and the regular NSE clock window is open. Exchange holidays "
-                 "are inferred only from actual incoming packets. "
-                 "Local receipt timestamps are not exchange event times."),
+        "note": ("Dhan-only original NSE_FNO 20-level packets. Nearby contracts "
+                 "remain subscribed; distant Dhan-listed strikes are visited "
+                 "by bounded rotation, not monitored continuously. Entire "
+                 "source option-chain snapshots are archived separately. "
+                 "Captures require the local server and NSE market hours. "
+                 "Local receive timestamps are not exchange event times."),
     }
 
 

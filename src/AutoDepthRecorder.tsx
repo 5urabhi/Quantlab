@@ -10,7 +10,7 @@ type Settings={
 }
 type Candidate={
   identity:string;side:'CE'|'PE';strike:number;expiry:string
-  wing?:'above'|'below';atm_strike?:number
+  wing?:'above'|'below'|'atm';atm_strike?:number;coverage_role?:'core'|'rotating'
   lot_size:number;ltp:number;chain_received_utc:string;volume:number
 }
 type Latest={
@@ -35,6 +35,13 @@ type Recorder={
   sockets_connected?:number;sockets_requested?:number;sockets_with_recent_pairs?:number
   dropped_depth_samples?:number
   selection_warning?:string|null;contracts:Candidate[]
+  source_contracts_reported?:number;source_verified_depth_contracts?:number
+  source_strike_min?:number|null;source_strike_max?:number|null
+  subscribed_strike_min?:number|null;subscribed_strike_max?:number|null
+  rotating_contracts?:number;not_currently_depth_subscribed?:number
+  rotation_step?:number;chain_refresh_seconds?:number
+  boundary_escape_events?:number;last_boundary_escape_utc?:string|null
+  coverage_gap_warning?:string|null
   latest:Record<string,Latest>;read_only:boolean
   historical_depth_download_supported:boolean
 }
@@ -46,7 +53,7 @@ type AutomaticChainCapture={
   last_quote_count:number;last_error:string|null
   token_maintenance:string;token_maintenance_message:string|null
   token_renewal_opted_in:boolean
-  capture_schedule_seconds:{nearest_two:number;next_four:number;remaining:number}
+  capture_schedule_seconds:{nearest:number;second:number;next_four:number;remaining:number}
 }
 const DEFAULT_SETTINGS:Settings={
   enabled:false,target_premium:300,tolerance:75,per_side:2,lots:3,sample_seconds:30,
@@ -145,10 +152,11 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <div>
         <span className="tc-page-kicker">AUTOMATIC LIVE DATA COLLECTION</span>
         <h3><Activity size={19}/> Record BANKNIFTY CE &amp; PE order books</h3>
-        <p>Automatically follow 100 verified option contracts above BANKNIFTY's
-          nearest listed ATM strike and 100 below it: 50 CE and 50 PE on each
-          side. Four Dhan depth sockets capture up to 200 live 20-level books.
-          The full CE/PE option chain is archived separately. No orders are sent.</p>
+        <p>Dhan-only automatic coverage. Archive every source-returned
+          CE/PE strike for all listed expiries. Four 20-level depth sockets
+          continuously monitor the 120 nearest verified contracts and rotate
+          80 slots across distant strikes. Large spot moves trigger recentering
+          on the next Dhan chain refresh. No orders.</p>
       </div>
       <span className={'ad-status '+(connected?'active':armed?'armed':'stopped')}>
         <Radio size={15}/>{STATE_NAME[state?.state||'disabled']||state?.state||'Stopped'}
@@ -157,9 +165,11 @@ export default function AutoDepthRecorder({onOpenSaved}:{
 
     <div className="ad-controls" aria-label="Automatic order-book recording configuration">
       <div className="ad-armed-note" role="note">
-        <strong>Automatic coverage: 100 contracts above + 100 below ATM</strong>
-        <div>50 listed strikes per direction × CE and PE = 200 contracts total.
-          Missing verified contracts are reported rather than simulated.</div>
+        <strong>Full Dhan option chains + 200 concurrent depth subscriptions</strong>
+        <div>120 nearest CE/PE contracts stay subscribed; 80 rotate across
+          the remaining verified nearest-expiry contracts every 90 seconds.
+          Distant inactive strikes have original chain quotes, but no
+          continuous 20-level book history.</div>
       </div>
       <label>Lots to evaluate
         <input aria-label="Auto depth lots" type="number" min={1} max={20} step={1}
@@ -175,9 +185,10 @@ export default function AutoDepthRecorder({onOpenSaved}:{
           <option value={60}>60 seconds per contract</option>
         </select>
       </label>
-      <small>Nearest above-ATM and below-ATM CE/PE contracts are sampled every 3 seconds.
-        Every other selected contract is sampled at the broad interval. All
-        selected contracts stay subscribed while the NSE market is open.</small>
+      <small>The six closest subscribed contracts may be saved every 3 seconds.
+        Others use the broad interval. Recheck original Dhan spot every
+        20 seconds; distant contracts rotate every 90 seconds. If the market
+        moves outside prior coverage, no missing book is invented.</small>
     </div>
     <div className="ad-actions">
       {!armed?<label className="ad-consent">
@@ -190,7 +201,8 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         <input type="checkbox" checked={armedConsent}
           onChange={e=>setArmedConsent(e.target.checked)}/>
         Allow my local QuantLab server to automatically subscribe to and record original
-        Dhan market-depth data for 100 contracts above and 100 below ATM and archive the complete
+        Dhan depth data for up to 200 verified contracts at a time
+        (120 nearest plus 80 rotating distant contracts), and archive complete
         returned BANKNIFTY option chains for listed expiries during future regular
         NSE sessions, until I stop it.
       </label>:<p className="ad-armed-note"><ShieldCheck size={16}/>
@@ -213,11 +225,21 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <AlertTriangle size={15}/>{state.last_error}</p>}
     {state?.selection_warning&&<p className="ad-warning" role="status">
       {state.selection_warning}; historical books are never fabricated.</p>}
+    {state?.coverage_gap_warning&&<p className="ad-warning" role="status">
+      <AlertTriangle size={15}/>{state.coverage_gap_warning}
+      {' '}Last detected: {clock(state.last_boundary_escape_utc)} IST.</p>}
     <div className="ad-summary">
       <span><strong>{n(state?.snapshots_saved)}</strong> books stored this session</span>
       <span><strong>{n(state?.received_pairs)}</strong> observed source packet pairs</span>
-      <span><strong>{state?.contracts.length??0}/200</strong> verified contracts selected</span>
-      <span><strong>{state?.contracts_above??0} / {state?.contracts_below??0}</strong> above / below ATM</span>
+      <span><strong>{state?.contracts.length??0}/200</strong> simultaneous depth IDs</span>
+      <span><strong>{n(state?.source_verified_depth_contracts)}</strong> verified options in source chain</span>
+      <span><strong>{n(state?.not_currently_depth_subscribed)}</strong> waiting for a distant depth rotation slot</span>
+      <span><strong>{n(state?.rotating_contracts)}</strong> currently rotating depth IDs</span>
+      <span><strong>{state?.contracts_above??0} / {state?.contracts_below??0}</strong> subscribed above / below ATM</span>
+      <span><strong>{n(state?.rotation_step)}</strong> distant strike rotation cycle</span>
+      <span><strong>{n(state?.boundary_escape_events)}</strong> observed prior-depth-range breakouts</span>
+      <span><strong>{n(state?.subscribed_strike_min)} – {n(state?.subscribed_strike_max)}</strong> subscribed strikes</span>
+      <span><strong>{n(state?.source_strike_min)} – {n(state?.source_strike_max)}</strong> verified source strikes</span>
       <span><strong>{n(state?.contracts_with_saved_books)}</strong> contracts with saved source books</span>
       <span><strong>{n(state?.contracts_with_recent_packets)}</strong> contracts with paired packets in last 10s</span>
       <span><strong>{state?.sockets_connected??0} / {state?.sockets_requested??0}</strong> connected depth sockets</span>
@@ -238,8 +260,9 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     </p>
     <div className="ad-contracts">
       {state?.contracts.length?<><p className="ad-armed-note">
-        Showing the eight nearest subscribed CE/PE contracts. {state.contracts.length}
-        original Dhan security IDs are subscribed; {n(state.contracts_with_saved_books)}
+        Showing six nearest and two rotating subscribed contracts.
+        {state.contracts.length} original Dhan IDs are subscribed;
+        {n(state.contracts_with_saved_books)}
         have produced stored original 20-level books this session.
         Only actual received books are saved in Market Replay.
         {Boolean(state.missing_ltp_selected)&&<>
@@ -248,8 +271,8 @@ export default function AutoDepthRecorder({onOpenSaved}:{
         {Boolean(state.dropped_depth_samples)&&
           <> {n(state.dropped_depth_samples)} samples were skipped because
           local storage could not keep up.</>}
-      </p>{[...state.contracts.filter(x=>x.wing==='above').slice(0,4),
-        ...state.contracts.filter(x=>x.wing==='below').slice(0,4)].map(contract=>{
+      </p>{[...state.contracts.filter(x=>x.coverage_role==='core').slice(0,6),
+        ...state.contracts.filter(x=>x.coverage_role==='rotating').slice(0,2)].map(contract=>{
         const live=state.latest[contract.identity]
         return <article className="ad-contract" key={contract.identity}>
           <div className="ad-contract-title">
