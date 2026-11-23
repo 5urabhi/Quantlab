@@ -146,13 +146,24 @@ def packet_stream(blob: bytes, depth: int) -> list[dict]:
     200-depth uses that field as NoOfRows. A 200-depth frame may therefore
     contain fewer than 200 levels: packet length is 12 + 16*NoOfRows.
     Never promote control packets or unsupported payload layouts to quotes.
+
+    Dhan's 20-level socket can subscribe to FIFTY instruments, but each
+    instrument can contribute one 332-byte bid and one 332-byte ask packet
+    in the same stacked WebSocket message. A single legitimate message can
+    therefore hold 100 depth half-packets (33,200 bytes), not just 50.
+    This is a strict byte bound, NOT permission to exceed 50 subscribed IDs.
     """
     if depth not in (20, 200):
         raise ValueError("Unsupported depth level count")
     max_packet = 12 + depth * 16
     if not isinstance(blob, (bytes, bytearray)) or not blob:
         return []
-    if len(blob) > max_packet * 50:
+    # At 20 levels, the documented worst-case single message has 50
+    # distinct instruments x TWO side packets each. Rejecting after just
+    # 50 packets discards entire legitimate full 50-contract book updates.
+    # Preserve the previous conservative bound for 200-level parsing.
+    max_side_packets = 100 if depth == 20 else 50
+    if len(blob) > max_packet * max_side_packets:
         raise ValueError("Depth feed frame exceeds safe decoded length")
     out = []
     offset = 0
