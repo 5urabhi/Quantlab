@@ -31,6 +31,8 @@ from index_research.dhan_data import (
 )
 from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, recorded_chain_model_quotes, pit_index, service, shared_market_data, research_library, research_insights, source_anomalies, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, auto_option_chain, trading_acceptance, strategy_lab, python_strategy_sandbox
 
+from . import option_source_coverage, upstox_options
+
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
 # status codes and instrument IDs only; never dump tokens or vendor bodies.
@@ -934,6 +936,67 @@ def trading_cockpit_option_chain(expiry: str, force_refresh: bool = False):
     try:
         return option_chain_live.chain(expiry, force_refresh=force_refresh)
     except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+class UpstoxLocalOptionToken(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    access_token: str = Field(min_length=16, max_length=4096)
+    confirm_local_storage: bool = False
+
+
+class UpstoxOptionDisconnect(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm_disconnect: bool = False
+
+
+@app.get("/api/trading-cockpit/options/providers")
+def trading_option_provider_status():
+    """Local configuration only; never fetches vendor data on page load."""
+    try:
+        return option_source_coverage.status()
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/options/upstox/connect")
+def trading_upstox_connect(body: UpstoxLocalOptionToken):
+    """Explicit local 0600 token storage; no broker orders or browser token reuse."""
+    try:
+        return upstox_options.configure(
+            body.access_token, confirm_local_storage=body.confirm_local_storage)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/options/upstox/disconnect")
+def trading_upstox_disconnect(body: UpstoxOptionDisconnect):
+    try:
+        return upstox_options.disconnect(confirm=body.confirm_disconnect)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/options/coverage/expiries")
+def trading_option_multi_expiries(
+        underlying: Literal["BANKNIFTY", "NIFTY50"] = "BANKNIFTY",
+        provider: Literal["all", "dhan", "upstox"] = "all"):
+    try:
+        return option_source_coverage.expiries(underlying, provider)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/options/coverage/chain")
+def trading_option_multi_chain(
+        expiry: str,
+        underlying: Literal["BANKNIFTY", "NIFTY50"] = "BANKNIFTY",
+        provider: Literal["all", "dhan", "upstox"] = "all",
+        force_refresh: bool = False):
+    try:
+        return option_source_coverage.chain(
+            underlying, expiry, provider=provider, force_refresh=force_refresh)
+    except (ValueError, OSError) as exc:
         bad(exc)
 
 
