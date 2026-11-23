@@ -72,14 +72,16 @@ def _validate_structure(strategy: str, books: list[dict]) -> None:
     if len(lot_sizes) != 1 or any(not size for size in lot_sizes):
         raise ValueError("Every leg must use the same verified lot size")
     k = [float(b["strike"]) for b in books]
-    valid = {
-        "bull_call_debit": k[0] < k[1],
-        "bear_put_debit": k[0] > k[1],
-        "bull_put_credit": k[0] < k[1],
-        "bear_call_credit": k[0] > k[1],
-        "iron_condor": k[0] < k[1] < k[2] < k[3],
-        "iron_butterfly": k[0] < k[1] == k[2] < k[3],
-    }[strategy]
+    # Do not build a dictionary of conditions: Python evaluates *all*
+    # values eagerly, including 4-leg indices for a 2-leg vertical.
+    if strategy in ("bull_call_debit", "bull_put_credit"):
+        valid = k[0] < k[1]
+    elif strategy in ("bear_put_debit", "bear_call_credit"):
+        valid = k[0] > k[1]
+    elif strategy == "iron_condor":
+        valid = k[0] < k[1] < k[2] < k[3]
+    else:
+        valid = k[0] < k[1] == k[2] < k[3]
     if not valid:
         raise ValueError("Strike ordering does not define the selected spread")
 
