@@ -300,7 +300,7 @@ class LiquiditySpreadResearchTests(TestCase):
         self.assertIn("NOT a backtest",res.json()["warning"])
 
     def test_execution_risk_missed_exit_has_full_costs_and_no_fabricated_ev(self):
-        original = original_book(self.t0, bid=249., ask=250., quantity=150)
+        original = original_book(self.t0, bid=100., ask=110., quantity=150)
         projection = spreads.scenario(
             original, lots=1, broker_profile="zerodha",
             adverse_move_bps=25)
