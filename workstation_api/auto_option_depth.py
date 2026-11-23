@@ -534,12 +534,6 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
             diagnostics["rejected_frame_count"] = (
                 diagnostics.get("rejected_frame_count", 0) + 1)
         return output
-    if diagnostics is not None and packets and len(blob) > 332 * 50:
-        # Every packet has already passed Dhan's exact original header/length
-        # validation. This directly measures real accepted messages that the
-        # previous incorrect 16,600-byte limit would have thrown away.
-        diagnostics["valid_depth_stacks_above_old_cutoff"] = (
-            diagnostics.get("valid_depth_stacks_above_old_cutoff", 0) + 1)
     for packet in packets:
         if packet["segment_code"] != 2:
             continue
@@ -576,6 +570,15 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
     for key, (_, stamped) in list(pending.items()):
         if (received - stamped).total_seconds() > 2:
             pending.pop(key, None)
+    if diagnostics is not None and output and len(blob) > 332 * 50:
+        # Count only frames containing book pairs that passed strict
+        # per-security validation. This proves exactly how many actually
+        # usable books the old 16,600-byte cutoff would have discarded.
+        diagnostics["valid_depth_stacks_above_old_cutoff"] = (
+            diagnostics.get("valid_depth_stacks_above_old_cutoff", 0) + 1)
+        diagnostics["valid_book_pairs_above_old_cutoff"] = (
+            diagnostics.get("valid_book_pairs_above_old_cutoff", 0)
+            + len(output))
     return output
 
 
