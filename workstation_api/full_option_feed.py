@@ -47,6 +47,7 @@ STATUS = {
     "recent_price_contracts": 0, "quote_packets": 0,
     "oi_packets": 0, "stored_events": 0, "dropped_events": 0,
     "rejected_frames": 0, "ignored_stale_trades": 0,
+    "unchanged_quote_packets": 0, "unchanged_oi_packets": 0,
     "last_quote_received_utc": None, "last_error": None,
     "session_id": None, "opportunity_count": 0,
 }
@@ -233,11 +234,15 @@ def _ingest(event: dict, received: datetime, session: str) -> None:
             "lot_size": contract["lot_size"],
             "last_packet_received_utc": received_iso,
         })
+        should_store = True
         if event["kind"] == "quote":
+            if event["packet_sha256"] == previous.get("packet_sha256"):
+                should_store = False
+                STATUS["unchanged_quote_packets"] += 1
             event_epoch = event["trade_epoch"]
             event_age = received.timestamp()-event_epoch
             fresh = -5 <= event_age <= MAX_TRADE_LAG_SECONDS
-            if fresh and (not previous.get("trade_epoch")
+            if fresh and should_store and (not previous.get("trade_epoch")
                           or event_epoch >= previous["trade_epoch"]):
                 entry.update({
                     "price": event["price"], "volume": event["volume"],
@@ -258,16 +263,24 @@ def _ingest(event: dict, received: datetime, session: str) -> None:
                 entry["packet_sha256"] = event["packet_sha256"]
                 score = _opportunity(prior)
                 entry.update(score)
-            else:
+            elif not fresh:
                 STATUS["ignored_stale_trades"] += 1
+                should_store = False
+            elif previous.get("trade_epoch") and event_epoch < previous["trade_epoch"]:
+                STATUS["ignored_stale_trades"] += 1
+                should_store = False
             STATUS["quote_packets"] += 1
             STATUS["last_quote_received_utc"] = received_iso
         else:
-            entry["open_interest"] = event["oi"]
-            entry["oi_received_utc"] = received_iso
+            if event["oi"] == previous.get("open_interest"):
+                should_store = False
+                STATUS["unchanged_oi_packets"] += 1
+            else:
+                entry["open_interest"] = event["oi"]
+                entry["oi_received_utc"] = received_iso
             STATUS["oi_packets"] += 1
         LATEST[identity] = entry
-        if _armed():
+        if _armed() and should_store:
             row = (
                 identity, received_iso,
                 _iso(datetime.fromtimestamp(event["trade_epoch"],timezone.utc))
@@ -291,18 +304,19 @@ def _opportunity(history: deque) -> dict:
                   history[0])
     ref_300 = history[0]
     last = history[-1]
-    if last[1] < ref_300[1] or last[3] <= ref_300[3]:
+    if last[1] < ref_300[1] or (
+            last[1] == ref_300[1] and last[3] <= ref_300[3]):
         return {"score": 0., "move_60s_pct": None,
                 "move_5m_pct": None, "volume_increase": 0}
     change60 = (last[2]/ref_60[2]-1)*100 if ref_60[2] > 0 else 0.
     change300 = (last[2]/ref_300[2]-1)*100 if ref_300[2] > 0 else 0.
     gain_volume = max(0, last[3]-ref_300[3])
-    if gain_volume <= 0:
-        return {"score": 0., "move_60s_pct": round(change60, 2),
-                "move_5m_pct": round(change300, 2), "volume_increase": 0}
-    # Activity rank is NOT a profitable-signal claim.
+    # A new Dhan last-trade timestamp is itself source evidence even if
+    # aggregate volume has not yet advanced in the broker's quote packet.
+    # Volume confirms activity, but cannot veto an observed option price jump.
     importance = max(abs(change60),abs(change300))
-    score = round(min(100., max(0., (importance-5)*2 + min(20., gain_volume/1000.))), 2)
+    score = round(min(100., max(0., (importance-5)*2
+                   + min(20., gain_volume/1000.))), 2)
     return {"score": score, "move_60s_pct": round(change60,2),
             "move_5m_pct": round(change300,2),
             "volume_increase": gain_volume}
@@ -386,6 +400,7 @@ def _session_rollover() -> None:
             "quote_packets": 0, "oi_packets": 0,
             "stored_events": 0, "dropped_events": 0,
             "rejected_frames": 0, "ignored_stale_trades": 0,
+            "unchanged_quote_packets": 0, "unchanged_oi_packets": 0,
             "last_quote_received_utc": None,
         })
 
@@ -492,7 +507,7 @@ def _run(stop: Event) -> None:
                 _set(state="storage_flush_incomplete",
                      last_error="Pending original price events are still flushing; keep local server running")
     finally:
-        _set(connected=False,state="stopped" if not STOP.is_set() else "stopping")
+        _set(connected=False,state="stopped" if not stop.is_set() else "stopping")
         os.close(fd)
 
 
