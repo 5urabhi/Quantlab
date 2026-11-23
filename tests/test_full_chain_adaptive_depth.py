@@ -163,7 +163,9 @@ class CompleteDhanStrikeCoverageTests(TestCase):
             jumped, selected), [], "large index move must recenter")
         expired = {**original, "expiry": "2026-11-30"}
         self.assertEqual(wide._retain_if_market_inside_core(expired, selected), [])
-        mismatched = {**original, "contracts": original["contracts"][:-1]}
+        mismatched = {**original, "contracts": [
+            row for row in original["contracts"]
+            if row["identity"] != selected[0]["identity"]]}
         self.assertEqual(wide._retain_if_market_inside_core(
             mismatched, selected), [], "missing current source identity must not persist")
 
