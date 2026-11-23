@@ -119,8 +119,11 @@ def capture_feasibility(row: dict, *, capital_inr: float,
             not 0 <= age <= policy["max_age_seconds"] or
             not row.get("fresh_original_saved_book")):
         reasons.append("STALE_OR_HISTORICAL_QUOTE")
-    if not row.get("expiry"):
+    expiry = row.get("expiry")
+    if not isinstance(expiry, str):
         reasons.append("UNKNOWN_EXPIRY")
+    elif expiry < datetime.now(timezone.utc).astimezone(spreads.IST).date().isoformat():
+        reasons.append("EXPIRED_CONTRACT")
     if row.get("best_hypothetical_lots") is None:
         reasons.append("NO_AFFORDABLE_FULL_DEPTH_LOT")
     if not _safe_positive(row.get("best_bid")) or row["best_bid"] < policy["min_bid_inr"]:
