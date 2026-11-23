@@ -53,9 +53,11 @@ def _market_open() -> bool:
 
 
 def _period(index: int) -> int:
-    """Snapshot frequency by Dhan-listed expiry rank, never by guessed dates."""
-    if index < 2:
-        return 90
+    """Prioritize complete Dhan chain coverage at the near expiries."""
+    if index == 0:
+        return 30
+    if index == 1:
+        return 60
     if index < 6:
         return 300
     return 1800
@@ -109,7 +111,8 @@ def status() -> dict:
             "token_renewal_opted_in": bool(auto_option_depth._config().get("allow_token_renewal")),
             "read_only": True, "shared_library": shared_market_data.SHARED_ID,
             "depth_all_contracts": False,
-            "capture_schedule_seconds": {"nearest_two": 90,
+            "capture_schedule_seconds": {"nearest": 30,
+                                         "second": 60,
                                          "next_four": 300,
                                          "remaining": 1800},
             "note": "Every strike returned by Dhan for each discovered expiry "
