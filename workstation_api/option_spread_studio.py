@@ -517,10 +517,14 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
 
 def build(*, day: str | None, strategy: str, identities: list[str],
           lots: int, broker_profile: str = "zerodha",
-          max_quote_skew_seconds: float = 10) -> dict:
+          max_quote_skew_seconds: float = 10,
+          capital_inr: float = 50000) -> dict:
     """Evaluate manually chosen optional legs; auto-scan is the main path."""
     if strategy not in STRATEGIES:
         raise ValueError("Unknown strategy")
+    if (not isinstance(capital_inr, (int, float)) or
+            not isfinite(capital_inr) or not 1000 <= capital_inr <= 10_000_000):
+        raise ValueError("Choose valid risk-capital budget")
     if len(identities) != len(STRATEGIES[strategy]["actions"]):
         raise ValueError("Wrong number of option legs")
     if any(not isinstance(i, str) or not spread_scanner.spreads.ID.fullmatch(i)
@@ -544,7 +548,7 @@ def build(*, day: str | None, strategy: str, identities: list[str],
         day=chosen, window_seconds=gate.MULTILEG_POLICY["receipt_window_seconds"])
     result["feasibility"] = gate.multileg_feasibility(
         result, books=[by_id[i] for i in identities],
-        capital_inr=50000, receipts=receipts)
+        capital_inr=capital_inr, receipts=receipts)
     result["paper_research_qualified"] = result["feasibility"][
         "paper_research_qualified"]
     result.update({"status": "MANUAL_READ_ONLY_RESEARCH", "day_ist": chosen,
