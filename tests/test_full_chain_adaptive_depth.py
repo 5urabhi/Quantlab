@@ -26,7 +26,7 @@ def full_source(spot=63000., above=200, below=200, missing_last=False):
                 "identity": "NSE_FNO:" + str(security),
                 "strike": strike, "expiry": EXPIRY, "option_type": side,
                 "lot_size": 30, "contract_master_verified": True,
-                "ltp": None if missing_last and abs(distance) > 140 else 300.,
+                "ltp": None if missing_last and abs(distance) > 70 else 300.,
                 "bid": 299, "ask": 301, "volume": 500,
             })
     return {"underlying_spot": spot, "expiry": EXPIRY,
