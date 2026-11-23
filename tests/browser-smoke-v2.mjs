@@ -254,7 +254,7 @@ try{
    const scanner=page.getByRole('region',{
      name:'Automatic spread profit and loss scanner'})
    await scanner.getByText('Spread P&L Opportunity Scanner').waitFor()
-   await scanner.getByText('Positive stressed upper bounds').waitFor()
+   await scanner.getByText('Risk-screened fresh research').waitFor()
    await scanner.getByRole('button',{name:'All lots'}).click()
    await scanner.getByRole('region',{name:'Per-lot transaction cashflow ledger'}).waitFor()
    await scanner.getByText('Cash left after buy').waitFor()
@@ -282,6 +282,70 @@ try{
    await page.getByText('NOT a backtest of filled orders').waitFor()
    assert.equal(await page.getByText('Verified realized P&L').count(),1)
    assert.equal(await page.getByRole('button',{name:/Place live order/}).count(),0)
+
+   // End-to-end browser fixture for new read-only multi-leg workflow.
+   await page.route('**/api/trading-cockpit/spreads/multileg/scan?*',route=>{
+     const legs=[
+       {role:'Buy lower CE',identity:'NSE_FNO:1001',action:'BUY',
+        expiry:'2026-11-23',option_type:'CE',strike:100,lots:1,
+        units:30,lot_size:30,saved_utc:'2026-11-23T04:05:00+00:00',
+        best_bid:29,best_ask:29.1,spread_bps:34,entry_vwap:29.1,
+        exit_vwap:29,entry_premium_turnover_inr:873,
+        entry_depth_levels_used:1,original_depth_verified:true},
+       {role:'Sell higher CE',identity:'NSE_FNO:1002',action:'SELL',
+        expiry:'2026-11-23',option_type:'CE',strike:110,lots:1,
+        units:30,lot_size:30,saved_utc:'2026-11-23T04:05:00+00:00',
+        best_bid:23,best_ask:23.1,spread_bps:43,entry_vwap:23,
+        exit_vwap:23.1,entry_premium_turnover_inr:690,
+        entry_depth_levels_used:1,original_depth_verified:true},
+     ]
+     const candidate={candidate_id:'bull_call_debit:NSE_FNO:1001:NSE_FNO:1002',
+       strategy:'bull_call_debit',label:'Bull call debit vertical',
+       group:'Directional',expiry:'2026-11-23',lots:1,units:30,legs,
+       quote_skew_seconds:0,entry_premium_cashflow_inr:-183,
+       entry_fees_inr:48,exit_fees_if_immediate_inr:48,
+       estimated_same_book_immediate_roundtrip_net_inr:-102,
+       max_profit_inr:69,max_loss_inr:231,risk_capital_proxy_inr:231,
+       risk_reward_ratio_proxy:.3,break_even_underlying:[107.7],
+       payoff_points:Array.from({length:61},(_,i)=>({
+         underlying:80+i,net_payoff_inr:
+           -231+30*Math.max(0,Math.min(i-20,10))})),
+       source_age_seconds:9,fresh_reference:true,research_priority_score:47,
+       broker_margin_verified:false,status:'FRESH_RESEARCH_ONLY_MARGIN_UNVERIFIED',
+       payoff_model:'Terminal intrinsic less entry charges, synthetic browser fixture.',
+       read_only:true}
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({
+         day_ist:'2026-11-23',capital_inr:50000,max_lots:5,
+         valid_unique_contracts:2,original_depth_id_count:2,
+         discovered_candidates:1,returned_candidates:1,
+         ranked_candidates:[candidate],
+         available_contracts:legs.map(l=>({
+           identity:l.identity,expiry:l.expiry,strike:l.strike,
+           option_type:l.option_type,lot_size:l.lot_size,
+           received_utc:l.saved_utc,bid:l.best_bid,ask:l.best_ask,
+           spread_bps:l.spread_bps})),
+         rejected_reason_counts:{},
+         strategies:[{key:'bull_call_debit',label:'Bull call debit vertical',
+           group:'Directional',roles:['Buy lower CE','Sell higher CE'],
+           actions:['BUY','SELL'],sides:['CE','CE'],
+           qualified_candidates:1}],
+         warning:'Research-only fixture; no fill, no broker margin.',
+       })})
+   })
+   await page.getByRole('tab',{name:/Multi-Leg Option Spreads/}).click()
+   const multi=page.getByRole('region',{
+     name:'BANKNIFTY multi-leg option spreads'})
+   await multi.getByText('Automatic research short-list').waitFor()
+   await multi.getByRole('button',{name:'Analyze'}).click()
+   await multi.getByText('Explore hypothetical expiry BANKNIFTY level').waitFor()
+   await multi.getByRole('button',{name:/Save research snapshot/}).click()
+   await multi.getByRole('button',{name:'Research Notebook'}).click()
+   await multi.getByText('Browser-local observations').waitFor()
+   await multi.getByRole('button',{name:'Build & Modify'}).click()
+   await multi.getByText('Optional source-verified leg builder').waitFor()
+   await shot('02-multileg-spread-studio')
+   await page.unroute('**/api/trading-cockpit/spreads/multileg/scan?*')
    await page.unroute('**/api/trading-cockpit/liquidity/scan?*')
    await page.unroute('**/api/trading-cockpit/liquidity/overview?*')
    await page.unroute('**/api/trading-cockpit/liquidity/history?*')
