@@ -98,3 +98,10 @@
 .sos-top-list p{grid-column:1/-1;margin:0;font-size:11px;line-height:1.6;
   color:#e7d2ad;padding:12px;border:1px dashed #886b51;border-radius:8px}
 @media(max-width:900px){.sos-top-list{grid-template-columns:1fr}}
+
+.sos-table tbody tr.sos-rejected{background:rgba(85,37,44,.13)}
+.sos-table tbody tr.sos-rejected:hover{background:rgba(112,46,52,.28)}
+.sos-table tbody tr.sos-rejected td:nth-last-child(3) small{
+  color:#e9b7a8;font-size:10px;line-height:1.5;max-width:210px;
+  white-space:normal;overflow-wrap:anywhere}
+.sos-top-list button span{line-height:1.5}

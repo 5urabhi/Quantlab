@@ -1261,6 +1261,7 @@ class DefinedRiskOptionSpreadRequest(BaseModel):
     broker_profile: Literal[
         "zerodha", "zerodha_debit_balance", "dhan"] = "zerodha"
     max_quote_skew_seconds: float = Field(default=10, ge=0, le=120)
+    capital_inr: float = Field(default=50000, ge=1000, le=10000000)
 
 
 @app.get("/api/trading-cockpit/spreads/multileg/scan")
@@ -1292,7 +1293,8 @@ def evaluate_defined_risk_spread(body: DefinedRiskOptionSpreadRequest):
             day=body.day, strategy=body.strategy,
             identities=body.identities, lots=body.lots,
             broker_profile=body.broker_profile,
-            max_quote_skew_seconds=body.max_quote_skew_seconds)
+            max_quote_skew_seconds=body.max_quote_skew_seconds,
+            capital_inr=body.capital_inr)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 

@@ -255,6 +255,8 @@ try{
      name:'Automatic spread profit and loss scanner'})
    await scanner.getByText('Spread P&L Opportunity Scanner').waitFor()
    await scanner.getByText('Risk-screened fresh research').waitFor()
+   await scanner.getByText('NO TRADE',{exact:true}).first().waitFor()
+   await scanner.getByText('To zero:').first().waitFor()
    await scanner.getByRole('button',{name:'All lots'}).click()
    await scanner.getByRole('region',{name:'Per-lot transaction cashflow ledger'}).waitFor()
    await scanner.getByText('Cash left after buy').waitFor()
@@ -311,7 +313,11 @@ try{
          underlying:80+i,net_payoff_inr:
            -231+30*Math.max(0,Math.min(i-20,10))})),
        source_age_seconds:9,fresh_reference:true,research_priority_score:47,
-       broker_margin_verified:false,status:'FRESH_RESEARCH_ONLY_MARGIN_UNVERIFIED',
+       broker_margin_verified:false,status:'PAPER_RESEARCH_ONLY_MARGIN_UNVERIFIED',
+       paper_research_qualified:true,
+       feasibility:{paper_research_qualified:true,reasons:[],
+         research_priority_score:47,status:'PAPER_RESEARCH_ONLY',
+         broker_margin_verified:false,required_broker_margin_inr:null},
        payoff_model:'Terminal intrinsic less entry charges, synthetic browser fixture.',
        read_only:true}
      return route.fulfill({status:200,contentType:'application/json',
@@ -319,6 +325,12 @@ try{
          day_ist:'2026-11-23',capital_inr:50000,max_lots:5,
          valid_unique_contracts:2,original_depth_id_count:2,
          discovered_candidates:1,returned_candidates:1,
+         execution_decision:{
+           live_action:'NO_TRADE',research_status:'PAPER_TEST_CANDIDATES',
+           paper_research_candidates:1,screened_candidates:1,
+           rejection_reason_counts:{},expected_net_profit_inr:null,
+           calibrated_fill_probability:null,
+           explanation:'No real fills in synthetic fixture; paper-study only.'},
          ranked_candidates:[candidate],
          available_contracts:legs.map(l=>({
            identity:l.identity,expiry:l.expiry,strike:l.strike,
@@ -337,6 +349,8 @@ try{
    const multi=page.getByRole('region',{
      name:'BANKNIFTY multi-leg option spreads'})
    await multi.getByText('Automatic research short-list').waitFor()
+   await multi.getByText('NO TRADE',{exact:true}).first().waitFor()
+   await multi.getByText('Paper-test candidates found').waitFor()
    await multi.getByRole('button',{name:'Analyze'}).click()
    await multi.getByText('Explore hypothetical expiry BANKNIFTY level').waitFor()
    await multi.getByRole('button',{name:/Save research snapshot/}).click()
