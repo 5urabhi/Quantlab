@@ -258,6 +258,33 @@ def status() -> dict:
             receipt["pair_age_seconds"] is None
             or receipt["pair_age_seconds"] > 60
             for receipt in receipts.values())
+    # 50 subscribed Dhan instruments contribute at most 50 validated
+    # original bid/ask pairs per accepted stacked WebSocket message.
+    # Never mutate evidence counters to force consistency or hide defects.
+    diagnostic = state["depth_parser_diagnostics"]
+    recovered_messages = diagnostic.get(
+        "valid_depth_stacks_above_old_cutoff", 0)
+    recovered_pairs = diagnostic.get(
+        "valid_book_pairs_above_old_cutoff", 0)
+    pair_count = state.get("received_pairs", 0)
+    evidence_consistent = bool(
+        isinstance(recovered_messages, int)
+        and isinstance(recovered_pairs, int)
+        and isinstance(pair_count, int)
+        and 0 <= recovered_pairs
+        <= min(50 * recovered_messages, pair_count))
+    state["depth_counter_audit"] = {
+        "consistent": evidence_consistent,
+        "accepted_large_messages": recovered_messages,
+        "validated_pairs_in_large_messages": recovered_pairs,
+        "max_pairs_per_valid_message": 50,
+        "mean_pairs_per_large_message": (
+            round(recovered_pairs / recovered_messages, 2)
+            if recovered_messages > 0 else None),
+        "note": ("Counts are session-scoped accepted original book pairs; "
+                 "saved sampled books are a separate metric. "
+                 "These counts do not imply trading fills."),
+    }
     # No unrestricted per-security receipt store or raw packet data in API.
     state.pop("observed_by_contract", None)
     state.pop("socket_last_paired_utc", None)

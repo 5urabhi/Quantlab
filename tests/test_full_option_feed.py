@@ -269,6 +269,73 @@ class DhanFullUniverseTests(TestCase):
         self.assertEqual(sum(e["stale_quote_packet_only"] for e in
                              status["coverage_by_expiry"]),1)
 
+    def test_stable_recent_original_ce_and_pe_can_get_active_depth(self):
+        original,_=master(6)
+        now=datetime.now(timezone.utc).isoformat()
+        rows=list(original["by_id"].values())
+        feed.CATALOG={row["identity"]:row for row in rows}
+        for index,row in enumerate(rows):
+            feed.LATEST[row["identity"]]={
+                "identity":row["identity"],"expiry":row["expiry"],
+                "strike":row["strike"],"option_type":row["option_type"],
+                "price":100.0 if index<4 else 1.0,
+                "volume":1000+index*100,
+                "quote_received_utc":now,
+                "last_trade_quantity":30,
+                "volume_increase":0,"score":0,
+            }
+        ranked=feed.ranked_active_depth(10)
+        self.assertEqual(len(ranked),4)
+        self.assertEqual(
+            [x["option_type"] for x in ranked],["CE","PE","CE","PE"])
+        self.assertTrue(all(x["source"]=="observed_original_Dhan_trade"
+                            for x in ranked))
+        self.assertEqual(feed.ranked_depth_candidates(),[])
+        self.assertEqual(len(feed.CATALOG),6)
+
+    def test_readonly_dhan_quote_receipt_audit_reports_gaps_as_uncertain(self):
+        feed._init_storage()
+        day="2026-11-23"
+        base=datetime(2026,11,23,5,0,tzinfo=timezone.utc)
+        identity="NSE_FNO:62539"
+        events=[
+            (base, "quote", 100.),
+            (base+timedelta(seconds=70), "quote", 101.),
+            (base+timedelta(seconds=420), "quote", 99.),
+            (base+timedelta(seconds=440), "oi", None),
+        ]
+        with live_market._database() as db:
+            db.executemany(
+                """INSERT INTO dhan_option_live_events(
+                identity,received_utc,exchange_trade_utc,kind,price,
+                volume,open_interest,last_trade_quantity,packet_sha256,session_id)
+                VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                [(identity,stamp.isoformat(),stamp.isoformat()
+                    if kind=="quote" else None,kind,price,
+                    100 if kind=="quote" else None,
+                    500 if kind=="oi" else None,
+                    30 if kind=="quote" else None,
+                    "fixture"+str(i),"source_fixture")
+                 for i,(stamp,kind,price) in enumerate(events)])
+        audit=feed.audit_saved_quote_history(identity,day)
+        self.assertEqual(audit["saved_quote_receipts"],3)
+        self.assertEqual(audit["saved_oi_events"],1)
+        self.assertEqual(audit["inter_receipt_gaps_over_60s"],2)
+        self.assertEqual(audit["inter_receipt_gaps_over_300s"],1)
+        self.assertEqual(audit["largest_inter_receipt_gap_seconds"],350.)
+        self.assertEqual(audit["minutes_with_saved_quotes"],3)
+        self.assertTrue(audit["scan_complete"])
+        self.assertIn("cannot prove loss",audit["note"])
+        endpoint=self.client.get(
+            "/api/trading-cockpit/option-feed/quality",
+            params={"identity":identity,"day":day})
+        self.assertEqual(endpoint.status_code,200,endpoint.text)
+        self.assertEqual(endpoint.json()["saved_quote_receipts"],3)
+        invalid=self.client.get(
+            "/api/trading-cockpit/option-feed/quality",
+            params={"identity":"../../secrets","day":day})
+        self.assertEqual(invalid.status_code,400)
+
     def test_stale_trade_does_not_trigger_false_momentum(self):
         original,_=master(2)
         item=original["by_id"]["61000"]
@@ -352,3 +419,18 @@ class DhanFullUniverseTests(TestCase):
         no_priority=wide_option_depth.select_full_chain_rotation(
             chain,auto.DEFAULTS,rotation_step=1)
         self.assertEqual(sum(x["coverage_role"]=="rotating" for x in no_priority),80)
+
+        active_only=wide_option_depth.select_full_chain_rotation(
+            chain,auto.DEFAULTS,rotation_step=1,
+            activity_ids=distant[:70])
+        self.assertEqual(sum(x["coverage_role"]=="core" for x in active_only),120)
+        self.assertEqual(sum(x["coverage_role"]=="active" for x in active_only),60)
+        self.assertEqual(sum(x["coverage_role"]=="rotating" for x in active_only),20)
+
+        joint=wide_option_depth.select_full_chain_rotation(
+            chain,auto.DEFAULTS,rotation_step=1,
+            priority_ids=distant[:40],activity_ids=distant[40:70])
+        self.assertEqual(sum(x["coverage_role"]=="opportunity" for x in joint),40)
+        self.assertEqual(sum(x["coverage_role"]=="active" for x in joint),20)
+        self.assertEqual(sum(x["coverage_role"]=="rotating" for x in joint),20)
+        self.assertEqual(len({x["identity"] for x in joint}),200)

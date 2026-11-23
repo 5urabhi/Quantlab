@@ -35,6 +35,8 @@ NEAR_ATM_FAST_SECONDS = 3
 CORE_CONTRACTS = 120
 ROTATING_CONTRACTS = MAX_CONTRACTS - CORE_CONTRACTS
 MAX_OPPORTUNITY_CONTRACTS = 40
+MAX_ACTIVE_DEPTH_CONTRACTS = 60
+MIN_EXPLORATION_CONTRACTS = 20
 ROTATION_SECONDS = 90
 SOCKET_RECV_LIMIT = 1_000_000
 QUEUE_MAX = 2500
@@ -126,7 +128,7 @@ def select_atm_contracts(chain: dict, cfg: dict, previous_ids=()) -> list[dict]:
 
 def select_full_chain_rotation(chain: dict, cfg: dict,
                                rotation_step: int = 0,
-                               priority_ids=()) -> list[dict]:
+                               priority_ids=(), activity_ids=()) -> list[dict]:
     """Cover every Dhan-listed, master-verified option *over time*.
 
     The original complete option-chain snapshots cover all source strikes and
@@ -173,8 +175,26 @@ def select_full_chain_rotation(chain: dict, cfg: dict,
             if len(active_priority) >= MAX_OPPORTUNITY_CONTRACTS:
                 break
     prioritized = {row["identity"] for row in active_priority}
-    remaining = [row for row in outer if row["identity"] not in prioritized]
-    free_slots = ROTATING_CONTRACTS - len(active_priority)
+    # Separate real recent-trade activity from large % price movement.
+    # Stable but genuinely traded options can now occupy depth slots;
+    # reserve at least 20 slots for continued distant-strike discovery.
+    activity_budget = min(
+        MAX_ACTIVE_DEPTH_CONTRACTS,
+        max(0, ROTATING_CONTRACTS - MIN_EXPLORATION_CONTRACTS
+            - len(active_priority)))
+    activity = []
+    for identity in activity_ids:
+        item = by_id.get(identity)
+        if (item is not None and identity not in prioritized
+                and item not in activity):
+            activity.append(item)
+            if len(activity) >= activity_budget:
+                break
+    activity_set = {row["identity"] for row in activity}
+    remaining = [row for row in outer if
+                 row["identity"] not in prioritized
+                 and row["identity"] not in activity_set]
+    free_slots = ROTATING_CONTRACTS - len(active_priority) - len(activity)
     if len(remaining) <= free_slots:
         visiting = remaining
     elif free_slots:
@@ -182,7 +202,7 @@ def select_full_chain_rotation(chain: dict, cfg: dict,
         visiting = (remaining[offset:] + remaining[:offset])[:free_slots]
     else:
         visiting = []
-    chosen = (core + active_priority + visiting)[:MAX_CONTRACTS]
+    chosen = (core + active_priority + activity + visiting)[:MAX_CONTRACTS]
     atm = min({float(row["strike"]) for row in verified},
               key=lambda strike: (abs(strike - spot), strike))
     result = []
@@ -205,9 +225,11 @@ def select_full_chain_rotation(chain: dict, cfg: dict,
             "atm_strike": atm,
             "priority_depth": (rank < 6 or
                                len(core) <= rank < len(core) + 6),
-            "coverage_role": ("core" if rank < len(core) else
-                              "opportunity" if rank < len(core)+len(active_priority)
-                              else "rotating"),
+            "coverage_role": (
+                "core" if rank < len(core) else
+                "opportunity" if rank < len(core)+len(active_priority) else
+                "active" if rank < len(core)+len(active_priority)+len(activity)
+                else "rotating"),
         })
     return result
 
@@ -223,6 +245,7 @@ def _full_chain_coverage(chain: dict, selected: list[dict]) -> dict:
     rotating = sum(row.get("coverage_role") == "rotating" for row in selected)
     opportunities = sum(row.get("coverage_role") == "opportunity"
                         for row in selected)
+    activity = sum(row.get("coverage_role") == "active" for row in selected)
     spot = float(chain["underlying_spot"])
     out_of_listed_range = bool(strikes and
                                (spot < min(strikes) or spot > max(strikes)))
@@ -237,6 +260,7 @@ def _full_chain_coverage(chain: dict, selected: list[dict]) -> dict:
         "subscribed_contracts": len(selected_ids),
         "rotating_contracts": rotating,
         "opportunity_depth_contracts": opportunities,
+        "activity_depth_contracts": activity,
         "not_currently_depth_subscribed": len(verified_ids - selected_ids),
         "depth_is_all_contracts_simultaneously":
             not bool(verified_ids - selected_ids),
@@ -485,10 +509,14 @@ def _select(cfg: dict, previous_ids=(), rotation_step: int = 0,
         raise ValueError("Original Dhan BANKNIFTY chain is stale")
     from . import full_option_feed
     ranked = full_option_feed.ranked_depth_candidates(limit=60)
+    active = full_option_feed.ranked_active_depth(limit=80)
     priority_ids = [item["identity"] for item in ranked
                     if item["expiry"] == chain["expiry"]]
+    activity_ids = [item["identity"] for item in active
+                    if item["expiry"] == chain["expiry"]]
     selected = select_full_chain_rotation(
-        chain, cfg, rotation_step, priority_ids=priority_ids)
+        chain, cfg, rotation_step, priority_ids=priority_ids,
+        activity_ids=activity_ids)
     # A genuinely strong option move can enter the 20-level subset at the
     # next 20-second Dhan chain refresh; moderate events wait for rotation.
     old_ids = {row["identity"] for row in previous_contracts}

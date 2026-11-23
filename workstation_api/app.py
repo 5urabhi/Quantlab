@@ -1220,6 +1220,15 @@ def banknifty_full_option_feed_contracts(offset: int = 0, limit: int = 100):
         bad(exc)
 
 
+@app.get("/api/trading-cockpit/option-feed/quality")
+def banknifty_full_option_feed_quality(identity: str, day: str | None = None):
+    """Inspect only saved original Dhan receipts; never infer missing trades."""
+    try:
+        return full_option_feed.audit_saved_quote_history(identity, day)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/option-feed/history")
 def banknifty_full_option_feed_history(identity: str, limit: int = 250):
     try:

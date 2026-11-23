@@ -92,3 +92,20 @@
 
 /* The explanation belongs above the two-column cards, not in its first cell. */
 .ad-contracts>.ad-armed-note,.ad-contracts>.ad-empty-contract{grid-column:1/-1}
+
+/* Recording-health overview: keep 200-ID source coverage readable at a glance. */
+.ad-primary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:9px;margin:8px 0 3px}
+.ad-primary span{display:grid;gap:5px;padding:13px;
+  border:1px solid #37677d;background:#153a4c;border-radius:9px;
+  color:#b4d5dd;font-size:11px;line-height:1.45}
+.ad-primary strong{font-size:18px;line-height:1.25;color:#ddfff6;
+  font-variant-numeric:tabular-nums}
+.ad-diagnostics{background:#0f2c3b;border:1px solid #345567;
+  border-radius:9px;padding:10px 13px}
+.ad-diagnostics summary{color:#c5f1e6;font-size:12px;font-weight:700;
+  padding:3px 0;cursor:pointer}
+.ad-diagnostics p{color:#aacbd2;font-size:11px;line-height:1.6}
+.ad-diagnostics .ad-summary{margin-top:10px}
+@media(max-width:920px){.ad-primary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.ad-primary{grid-template-columns:1fr}}
