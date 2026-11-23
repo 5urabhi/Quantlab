@@ -81,3 +81,20 @@
 }
 
 .sos-conditional{color:#f4cf83!important;font-weight:750}
+
+.sos-top-choices{display:grid;gap:12px;border:1px solid #537b7b;
+  padding:15px;background:#173d4b;border-radius:10px}
+.sos-top-choices>div:first-child{display:grid;gap:6px}
+.sos-top-choices>div:first-child strong{font-size:14px;color:#e2fff3}
+.sos-top-choices>div:first-child small{color:#b8d6df;font-size:11px;line-height:1.6}
+.sos-top-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px}
+.sos-top-list button{text-align:left;display:grid;gap:8px;padding:14px;
+  border:1px solid #5d8b86;background:#24535c;color:#e3fff4;
+  border-radius:10px;cursor:pointer;font-size:11px}
+.sos-top-list button:hover{border-color:#f0cf8b;background:#2b5a65}
+.sos-top-list button strong{font-size:14px}
+.sos-top-list button small{font-size:10px;color:#f5d28c;font-weight:800}
+.sos-top-list button span:last-child{color:#f4d89e;font-weight:800}
+.sos-top-list p{grid-column:1/-1;margin:0;font-size:11px;line-height:1.6;
+  color:#e7d2ad;padding:12px;border:1px dashed #886b51;border-radius:8px}
+@media(max-width:900px){.sos-top-list{grid-template-columns:1fr}}
