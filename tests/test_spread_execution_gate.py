@@ -67,10 +67,10 @@ def legs():
     return [
         {"identity": "NSE_FNO:1001", "bid": 150., "ask": 152.,
          "spread_bps": 132., "bid_top_quantity": 120,
-         "ask_top_quantity": 120},
+         "ask_top_quantity": 120, "lot_size": 30},
         {"identity": "NSE_FNO:1002", "bid": 105., "ask": 107.,
          "spread_bps": 189., "bid_top_quantity": 120,
-         "ask_top_quantity": 120},
+         "ask_top_quantity": 120, "lot_size": 30},
     ]
 
 
