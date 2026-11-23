@@ -12,13 +12,23 @@ type FeedState={
   stored_events:number;dropped_events:number;rejected_frames:number
   ignored_stale_trades:number;unchanged_quote_packets:number
   unchanged_oi_packets:number;queue_depth:number
-  opportunity_count:number;last_quote_received_utc:string|null
+  opportunity_count:number;depth_candidate_count:number
+  observed_oi_contracts:number;requested_not_yet_quoted:number
+  coverage_by_expiry:ExpiryCoverage[]
+  last_quote_received_utc:string|null
   last_error:string|null
+}
+type ExpiryCoverage={
+  expiry:string;subscribed:number;with_any_quote:number
+  fresh_quote_60s:number;with_any_oi:number;oi_only:number
+  never_quoted:number;activity_screen_passed_45s:number
 }
 type SourceOption={
   identity:string;expiry:string;strike:number;option_type:'CE'|'PE'
   lot_size:number;price:number|null;volume:number|null;open_interest:number|null
   score:number|null;move_60s_pct:number|null;move_5m_pct:number|null
+  observed_change_pct:number|null;observed_span_seconds:number|null
+  eligible_for_depth?:boolean;screen_reason?:string
   volume_increase:number|null;quote_received_utc:string|null
 }
 type FeedPage={total:number;offset:number;limit:number;contracts:SourceOption[]}
@@ -122,12 +132,15 @@ export default function OptionUniverseMonitor(){
   const metrics=[
     ['Original listed contracts',state?.source_contracts],
     ['Requested live subscriptions',state?.requested_contracts],
-    ['Distinct options with observed prices',state?.observed_contracts],
-    ['Received fresh price IDs (60s)',state?.recent_price_contracts],
+    ['Contracts with any observed trade price',state?.observed_contracts],
+    ['Live price IDs seen in last 60s',state?.recent_price_contracts],
+    ['Subscribed IDs without a trade price yet',state?.requested_not_yet_quoted],
+    ['Contracts with observed OI',state?.observed_oi_contracts],
     ['Original Quote / OI packets',state?nf(state.quote_packets)+' / '+nf(state.oi_packets):null],
     ['Saved source events',state?.stored_events],
     ['Dropped / rejected frames',state?nf(state.dropped_events)+' / '+nf(state.rejected_frames):null],
-    ['Source candidates for further research',state?.opportunity_count],
+    ['All observed movers',state?.opportunity_count],
+    ['Source-activity-screened depth candidates',state?.depth_candidate_count],
   ] as const
   return <section className="ofu-root" aria-label="Full BANKNIFTY option universe monitor">
     <header className="ofu-head"><div><span className="tc-page-kicker">
@@ -162,6 +175,24 @@ export default function OptionUniverseMonitor(){
         <span>{label}</span>
       </div>)}
     </div>
+    {Boolean(state?.coverage_by_expiry?.length)&&<section className="ofu-expiries"
+      aria-label="Original option quote and open interest coverage by expiry">
+      <strong>Original price and OI coverage by expiry</strong>
+      <p className="ofu-help">These counts distinguish subscription requests from
+        market packets actually received. Options without new trades may be
+        silent or illiquid; missing quotes are not filled from snapshots.</p>
+      <div className="ofu-scroll"><table className="ofu-table">
+        <thead><tr><th>Expiry</th><th>Subscribed</th>
+          <th>Any price observed</th><th>Price seen in 60s</th>
+          <th>OI observed</th><th>No price yet</th>
+          <th>Pass source activity screen</th></tr></thead>
+        <tbody>{state?.coverage_by_expiry?.map(e=><tr key={e.expiry}>
+          <td>{e.expiry}</td><td>{nf(e.subscribed)}</td>
+          <td>{nf(e.with_any_quote)}</td><td>{nf(e.fresh_quote_60s)}</td>
+          <td>{nf(e.with_any_oi)}</td><td>{nf(e.never_quoted)}</td>
+          <td>{nf(e.activity_screen_passed_45s)}</td></tr>)}</tbody>
+      </table></div>
+    </section>}
     {!!state?.unsubscribed_due_to_capacity&&<p className="ofu-warning" role="alert">
       <AlertTriangle size={15}/>{nf(state.unsubscribed_due_to_capacity)} contracts
       exceed Dhan's 5,000-per-connection limit and are NOT streamed.
@@ -178,23 +209,35 @@ export default function OptionUniverseMonitor(){
       {' '}Daily storage cap: two million received source events. Disconnections,
       silent contracts, delayed last trades, and dropped packets are never filled.</p>
     <div className="ofu-section-head"><div><strong>Unusual observed premium moves</strong>
-      <small>Original trades over the last five minutes. Activity signals,
-        not recommendations or guaranteed fills.</small></div>
+      <small>Source-activity-screened contracts appear first; all price
+        observations remain recorded. The observed-span column shows actual
+        elapsed Dhan trade time. A 60s/5m return stays blank until a
+        genuine source observation establishes that horizon.
+        Screening is not proof of liquidity, a guaranteed fill, or advice.</small></div>
       <button type="button" onClick={()=>void refresh()}>Refresh feed</button></div>
     <div className="ofu-scroll">
       <table className="ofu-table">
         <thead><tr><th>Expiry / Contract</th><th>Strike</th><th>Last price</th>
-          <th>60s change</th><th>5m change</th><th>Volume gain</th>
-          <th>Last quote IST</th><th></th></tr></thead>
+          <th>Observed move</th><th>Trade span</th>
+          <th>60s return</th><th>5m return</th><th>Volume gain</th>
+          <th>Depth research screen</th><th>Last quote IST</th><th></th></tr></thead>
         <tbody>{alerts.map(row=><tr key={row.identity}>
           <td>{row.expiry} · {row.option_type}<small>{row.identity}</small></td>
           <td>{nf(row.strike)}</td><td>₹{nf(row.price,2)}</td>
+          <td>{change(row.observed_change_pct)}</td>
+          <td>{row.observed_span_seconds==null?'—':
+            nf(row.observed_span_seconds)+'s'}</td>
           <td>{change(row.move_60s_pct)}</td><td>{change(row.move_5m_pct)}</td>
-          <td>{nf(row.volume_increase)}</td><td>{time(row.quote_received_utc)}</td>
+          <td>{nf(row.volume_increase)}</td>
+          <td><span className={'ofu-screen '+(row.eligible_for_depth?'ok':'excluded')}
+            title={row.screen_reason||'Awaiting original activity evidence'}>
+            {row.eligible_for_depth?'Source screen passed':'Observation only'}
+          </span></td>
+          <td>{time(row.quote_received_utc)}</td>
           <td><button type="button" onClick={()=>void select(row.identity)}>
             View observations</button></td>
         </tr>)}
-        {!alerts.length&&<tr><td colSpan={8}>
+        {!alerts.length&&<tr><td colSpan={11}>
           No source-confirmed rapid moves observed. This does not mean all
           options were active or unchanged.</td></tr>}</tbody>
       </table>
