@@ -10,7 +10,7 @@ guarantees that silent/illiquid instruments produce trades.
 from __future__ import annotations
 
 from collections import deque
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from hashlib import sha256
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -210,6 +210,8 @@ def _init_storage() -> None:
               ON dhan_option_live_events(identity,received_utc);
             CREATE INDEX IF NOT EXISTS dhan_live_quote_by_session
               ON dhan_option_live_events(session_id,received_utc);
+            CREATE INDEX IF NOT EXISTS dhan_live_quote_received
+              ON dhan_option_live_events(received_utc);
             """)
         STORAGE_INITIALIZED = True
 
@@ -323,11 +325,23 @@ def ranked_opportunities(limit: int = 40) -> list[dict]:
         return sorted(rows,key=lambda r:(-r["score"],r["identity"]))[:max(0,min(limit,80))]
 
 
-def _write_batches(stop: Event, session: str) -> None:
+def _write_batches(stop: Event) -> None:
     saved = 0
+    day = None
     try:
         _init_storage()
         while not stop.is_set() or not WRITES.empty():
+            current_day = _utc().astimezone(auto.IST).date()
+            if current_day != day:
+                day = current_day
+                midnight_ist = datetime.combine(
+                    day, datetime.min.time(), tzinfo=auto.IST)
+                with live_market._database() as db:
+                    saved = int(db.execute(
+                        "SELECT COUNT(*) FROM dhan_option_live_events "
+                        "WHERE received_utc>=? AND received_utc<?",
+                        (_iso(midnight_ist), _iso(midnight_ist +
+                            timedelta(days=1)))).fetchone()[0])
             batch = []
             try:
                 batch.append(WRITES.get(timeout=.25))
@@ -389,93 +403,96 @@ def _run(stop: Event) -> None:
             return
         failures = 0
         day = ""
-        while not stop.is_set():
-            if not _armed():
-                _set(state="disabled",connected=False)
-                return
-            if not auto._market_open():
-                _set(state="armed_waiting_for_nse_hours",connected=False)
-                stop.wait(15)
-                continue
-            # Four automatic depth sockets + one option quote socket = five.
-            # The old manual ticker/depth pair cannot also run concurrently.
-            if live_market.status().get("active"):
-                _set(state="manual_live_session_conflict",connected=False,
-                     last_error="Stop the separate manual Trading Cockpit live stream to release the fifth Dhan socket")
-                stop.wait(10)
-                continue
-            current_day = _utc().astimezone(auto.IST).date().isoformat()
-            if day != current_day:
-                day = current_day
-                _session_rollover()
-            try:
-                contracts, excess = _discover()
-                selected = {row["identity"]:row for row in contracts}
-                with LOCK:
-                    CATALOG.clear()
-                    CATALOG.update(selected)
-                _set(state="connecting",last_error=None,
-                     requested_contracts=len(contracts),source_contracts=len(contracts)+excess,
-                     unsubscribed_due_to_capacity=excess)
-                token, client = option_chain_live._credentials()
-                url = ("wss://api-feed.dhan.co?version=2&token=" + quote(token,safe="")
-                       + "&clientId="+quote(client,safe="")+"&authType=2")
-                from websockets.sync.client import connect
-                session = "options_"+day.replace("-","")+"_"+str(int(time.time()))
-                writer_stop = Event()
-                writer = Thread(target=_write_batches,args=(writer_stop,session),
-                                daemon=True,name="quantlab-full-option-feed-writer")
-                writer.start()
+        writer_stop = Event()
+        writer = Thread(target=_write_batches,args=(writer_stop,),
+                        daemon=True,name="quantlab-full-option-feed-writer")
+        writer.start()
+        try:
+            while not stop.is_set():
+                if not _armed():
+                    _set(state="disabled",connected=False)
+                    return
+                if not auto._market_open():
+                    _set(state="armed_waiting_for_nse_hours",connected=False)
+                    stop.wait(15)
+                    continue
+                # Four automatic depth sockets + one option quote socket = five.
+                # The old manual ticker/depth pair cannot also run concurrently.
+                if live_market.status().get("active"):
+                    _set(state="manual_live_session_conflict",connected=False,
+                         last_error="Stop the separate manual Trading Cockpit live stream to release the fifth Dhan socket")
+                    stop.wait(10)
+                    continue
+                current_day = _utc().astimezone(auto.IST).date().isoformat()
+                if day != current_day:
+                    day = current_day
+                    _session_rollover()
                 try:
+                    contracts, excess = _discover()
+                    selected = {row["identity"]:row for row in contracts}
+                    with LOCK:
+                        CATALOG.clear()
+                        CATALOG.update(selected)
+                    _set(state="connecting",last_error=None,
+                         requested_contracts=len(contracts),source_contracts=len(contracts)+excess,
+                         unsubscribed_due_to_capacity=excess)
+                    token, client = option_chain_live._credentials()
+                    url = ("wss://api-feed.dhan.co?version=2&token=" + quote(token,safe="")
+                           + "&clientId="+quote(client,safe="")+"&authType=2")
+                    from websockets.sync.client import connect
+                    session = "options_"+day.replace("-","")+"_"+str(int(time.time()))
                     with connect(url,open_timeout=12,close_timeout=3,
                                  max_size=MAX_FRAME_BYTES) as socket:
-                        for msg in _subscribe_batches(contracts):
-                            socket.send(json.dumps(msg))
-                            if stop.is_set():break
-                            stop.wait(.03)
-                        _set(state="subscribed_awaiting_quotes",connected=True,
-                             session_id=session)
-                        failures = 0
-                        until = time.monotonic()+DISCOVER_SECONDS
-                        while not stop.is_set() and _armed() and auto._market_open():
-                            if os.getenv("DHAN_ACCESS_TOKEN","").strip()!=token:
-                                break
-                            if time.monotonic() >= until:
-                                updated, _ = _discover()
-                                if [row["identity"] for row in updated] != [
-                                        row["identity"] for row in contracts]:
+                            for msg in _subscribe_batches(contracts):
+                                socket.send(json.dumps(msg))
+                                if stop.is_set():break
+                                stop.wait(.03)
+                            _set(state="subscribed_awaiting_quotes",connected=True,
+                                 session_id=session)
+                            failures = 0
+                            until = time.monotonic()+DISCOVER_SECONDS
+                            while not stop.is_set() and _armed() and auto._market_open():
+                                if os.getenv("DHAN_ACCESS_TOKEN","").strip()!=token:
                                     break
-                                until = time.monotonic()+DISCOVER_SECONDS
-                            try:
-                                payload = socket.recv(timeout=1)
-                            except TimeoutError:
-                                continue
-                            if not isinstance(payload,bytes):
-                                continue
-                            received = _utc()
-                            try:
-                                decoded = decode_quote_frames(payload)
-                            except ValueError:
-                                with LOCK:
-                                    STATUS["rejected_frames"]+=1
-                                continue
-                            for event in decoded:
-                                _ingest(event,received,session)
-                            if decoded:
-                                _set(state="streaming_original_quotes")
-                finally:
-                    writer_stop.set()
-                    writer.join(timeout=10)
+                                if time.monotonic() >= until:
+                                    updated, _ = _discover()
+                                    if [row["identity"] for row in updated] != [
+                                            row["identity"] for row in contracts]:
+                                        break
+                                    until = time.monotonic()+DISCOVER_SECONDS
+                                try:
+                                    payload = socket.recv(timeout=1)
+                                except TimeoutError:
+                                    continue
+                                if not isinstance(payload,bytes):
+                                    continue
+                                received = _utc()
+                                try:
+                                    decoded = decode_quote_frames(payload)
+                                except ValueError:
+                                    with LOCK:
+                                        STATUS["rejected_frames"]+=1
+                                    continue
+                                for event in decoded:
+                                    _ingest(event,received,session)
+                                if decoded:
+                                    _set(state="streaming_original_quotes")
                     _set(connected=False)
-            except Exception as exc:
-                # Never log WebSocket URLs or token-bearing exception strings.
-                failures+=1
-                _set(state="connection_or_source_error",connected=False,
-                     last_error="Dhan full-option monitor interrupted ("+
-                                type(exc).__name__+"); retrying safely")
-                stop.wait(min(60,3*2**min(failures,4)))
+                except Exception as exc:
+                    # Never log WebSocket URLs or token-bearing exception strings.
+                    failures+=1
+                    _set(state="connection_or_source_error",connected=False,
+                         last_error="Dhan full-option monitor interrupted ("+
+                                    type(exc).__name__+"); retrying safely")
+                    stop.wait(min(60,3*2**min(failures,4)))
+        finally:
+            writer_stop.set()
+            writer.join(timeout=15)
+            if writer.is_alive():
+                _set(state="storage_flush_incomplete",
+                     last_error="Pending original price events are still flushing; keep local server running")
     finally:
-        _set(connected=False,state="stopped")
+        _set(connected=False,state="stopped" if not STOP.is_set() else "stopping")
         os.close(fd)
 
 
