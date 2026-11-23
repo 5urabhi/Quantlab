@@ -1,6 +1,7 @@
 import {useCallback,useEffect,useMemo,useState} from 'react'
 import {ArrowDownUp,ArrowRight,RefreshCw,ShieldAlert} from 'lucide-react'
 import {marketApi,readableError} from './tradingCockpitApi'
+import SpreadExecutionDecision,{type ExecutionDecision} from './SpreadExecutionDecision'
 import './spread-opportunity-scanner.css'
 
 export type BrokerProfile='zerodha'|'zerodha_debit_balance'|'dhan'
@@ -13,6 +14,9 @@ type LotOutcome={
   passive_gross_inr:number;passive_upper_net_inr:number
   passive_stressed_upper_net_inr:number;marketable_net_inr:number|null
   failed_exit_net_inr?:number|null;break_even_exit_fill_probability?:number|null
+  half_premium_exit_net_inr?:number|null
+  loss_if_option_worthless_inr?:number|null
+  sell_fill_hurdle_if_zero_recovery?:number|null
   marketable_buy_cash_debit_inr:number|null
   marketable_sell_cash_credit_inr:number|null
   marketable_buy_fees_inr:number|null
@@ -34,6 +38,14 @@ type Candidate={
   risk_screen_score?:number|null;source_fresh_risk_screened?:boolean
   break_even_sell_fill_given_buy?:number|null;failed_exit_net_inr?:number|null
   risk_screen_reason?:string
+  loss_if_option_worthless_inr?:number|null
+  half_premium_exit_net_inr?:number|null
+  conservative_sell_fill_hurdle?:number|null
+  feasibility?:{paper_research_qualified:boolean;reasons:string[]
+    status:string;loss_if_option_worthless_inr:number|null
+    conservative_sell_fill_hurdle_if_zero_recovery:number|null
+    receipt_evidence?:{packet_receipts_120s:number;distinct_packet_pairs_120s:number
+      receipt_span_seconds:number}}
   lot_scenarios:LotOutcome[]
   classification:string;two_passive_fills_observed:false
   actual_executed_orders:0;actual_profit_inr:null
@@ -49,6 +61,11 @@ type Scan={
   positive_even_without_stress:number;negative_even_optimistic:number
   no_feasible_lots:number;recent_saved_books_60s:number
   source_fresh_risk_screened?:number
+  execution_decision?:ExecutionDecision
+  execution_policy?:{max_age_seconds:number;min_bid_inr:number
+    max_relative_spread_bps:number;min_receipts:number
+    minimum_top_depth_multiple:number;min_receipt_span_seconds:number
+    max_loss_to_zero_fraction_of_budget:number}
   scan_completed_utc:string;total_rows:number;read_only:true;fills_observed:false
   net_realized_profit_inr:null;source:string;warning:string;rows:Candidate[]
 }
@@ -209,10 +226,14 @@ export default function SpreadOpportunityScanner({
         <strong>{n(value)}</strong><small>{name}</small>
       </div>)}
     </div>
+    <SpreadExecutionDecision decision={data?.execution_decision}
+      scope="Bid-ask spread capture"/>
     <section className="sos-top-choices" aria-label="Automatically screened bid-ask research candidates">
       <div><strong>Automatically screened research shortlist</strong>
-        <small>Fresh source + budget/depth + positive stressed bound + modeled
-          conditional exit-fill hurdle ≤75%; not calibrated profitability.</small></div>
+        <small>Strict source gate: ≤8-second books, bid ≥₹20, ≤250 bps
+          relative spread, at least 3 recent packet receipts over ≥15 seconds,
+          ≥2× top-level depth, and loss-to-zero ≤25% of your budget.
+          Not a profit forecast.</small></div>
       <div className="sos-top-list">
         {(data?.rows||[]).filter(x=>x.source_fresh_risk_screened).slice(0,3)
           .map((row,i)=><button type="button" key={row.identity}
@@ -221,14 +242,17 @@ export default function SpreadOpportunityScanner({
             <small>RESEARCH #{i+1} · score {n(row.risk_screen_score,1)}</small>
             <strong>{row.option_type} {n(row.strike)} · {n(row.best_hypothetical_lots)} lot(s)</strong>
             <span>Conditional upper net {money(row.passive_stressed_upper_net_inr)}</span>
-            <span>Missed exit {money(row.failed_exit_net_inr)} · hurdle {
-              row.break_even_sell_fill_given_buy==null?'—':
-              n(row.break_even_sell_fill_given_buy*100,1)+'%'}</span>
+            <span>Failed exit {money(row.failed_exit_net_inr)}</span>
+            <span>Option worthless: {money(row.loss_if_option_worthless_inr)}
+              {' · '}zero-recovery hurdle {
+                row.conservative_sell_fill_hurdle==null?'—':
+                n(row.conservative_sell_fill_hurdle*100,1)+'%'}</span>
             <span>Analyze execution & costs →</span>
           </button>)}
         {!(data?.rows||[]).some(x=>x.source_fresh_risk_screened)&&
-          <p>No current saved source clears the preliminary risk screen.
-            Historic conditional bounds remain below for study, not live execution.</p>}
+          <p><b>NO TRADE.</b> No source-verified candidate passes the
+            stricter spread, premium, depth, repeated-book and full-premium-risk
+            screen. Blocked quotes remain below so you can see why.</p>}
       </div>
     </section>
     <div className="sos-toolbar">
@@ -279,7 +303,7 @@ export default function SpreadOpportunityScanner({
         n(data.invalid_or_nonoriginal_books)+'.':''}
     </p>
     <div className="sos-warning"><ShieldAlert size={16}/>
-      <span><strong>Yellow/amber means conditional spread opportunity, not estimated earnings.</strong>
+      <span><strong>NO TRADE is the only live action; amber is paper research only.</strong>
         No fill probability or realized profit is observed. Large quoted spreads
         may be illiquid or stale. Dhan Quote/OI covers more contracts than
         the 20-level depth that is required to evaluate execution.
@@ -291,8 +315,8 @@ export default function SpreadOpportunityScanner({
         <th>Best modeled lots</th><th>Capital required</th>
         <th>Buy fees / Sell fees</th>
         <th>Marketable net</th><th>Conditional upper net</th>
-        <th>Conditional after stress</th><th>Failed-exit net</th>
-        <th>Exit fill needed</th><th>Research rank</th>
+        <th>Conditional after stress</th><th>Failed-exit / zero loss</th>
+        <th>Fill hurdle (mild / zero)</th><th>Execution evidence gate</th>
         <th>Source age</th><th/>
       </tr></thead>
       <tbody>
@@ -300,7 +324,10 @@ export default function SpreadOpportunityScanner({
           const selectedLot=row.lot_scenarios.find(
             lot=>lot.lots===row.best_hypothetical_lots)
           const positive=(row.passive_stressed_upper_net_inr??0)>0
-          return <tr key={row.identity} className={expanded===row.identity?'sos-open':''}>
+          return <tr key={row.identity} className={
+            (expanded===row.identity?'sos-open ':'')+
+            (row.feasibility&&!row.feasibility.paper_research_qualified
+              ?'sos-rejected':'')}>
             <td><span className="sos-contract">
               {row.option_type} {n(row.strike)} <small>{row.expiry}
               {' · '}{row.identity}</small></span></td>
@@ -320,14 +347,23 @@ export default function SpreadOpportunityScanner({
               <small>{row.best_hypothetical_lots==null?'Budget/depth blocked':
                 positive?'Not a profit prediction':'Conditional loss/negative'}</small>
             </td>
-            <td className="sos-negative">{money(row.failed_exit_net_inr)}</td>
+            <td className="sos-negative">{money(row.failed_exit_net_inr)}
+              <small>To zero: {money(row.loss_if_option_worthless_inr)}</small>
+              <small>Half-price exit: {money(row.half_premium_exit_net_inr)}</small>
+            </td>
             <td>{row.break_even_sell_fill_given_buy==null?'—':
               n(row.break_even_sell_fill_given_buy*100,1)+'%'}
-              <small>Given buy filled</small></td>
-            <td><span className={row.source_fresh_risk_screened?'sos-conditional':'sos-unknown'}>
-              {row.source_fresh_risk_screened?'Research '+n(row.risk_screen_score,1):
-                'Not screened'}</span>
-              <small>{row.risk_screen_reason?.replaceAll('_',' ')}</small></td>
+              {' / '}{row.conservative_sell_fill_hurdle==null?'—':
+              n(row.conservative_sell_fill_hurdle*100,1)+'%'}
+              <small>Both hypothetical, not probabilities</small></td>
+            <td><span className={row.source_fresh_risk_screened?
+                'sos-conditional':'sos-negative'}>
+              {row.source_fresh_risk_screened?
+                'Paper study '+n(row.risk_screen_score,1):'NO TRADE'}</span>
+              <small title={row.feasibility?.reasons.join(', ')}>
+                {row.feasibility?.reasons.slice(0,2).map(
+                  x=>x.replaceAll('_',' ')).join(' · ')||
+                  'Passes source screen; fill odds unknown'}</small></td>
             <td><span className={row.fresh_original_saved_book?'sos-fresh':'sos-older'}>
               {n(row.saved_book_age_seconds,0)}s</span><small>
               {time(row.received_utc)} IST</small></td>
