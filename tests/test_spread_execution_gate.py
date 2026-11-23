@@ -24,6 +24,17 @@ def recent_receipt():
     }
 
 
+def recent_trade():
+    return {
+        "source_distinct_exchange_trade_times": 3,
+        "observed_quote_packets_with_recent_trade": 4,
+        "cumulative_volume_delta_units": 90,
+        "last_quote_receive_utc": "2026-11-23T08:02:00+00:00",
+        "user_order_fills_observed": False,
+        "full_exchange_trade_tape_available": False,
+    }
+
+
 def capture_row(**updates):
     row = {
         "expiry": "2026-12-01",
@@ -72,7 +83,8 @@ class SpreadExecutionGateTests(TestCase):
             passive_stressed_upper_net_inr=309.70,
             failed_exit_net_inr=-50.78)
         verdict = gate.capture_feasibility(
-            sample, capital_inr=50000, receipt=recent_receipt())
+            sample, capital_inr=50000, receipt=recent_receipt(),
+            trade=recent_trade())
         self.assertFalse(verdict["paper_research_qualified"])
         self.assertFalse(verdict["live_order_approved"])
         self.assertEqual(verdict["trade_action"], "NO_TRADE")
@@ -87,7 +99,8 @@ class SpreadExecutionGateTests(TestCase):
 
     def test_well_formed_depth_still_only_qualifies_for_paper_study(self):
         verdict = gate.capture_feasibility(
-            capture_row(), capital_inr=50000, receipt=recent_receipt())
+            capture_row(), capital_inr=50000, receipt=recent_receipt(),
+            trade=recent_trade())
         self.assertTrue(verdict["paper_research_qualified"])
         self.assertEqual(verdict["reasons"], [])
         self.assertIsNotNone(verdict["research_priority_score"])
@@ -108,7 +121,8 @@ class SpreadExecutionGateTests(TestCase):
             capital_inr=50000,
             receipt={"packet_receipts_120s": 1,
                      "distinct_packet_pairs_120s": 1,
-                     "receipt_span_seconds": 0})
+                     "receipt_span_seconds": 0},
+            trade=recent_trade())
         self.assertFalse(verdict["paper_research_qualified"])
         for reason in (
             "STALE_OR_HISTORICAL_QUOTE",
@@ -133,9 +147,10 @@ class SpreadExecutionGateTests(TestCase):
     def test_multileg_uses_same_depth_and_risk_gate(self):
         samples = legs()
         observed = {b["identity"]: recent_receipt() for b in samples}
+        trades = {b["identity"]: recent_trade() for b in samples}
         passed = gate.multileg_feasibility(
             multileg_candidate(), books=samples, capital_inr=50000,
-            receipts=observed)
+            receipts=observed, trades=trades)
         self.assertTrue(passed["paper_research_qualified"])
         self.assertEqual(passed["trade_action"], "NO_TRADE")
         self.assertFalse(passed["broker_margin_verified"])
@@ -146,7 +161,8 @@ class SpreadExecutionGateTests(TestCase):
         failed = gate.multileg_feasibility(
             multileg_candidate(max_loss_inr=20000.,
                                quote_skew_seconds=9.),
-            books=bad, capital_inr=50000, receipts=observed)
+            books=bad, capital_inr=50000, receipts=observed,
+            trades=trades)
         self.assertFalse(failed["paper_research_qualified"])
         for reason in ("PENNY_OPTION_LEG",
                        "EXCESSIVE_RELATIVE_LEG_SPREAD",
@@ -158,7 +174,8 @@ class SpreadExecutionGateTests(TestCase):
     def test_no_trade_if_all_candidates_blocked(self):
         sample = gate.capture_feasibility(
             capture_row(best_bid=1.,spread_bps=8000.),
-            capital_inr=50000, receipt=recent_receipt())
+            capital_inr=50000, receipt=recent_receipt(),
+            trade=recent_trade())
         decision = gate.decision_summary([{"feasibility": sample}])
         self.assertEqual(decision["live_action"], "NO_TRADE")
         self.assertEqual(decision["research_status"],
@@ -190,6 +207,20 @@ class SpreadExecutionGateTests(TestCase):
                 + [("NSE_FNO:2999",
                     (now-timedelta(seconds=1000)).isoformat(),
                     "synthetic_test", "{}", "old")])
+        with live_market._database() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS dhan_option_live_events(
+              identity TEXT, received_utc TEXT, exchange_trade_utc TEXT,
+              kind TEXT, volume INTEGER
+            )""")
+            db.executemany(
+                """INSERT INTO dhan_option_live_events
+                   (identity,received_utc,exchange_trade_utc,kind,volume)
+                   VALUES(?,?,?,?,?)""",
+                [("NSE_FNO:1999",
+                  (now-timedelta(seconds=delta)).isoformat(),
+                  (now-timedelta(seconds=delta+1)).isoformat(),
+                  "quote", 1000+30*i)
+                 for i, delta in enumerate((50, 35, 20))])
         activity = gate.recent_depth_receipts(
             day="2026-11-23", now=now, window_seconds=120)
         self.assertEqual(activity["NSE_FNO:1999"][
@@ -199,5 +230,31 @@ class SpreadExecutionGateTests(TestCase):
         self.assertEqual(activity["NSE_FNO:1999"][
             "distinct_packet_pairs_120s"], 3)
         self.assertNotIn("NSE_FNO:2999", activity)
+        trades = gate.recent_trade_activity(
+            day="2026-11-23", now=now, window_seconds=120)
+        self.assertEqual(trades["NSE_FNO:1999"][
+            "source_distinct_exchange_trade_times"], 3)
+        self.assertEqual(trades["NSE_FNO:1999"][
+            "cumulative_volume_delta_units"], 60)
+        self.assertIs(trades["NSE_FNO:1999"]["user_order_fills_observed"], False)
         self.assertEqual(gate.recent_depth_receipts(
             day="2026-11-22", now=now), {})
+        self.assertEqual(gate.recent_trade_activity(
+            day="2026-11-22", now=now), {})
+
+    def test_no_trade_when_source_trade_activity_is_missing(self):
+        assessment = gate.capture_feasibility(
+            capture_row(), capital_inr=50000, receipt=recent_receipt(),
+            trade=None)
+        self.assertFalse(assessment["paper_research_qualified"])
+        self.assertIn("MISSING_FRESH_SOURCE_TRADE_ACTIVITY",
+                      assessment["reasons"])
+        self.assertEqual(assessment["trade_action"], "NO_TRADE")
+
+    def test_minimum_live_volume_requires_at_least_one_verified_lot(self):
+        assessment = gate.capture_feasibility(
+            capture_row(), capital_inr=50000, receipt=recent_receipt(),
+            trade={**recent_trade(), "cumulative_volume_delta_units": 5})
+        self.assertFalse(assessment["paper_research_qualified"])
+        self.assertIn("TOO_LITTLE_RECORDED_TRADE_VOLUME",
+                      assessment["reasons"])
