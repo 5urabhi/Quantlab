@@ -470,6 +470,16 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
         -c["risk_reward_ratio_proxy"],
         c["risk_capital_proxy_inr"], c["candidate_id"]))
     counts = Counter(row["strategy"] for row in ranked)
+    decision = gate.decision_summary(ranked)
+    # Preserve structural rejections that never reached the per-leg gate,
+    # so an empty result still explains source/shape/budget constraints.
+    for reason, count in rejections.items():
+        label = "STRUCTURAL_" + "".join(
+            char if char.isalnum() else "_" for char in str(reason)).upper()
+        decision["rejection_reason_counts"][label] = count
+    if evidence["invalid_or_expired_contracts"]:
+        decision["rejection_reason_counts"]["INVALID_OR_EXPIRED_ORIGINAL_BOOK"] = (
+            evidence["invalid_or_expired_contracts"])
     return {
         "day_ist": chosen, "capital_inr": capital_inr,
         "max_lots": max_lots, "broker_profile": broker_profile,
@@ -486,7 +496,7 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
                 "received_utc", "bid", "ask", "spread_bps")}
             for item in universe[:750]],
         "discovered_candidates": len(ranked),
-        "execution_decision": gate.decision_summary(ranked),
+        "execution_decision": decision,
         "execution_policy": dict(gate.MULTILEG_POLICY),
         "ranked_candidates": ranked[:limit],
         "returned_candidates": min(len(ranked), limit),
