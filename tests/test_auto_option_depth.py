@@ -160,8 +160,10 @@ class AutomaticDepthRecorderTests(unittest.TestCase):
         self.assertEqual(len(observed_sides), 50)
         self.assertTrue(all(sides == {"bid", "ask"}
                             for sides in observed_sides.values()))
-        self.assertEqual(
-            diagnostics, {"valid_depth_stacks_above_old_cutoff": 1})
+        self.assertEqual(diagnostics, {
+            "valid_depth_stacks_above_old_cutoff": 1,
+            "valid_book_pairs_above_old_cutoff": 50,
+        })
         self.assertEqual(pending, {})
 
         # More than 50 identities (101+ half packets) remains forbidden,
