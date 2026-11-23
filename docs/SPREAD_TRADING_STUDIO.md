@@ -98,6 +98,9 @@ exist. High scores are research heuristics, never win probabilities.
 - first-level bid AND ask size at least **2 × intended units**;
 - at least **3 saved packet receipts** and **2 distinct packet hashes**
   spanning at least **15 seconds** within the latest **120 seconds**;
+- at least **2 distinct Dhan source exchange-trade timestamps** and
+  cumulative reported volume growth ≥ **1 verified option lot** in
+  the last 120 seconds. These reflect *other market trades*, not our fills;
 - long option's full **entry cash debit** (loss-to-zero scenario) ≤
   **25%** of the user-selected capital;
 - positive hypothetical cost-adjusted, adverse-stressed two-fill bound
@@ -118,8 +121,8 @@ fees. Unknown costs and unobservable queue events remain unknown.
   skew ≤ **2 seconds**;
 - every leg's bid ≥ **₹5** and relative spread ≤ **1000 bps**;
 - each leg has top-of-book bid and ask quantity ≥ **2 × position units**;
-- each leg has the same minimum original packet receipt history
-  described above;
+- each leg has the same minimum original packet receipt **and source
+  trade/volume** history described above;
 - theoretical maximum loss after entry fees ≤ **25%** of the selected
   capital;
 - hypothetical same-book immediate round-trip drag ≤ **50%** of
@@ -134,11 +137,13 @@ reference display windows does not loosen these hard requirements.
 
 ### Performance and data provenance
 
-Both engines use the existing local database. A **single bounded
-GROUP BY** query obtains per-contract receipt counts/distinct packet
-hashes over the last 120 seconds; this read does not change live Dhan
-subscriptions or stop their recording. Receipt counts are *not trade
-prints, exchanges fills or independent evidence of queue priority*.
+Both engines use the existing local database. Two **bounded
+GROUP BY** queries obtain per-contract depth receipt counts/distinct
+packet hashes and source observed trade-timestamp/volume activity over
+the last 120 seconds; these reads do not change live Dhan
+subscriptions or stop their recording. Receipt counts are *not exchange fills or independent evidence of queue
+priority*. Source trade timestamps and cumulative volume growth are
+not fills or profit for our account.
 
 No source quotes, broker acknowledgements, or profits are synthesized.
 The new `execution_decision` API object explicitly returns
