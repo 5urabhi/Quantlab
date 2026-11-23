@@ -6,6 +6,7 @@ not a claim of Dhan market delivery, order execution or positive realized P&L.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -64,7 +65,8 @@ class LiquiditySpreadResearchTests(TestCase):
                 "(identity,received_utc,session_id,book_json,packet_pair_sha256)"
                 " VALUES(?,?,?,?,?)",
                 [("NSE_FNO:62539",book["received_utc"],
-                  "auto20_20261123_fixture",json.dumps(book),"c"*64)
+                  "auto20_20261123_fixture",json.dumps(book),
+                  sha256(("a"*64+"b"*64).encode()).hexdigest())
                  for book in self.sample])
 
     def test_original_only_daily_history_and_exact_20_level_rows(self):
@@ -76,6 +78,15 @@ class LiquiditySpreadResearchTests(TestCase):
         self.assertTrue(data["sampled_books_not_continuous"])
         self.assertEqual(data["source"],
                          "validated_original_Dhan_20_level_books_saved_to_dhan_shared")
+        # Tampered source packet-pair digests must never become usable books.
+        with live_market._database() as db:
+            db.execute(
+                "UPDATE live_depth_books SET packet_pair_sha256=? "
+                "WHERE identity=? AND received_utc=?",
+                ("f"*64,"NSE_FNO:62539",self.sample[0]["received_utc"]))
+        verified=spreads.book_history("NSE_FNO:62539","2026-11-23")
+        self.assertEqual(verified["count"],2)
+        self.assertGreaterEqual(verified["rejected_or_not_auto_dhan"],1)
         self.assertEqual(spreads.book_history(
             "NSE_FNO:62539","2026-11-24")["count"],0)
         minimal=spreads.book_history(
