@@ -2,6 +2,7 @@ import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Activity,ArrowRight,BarChart3,BookOpen,Database,Info,
   Layers3,RefreshCw,ShieldCheck,SlidersHorizontal,TrendingUp} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
+import SpreadOpportunityScanner,{type BrokerProfile} from './SpreadOpportunityScanner'
 import './liquidity-spreads.css'
 
 type PageTab='live'|'execution'|'history'|'lab'
@@ -34,8 +35,13 @@ type Books={identity:string;day_ist:string;count:number;books:Book[]
   sampled_books_not_continuous:boolean;notice:string}
 type SideFill={fillable:boolean;missing_units:number;observed_units:number
   vwap:number|null;premium_turnover:number|null;levels_used:number}
+type FeeLeg={brokerage:number;exchange_indicative:number;sebi:number;gst:number
+  stt_sell:number;stamp_buy:number;premium_turnover:number;fees_total:number
+  cash_debit?:number;cash_credit?:number}
 type Fees={brokerage:number;exchange_indicative:number;sebi:number;gst:number
   stt_sell:number;stamp_buy:number;total_estimated:number
+  buy_leg:FeeLeg;sell_leg:FeeLeg;broker_profile:BrokerProfile
+  broker_profile_name:string
   additional_charges_excluded:boolean;assumptions:string;version:string}
 type Marketable={gross_inr:number|null;fees:Fees|null
   estimated_net_inr:number|null;status:string;fills_observed:boolean}
@@ -179,6 +185,12 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
   const [lots,setLots]=useState(3)
   const [orders,setOrders]=useState(1)
   const [brokerage,setBrokerage]=useState(20)
+  const [brokerProfile,setBrokerProfile]=useState<BrokerProfile>('zerodha')
+  const changeBroker=useCallback((profile:BrokerProfile)=>{
+    setBrokerProfile(profile)
+    setBrokerage(profile==='zerodha_debit_balance'?40:20)
+    setSim(null);setResearch(null)
+  },[])
   const [adverseBps,setAdverseBps]=useState(25)
   const [sim,setSim]=useState<SimResult|null>(null)
   const [research,setResearch]=useState<Research|null>(null)
@@ -236,6 +248,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
           ...(current?{received_utc:current.received_utc}:{}),
           executed_orders_per_side:orders,
           brokerage_inr:brokerage,adverse_move_bps:adverseBps,
+          broker_profile:brokerProfile,
         }))
     }catch(e){setError(readableError(e))}
     finally{setRunning(false)}
@@ -247,7 +260,8 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
       setResearch(await marketApi<Research>(
         '/api/trading-cockpit/liquidity/research?'+
         new URLSearchParams({identity:selected,day,
-          lots:String(lots),adverse_move_bps:String(adverseBps),limit:'300'})))
+          lots:String(lots),adverse_move_bps:String(adverseBps),limit:'300',
+          broker_profile:brokerProfile})))
     }catch(e){setError(readableError(e))}
     finally{setRunning(false)}
   }
@@ -305,6 +319,15 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
         onChange={e=>setDay(e.target.value)}/></label>
     </div>
     {tab==='live'&&<div className="lq-section" role="tabpanel" aria-label="Live Spread Monitor">
+      <SpreadOpportunityScanner day={day} expiry={expiry} side={side}
+        search={search} brokerProfile={brokerProfile}
+        onBrokerProfileChange={changeBroker}
+        onInspect={(identity,chosenLots,profile)=>{
+          setSelected(identity)
+          setLots(chosenLots)
+          changeBroker(profile)
+          setBookList(null);setBookIndex(-1);setTab('execution')
+        }}/>
       <div className="lq-section-title"><div><strong>Source-backed bid / ask watchlist</strong>
         <small>{num(filtered.length)} selected contracts. Latest *saved* depth may lag
           current source packets; stale rows are always identified.</small></div>
@@ -400,6 +423,8 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
       <div className="lq-form">
         <label>Selected source contract<select value={selected}
           onChange={e=>setSelected(e.target.value)}>
+          {selected&&!overview?.rows.some(r=>r.identity===selected)&&
+            <option value={selected}>Saved depth {selected}</option>}
           {overview?.rows.map(r=><option key={r.identity} value={r.identity}>
             {r.option_type} {num(r.strike)} · {r.expiry} · {r.identity}
           </option>)}</select></label>
@@ -408,6 +433,12 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
         <label>Executed orders per side<input type="number" min="1" max="20"
           value={orders} onChange={e=>setOrders(Math.max(1,
             Math.min(20,Number(e.target.value)||1)))}/></label>
+        <label>Broker charges<select value={brokerProfile}
+          onChange={e=>changeBroker(e.target.value as BrokerProfile)}>
+          <option value="zerodha">Zerodha regular retail</option>
+          <option value="zerodha_debit_balance">Zerodha special ₹40/order</option>
+          <option value="dhan">Dhan retail</option>
+        </select></label>
         <label>Brokerage ₹/executed order<input type="number" min="0" max="1000"
           value={brokerage} onChange={e=>setBrokerage(Math.max(0,
             Math.min(1000,Number(e.target.value)||0)))}/></label>
@@ -466,6 +497,38 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
             .map(([k,v])=><div key={k}><span>{k.replaceAll('_',' ')}</span>
               <strong>{money(Number(v))}</strong></div>)}
         </div>
+        <details className="lq-transaction-ledger">
+          <summary>Estimated transaction-by-transaction cash movements · {brokerProfile}</summary>
+          <div className="lq-transaction-grid">
+            <div><strong>1 · Hypothetical buy at bid</strong>
+              <span>Premium paid: {money(sim.assumptions.passive_capture_upper_bound.fees.buy_leg.premium_turnover)}</span>
+              <span>Brokerage: {money(sim.assumptions.passive_capture_upper_bound.fees.buy_leg.brokerage)}</span>
+              <span>Exchange + SEBI: {money(
+                sim.assumptions.passive_capture_upper_bound.fees.buy_leg.exchange_indicative+
+                sim.assumptions.passive_capture_upper_bound.fees.buy_leg.sebi)}</span>
+              <span>GST: {money(sim.assumptions.passive_capture_upper_bound.fees.buy_leg.gst)}</span>
+              <span>Stamp duty: {money(sim.assumptions.passive_capture_upper_bound.fees.buy_leg.stamp_buy)}</span>
+              <strong>Total cash debit: {money(
+                sim.assumptions.passive_capture_upper_bound.fees.buy_leg.cash_debit)}</strong>
+            </div>
+            <div><strong>2 · Hypothetical sell at ask</strong>
+              <span>Premium proceeds: {money(sim.assumptions.passive_capture_upper_bound.fees.sell_leg.premium_turnover)}</span>
+              <span>Brokerage: {money(sim.assumptions.passive_capture_upper_bound.fees.sell_leg.brokerage)}</span>
+              <span>Exchange + SEBI: {money(
+                sim.assumptions.passive_capture_upper_bound.fees.sell_leg.exchange_indicative+
+                sim.assumptions.passive_capture_upper_bound.fees.sell_leg.sebi)}</span>
+              <span>GST: {money(sim.assumptions.passive_capture_upper_bound.fees.sell_leg.gst)}</span>
+              <span>STT: {money(sim.assumptions.passive_capture_upper_bound.fees.sell_leg.stt_sell)}</span>
+              <strong>Net cash credit: {money(
+                sim.assumptions.passive_capture_upper_bound.fees.sell_leg.cash_credit)}</strong>
+            </div>
+          </div>
+          <p>Net after both *hypothetical* fills: {
+            money(sim.assumptions.passive_capture_upper_bound.upper_bound_net_inr_before_unmodelled_costs)
+          }. Marketable orders instead pay the ask and receive the bid; see
+            the marketable net above. Neither scenario is a real Zerodha
+            contract note or confirmed execution.</p>
+        </details>
         <p className="lq-disclaimer">{sim.assumptions.passive_capture_upper_bound.caveat}
           {' '}{sim.assumptions.passive_capture_upper_bound.fees.assumptions}</p>
       </div>}
@@ -530,6 +593,12 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
           The lab deliberately reports those metrics as unavailable.</span>
       </div>
       <div className="lq-form">
+        <label>Broker fees<select value={brokerProfile}
+          onChange={e=>changeBroker(e.target.value as BrokerProfile)}>
+          <option value="zerodha">Zerodha standard</option>
+          <option value="zerodha_debit_balance">Zerodha special ₹40/order</option>
+          <option value="dhan">Dhan</option>
+        </select></label>
         <label>Lots<input type="number" min="1" max="10" value={lots}
           onChange={e=>setLots(Math.max(1,Math.min(10,Number(e.target.value)||1)))}/></label>
         <label>Adverse price move stress (bps)<input type="number" min="0" max="1000"
