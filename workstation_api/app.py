@@ -1232,6 +1232,7 @@ def liquidity_spreads_scan(
     max_lots: int = 10,
     executed_orders_per_side: int = 1,
     adverse_move_bps: float = 25,
+    exit_slippage_bps: float = 10,
 ):
     """Automatic read-only scan of every original saved 20-level instrument.
 
@@ -1243,7 +1244,8 @@ def liquidity_spreads_scan(
             day=day, broker_profile=broker_profile,
             capital_inr=capital_inr, max_lots=max_lots,
             executed_orders_per_side=executed_orders_per_side,
-            adverse_move_bps=adverse_move_bps)
+            adverse_move_bps=adverse_move_bps,
+            exit_slippage_bps=exit_slippage_bps)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
