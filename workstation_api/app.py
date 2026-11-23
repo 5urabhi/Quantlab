@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, recorded_chain_model_quotes, pit_index, service, shared_market_data, research_library, research_insights, source_anomalies, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, auto_option_chain, full_option_feed, liquidity_spreads, spread_scanner, trading_acceptance, strategy_lab, python_strategy_sandbox
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, recorded_chain_model_quotes, pit_index, service, shared_market_data, research_library, research_insights, source_anomalies, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, auto_option_chain, full_option_feed, liquidity_spreads, spread_scanner, option_spread_studio, trading_acceptance, strategy_lab, python_strategy_sandbox
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -1232,6 +1232,7 @@ def liquidity_spreads_scan(
     max_lots: int = 10,
     executed_orders_per_side: int = 1,
     adverse_move_bps: float = 25,
+    exit_slippage_bps: float = 10,
 ):
     """Automatic read-only scan of every original saved 20-level instrument.
 
@@ -1243,7 +1244,55 @@ def liquidity_spreads_scan(
             day=day, broker_profile=broker_profile,
             capital_inr=capital_inr, max_lots=max_lots,
             executed_orders_per_side=executed_orders_per_side,
-            adverse_move_bps=adverse_move_bps)
+            adverse_move_bps=adverse_move_bps,
+            exit_slippage_bps=exit_slippage_bps)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+class DefinedRiskOptionSpreadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    day: str | None = None
+    strategy: Literal[
+        "bull_call_debit", "bear_put_debit", "bull_put_credit",
+        "bear_call_credit", "iron_condor", "iron_butterfly"]
+    identities: list[str] = Field(min_length=2, max_length=4)
+    lots: int = Field(default=1, ge=1, le=10)
+    broker_profile: Literal[
+        "zerodha", "zerodha_debit_balance", "dhan"] = "zerodha"
+    max_quote_skew_seconds: float = Field(default=10, ge=0, le=120)
+
+
+@app.get("/api/trading-cockpit/spreads/multileg/scan")
+def scan_defined_risk_spreads(
+    day: str | None = None,
+    capital_inr: float = 50000,
+    broker_profile: Literal[
+        "zerodha", "zerodha_debit_balance", "dhan"] = "zerodha",
+    max_lots: int = 5, max_quote_skew_seconds: float = 10,
+    max_source_age_seconds: float = 60, limit: int = 100,
+):
+    """Auto-rank debit/credit/neutral spreads using saved depth only."""
+    try:
+        return option_spread_studio.scan(
+            day=day, capital_inr=capital_inr,
+            broker_profile=broker_profile, max_lots=max_lots,
+            max_quote_skew_seconds=max_quote_skew_seconds,
+            max_source_age_seconds=max_source_age_seconds,
+            limit=limit)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/spreads/multileg/evaluate")
+def evaluate_defined_risk_spread(body: DefinedRiskOptionSpreadRequest):
+    """Optional exact-leg builder; never calls Zerodha to place orders."""
+    try:
+        return option_spread_studio.build(
+            day=body.day, strategy=body.strategy,
+            identities=body.identities, lots=body.lots,
+            broker_profile=body.broker_profile,
+            max_quote_skew_seconds=body.max_quote_skew_seconds)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 

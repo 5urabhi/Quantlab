@@ -3,9 +3,10 @@ import {Activity,ArrowRight,BarChart3,BookOpen,Database,Info,
   Layers3,RefreshCw,ShieldCheck,SlidersHorizontal,TrendingUp} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import SpreadOpportunityScanner,{type BrokerProfile} from './SpreadOpportunityScanner'
+import MultiLegSpreadStudio from './MultiLegSpreadStudio'
 import './liquidity-spreads.css'
 
-type PageTab='live'|'execution'|'history'|'lab'
+type PageTab='live'|'multileg'|'execution'|'history'|'lab'
 type Row={
   identity:string;expiry:string;strike:number;option_type:'CE'|'PE'
   lot_size:number;coverage_role:string;best_bid:number|null
@@ -100,7 +101,8 @@ const todayIST=()=>new Intl.DateTimeFormat('sv-SE',{
   timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'
 }).format(new Date())
 const tabs:{id:PageTab;name:string;caption:string;icon:typeof Activity}[]=[
-  {id:'live',name:'Live Spread Monitor',caption:'Source books & comparisons',icon:Activity},
+  {id:'live',name:'Live Spread Monitor',caption:'Bid–ask capture & automatic ranking',icon:Activity},
+  {id:'multileg',name:'Multi-Leg Option Spreads',caption:'Auto discover, build, payoff',icon:Layers3},
   {id:'execution',name:'Execution Simulator',caption:'Depth-weighted cost estimates',icon:SlidersHorizontal},
   {id:'history',name:'Historical Spread Analysis',caption:'Original saved book timeline',icon:BarChart3},
   {id:'lab',name:'Spread Strategy Lab',caption:'Unexecuted research bounds',icon:TrendingUp},
@@ -219,6 +221,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
   const [buyProbability,setBuyProbability]=useState(50)
   const [sellProbability,setSellProbability]=useState(50)
   const [sim,setSim]=useState<SimResult|null>(null)
+  const [autoSimAfterInspect,setAutoSimAfterInspect]=useState(false)
   const [research,setResearch]=useState<Research|null>(null)
   const [running,setRunning]=useState(false)
   const refresh=useCallback(async()=>{
@@ -283,6 +286,13 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
     }catch(e){setError(readableError(e))}
     finally{setRunning(false)}
   }
+  useEffect(()=>{
+    if(autoSimAfterInspect&&!bookBusy&&!running&&tab==='execution'&&
+      bookList?.identity===selected&&current?.identity===selected){
+      setAutoSimAfterInspect(false)
+      void runSimulation()
+    }
+  },[autoSimAfterInspect,bookBusy,bookList,selected,current,tab,running])
   const runResearch=async()=>{
     if(!selected)return
     setRunning(true);setError('');setResearch(null)
@@ -299,8 +309,10 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
     <div className="lq-intro">
       <div><span className="lq-eyebrow">DHAN ONLY · BANKNIFTY MARKET MICROSTRUCTURE</span>
         <h2>Liquidity &amp; Spreads</h2>
-        <p>One research home for actual option spreads, original 20-level books,
-          execution costs and unexecuted passive spread scenarios.</p></div>
+        <p>Two automated spread engines: <strong>bid–ask liquidity capture</strong>
+          and <strong>multi-leg option structures</strong>. Both rank source-verified
+          opportunities, model broker costs and make risk inspectable.
+          No manual contract selection is required for discovery.</p></div>
       <div className="lq-actions">
         <span className={'lq-status '+(overview?.connected?'online':'offline')}>
           <Activity size={15}/>{overview?.connected?'Dhan depth connected':'Saved-data mode'}
@@ -356,7 +368,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
           setSelected(identity)
           setLots(chosenLots)
           changeBroker(profile)
-          setBookList(null);setBookIndex(-1);setTab('execution')
+          setBookIndex(-1);setAutoSimAfterInspect(true);setTab('execution')
         }}/>
       <div className="lq-section-title"><div><strong>Source-backed bid / ask watchlist</strong>
         <small>{num(filtered.length)} selected contracts. Latest *saved* depth may lag
@@ -443,6 +455,11 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
         </div>
       </div>
       {current&&<BookView book={current} lots={lots}/>}
+    </div>}
+    {tab==='multileg'&&<div className="lq-section" role="tabpanel"
+      aria-label="Multi-Leg Option Spreads">
+      <MultiLegSpreadStudio day={day} expiry={expiry}
+        brokerProfile={brokerProfile} onBrokerProfileChange={changeBroker}/>
     </div>}
     {tab==='execution'&&<section className="lq-section" role="tabpanel"
       aria-label="Execution Simulator">

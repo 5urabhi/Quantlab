@@ -75,13 +75,18 @@ def _original_book(identity: str, received: str, raw: str, digest: str):
 
 
 def _lot_outcomes(book: dict, stats: dict, budget: float, max_lots: int,
-                  profile: str, orders: int, adverse_bps: float):
+                  profile: str, orders: int, adverse_bps: float,
+                  exit_slippage_bps: float = 10.0):
     eligible = []
     trace = []
     for lots in range(1, max_lots + 1):
         calc = spreads.scenario(
             book, lots=lots, executed_orders_per_side=orders,
             adverse_move_bps=adverse_bps, broker_profile=profile)
+        risk = spreads.execution_risk(
+            book, calc, executed_orders_per_side=orders,
+            broker_profile=profile, adverse_move_bps=adverse_bps,
+            exit_slippage_bps=exit_slippage_bps)
         passive = calc["passive_capture_upper_bound"]
         market = calc["marketable_roundtrip"]
         fees = passive["fees"]
@@ -108,6 +113,11 @@ def _lot_outcomes(book: dict, stats: dict, budget: float, max_lots: int,
             "passive_stressed_upper_net_inr": passive[
                 "after_adverse_move_stress_inr"],
             "marketable_net_inr": market["estimated_net_inr"],
+            "failed_exit_net_inr": risk[
+                "buy_fills_sell_misses_forced_exit_net_inr"],
+            "break_even_exit_fill_probability": risk[
+                "break_even_sell_fill_probability_given_buy"],
+            "execution_risk_status": risk["status"],
             "marketable_buy_cash_debit_inr": (
                 market["fees"]["buy_leg"]["cash_debit"]
                 if market.get("fees") else None),
@@ -125,16 +135,22 @@ def _lot_outcomes(book: dict, stats: dict, budget: float, max_lots: int,
             eligible.append(trace[-1])
     if not eligible:
         return trace, None
-    # Automatically evaluate 1..N, select highest stressed upper bound.
-    # Not a recommendation to trade or evidence of actual fills.
+    # Optimize conditional surplus per rupee of entry capital and the
+    # break-even exit-fill hurdle, not the largest absolute quoted spread.
+    # These are *structural* heuristics, never observed fill probabilities.
     best = max(eligible, key=lambda row: (
-        row["passive_stressed_upper_net_inr"], -row["lots"]))
+        row["passive_stressed_upper_net_inr"] /
+        max(1.0, row["capital_required_inr"]),
+        -(row["break_even_exit_fill_probability"] if
+          row["break_even_exit_fill_probability"] is not None else 1),
+        -row["lots"]))
     return trace, best
 
 
 def scan(*, day: str | None = None, broker_profile: str = "zerodha",
          capital_inr: float = 50000.0, max_lots: int = 10,
-         executed_orders_per_side: int = 1, adverse_move_bps: float = 25.0):
+         executed_orders_per_side: int = 1, adverse_move_bps: float = 25.0,
+         exit_slippage_bps: float = 10.0):
     """Rank ALL saved depth-bearing identities, not just nearest 200 slots.
 
     The archive can include prior 20-level rotation identities. Dhan's
@@ -157,6 +173,10 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             or not 0 <= adverse_move_bps <= 1000):
         raise ValueError("Choose an adverse-move stress of 0–1000 bps")
 
+    if not isinstance(exit_slippage_bps, (int, float)) or (
+            not isfinite(exit_slippage_bps) or
+            not 0 <= exit_slippage_bps <= 1000):
+        raise ValueError("Exit slippage must be 0–1000 bps")
     selected_day, source_rows, scan_limited = _last_books_on_date(day)
     now = datetime.now(timezone.utc)
     outcomes = []
@@ -166,6 +186,7 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
         "positive_stressed_upper_bounds": 0, "negative_stressed_upper_bounds": 0,
         "positive_even_without_stress": 0, "negative_even_optimistic": 0,
         "no_feasible_lots": 0, "recent_saved_books_60s": 0,
+        "source_fresh_risk_screened": 0,
     }
     for identity, received_utc, json_blob, packet_digest in source_rows:
         validated = _original_book(
@@ -186,7 +207,8 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             counters["recent_saved_books_60s"] += 1
         trace, best = _lot_outcomes(
             original, stats, capital_inr, max_lots,
-            broker_profile, executed_orders_per_side, adverse_move_bps)
+            broker_profile, executed_orders_per_side, adverse_move_bps,
+            exit_slippage_bps)
         if best is None:
             counters["no_feasible_lots"] += 1
         else:
@@ -199,6 +221,22 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
                 counters["positive_even_without_stress"] += 1
             else:
                 counters["negative_even_optimistic"] += 1
+        hurdle = best["break_even_exit_fill_probability"] if best else None
+        quote_age_ok = fresh and isinstance(features.get("expiry"), str) and (
+            features["expiry"] >= now.astimezone(spreads.IST).date().isoformat())
+        screened = bool(best and quote_age_ok and
+                        best["passive_stressed_upper_net_inr"] > 0 and
+                        hurdle is not None and 0 <= hurdle <= 0.75)
+        if screened:
+            counters["source_fresh_risk_screened"] += 1
+        score = None
+        if screened:
+            ratio = best["passive_stressed_upper_net_inr"] / max(
+                1.0, best["capital_required_inr"])
+            score = round(max(0., min(100.,
+                (1 - hurdle) * 60 +
+                max(-10., min(25., ratio * 1000)) +
+                max(0., 15 - stats["spread_bps"] / 200))), 2)
         # For unavailable lots we still expose truthful source quote data,
         # but not a fabricated P&L ranking.
         result = {
@@ -236,6 +274,18 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             "estimated_total_fees_inr": (
                 best["total_fees_inr"] if best else None),
             "lot_scenarios": trace,
+            "risk_screen_score": score,
+            "source_fresh_risk_screened": screened,
+            "break_even_sell_fill_given_buy": hurdle,
+            "failed_exit_net_inr": (
+                best["failed_exit_net_inr"] if best else None),
+            "risk_screen_reason": (
+                "MISSING_BUDGET_OR_DEPTH" if best is None else
+                "STALE_OR_EXPIRED_SOURCE" if not quote_age_ok else
+                "NO_POSITIVE_STRESSED_BOUND" if best[
+                    "passive_stressed_upper_net_inr"] <= 0 else
+                "UNKNOWN_OR_HIGH_EXIT_HURDLE" if not screened else
+                "RESEARCH_ONLY_NO_CALIBRATED_FILLS"),
             "classification": (
                 "NO_AFFORDABLE_VERIFIED_DEPTH" if best is None
                 else "POSITIVE_HYPOTHETICAL_STRESS_BOUND"
@@ -247,8 +297,11 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             "read_only": True,
         }
         outcomes.append(result)
-    # Default display order: positives first; none are guaranteed profits.
+    # Rank source-fresh, risk-screened research first; never sort stale
+    # inflated theoretical spread capture ahead of evidence quality.
     outcomes.sort(key=lambda row: (
+        not row["source_fresh_risk_screened"],
+        -(row["risk_screen_score"] or 0),
         row["passive_stressed_upper_net_inr"] is None,
         -(row["passive_stressed_upper_net_inr"] or 0),
         row["identity"],
@@ -261,6 +314,7 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
         "capital_inr": capital_inr, "max_lots": max_lots,
         "executed_orders_per_side": executed_orders_per_side,
         "adverse_move_bps": adverse_move_bps,
+        "exit_slippage_bps": exit_slippage_bps,
         "original_depth_contracts_found": len(source_rows),
         "source_scan_truncated": scan_limited,
         "invalid_or_nonoriginal_books": rejected_original,
@@ -271,7 +325,11 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
         "fills_observed": False,
         "net_realized_profit_inr": None,
         "source": "Dhan original 20-level saved depth books (not all Quote/OI subscriptions)",
-        "warning": "POSITIVE is only an optimistic conditional two-passive-fill "
+        "warning": "Research priority is an explainable heuristic based on "
+                   "capital-normalized two-fill bounds, stressed failed-exit "
+                   "loss and required conditional sell-fill hurdle. It is "
+                   "NOT a calibrated profit forecast. POSITIVE is only an "
+                   "optimistic conditional two-passive-fill "
                    "upper bound after estimated charges and stress, NOT an "
                    "observed trade or expected profit. No exchange queue or "
                    "future price path is observable from this static book. "
