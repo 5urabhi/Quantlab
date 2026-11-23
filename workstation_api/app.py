@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from index_research.dhan_data import (
     MASTER_URL, Instrument, build_monthly_close, download_candles, save_download,
 )
-from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, recorded_chain_model_quotes, pit_index, service, shared_market_data, research_library, research_insights, source_anomalies, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, auto_option_chain, trading_acceptance, strategy_lab, python_strategy_sandbox
+from . import dhan_auth, dhan_benchmark, dhan_workspace, model_data_manager, model_lab, model_registry, option_quotes, model_readiness, model_input_selector, dhan_option_chain, recorded_chain_model_quotes, pit_index, service, shared_market_data, research_library, research_insights, source_anomalies, research_advanced, project_bundles, research_integrity, dhan_live_verification, research_learning, research_next, active_risk_lab, research_publication, result_evidence, research_assistant, selection_diagnostics, evidence_bundle, source_inventory, historical_readiness, frozen_study, corporate_action_import, job_recovery, source_completion, nse_source_automation, nse_mcp_workspace, data_orchestrator, data_acquisition, database_inspector, columnar_cache, compatible_sources, intraday_parquet, market_depth, research_acceptance, research_workflow, zerodha_fallback, real_data_acceptance, job_safety, operational_health, market_data_workflow, batch_secondary_recovery, market_library, trading_cockpit, cockpit_sources, manual_trade_journal, live_market, option_chain_live, expired_options_backtest, auto_option_depth, auto_option_chain, full_option_feed, trading_acceptance, strategy_lab, python_strategy_sandbox
 
 load_dotenv(service.ROOT / ".env", override=False)
 # Explicit terminal sink for QuantLab diagnostics. It logs operation names,
@@ -1151,7 +1151,9 @@ def banknifty_auto_depth_arm(body: BankNiftyAutoDepthRequest):
             body.model_dump(exclude={"confirm_live_data"}),
             confirm_live_data=body.confirm_live_data)
         auto_option_chain.resume_if_armed()
-        return {**armed, "option_chain_capture": auto_option_chain.status()}
+        full_option_feed.resume_if_armed()
+        return {**armed, "option_chain_capture": auto_option_chain.status(),
+                "full_option_feed": full_option_feed.status()}
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
@@ -1161,7 +1163,9 @@ def banknifty_auto_depth_disarm():
     try:
         result = auto_option_depth.disarm()
         auto_option_chain.disarmed()
-        return {**result, "option_chain_capture": auto_option_chain.status()}
+        full_option_feed.disarmed()
+        return {**result, "option_chain_capture": auto_option_chain.status(),
+                "full_option_feed": full_option_feed.status()}
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
@@ -1170,6 +1174,35 @@ def banknifty_auto_depth_disarm():
 def banknifty_auto_chain_status():
     """Safe local-only capture counts; no additional Dhan API requests."""
     return auto_option_chain.status()
+
+
+@app.get("/api/trading-cockpit/option-feed/status")
+def banknifty_full_option_feed_status():
+    """No network call: local source receipt counters, never broker tokens."""
+    return full_option_feed.status()
+
+
+@app.get("/api/trading-cockpit/option-feed/opportunities")
+def banknifty_full_option_feed_opportunities(limit: int = 25):
+    return {"candidates": full_option_feed.ranked_opportunities(limit),
+            "basis": "observed_Dhan_trade_price_movement_not_trade_advice",
+            "read_only": True}
+
+
+@app.get("/api/trading-cockpit/option-feed/contracts")
+def banknifty_full_option_feed_contracts(offset: int = 0, limit: int = 100):
+    try:
+        return full_option_feed.contracts_page(offset, limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/option-feed/history")
+def banknifty_full_option_feed_history(identity: str, limit: int = 250):
+    try:
+        return full_option_feed.saved_history(identity, limit)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
 
 
 @app.get("/api/data-manager/depth/catalog")
@@ -2881,6 +2914,7 @@ def market_data_connect_dhan(body: DhanLocalConnect):
         # immediately (or queue them for NSE hours); no Arm click is required.
         auto_option_depth.resume_if_armed()
         auto_option_chain.resume_if_armed()
+        full_option_feed.resume_if_armed()
         return {**verified, "automatic_recording": auto_option_depth.status()["armed"]}
     except Exception as exc:
         bad(exc)
@@ -3843,6 +3877,7 @@ def resume_user_armed_banknifty_depth():
     try:
         auto_option_depth.resume_if_armed()
         auto_option_chain.resume_if_armed()
+        full_option_feed.resume_if_armed()
     except (ValueError, OSError, sqlite3.Error):
         LOG.warning("Previously armed automatic depth recorder could not resume")
 
@@ -3851,6 +3886,7 @@ def resume_user_armed_banknifty_depth():
 def suspend_banknifty_depth_on_local_shutdown():
     auto_option_depth.suspend_for_shutdown()
     auto_option_chain.suspend_for_shutdown()
+    full_option_feed.suspend_for_shutdown()
 
 
 # Missing or interrupted SHARED DERIVED VIEW publications are repaired at startup
