@@ -152,10 +152,10 @@ export default function SpreadOpportunityScanner({
   return <section className="sos-workspace" aria-label="Automatic spread profit and loss scanner">
     <div className="sos-title">
       <div><span className="sos-overline"><ArrowDownUp size={13}/> AUTO-EVALUATE SAVED DHAN BOOKS</span>
-        <h3>Spread P&amp;L Opportunity Scanner</h3>
+        <h3>Spread Execution Feasibility Scanner</h3>
         <p>Automatically test 1–{maxLots} lots for every source-validated
           saved option order book, under your capital budget. All net results
-          below are <strong>conditional estimates, not trades or recommendations.</strong></p>
+          below are <strong>conditional bounds, not forecasts of trade profit.</strong></p>
       </div>
       <button type="button" onClick={()=>setRefreshToken(v=>v+1)}
         disabled={busy}><RefreshCw size={14}/>{busy?'Scanning…':'Refresh scan'}</button>
@@ -198,14 +198,14 @@ export default function SpreadOpportunityScanner({
       <label>Show outcomes
         <select value={verdict} onChange={e=>setVerdict(e.target.value as Verdict)}>
           <option value="all">All evaluated / unavailable</option>
-          <option value="positive">Positive *hypothetical* after stress</option>
-          <option value="negative">Negative after stress</option>
+          <option value="positive">Positive conditional bounds (not profits)</option>
+          <option value="negative">Nonpositive conditional bounds</option>
           <option value="blocked">No affordable verified-depth lot</option>
         </select>
       </label>
       <label>Sort by
         <select value={sort} onChange={e=>setSort(e.target.value as SortKey)}>
-          <option value="stressed">Passive upper net after stress</option>
+          <option value="stressed">Conditional upper net after stress</option>
           <option value="optimistic">Optimistic passive upper net</option>
           <option value="marketable">Marketable round-trip estimate</option>
           <option value="spread">Quoted spread (bps)</option>
@@ -238,7 +238,7 @@ export default function SpreadOpportunityScanner({
         n(data.invalid_or_nonoriginal_books)+'.':''}
     </p>
     <div className="sos-warning"><ShieldAlert size={16}/>
-      <span><strong>Green means positive only if both passive orders fill.</strong>
+      <span><strong>Yellow/amber means conditional spread opportunity, not estimated earnings.</strong>
         No fill probability or realized profit is observed. Large quoted spreads
         may be illiquid or stale. Dhan Quote/OI covers more contracts than
         the 20-level depth that is required to evaluate execution.
@@ -249,8 +249,8 @@ export default function SpreadOpportunityScanner({
         <th>Source contract</th><th>Bid / ask</th><th>Spread</th>
         <th>Best modeled lots</th><th>Capital required</th>
         <th>Buy fees / Sell fees</th>
-        <th>Marketable net</th><th>Passive upper net</th>
-        <th>After stress</th><th>Source age</th><th/>
+        <th>Marketable net</th><th>Conditional upper net</th>
+        <th>Conditional after stress</th><th>Source age</th><th/>
       </tr></thead>
       <tbody>
         {visible.map(row=>{
@@ -270,12 +270,12 @@ export default function SpreadOpportunityScanner({
             <td>{money(row.estimated_buy_fees_inr)} / {money(row.estimated_sell_fees_inr)}</td>
             <td className="sos-negative">{money(row.marketable_net_inr)}</td>
             <td className={row.passive_upper_net_inr!==null&&row.passive_upper_net_inr>0?
-              'sos-positive':'sos-negative'}>{money(row.passive_upper_net_inr)}</td>
+              'sos-conditional':'sos-negative'}>{money(row.passive_upper_net_inr)}</td>
             <td><span className={row.best_hypothetical_lots===null?'sos-unknown':
-                positive?'sos-positive':'sos-negative'}>
+                positive?'sos-conditional':'sos-negative'}>
               {money(row.passive_stressed_upper_net_inr)}</span>
               <small>{row.best_hypothetical_lots==null?'Budget/depth blocked':
-                positive?'Conditional positive only':'Conditional loss/negative'}</small>
+                positive?'Not a profit prediction':'Conditional loss/negative'}</small>
             </td>
             <td><span className={row.fresh_original_saved_book?'sos-fresh':'sos-older'}>
               {n(row.saved_book_age_seconds,0)}s</span><small>
@@ -322,9 +322,9 @@ export default function SpreadOpportunityScanner({
                   <small>Sell fees {money(lot.sell_fees_inr)}</small></td>
                 <td>{money(budget-lot.hypothetical_buy_cash_debit_inr+
                   lot.hypothetical_sell_cash_credit_inr)}</td>
-                <td className={lot.passive_upper_net_inr>0?'sos-positive':'sos-negative'}>
+                <td className={lot.passive_upper_net_inr>0?'sos-conditional':'sos-negative'}>
                   {money(lot.passive_upper_net_inr)}</td>
-                <td className={lot.passive_stressed_upper_net_inr>0?'sos-positive':'sos-negative'}>
+                <td className={lot.passive_stressed_upper_net_inr>0?'sos-conditional':'sos-negative'}>
                   {money(lot.passive_stressed_upper_net_inr)}</td>
                 <td>{money(lot.marketable_net_inr)}</td>
               </tr>)}</tbody></table></div>
