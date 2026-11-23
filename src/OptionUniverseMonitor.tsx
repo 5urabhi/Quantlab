@@ -14,6 +14,8 @@ type FeedState={
   unchanged_oi_packets:number;queue_depth:number
   opportunity_count:number;depth_candidate_count:number
   observed_oi_contracts:number;requested_not_yet_quoted:number
+  source_quote_delivered_contracts:number;recent_source_quote_contracts:number
+  stale_source_quote_only_contracts:number;never_received_source_quote_ids:number
   coverage_by_expiry:ExpiryCoverage[]
   last_quote_received_utc:string|null
   last_error:string|null
@@ -21,6 +23,8 @@ type FeedState={
 type ExpiryCoverage={
   expiry:string;subscribed:number;with_any_quote:number
   fresh_quote_60s:number;with_any_oi:number;oi_only:number
+  received_quote_packet_ids:number;source_quote_60s:number
+  stale_quote_packet_only:number;never_received_quote_packet:number
   never_quoted:number;activity_screen_passed_45s:number
 }
 type SourceOption={
@@ -132,8 +136,10 @@ export default function OptionUniverseMonitor(){
   const metrics=[
     ['Original listed contracts',state?.source_contracts],
     ['Requested live subscriptions',state?.requested_contracts],
-    ['Contracts with any observed trade price',state?.observed_contracts],
-    ['Live price IDs seen in last 60s',state?.recent_price_contracts],
+    ['Contracts delivering Dhan Quote packets',state?.source_quote_delivered_contracts],
+    ['Contracts with accepted trade prices',state?.observed_contracts],
+    ['Recent original trade IDs (60s)',state?.recent_price_contracts],
+    ['Quote packets received but no recent trade',state?.stale_source_quote_only_contracts],
     ['Subscribed IDs without a trade price yet',state?.requested_not_yet_quoted],
     ['Contracts with observed OI',state?.observed_oi_contracts],
     ['Original Quote / OI packets',state?nf(state.quote_packets)+' / '+nf(state.oi_packets):null],
@@ -178,17 +184,22 @@ export default function OptionUniverseMonitor(){
     {Boolean(state?.coverage_by_expiry?.length)&&<section className="ofu-expiries"
       aria-label="Original option quote and open interest coverage by expiry">
       <strong>Original price and OI coverage by expiry</strong>
-      <p className="ofu-help">These counts distinguish subscription requests from
-        market packets actually received. Options without new trades may be
-        silent or illiquid; missing quotes are not filled from snapshots.</p>
+      <p className="ofu-help">A source Quote packet can carry an old last-trade
+        timestamp. The source-packet column counts delivery, while
+        accepted-trade columns require a recent actual last trade. Options
+        without new trades may be silent or illiquid. Missing trades are
+        never filled from snapshots.</p>
       <div className="ofu-scroll"><table className="ofu-table">
         <thead><tr><th>Expiry</th><th>Subscribed</th>
-          <th>Any price observed</th><th>Price seen in 60s</th>
-          <th>OI observed</th><th>No price yet</th>
+          <th>Any Quote packet</th><th>Accepted trade price</th>
+          <th>Recent trades (60s)</th><th>Stale-trade quote only</th>
+          <th>OI observed</th><th>No trade price yet</th>
           <th>Pass source activity screen</th></tr></thead>
         <tbody>{state?.coverage_by_expiry?.map(e=><tr key={e.expiry}>
           <td>{e.expiry}</td><td>{nf(e.subscribed)}</td>
+          <td>{nf(e.received_quote_packet_ids)}</td>
           <td>{nf(e.with_any_quote)}</td><td>{nf(e.fresh_quote_60s)}</td>
+          <td>{nf(e.stale_quote_packet_only)}</td>
           <td>{nf(e.with_any_oi)}</td><td>{nf(e.never_quoted)}</td>
           <td>{nf(e.activity_screen_passed_45s)}</td></tr>)}</tbody>
       </table></div>
