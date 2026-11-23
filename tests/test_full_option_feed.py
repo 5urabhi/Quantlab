@@ -4,6 +4,7 @@ No live brokerage credentials, market requests, invented prices or orders.
 """
 from __future__ import annotations
 
+from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -165,12 +166,99 @@ class DhanFullUniverseTests(TestCase):
         rank=feed.ranked_opportunities(limit=10)
         self.assertEqual(rank[0]["identity"],selected["identity"])
         self.assertEqual(rank[0]["price"],500.)
-        self.assertGreater(rank[0]["move_5m_pct"],300.)
+        # There have been only twelve seconds of original trade history.
+        # Do NOT advertise that as a five-minute or 60-second return.
+        self.assertGreater(rank[0]["observed_change_pct"],300.)
+        self.assertIsNone(rank[0]["move_60s_pct"])
+        self.assertIsNone(rank[0]["move_5m_pct"])
+        self.assertEqual(rank[0]["observed_span_seconds"],12)
+        self.assertTrue(rank[0]["eligible_for_depth"])
         self.assertEqual(rank[0]["open_interest"],2000)
         self.assertGreaterEqual(rank[0]["score"],70)
         self.assertEqual(feed.WRITES.qsize(),4)
         self.assertEqual(feed.STATUS["unchanged_quote_packets"],1)
         self.assertEqual(feed.LATEST[selected["identity"]]["volume"],1000)
+
+    def test_observed_span_and_true_horizon_returns_are_not_conflated(self):
+        source_time=1_900_000_000
+        short=deque([
+            (source_time, source_time, 99., 100),
+            (source_time+6, source_time+6, 125., 300),
+            (source_time+12, source_time+12, 500., 1000),
+        ])
+        result=feed._opportunity(short)
+        self.assertGreater(result["observed_change_pct"], 400)
+        self.assertEqual(result["observed_span_seconds"], 12)
+        self.assertIsNone(result["move_60s_pct"])
+        self.assertIsNone(result["move_5m_pct"])
+        self.assertGreaterEqual(result["score"], 70)
+
+        full=deque([
+            (source_time+0, source_time+0, 100., 100),
+            (source_time+4, source_time+4, 102., 140),
+            (source_time+242, source_time+242, 170., 540),
+            (source_time+302, source_time+302, 180., 1000),
+        ])
+        expanded=feed._opportunity(full)
+        self.assertAlmostEqual(expanded["move_60s_pct"],5.88,places=2)
+        self.assertEqual(expanded["move_5m_pct"],80.0)
+        self.assertEqual(expanded["observed_span_seconds"],302)
+
+        # Multiple quote packets with an unchanged Dhan last-trade time
+        # must not be advertised as a market price impulse.
+        duplicate_time=feed._opportunity(deque([
+            (source_time, source_time, 99., 100),
+            (source_time+4, source_time, 500., 500),
+        ]))
+        self.assertEqual(duplicate_time["score"],0)
+        self.assertIsNone(duplicate_time["observed_change_pct"])
+
+    def test_all_observed_penny_movers_are_preserved_but_not_promoted(self):
+        now=datetime.now(timezone.utc).isoformat()
+        original,_=master(4)
+        ids=list(original["by_id"].values())
+        for item in ids[:2]:
+            feed.CATALOG[item["identity"]]=item
+        feed.LATEST[ids[0]["identity"]]={
+            "identity":ids[0]["identity"],"expiry":ids[0]["expiry"],
+            "price":0.95,"score":100.0,"observed_span_seconds":20,
+            "observed_change_pct":-55,"volume_increase":100000,
+            "quote_received_utc":now}
+        feed.LATEST[ids[1]["identity"]]={
+            "identity":ids[1]["identity"],"expiry":ids[1]["expiry"],
+            "price":120.0,"score":25.0,"observed_span_seconds":20,
+            "observed_change_pct":10.0,"volume_increase":900,
+            "quote_received_utc":now}
+        all_movers=feed.ranked_opportunities(10)
+        depth=feed.ranked_depth_candidates(10)
+        self.assertEqual(len(all_movers),2)
+        self.assertEqual(all_movers[0]["identity"],ids[1]["identity"])
+        self.assertFalse(all_movers[1]["eligible_for_depth"])
+        self.assertEqual([x["identity"] for x in depth],[ids[1]["identity"]])
+        # Source catalog stays intact; these are research-ranking screens,
+        # not a market-data capture restriction.
+        self.assertEqual(len(feed.CATALOG),2)
+
+    def test_expiry_coverage_distinguishes_requested_quote_and_oi_packets(self):
+        original,expiry=master(4)
+        rows=list(original["by_id"].values())
+        feed.CATALOG={item["identity"]:item for item in rows}
+        now=datetime.now(timezone.utc).isoformat()
+        feed.LATEST[rows[0]["identity"]]={
+            "quote_received_utc":now,"price":100.,"score":0}
+        feed.LATEST[rows[1]["identity"]]={
+            "oi_received_utc":now,"open_interest":1000,"score":0}
+        status=feed.status()
+        self.assertEqual(status["observed_contracts"],1)
+        self.assertEqual(status["recent_price_contracts"],1)
+        self.assertEqual(status["observed_oi_contracts"],1)
+        self.assertEqual(status["requested_not_yet_quoted"],3)
+        self.assertEqual(sum(e["subscribed"] for e in
+                             status["coverage_by_expiry"]),4)
+        self.assertEqual(sum(e["never_quoted"] for e in
+                             status["coverage_by_expiry"]),3)
+        self.assertEqual(sum(e["oi_only"] for e in
+                             status["coverage_by_expiry"]),1)
 
     def test_stale_trade_does_not_trigger_false_momentum(self):
         original,_=master(2)
