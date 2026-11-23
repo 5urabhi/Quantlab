@@ -54,8 +54,12 @@ The new Dhan-only recorder:
    Previously saved original books remain immutable.
 4. Re-reads the actual Dhan option-chain spot and source contract listing
    every **20 seconds** instead of 75 seconds, and recenters the 120 nearby
-   contracts when BANKNIFTY moves. Reconnecting sockets introduces short
-   genuine gaps; we do not imply uninterrupted depth during reconnection.
+   contracts when BANKNIFTY moves. Small spot fluctuations inside the
+   existing core's central 40% retain the current four sockets and update
+   quote metadata without losing a live subscription. The selection only
+   recenters for larger spot moves, an invalid current ID, an expiry change,
+   or the 90-second remote-strike rotation. Reconnecting sockets introduces
+   short genuine gaps; we do not imply uninterrupted depth during reconnection.
 5. Never subscribes unverified security IDs, duplicates, or more than
    **50 per socket / 200 concurrent**. Missing source-provided IDs and a
    spot outside the original listed strike range generate warnings.
