@@ -356,6 +356,8 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
     chosen, universe, evidence = _universe(day)
     activity = gate.recent_depth_receipts(
         day=chosen, window_seconds=gate.MULTILEG_POLICY["receipt_window_seconds"])
+    trades = gate.recent_trade_activity(
+        day=chosen, window_seconds=gate.MULTILEG_POLICY["receipt_window_seconds"])
     now = datetime.now(timezone.utc)
     today = now.astimezone(liquidity.IST).date().isoformat()
     groups = defaultdict(lambda: {"CE": [], "PE": []})
@@ -438,7 +440,8 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
         choice["risk_budget_proxy_pass"] = True
         choice["structural_reward_risk_score"] = score
         assessment = gate.multileg_feasibility(
-            choice, books=books, capital_inr=capital_inr, receipts=activity)
+            choice, books=books, capital_inr=capital_inr, receipts=activity,
+            trades=trades)
         choice["feasibility"] = assessment
         choice["paper_research_qualified"] = assessment[
             "paper_research_qualified"]
@@ -546,9 +549,11 @@ def build(*, day: str | None, strategy: str, identities: list[str],
         and 0 <= age <= gate.MULTILEG_POLICY["max_age_seconds"])
     receipts = gate.recent_depth_receipts(
         day=chosen, window_seconds=gate.MULTILEG_POLICY["receipt_window_seconds"])
+    trades = gate.recent_trade_activity(
+        day=chosen, window_seconds=gate.MULTILEG_POLICY["receipt_window_seconds"])
     result["feasibility"] = gate.multileg_feasibility(
         result, books=[by_id[i] for i in identities],
-        capital_inr=capital_inr, receipts=receipts)
+        capital_inr=capital_inr, receipts=receipts, trades=trades)
     result["paper_research_qualified"] = result["feasibility"][
         "paper_research_qualified"]
     result.update({"status": "MANUAL_READ_ONLY_RESEARCH", "day_ist": chosen,
