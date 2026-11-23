@@ -692,30 +692,70 @@ def suspend_for_shutdown() -> None:
 
 def status() -> dict:
     now = _utc()
+    def recent(stamp: str | None, seconds: int) -> bool:
+        if not stamp:
+            return False
+        try:
+            age = (now - datetime.fromisoformat(stamp)).total_seconds()
+            return 0 <= age <= seconds
+        except (ValueError, TypeError):
+            return False
+
     with LOCK:
-        recent = sum(1 for item in LATEST.values()
-                     if item.get("quote_received_utc") and
-                     0 <= (now-datetime.fromisoformat(
-                         item["quote_received_utc"])).total_seconds() <= 60)
+        by_expiry: dict[str, dict] = {}
+        for identity, contract in CATALOG.items():
+            expiry = contract["expiry"]
+            row = by_expiry.setdefault(expiry, {
+                "expiry": expiry, "subscribed": 0, "with_any_quote": 0,
+                "fresh_quote_60s": 0, "with_any_oi": 0,
+                "oi_only": 0, "never_quoted": 0,
+                "activity_screen_passed_45s": 0})
+            row["subscribed"] += 1
+            item = LATEST.get(identity, {})
+            has_quote = bool(item.get("quote_received_utc"))
+            has_oi = bool(item.get("oi_received_utc"))
+            row["with_any_quote"] += int(has_quote)
+            row["fresh_quote_60s"] += int(
+                recent(item.get("quote_received_utc"), 60))
+            row["with_any_oi"] += int(has_oi)
+            row["oi_only"] += int(has_oi and not has_quote)
+            row["never_quoted"] += int(not has_quote)
+            eligible, _ = _eligible_for_depth(item)
+            row["activity_screen_passed_45s"] += int(
+                eligible and recent(item.get("quote_received_utc"), 45))
+
         snapshot = dict(STATUS)
         snapshot["observed_contracts"] = sum(
-            bool(entry.get("quote_received_utc")) for entry in LATEST.values())
-        snapshot["recent_price_contracts"] = recent
+            row["with_any_quote"] for row in by_expiry.values())
+        snapshot["recent_price_contracts"] = sum(
+            row["fresh_quote_60s"] for row in by_expiry.values())
+        snapshot["observed_oi_contracts"] = sum(
+            row["with_any_oi"] for row in by_expiry.values())
+        snapshot["requested_not_yet_quoted"] = sum(
+            row["never_quoted"] for row in by_expiry.values())
         snapshot["queue_depth"] = WRITES.qsize()
+        snapshot["coverage_by_expiry"] = sorted(
+            by_expiry.values(), key=lambda row: row["expiry"])
         snapshot["opportunity_count"] = sum(
-            item.get("score",0)>=12 and bool(item.get("quote_received_utc"))
-            and 0 <= (now-datetime.fromisoformat(
-                item["quote_received_utc"])).total_seconds() <= 45
+            item.get("score", 0) >= 12 and
+            recent(item.get("quote_received_utc"), 45)
             for item in LATEST.values())
-    return {**snapshot,"armed":_armed(),
-            "full_universe_consent":_consented(),
-            "depth_armed":bool(auto._config()["enabled"]),
-            "market_regular_hours":auto._market_open(),
-            "source":"Dhan v2 original NSE_FNO Quote(4) and OI(5) packets",
-            "read_only":True,"shared_library":"dhan_shared",
-            "continuous_20_depth_for_all":False,
-            "note":"Subscribed does not prove trades or packets for each contract; "
-                   "venue-silent options and source gaps remain explicit."}
+        snapshot["depth_candidate_count"] = sum(
+            _eligible_for_depth(item)[0] and
+            recent(item.get("quote_received_utc"), 45)
+            for item in LATEST.values())
+    return {**snapshot, "armed": _armed(),
+            "full_universe_consent": _consented(),
+            "depth_armed": bool(auto._config()["enabled"]),
+            "market_regular_hours": auto._market_open(),
+            "source": "Dhan v2 original NSE_FNO Quote(4) and OI(5) packets",
+            "read_only": True, "shared_library": "dhan_shared",
+            "continuous_20_depth_for_all": False,
+            "note": "All contracts remain subscribed and recorded. "
+                    "Dhan does not guarantee source packet emission for "
+                    "silent contracts; each expiry has separate observed "
+                    "quote and OI evidence. Price movers and candidates "
+                    "for detailed-book promotion are not identical."}
 
 
 def contracts_page(offset: int = 0, limit: int = 100) -> dict:
