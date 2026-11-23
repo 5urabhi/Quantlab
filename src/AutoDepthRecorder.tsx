@@ -293,7 +293,10 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{n(state?.depth_parser_diagnostics?.rejected_frame_count)}</strong> non-book / invalid Dhan depth frames (see reasons)</span>
       <span><strong>{n(state?.depth_parser_diagnostics?.disconnect_or_control_frames)}</strong> Dhan depth control/disconnect frames</span>
       <span><strong>{n(state?.depth_parser_diagnostics?.unsupported_response_code_frames)}</strong> unsupported depth response-code frames</span>
-      <span><strong>{n(state?.depth_parser_diagnostics?.truncated_or_wrong_size_frames)}</strong> truncated or wrong-length depth frames</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.valid_depth_stacks_above_old_cutoff)}</strong> accepted Dhan messages over 16,600 bytes (old cutoff rejected these)</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.valid_book_pairs_above_old_cutoff)}</strong> original valid bid/ask books rescued from previous batch-size rejection</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.oversized_depth_stack_frames)}</strong> oversized depth messages (over 100 half-packets)</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.truncated_or_wrong_size_frames)}</strong> malformed / truncated depth frames</span>
       <span><strong>{n(state?.depth_parser_diagnostics?.invalid_header_or_level_frames)}</strong> invalid depth headers or level values</span>
       <span><strong>{n(state?.depth_parser_diagnostics?.unpaired_time_window_count)}</strong> source bid/ask halves outside 1s pairing window</span>
       <span><strong>{n(state?.depth_parser_diagnostics?.rejected_book_pair_count)}</strong> decoded pairs rejected by original-book validation</span>

@@ -518,6 +518,11 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
             response_code = blob[2] if isinstance(blob, bytes) and len(blob) >= 3 else None
             if response_code == 50:
                 bucket = "disconnect_or_control_frames"
+            elif description == "depth feed frame exceeds safe decoded length":
+                # A correctly configured 50-ID socket may legitimately
+                # stack 100 half-books. Above 100 full-size 20-depth halves
+                # remains unsupported and must be diagnosed separately.
+                bucket = "oversized_depth_stack_frames"
             elif description.startswith("not a bid/ask"):
                 bucket = "unsupported_response_code_frames"
             elif ("truncated" in description or "size" in description
@@ -565,6 +570,15 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
     for key, (_, stamped) in list(pending.items()):
         if (received - stamped).total_seconds() > 2:
             pending.pop(key, None)
+    if diagnostics is not None and output and len(blob) > 332 * 50:
+        # Count only frames containing book pairs that passed strict
+        # per-security validation. This proves exactly how many actually
+        # usable books the old 16,600-byte cutoff would have discarded.
+        diagnostics["valid_depth_stacks_above_old_cutoff"] = (
+            diagnostics.get("valid_depth_stacks_above_old_cutoff", 0) + 1)
+        diagnostics["valid_book_pairs_above_old_cutoff"] = (
+            diagnostics.get("valid_book_pairs_above_old_cutoff", 0)
+            + len(output))
     return output
 
 
