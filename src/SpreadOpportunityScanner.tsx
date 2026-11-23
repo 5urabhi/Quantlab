@@ -231,8 +231,9 @@ export default function SpreadOpportunityScanner({
     <section className="sos-top-choices" aria-label="Automatically screened bid-ask research candidates">
       <div><strong>Automatically screened research shortlist</strong>
         <small>Strict source gate: ≤8-second books, bid ≥₹20, ≤250 bps
-          relative spread, at least 3 recent packet receipts over ≥15 seconds,
-          ≥2× top-level depth, and loss-to-zero ≤25% of your budget.
+          relative spread, ≥3 packet receipts over ≥15s, ≥2 fresh Dhan
+          exchange-trade times with ≥1 lot of cumulative volume growth,
+          ≥2× top-level depth, and loss-to-zero ≤25% of capital.
           Not a profit forecast.</small></div>
       <div className="sos-top-list">
         {(data?.rows||[]).filter(x=>x.source_fresh_risk_screened).slice(0,3)
