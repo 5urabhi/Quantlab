@@ -178,6 +178,15 @@ try{
      status:200,contentType:'application/json',body:JSON.stringify({
        status:'ORIGINAL_BOOK_SCENARIO_ONLY',identity:'NSE_FNO:62539',
        selected_book_received_utc:'2026-11-23T04:05:00+00:00',
+       future_saved_quote_markouts:[
+         {horizon_seconds:60,status:'NO_TIMELY_FUTURE_RECEIPT',
+          received_utc:null,elapsed_seconds:null,observed_exit_bid_vwap:null,
+          quote_markout_net_if_entry_filled_inr:null},
+         {horizon_seconds:300,status:'NO_TIMELY_FUTURE_RECEIPT',
+          received_utc:null,elapsed_seconds:null,observed_exit_bid_vwap:null,
+          quote_markout_net_if_entry_filled_inr:null},
+       ],
+       markout_disclaimer:'Synthetic quote paths; no observed fills.',
        assumptions:{units:90,lots:3,lot_size:30,observed_bid:249,
          observed_ask:250,spread_bps:40.08,broker_orders_sent:0,read_only:true,
          marketable_buy:{fillable:true,vwap:250,levels_used:1,
@@ -186,6 +195,23 @@ try{
            observed_units:90,missing_units:0},
          marketable_roundtrip:{gross_inr:-90,estimated_net_inr:-171,
            status:'COUNTERFACTUAL_IMMEDIATE_CROSS_THE_SPREAD',fills_observed:false},
+         execution_risk:{
+           status:'FILL_PROBABILITIES_UNKNOWN',no_buy_fill_net_inr:0,
+           both_passive_fills_net_inr:9,
+           buy_fills_sell_misses_forced_exit_net_inr:-150,
+           forced_exit_turnover_inr:22300,premium_at_risk_inr:22437.31,
+           break_even_sell_fill_probability_given_buy:.944,
+           scenario_weighted_net_inr:null,buy_fill_probability_assumed:null,
+           sell_fill_probability_given_buy_assumed:null,
+           probability_no_buy_fill:null,probability_both_fill:null,
+           probability_buy_fill_exit_fails:null,
+           adverse_move_bps_assumption:25,
+           forced_exit_slippage_bps_assumption:10,
+           recorded_bid_depth_sufficient_for_liquidation:true,
+           top_book_quantity_sufficient:true,
+           fill_probabilities_calibrated:false,realized_pnl_inr:null,
+           explanation:'Synthetic read-only fixture; no live fills.',
+         },
          passive_capture_upper_bound:{
            hypothetical_buy_at_bid:249,hypothetical_sell_at_ask:250,
            gross_inr:90,upper_bound_net_inr_before_unmodelled_costs:9,
@@ -246,6 +272,8 @@ try{
    await page.getByRole('tab',{name:/Execution Simulator/}).click()
    await page.getByRole('button',{name:/Estimate from original book/}).click()
    await page.getByText('Passive upper-bound net').waitFor()
+   await page.getByText('Execution outcome paths').waitFor()
+   await page.getByText('Buy fills, sell misses').waitFor()
    await page.getByText('No passive order fills observed.').waitFor()
    await page.getByRole('tab',{name:/Historical Spread Analysis/}).click()
    await page.getByRole('img',{name:/Source-received option spread chart/}).waitFor()
