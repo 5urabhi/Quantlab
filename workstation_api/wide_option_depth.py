@@ -384,6 +384,7 @@ def _read_socket(index: int, group: list[dict], url: str,
             with connected_lock:
                 connected.add(index)
                 auto._status_update(sockets_connected=len(connected),
+                                    connected_socket_indices=sorted(connected),
                                     connected=True,
                                     state="connected_waiting_for_packets")
             while not stop.is_set() and not abort.is_set() and auto._market_open():
@@ -396,7 +397,27 @@ def _read_socket(index: int, group: list[dict], url: str,
                 if not isinstance(raw, bytes):
                     continue
                 now = auto._now()
-                books = auto._paired_books(raw, chosen, pending, now)
+                side_observations: dict[str, set[str]] = {}
+                diagnostics: dict[str, int] = {}
+                books = auto._paired_books(
+                    raw, chosen, pending, now,
+                    observed_sides=side_observations,
+                    diagnostics=diagnostics)
+                if side_observations or diagnostics:
+                    # Only timestamps/counters: no original bids, asks,
+                    # securities outside this socket, or credentials.
+                    stamp = now.isoformat()
+                    with auto.LOCK:
+                        side_history = auto.STATE.setdefault(
+                            "observed_sides_by_contract", {})
+                        for identity, sides in side_observations.items():
+                            observed = side_history.setdefault(identity, {})
+                            for side in sides:
+                                observed[side] = stamp
+                        totals = auto.STATE.setdefault(
+                            "depth_parser_diagnostics", {})
+                        for name, count in diagnostics.items():
+                            totals[name] = totals.get(name, 0) + count
                 if not books:
                     if _stalled_socket(time.monotonic(), last_pair):
                         raise TimeoutError("No original book pairs on Dhan socket")
@@ -429,6 +450,7 @@ def _read_socket(index: int, group: list[dict], url: str,
         with connected_lock:
             connected.discard(index)
             auto._status_update(sockets_connected=len(connected),
+                                connected_socket_indices=sorted(connected),
                                 connected=bool(connected))
 
 
@@ -506,6 +528,8 @@ def run(stop: Event) -> None:
                 contracts=[], sockets_connected=0, dropped_depth_samples=0,
                 contracts_above=0, contracts_below=0, last_error=None,
                 observed_by_contract={}, socket_last_paired_utc={},
+                observed_sides_by_contract={}, depth_parser_diagnostics={},
+                connected_socket_indices=[],
                 source_pairs_above=0, source_pairs_below=0,
                 missing_ltp_selected=0, boundary_escape_events=0,
                 last_boundary_escape_utc=None, coverage_gap_warning=None)
@@ -535,6 +559,10 @@ def run(stop: Event) -> None:
                 auto.STATE["observed_by_contract"] = {
                     key: value for key, value in
                     auto.STATE.get("observed_by_contract", {}).items()
+                    if key in active}
+                auto.STATE["observed_sides_by_contract"] = {
+                    key: value for key, value in
+                    auto.STATE.get("observed_sides_by_contract", {}).items()
                     if key in active}
                 auto.STATE["selection_events"] += 1
                 auto.STATE["last_error"] = None
@@ -628,7 +656,8 @@ def run(stop: Event) -> None:
                 abort.set()
                 for worker in workers:
                     worker.join(timeout=4)
-                auto._status_update(connected=False, sockets_connected=0)
+                auto._status_update(connected=False, sockets_connected=0,
+                                    connected_socket_indices=[])
             if source_interrupted and not stop.is_set() and auto._market_open():
                 failures += 1
                 stop.wait(min(auto.MAX_RECONNECT_DELAY_SECONDS,
