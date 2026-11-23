@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useState} from 'react'
-import {ArrowDownUp,Download,RefreshCw,Save,ShieldAlert,Trash2} from 'lucide-react'
+import {Download,RefreshCw,Save,ShieldAlert,Trash2} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import type {BrokerProfile} from './SpreadOpportunityScanner'
 import './multi-leg-spreads.css'
