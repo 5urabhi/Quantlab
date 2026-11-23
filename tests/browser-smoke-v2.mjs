@@ -236,7 +236,7 @@ try{
    await scanner.getByLabel('Sort by').selectOption('marketable')
    await scanner.getByLabel('Show outcomes').selectOption('positive')
    await scanner.getByLabel('Charge profile').selectOption('dhan')
-   await scanner.getByText('Conditional positive only').waitFor()
+   await scanner.getByText('Not a profit prediction').waitFor()
    await shot('02-spread-auto-scanner')
 
    await page.getByRole('tabpanel',{name:'Live Spread Monitor'}).waitFor()
