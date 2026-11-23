@@ -12,7 +12,7 @@ from itertools import product
 from math import isfinite
 from statistics import median
 
-from . import liquidity_spreads as liquidity, spread_scanner
+from . import liquidity_spreads as liquidity, spread_scanner, spread_execution_gate as gate
 
 STRATEGIES = {
     "bull_call_debit": {
@@ -354,6 +354,8 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
             not 0 <= max_quote_skew_seconds <= 120):
         raise ValueError("Quote skew must be 0–120 seconds")
     chosen, universe, evidence = _universe(day)
+    activity = gate.recent_depth_receipts(
+        day=chosen, window_seconds=gate.MULTILEG_POLICY["receipt_window_seconds"])
     now = datetime.now(timezone.utc)
     today = now.astimezone(liquidity.IST).date().isoformat()
     groups = defaultdict(lambda: {"CE": [], "PE": []})
@@ -403,7 +405,9 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
                 except ValueError:
                     break
             if (result["risk_capital_proxy_inr"] > 0 and
-                    result["risk_capital_proxy_inr"] <= capital_inr):
+                    result["risk_capital_proxy_inr"] <= capital_inr *
+                    gate.MULTILEG_POLICY[
+                        "max_theoretical_loss_fraction_of_budget"]):
                 choice = result
             else:
                 break
@@ -432,9 +436,18 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
         choice["source_age_seconds"] = round(age, 1)
         choice["fresh_reference"] = fresh
         choice["risk_budget_proxy_pass"] = True
-        choice["research_priority_score"] = score
-        choice["status"] = ("FRESH_RESEARCH_ONLY_MARGIN_UNVERIFIED"
-                            if fresh else "HISTORICAL_RESEARCH_ONLY")
+        choice["structural_reward_risk_score"] = score
+        assessment = gate.multileg_feasibility(
+            choice, books=books, capital_inr=capital_inr, receipts=activity)
+        choice["feasibility"] = assessment
+        choice["paper_research_qualified"] = assessment[
+            "paper_research_qualified"]
+        choice["research_priority_score"] = assessment[
+            "research_priority_score"]
+        choice["status"] = (
+            "PAPER_RESEARCH_ONLY_MARGIN_UNVERIFIED"
+            if assessment["paper_research_qualified"]
+            else "BLOCKED_BY_EXECUTION_EVIDENCE_GATE")
         choice["qualification_notes"] = [
             "All entry legs are hypothetically filled against recorded "
             "ask (BUY) / bid (SELL) depth.",
@@ -442,11 +455,15 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
             "No broker SPAN/required basket margin is available.",
             "Quote sync %ss; saved-book age %ss." % (
                 choice["quote_skew_seconds"], round(age, 1)),
+            "Execution gate: " + (
+                "SOURCE_RESEARCH_PASSED" if assessment["paper_research_qualified"]
+                else ", ".join(assessment["reasons"])),
         ]
         ranked.append(choice)
     ranked.sort(key=lambda c: (
+        not c["paper_research_qualified"],
         not c["fresh_reference"],
-        -c["research_priority_score"],
+        -(c["research_priority_score"] or 0),
         -c["risk_reward_ratio_proxy"],
         c["risk_capital_proxy_inr"], c["candidate_id"]))
     counts = Counter(row["strategy"] for row in ranked)
@@ -466,6 +483,8 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
                 "received_utc", "bid", "ask", "spread_bps")}
             for item in universe[:750]],
         "discovered_candidates": len(ranked),
+        "execution_decision": gate.decision_summary(ranked),
+        "execution_policy": dict(gate.MULTILEG_POLICY),
         "ranked_candidates": ranked[:limit],
         "returned_candidates": min(len(ranked), limit),
         "rejected_reason_counts": dict(rejections),
@@ -477,7 +496,14 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
         "broker_margin_verified": False,
         "realized_pnl_inr": None, "executed_orders": 0,
         "read_only": True,
-        "warning": "Automatic ranking is for SOURCE-BOUNDED RESEARCH, "
+        "warning": "NO TRADE: no multi-leg basket is automatically approved "
+                   "without verified broker margin, sequenced fills and "
+                   "execution probability. The negative screen rejects "
+                   "stale/asynchronous quotes, high relative spreads, "
+                   "penny legs, thin top levels, insufficient repeated "
+                   "packet receipts, excessive loss to budget and costly "
+                   "same-book crossing. Automatic ranking is for "
+                   "SOURCE-BOUNDED RESEARCH, "
                    "not most-profitable live contracts. Max profit/loss "
                    "are terminal intrinsic payoff bounds after estimated "
                    "entry charges only, excluding exercise/settlement; "
@@ -507,6 +533,20 @@ def build(*, day: str | None, strategy: str, identities: list[str],
     result = evaluate(strategy, [by_id[i] for i in identities],
                       lots=lots, broker_profile=broker_profile,
                       max_skew_seconds=max_quote_skew_seconds)
+    now = datetime.now(timezone.utc)
+    stamps = [b["stamp"] for b in [by_id[i] for i in identities]]
+    age = (now - min(stamps)).total_seconds()
+    result["source_age_seconds"] = round(age, 1)
+    result["fresh_reference"] = (
+        chosen == now.astimezone(liquidity.IST).date().isoformat()
+        and 0 <= age <= gate.MULTILEG_POLICY["max_age_seconds"])
+    receipts = gate.recent_depth_receipts(
+        day=chosen, window_seconds=gate.MULTILEG_POLICY["receipt_window_seconds"])
+    result["feasibility"] = gate.multileg_feasibility(
+        result, books=[by_id[i] for i in identities],
+        capital_inr=50000, receipts=receipts)
+    result["paper_research_qualified"] = result["feasibility"][
+        "paper_research_qualified"]
     result.update({"status": "MANUAL_READ_ONLY_RESEARCH", "day_ist": chosen,
                    "source_metadata": metadata})
     return result
