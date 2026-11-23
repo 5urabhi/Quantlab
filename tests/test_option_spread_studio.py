@@ -181,7 +181,7 @@ class OptionSpreadStudioTest(TestCase):
             "/api/trading-cockpit/spreads/multileg/evaluate",
             json={"day": "2026-11-23", "strategy": "iron_condor",
                   "identities": ["NSE_FNO:1001"], "lots": 1})
-        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.status_code, 422)
         wrong = self.client.post(
             "/api/trading-cockpit/spreads/multileg/evaluate",
             json={"day": "2026-11-23", "strategy": "bull_call_debit",
