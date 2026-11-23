@@ -103,3 +103,89 @@ still needs actual or conservatively simulated *queue-aware* fills,
 order latency, cancellation/replace events, adverse selection,
 selection bias controls, independent test periods and fully reconciled
 fees. **This module does not claim profitable trades.**
+
+
+## Automatic spread P&L scanner — Zerodha or Dhan, all saved contracts
+
+**Live Spread Monitor → Spread P&L Opportunity Scanner** automatically
+scans the latest **original saved 20-level Dhan book for each contract on
+the chosen IST date**, not just the 200 currently subscribed contracts.
+Existing rotating source books are included. **The wider 2,850 original
+Quote/OI subscriptions do not all provide bid/ask depth**; a contract
+without an original valid 20-level book is *not* assigned a synthetic
+spread or profitable mark.
+
+It tests each quantity from **1 through 10 lots**, based on the contract's
+source-verified lot size, one hypothetical buy and sell order per side
+(or a configurable count), and a configurable **long-option premium**
+budget (default ₹50,000). Only lot sizes affordable with buy-side cash
+cost and supported by both sides of the original observed top-book and
+20-level total depth qualify for the sorted stress-upper-bound column.
+Every tested lot (including over-budget or insufficient-depth scenarios)
+appears in the expanded **All lots** receipt ledger.
+
+### Sorting, filters and colors
+
+- Rank by **passive two-fill upper bound after stress**, optimistic
+  fee-adjusted upper bound, immediate marketable buy/ask-and-sell/bid net,
+  quoted spread in bps, required buy capital, observation age or strike.
+- Show **positive hypothetical**, **negative hypothetical**, blocked
+  budget/real-depth, or all contracts. CE/PE, expiry, search and original
+  IST date filters are shared with the parent Liquidity page.
+- Rows marked green represent *positive only if both passive limit
+  orders fill at their best quoted prices*. There is no actual order or
+  queue position, and no measured profit. Red marks modeled negative
+  net under the chosen stress, not an observed losing trade.
+- The ledger shows the **hypothetical cash debit after buying**, **cash
+  remaining**, **hypothetical sell credit after taxes**, and **ending
+  cash after selling**. It also shows the alternative immediately
+  marketable roundtrip net against the same source book. Rows are
+  separate counterfactuals, not sequentially compounded executions.
+- Refresh the scanner manually or it checks every 60 seconds while
+  the tab is visible. Reads only from existing local SQLite storage;
+  no extra Dhan WebSocket, no API calls to Zerodha, and no orders.
+
+### Zerodha charges and why "exact" requires a contract note
+
+Available profiles:
+- **Zerodha regular individual account**: ₹20 brokerage per executed
+  option order.
+- **Zerodha debit-balance/collateral-shortfall special case**:
+  ₹40 brokerage per executed option order when the documented
+  conditions apply.
+- **Dhan regular retail**: ₹20 brokerage per executed F&O order.
+
+These are applied with NSE option transaction charges of **0.03553%**
+on premium, SEBI turnover charges **₹10/crore**, 18% GST on brokerage,
+SEBI and exchange charges, buy-side stamp duty **0.003%**, and
+option-sale STT **0.15% on premium** effective 1 April 2026.
+Sell-side STT and buy-side stamp duty are assigned to the correct
+transaction leg, with rounding reconciled to the previous total
+fee engine. **Actual per-trade charges may differ** due to customer
+tariff/segment, rounding over aggregated orders, executed order counts,
+special balances, exchange/clearing/IPFT charges, partial fills,
+exercise/physical settlement and broker adjustments. Actual fills,
+price, quantity and **your own Zerodha contract notes** are needed for
+exact debits, credits and realized P&L.
+
+No Zerodha login or holdings access is required for the tariff-only
+profile. The trading data source remains exclusively original Dhan.
+
+Current official published references:
+- Zerodha tariff: https://zerodha.com/charges/
+- Zerodha special ₹40 scenario: https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/what-is-the-brokerage-at-zerodha-for-equity
+- NSE post-2026 STT: https://www.nseindia.in/static/products-services/equity-derivatives-securities-transaction-tax
+- Dhan fees: https://dhan.co/pricing/
+
+### Backend acceptance
+
+Read-only endpoint:
+\`GET /api/trading-cockpit/liquidity/scan?day=2026-11-23&broker_profile=zerodha&capital_inr=50000&max_lots=10&executed_orders_per_side=1&adverse_move_bps=25\`.
+
+The scanner runs one bounded daily SQLite query, checks original Dhan
+packet-pair SHA integrity and independently revalidates 20-level
+bid/ask ordering and quantities. It will evaluate at most 3,000
+original saved source IDs per scan and reports any cap. It refuses
+unverifiable books and never guesses a missing contract's bid or ask.
+The formula is a *source-book scenario*, not an out-of-sample execution
+backtest, risk-adjusted expected value, or advice to initiate a trade.
