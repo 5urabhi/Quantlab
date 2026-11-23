@@ -223,6 +223,16 @@ def _full_chain_coverage(chain: dict, selected: list[dict]) -> dict:
     }
 
 
+def _escaped_previous_range(spot: float, previous: list[dict]) -> bool:
+    """Detect observed market moves beyond already subscribed strike bounds."""
+    strikes = [float(row["strike"]) for row in previous
+               if isinstance(row, dict) and isinstance(row.get("strike"), (int, float))
+               and math.isfinite(row["strike"])]
+    return bool(strikes and isinstance(spot, (int, float))
+                and math.isfinite(spot) and
+                (spot < min(strikes) or spot > max(strikes)))
+
+
 def _coverage_diagnostics(chain: dict, selected: list[dict]) -> dict:
     """Explain source-limited ATM coverage without guessing missing options."""
     atm = selected[0]["atm_strike"] if selected else None
@@ -444,7 +454,8 @@ def run(stop: Event) -> None:
                 contracts_above=0, contracts_below=0, last_error=None,
                 observed_by_contract={}, socket_last_paired_utc={},
                 source_pairs_above=0, source_pairs_below=0,
-                missing_ltp_selected=0)
+                missing_ltp_selected=0, boundary_escape_events=0,
+                last_boundary_escape_utc=None, coverage_gap_warning=None)
         if daily_saved >= auto.MAX_DAILY_SNAPSHOTS:
             auto._status_update(state="daily_storage_limit_reached",
                                 connected=False)
@@ -513,6 +524,19 @@ def run(stop: Event) -> None:
                         rotation_step = requested_step
                         if rotate:
                             next_rotation_due = time.monotonic() + ROTATION_SECONDS
+                        with auto.LOCK:
+                            observed_spot = auto.STATE.get("chain_spot")
+                        if _escaped_previous_range(observed_spot, selected):
+                            with auto.LOCK:
+                                escaped = auto.STATE.get("boundary_escape_events", 0) + 1
+                            auto._status_update(
+                                boundary_escape_events=escaped,
+                                last_boundary_escape_utc=auto._now().isoformat(),
+                                coverage_gap_warning=(
+                                    "Actual Dhan BANKNIFTY spot moved outside "
+                                    "the preceding 20-level subscribed strike range. "
+                                    "Recenter requested; missing historic books "
+                                    "are not recoverable from REST chain quotes."))
                         if ([c["identity"] for c in updated] !=
                             [c["identity"] for c in selected] or updated_cfg != cfg):
                             previous = selected
