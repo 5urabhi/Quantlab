@@ -227,7 +227,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
         <div><strong>Market-data connections</strong>
           <small>Connect multiple providers. Each contributes only capabilities it actually supports.</small></div>
         <button type="button" className="oc-connection-button" onClick={openConnections}>
-          Manage Dhan / Zerodha <ArrowRight size={14}/></button>
+          Manage Dhan <ArrowRight size={14}/></button>
         <button type="button" className="oc-connection-button"
           aria-expanded={upstoxOpen} onClick={()=>setUpstoxOpen(v=>!v)}>
           {upstoxOpen?'Hide Upstox setup':'Connect Upstox'}</button>
