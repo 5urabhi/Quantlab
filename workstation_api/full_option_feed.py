@@ -464,8 +464,8 @@ def _ranked_candidates(limit: int, *, for_depth: bool) -> list[dict]:
                 {"eligible_for_depth": eligible, "screen_reason": reason})
             rows.append(candidate)
         return sorted(rows, key=lambda row:
-                      (-row["score"], -row["volume_increase"],
-                       row["identity"]))[:limit]
+                      (-int(row["eligible_for_depth"]), -row["score"],
+                       -row["volume_increase"], row["identity"]))[:limit]
 
 
 def ranked_opportunities(limit: int = 40) -> list[dict]:
