@@ -245,12 +245,19 @@ class DhanFullUniverseTests(TestCase):
         feed.CATALOG={item["identity"]:item for item in rows}
         now=datetime.now(timezone.utc).isoformat()
         feed.LATEST[rows[0]["identity"]]={
-            "quote_received_utc":now,"price":100.,"score":0}
+            "quote_received_utc":now,"last_quote_packet_received_utc":now,
+            "price":100.,"score":0}
         feed.LATEST[rows[1]["identity"]]={
             "oi_received_utc":now,"open_interest":1000,"score":0}
+        feed.LATEST[rows[2]["identity"]]={
+            "last_quote_packet_received_utc":now,"score":0}
         status=feed.status()
         self.assertEqual(status["observed_contracts"],1)
         self.assertEqual(status["recent_price_contracts"],1)
+        self.assertEqual(status["source_quote_delivered_contracts"],2)
+        self.assertEqual(status["recent_source_quote_contracts"],2)
+        self.assertEqual(status["stale_source_quote_only_contracts"],1)
+        self.assertEqual(status["never_received_source_quote_ids"],2)
         self.assertEqual(status["observed_oi_contracts"],1)
         self.assertEqual(status["requested_not_yet_quoted"],3)
         self.assertEqual(sum(e["subscribed"] for e in
@@ -258,6 +265,8 @@ class DhanFullUniverseTests(TestCase):
         self.assertEqual(sum(e["never_quoted"] for e in
                              status["coverage_by_expiry"]),3)
         self.assertEqual(sum(e["oi_only"] for e in
+                             status["coverage_by_expiry"]),1)
+        self.assertEqual(sum(e["stale_quote_packet_only"] for e in
                              status["coverage_by_expiry"]),1)
 
     def test_stale_trade_does_not_trigger_false_momentum(self):
@@ -270,6 +279,12 @@ class DhanFullUniverseTests(TestCase):
             feed._ingest(feed.decode_quote_frames(packet)[0],now,"test_session")
         self.assertEqual(feed.ranked_opportunities(),[])
         self.assertEqual(feed.STATUS["ignored_stale_trades"],1)
+        # A stale Dhan LTT still proves that the broker sent a Quote packet;
+        # it is NOT a new trade and must not be saved as a current trade.
+        self.assertIn("last_quote_packet_received_utc",
+                      feed.LATEST[item["identity"]])
+        self.assertEqual(feed.status()["source_quote_delivered_contracts"],1)
+        self.assertEqual(feed.status()["observed_contracts"],0)
         self.assertEqual(feed.WRITES.qsize(),0)
 
     def test_real_source_tick_persists_and_history_is_not_interpolated(self):
