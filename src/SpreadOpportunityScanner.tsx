@@ -24,7 +24,7 @@ type Candidate={
   spread_inr:number;spread_bps:number
   top_bid_quantity:number;top_ask_quantity:number
   bid_quantity_20:number;ask_quantity_20:number
-  best_hypothetical_lots:number|null
+  best_hypothetical_lots:number|null;tested_lot_count:number
   required_capital_inr:number|null
   passive_upper_net_inr:number|null
   passive_stressed_upper_net_inr:number|null;marketable_net_inr:number|null
@@ -44,7 +44,7 @@ type Scan={
   positive_stressed_upper_bounds:number;negative_stressed_upper_bounds:number
   positive_even_without_stress:number;negative_even_optimistic:number
   no_feasible_lots:number;recent_saved_books_60s:number
-  scan_completed_utc:string;read_only:true;fills_observed:false
+  scan_completed_utc:string;total_rows:number;read_only:true;fills_observed:false
   net_realized_profit_inr:null;source:string;warning:string;rows:Candidate[]
 }
 type SortKey='stressed'|'optimistic'|'marketable'|'spread'|'capital'|'freshness'|'strike'
