@@ -12,6 +12,7 @@ type LotOutcome={
   buy_fees_inr:number;sell_fees_inr:number;total_fees_inr:number
   passive_gross_inr:number;passive_upper_net_inr:number
   passive_stressed_upper_net_inr:number;marketable_net_inr:number|null
+  failed_exit_net_inr?:number|null;break_even_exit_fill_probability?:number|null
   marketable_buy_cash_debit_inr:number|null
   marketable_sell_cash_credit_inr:number|null
   marketable_buy_fees_inr:number|null
@@ -30,6 +31,9 @@ type Candidate={
   passive_stressed_upper_net_inr:number|null;marketable_net_inr:number|null
   estimated_buy_fees_inr:number|null;estimated_sell_fees_inr:number|null
   estimated_total_fees_inr:number|null
+  risk_screen_score?:number|null;source_fresh_risk_screened?:boolean
+  break_even_sell_fill_given_buy?:number|null;failed_exit_net_inr?:number|null
+  risk_screen_reason?:string
   lot_scenarios:LotOutcome[]
   classification:string;two_passive_fills_observed:false
   actual_executed_orders:0;actual_profit_inr:null
@@ -44,11 +48,12 @@ type Scan={
   positive_stressed_upper_bounds:number;negative_stressed_upper_bounds:number
   positive_even_without_stress:number;negative_even_optimistic:number
   no_feasible_lots:number;recent_saved_books_60s:number
+  source_fresh_risk_screened?:number
   scan_completed_utc:string;total_rows:number;read_only:true;fills_observed:false
   net_realized_profit_inr:null;source:string;warning:string;rows:Candidate[]
 }
-type SortKey='stressed'|'optimistic'|'marketable'|'spread'|'capital'|'freshness'|'strike'
-type Verdict='all'|'positive'|'negative'|'blocked'
+type SortKey='risk'|'hurdle'|'failed_exit'|'stressed'|'optimistic'|'marketable'|'spread'|'capital'|'freshness'|'strike'
+type Verdict='all'|'screened'|'positive'|'negative'|'blocked'
 const money=(x:number|null|undefined)=>typeof x==='number'&&Number.isFinite(x)
   ?'₹'+x.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'
 const n=(x:number|null|undefined,precision=0)=>typeof x==='number'&&Number.isFinite(x)
@@ -57,6 +62,9 @@ const time=(s:string)=>new Date(s).toLocaleString('en-IN',{
   timeZone:'Asia/Kolkata',day:'2-digit',month:'short',
   hour:'2-digit',minute:'2-digit',second:'2-digit'})
 const sortValue=(row:Candidate,sort:SortKey):number|null=>{
+  if(sort==='risk')return row.risk_screen_score??null
+  if(sort==='hurdle')return row.break_even_sell_fill_given_buy??null
+  if(sort==='failed_exit')return row.failed_exit_net_inr??null
   if(sort==='stressed')return row.passive_stressed_upper_net_inr
   if(sort==='optimistic')return row.passive_upper_net_inr
   if(sort==='marketable')return row.marketable_net_inr
@@ -77,11 +85,12 @@ export default function SpreadOpportunityScanner({
   const [maxLots,setMaxLots]=useState(10)
   const [orders,setOrders]=useState(1)
   const [stress,setStress]=useState(25)
+  const [exitSlippage,setExitSlippage]=useState(10)
   const [data,setData]=useState<Scan|null>(null)
   const [busy,setBusy]=useState(true)
   const [error,setError]=useState('')
   const [verdict,setVerdict]=useState<Verdict>('all')
-  const [sort,setSort]=useState<SortKey>('stressed')
+  const [sort,setSort]=useState<SortKey>('risk')
   const [descending,setDescending]=useState(true)
   const [freshOnly,setFreshOnly]=useState(false)
   const [page,setPage]=useState(0)
@@ -93,7 +102,7 @@ export default function SpreadOpportunityScanner({
       const qs=new URLSearchParams({
         day,broker_profile:brokerProfile,capital_inr:String(budget),
         max_lots:String(maxLots),executed_orders_per_side:String(orders),
-        adverse_move_bps:String(stress),
+        adverse_move_bps:String(stress),exit_slippage_bps:String(exitSlippage),
       })
       // Data access remains read-only, local; cost profile is only a tariff.
       const value=await marketApi<Scan>('/api/trading-cockpit/liquidity/scan?'+qs)
@@ -101,7 +110,7 @@ export default function SpreadOpportunityScanner({
       setData(value);setError('')
     }catch(e){if(!signal?.aborted)setError(readableError(e))}
     finally{if(!signal?.aborted)setBusy(false)}
-  },[day,brokerProfile,budget,maxLots,orders,stress])
+  },[day,brokerProfile,budget,maxLots,orders,stress,exitSlippage])
   useEffect(()=>{
     const controller=new AbortController()
     const timer=window.setTimeout(()=>{if(!document.hidden)void scan(controller.signal)},350)
@@ -123,6 +132,7 @@ export default function SpreadOpportunityScanner({
       if(search&&!label.includes(search.toLowerCase()))return false
       if(freshOnly&&!row.fresh_original_saved_book)return false
       if(verdict==='blocked')return row.best_hypothetical_lots===null
+      if(verdict==='screened')return !!row.source_fresh_risk_screened
       if(verdict==='positive')return row.passive_stressed_upper_net_inr!==null&&
         row.passive_stressed_upper_net_inr>0
       if(verdict==='negative')return row.passive_stressed_upper_net_inr!==null&&
@@ -145,7 +155,7 @@ export default function SpreadOpportunityScanner({
     ['Original depth IDs found',data?.original_depth_contracts_found],
     ['Validated books',data?.evaluated_source_books],
     ['Affordable with verified depth',data?.rankable_with_budget_and_depth],
-    ['Positive stressed upper bounds',data?.positive_stressed_upper_bounds],
+    ['Risk-screened fresh research',data?.source_fresh_risk_screened],
     ['Negative stressed upper bounds',data?.negative_stressed_upper_bounds],
     ['Insufficient budget / depth',data?.no_feasible_lots],
   ] as const
@@ -153,9 +163,10 @@ export default function SpreadOpportunityScanner({
     <div className="sos-title">
       <div><span className="sos-overline"><ArrowDownUp size={13}/> AUTO-EVALUATE SAVED DHAN BOOKS</span>
         <h3>Spread P&amp;L Opportunity Scanner</h3>
-        <p>Automatically test 1–{maxLots} lots for every source-validated
-          saved option order book, under your capital budget. All net results
-          below are <strong>conditional bounds, not forecasts of trade profit.</strong></p>
+        <p>Automatic price/fee/depth scan of all saved, validated original
+          order books. Each contract and lot size is screened for conditional
+          sell-fill hurdle and failed-exit loss. <b>Use Analyze to inspect
+          a ranked candidate; no manual contract picking required.</b></p>
       </div>
       <button type="button" onClick={()=>setRefreshToken(v=>v+1)}
         disabled={busy}><RefreshCw size={14}/>{busy?'Scanning…':'Refresh scan'}</button>
@@ -188,16 +199,43 @@ export default function SpreadOpportunityScanner({
         <input type="number" min={0} max={1000} value={stress}
           onChange={e=>setStress(Math.min(1000,Math.max(0,Number(e.target.value)||0)))}/>
       </label>
+      <label>Exit slippage allowance (bps)
+        <input type="number" min={0} max={1000} value={exitSlippage}
+          onChange={e=>setExitSlippage(Math.min(1000,Math.max(0,Number(e.target.value)||0)))}/>
+      </label>
     </div>
     <div className="sos-summary">
       {summary.map(([name,value])=><div key={name}>
         <strong>{n(value)}</strong><small>{name}</small>
       </div>)}
     </div>
+    <section className="sos-top-choices" aria-label="Automatically screened bid-ask research candidates">
+      <div><strong>Automatically screened research shortlist</strong>
+        <small>Fresh source + budget/depth + positive stressed bound + modeled
+          conditional exit-fill hurdle ≤75%; not calibrated profitability.</small></div>
+      <div className="sos-top-list">
+        {(data?.rows||[]).filter(x=>x.source_fresh_risk_screened).slice(0,3)
+          .map((row,i)=><button type="button" key={row.identity}
+            onClick={()=>row.best_hypothetical_lots!==null&&
+              onInspect(row.identity,row.best_hypothetical_lots,brokerProfile)}>
+            <small>RESEARCH #{i+1} · score {n(row.risk_screen_score,1)}</small>
+            <strong>{row.option_type} {n(row.strike)} · {n(row.best_hypothetical_lots)} lot(s)</strong>
+            <span>Conditional upper net {money(row.passive_stressed_upper_net_inr)}</span>
+            <span>Missed exit {money(row.failed_exit_net_inr)} · hurdle {
+              row.break_even_sell_fill_given_buy==null?'—':
+              n(row.break_even_sell_fill_given_buy*100,1)+'%'}</span>
+            <span>Analyze execution & costs →</span>
+          </button>)}
+        {!(data?.rows||[]).some(x=>x.source_fresh_risk_screened)&&
+          <p>No current saved source clears the preliminary risk screen.
+            Historic conditional bounds remain below for study, not live execution.</p>}
+      </div>
+    </section>
     <div className="sos-toolbar">
       <label>Show outcomes
         <select value={verdict} onChange={e=>setVerdict(e.target.value as Verdict)}>
           <option value="all">All evaluated / unavailable</option>
+          <option value="screened">Fresh risk-screened research only</option>
           <option value="positive">Positive conditional bounds (not profits)</option>
           <option value="negative">Nonpositive conditional bounds</option>
           <option value="blocked">No affordable verified-depth lot</option>
@@ -205,6 +243,9 @@ export default function SpreadOpportunityScanner({
       </label>
       <label>Sort by
         <select value={sort} onChange={e=>setSort(e.target.value as SortKey)}>
+          <option value="risk">Risk-screen research priority</option>
+          <option value="hurdle">Break-even exit-fill hurdle</option>
+          <option value="failed_exit">Failed-exit scenario P&amp;L</option>
           <option value="stressed">Conditional upper net after stress</option>
           <option value="optimistic">Optimistic passive upper net</option>
           <option value="marketable">Marketable round-trip estimate</option>
@@ -250,7 +291,9 @@ export default function SpreadOpportunityScanner({
         <th>Best modeled lots</th><th>Capital required</th>
         <th>Buy fees / Sell fees</th>
         <th>Marketable net</th><th>Conditional upper net</th>
-        <th>Conditional after stress</th><th>Source age</th><th/>
+        <th>Conditional after stress</th><th>Failed-exit net</th>
+        <th>Exit fill needed</th><th>Research rank</th>
+        <th>Source age</th><th/>
       </tr></thead>
       <tbody>
         {visible.map(row=>{
@@ -277,6 +320,14 @@ export default function SpreadOpportunityScanner({
               <small>{row.best_hypothetical_lots==null?'Budget/depth blocked':
                 positive?'Not a profit prediction':'Conditional loss/negative'}</small>
             </td>
+            <td className="sos-negative">{money(row.failed_exit_net_inr)}</td>
+            <td>{row.break_even_sell_fill_given_buy==null?'—':
+              n(row.break_even_sell_fill_given_buy*100,1)+'%'}
+              <small>Given buy filled</small></td>
+            <td><span className={row.source_fresh_risk_screened?'sos-conditional':'sos-unknown'}>
+              {row.source_fresh_risk_screened?'Research '+n(row.risk_screen_score,1):
+                'Not screened'}</span>
+              <small>{row.risk_screen_reason?.replaceAll('_',' ')}</small></td>
             <td><span className={row.fresh_original_saved_book?'sos-fresh':'sos-older'}>
               {n(row.saved_book_age_seconds,0)}s</span><small>
               {time(row.received_utc)} IST</small></td>
@@ -294,7 +345,7 @@ export default function SpreadOpportunityScanner({
             </td>
           </tr>
         })}
-        {visible.length===0&&!busy&&<tr><td colSpan={11}>
+        {visible.length===0&&!busy&&<tr><td colSpan={14}>
           No source-verified saved books match these filters. No prices
           or transactions will be invented.</td></tr>}
       </tbody></table></div>
@@ -310,6 +361,7 @@ export default function SpreadOpportunityScanner({
                 <th>Buy debit incl. charges</th><th>Cash left after buy</th>
                 <th>Sell credit after charges</th><th>Cash after hypothetical sell</th>
                 <th>Net after costs</th><th>After stress</th><th>Marketable net</th>
+                <th>Missed-exit loss</th><th>Exit-fill hurdle</th>
               </tr></thead>
               <tbody>{row.lot_scenarios.map(lot=><tr key={lot.lots}>
                 <td>{lot.lots} / {n(lot.units)}</td>
@@ -327,6 +379,9 @@ export default function SpreadOpportunityScanner({
                 <td className={lot.passive_stressed_upper_net_inr>0?'sos-conditional':'sos-negative'}>
                   {money(lot.passive_stressed_upper_net_inr)}</td>
                 <td>{money(lot.marketable_net_inr)}</td>
+                <td className="sos-negative">{money(lot.failed_exit_net_inr)}</td>
+                <td>{lot.break_even_exit_fill_probability==null?'—':
+                  n(lot.break_even_exit_fill_probability*100,1)+'%'}</td>
               </tr>)}</tbody></table></div>
             <small className="sos-muted">These are independent counterfactuals
               for this one contract. Cash after buy/sell assumes full passive
