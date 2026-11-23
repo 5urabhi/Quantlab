@@ -11,7 +11,7 @@ type Settings={
 }
 type Candidate={
   identity:string;side:'CE'|'PE';strike:number;expiry:string
-  wing?:'above'|'below'|'atm';atm_strike?:number;coverage_role?:'core'|'opportunity'|'rotating'
+  wing?:'above'|'below'|'atm';atm_strike?:number;coverage_role?:'core'|'opportunity'|'active'|'rotating'
   lot_size:number;ltp:number;chain_received_utc:string;volume:number
 }
 type Latest={
@@ -54,6 +54,14 @@ type Recorder={
   source_strike_min?:number|null;source_strike_max?:number|null
   subscribed_strike_min?:number|null;subscribed_strike_max?:number|null
   rotating_contracts?:number;opportunity_depth_contracts?:number
+  activity_depth_contracts?:number
+  depth_counter_audit?:{
+    consistent:boolean;accepted_large_messages:number
+    validated_pairs_in_large_messages:number
+    max_pairs_per_valid_message:number
+    mean_pairs_per_large_message:number|null
+    note:string
+  }
   not_currently_depth_subscribed?:number
   rotation_step?:number;chain_refresh_seconds?:number
   boundary_escape_events?:number;last_boundary_escape_utc?:string|null
@@ -212,10 +220,11 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     <div className="ad-controls" aria-label="Automatic order-book recording configuration">
       <div className="ad-armed-note" role="note">
         <strong>Full Dhan option chains + 200 concurrent depth subscriptions</strong>
-        <div>120 nearest CE/PE contracts remain subscribed. Up to 40
-          source-confirmed premium movers can take deep-book slots, while
-          remaining distant slots rotate every 90 seconds. The separate
-          all-contract Quote/OI monitor is optional and independent of depth.</div>
+        <div>120 nearest CE/PE contracts remain subscribed. Among the
+          other 80 slots, prioritize up to 40 source-confirmed big movers,
+          then freshly traded CE/PE contracts, while reserving at least
+          20 rotating discovery slots. These selections are not guaranteed
+          to fill. The Dhan-only all-contract Quote/OI feed remains separate.</div>
       </div>
       <label>Lots to evaluate
         <input aria-label="Auto depth lots" type="number" min={1} max={20} step={1}
@@ -274,7 +283,26 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     {state?.coverage_gap_warning&&<p className="ad-warning" role="status">
       <AlertTriangle size={15}/>{state.coverage_gap_warning}
       {' '}Last detected: {clock(state.last_boundary_escape_utc)} IST.</p>}
-    <div className="ad-summary">
+    <div className="ad-primary" aria-label="Automatic recording headline metrics">
+      <span><strong>{state?.contracts.length??0}/200</strong> active depth subscriptions</span>
+      <span><strong>{n(state?.received_pairs)}</strong> genuine source book pairs</span>
+      <span><strong>{n(state?.snapshots_saved)}</strong> sampled books saved</span>
+      <span><strong>{n(state?.contracts_with_recent_packets)}/200</strong> recent paired option IDs (10s)</span>
+      <span><strong>{n(state?.activity_depth_contracts)}</strong> activity-prioritized depth IDs</span>
+      <span><strong>{n(state?.rotating_contracts)}</strong> discovery/rotation IDs</span>
+    </div>
+    {state?.depth_counter_audit&&!state.depth_counter_audit.consistent&&
+      <p className="ad-warning" role="alert">
+        <AlertTriangle size={15}/> Depth counter inconsistency detected.
+        Original receipt counters have not been modified.
+        Review source diagnostics before relying on recovered-book totals.
+      </p>}
+    <details className="ad-diagnostics">
+      <summary>Detailed Dhan source and decoder diagnostics</summary>
+      <p>Original source receipt counts are different from deliberately
+        sampled saved books. Up to 50 complete bid/ask pairs can be
+        validated per large 50-instrument Dhan message.</p>
+      <div className="ad-summary">
       <span><strong>{n(state?.snapshots_saved)}</strong> books stored this session</span>
       <span><strong>{n(state?.received_pairs)}</strong> observed source packet pairs</span>
       <span><strong>{state?.contracts.length??0}/200</strong> simultaneous depth IDs</span>
@@ -282,6 +310,8 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{n(state?.not_currently_depth_subscribed)}</strong> waiting for a distant depth rotation slot</span>
       <span><strong>{n(state?.rotating_contracts)}</strong> currently rotating depth IDs</span>
       <span><strong>{n(state?.opportunity_depth_contracts)}</strong> original moving options promoted to 20-level</span>
+      <span><strong>{n(state?.activity_depth_contracts)}</strong> actual fresh-trade options prioritized for 20-level</span>
+      <span><strong>{n(state?.depth_counter_audit?.mean_pairs_per_large_message,1)}</strong> source-valid book pairs per large message (mean)</span>
       <span><strong>{state?.contracts_above??0} / {state?.contracts_below??0}</strong> subscribed above / below ATM</span>
       <span><strong>{n(state?.rotation_step)}</strong> distant strike rotation cycle</span>
       <span><strong>{n(state?.boundary_escape_events)}</strong> observed prior-depth-range breakouts</span>
@@ -304,7 +334,8 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{n(state?.sockets_with_recent_pairs)} / {state?.sockets_requested??0}</strong> sockets with original depth in last 60s</span>
       <span><strong>{state?.current_expiry||'—'}</strong> Dhan-listed expiry</span>
       <span><strong>{clock(state?.last_packet_utc)}</strong> most recent paired packet (IST)</span>
-    </div>
+      </div>
+    </details>
     <p className="ad-armed-note" role="status">
       <Database size={16}/> Complete option-chain archive: <strong>{chainCapture?.state||'Checking status'}</strong>
       {' · '}{n(chainCapture?.snapshots_saved_today)} chain snapshots saved today
