@@ -294,13 +294,6 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
                 best["half_premium_exit_net_inr"] if best else None),
             "conservative_sell_fill_hurdle": (
                 best["sell_fill_hurdle_if_zero_recovery"] if best else None),
-            "risk_screen_reason": (
-                "MISSING_BUDGET_OR_DEPTH" if best is None else
-                "STALE_OR_EXPIRED_SOURCE" if not quote_age_ok else
-                "NO_POSITIVE_STRESSED_BOUND" if best[
-                    "passive_stressed_upper_net_inr"] <= 0 else
-                "UNKNOWN_OR_HIGH_EXIT_HURDLE" if not screened else
-                "RESEARCH_ONLY_NO_CALIBRATED_FILLS"),
             "classification": (
                 "NO_AFFORDABLE_VERIFIED_DEPTH" if best is None
                 else "POSITIVE_HYPOTHETICAL_STRESS_BOUND"
