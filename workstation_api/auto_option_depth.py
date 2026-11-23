@@ -421,12 +421,23 @@ def _store_book(session_id: str, book: dict, feature: dict) -> bool:
 
 
 def _paired_books(blob: bytes, chosen: dict[str, dict],
-                  pending: dict, received: datetime) -> list[tuple[dict,dict]]:
-    """Pair only source bids/asks of the SAME contract within one second."""
+                  pending: dict, received: datetime, *,
+                  observed_sides: dict | None = None,
+                  diagnostics: dict | None = None) -> list[tuple[dict, dict]]:
+    """Pair source bid+ask from the SAME security within one second.
+
+    Optional bounded metadata reports decoded half-book availability without
+    changing pairing thresholds, saving prices, or accepting invalid snapshots.
+    Callers aggregate instrumentation outside the decoder to avoid per-packet
+    locks. No raw packet, credential, or rejected price leaves this function.
+    """
     output = []
     try:
         packets = market_depth.packet_stream(blob, 20)
     except ValueError:
+        if diagnostics is not None:
+            diagnostics["rejected_frame_count"] = (
+                diagnostics.get("rejected_frame_count", 0) + 1)
         return output
     for packet in packets:
         if packet["segment_code"] != 2:
@@ -434,6 +445,9 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
         security = packet["security_id"]
         if security not in chosen:
             continue
+        if observed_sides is not None:
+            identity = chosen[security]["identity"]
+            observed_sides.setdefault(identity, set()).add(packet["side"])
         key = (security, packet["side"])
         pending[key] = (packet, received)
         opposite = (security, "ask" if packet["side"] == "bid" else "bid")
@@ -441,6 +455,9 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
             continue
         other, last_received = pending[opposite]
         if abs((received - last_received).total_seconds()) > 1.0:
+            if diagnostics is not None:
+                diagnostics["unpaired_time_window_count"] = (
+                    diagnostics.get("unpaired_time_window_count", 0) + 1)
             continue
         bid = packet if packet["side"] == "bid" else other
         ask = packet if packet["side"] == "ask" else other
@@ -449,7 +466,9 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
             book = market_depth._snapshot(bid, ask, identity, received, 20)
             output.append((book, chosen[security]))
         except (ValueError, KeyError, TypeError):
-            pass
+            if diagnostics is not None:
+                diagnostics["rejected_book_pair_count"] = (
+                    diagnostics.get("rejected_book_pair_count", 0) + 1)
         pending.pop(key, None)
         pending.pop(opposite, None)
     # Unpaired half-books are never retained across long disconnects.
