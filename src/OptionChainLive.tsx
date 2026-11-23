@@ -215,18 +215,81 @@ export default function OptionChainLive({feedActive,depthIdentity,
   const bookCurrent=Boolean(picked?.identity&&picked.identity===depthIdentity)
   const mapSignal=underlying==='BANKNIFTY'&&currentIndexDirection==='UP'?'CE':
     underlying==='BANKNIFTY'&&currentIndexDirection==='DOWN'?'PE':null
-  return <section className="oc-root" aria-label="BANKNIFTY option chain and lot calculator">
-    <header className="oc-head"><div><span className="tc-page-kicker">TRADE THE CONTRACT, NOT THE INDEX</span>
-      <h3>BANKNIFTY CE / PE option chain</h3>
-      <p>Current Dhan option snapshots, real contract IDs and exchange lot sizes.
-        Subscribe separately to one selected NSE_FNO contract for live 20-level depth.</p>
+  return <section className="oc-root" aria-label="Index option chain and lot calculator">
+    <header className="oc-head"><div><span className="tc-page-kicker">READ-ONLY ORIGINAL OPTIONS / MULTIPLE SOURCES</span>
+      <h3>{underlying==='BANKNIFTY'?'BANKNIFTY':'NIFTY 50'} CE / PE option chain</h3>
+      <p>Browse every source-reported active expiry and all returned strikes.
+        Dhan remains the reference for original 20-level depth and tradeable exchange IDs;
+        providers' snapshot prices are never mixed into a synthetic best bid/ask.</p>
     </div><span className="oc-source"><ShieldCheck size={15}/> Read-only · no orders</span></header>
+    <section className="oc-provider-panel" aria-label="Multiple market data connections">
+      <div className="oc-provider-heading">
+        <div><strong>Market-data connections</strong>
+          <small>Connect multiple providers. Each contributes only capabilities it actually supports.</small></div>
+        <button type="button" className="oc-connection-button" onClick={openConnections}>
+          Manage Dhan / Zerodha <ArrowRight size={14}/></button>
+        <button type="button" className="oc-connection-button"
+          aria-expanded={upstoxOpen} onClick={()=>setUpstoxOpen(v=>!v)}>
+          {upstoxOpen?'Hide Upstox setup':'Connect Upstox'}</button>
+      </div>
+      <div className="oc-provider-cards">
+        {connections?.providers.map(item=><div className="oc-provider-card" key={item.id}>
+          <strong>{item.label}</strong><span className={item.configured?'connected':'missing'}>
+            {item.configured?'Configured · live session not assumed':'Not configured'}</span>
+          <small>{item.note}</small>
+        </div>)}
+        {!connections&&<p>Checking configured source connections…</p>}
+      </div>
+      {connectionNotice&&<div className="oc-timestamp" role="status">{connectionNotice}</div>}
+      {upstoxOpen&&<form className="oc-provider-form" onSubmit={e=>void connectUpstox(e)}>
+        <label>Authorized Upstox access token
+          <input aria-label="Upstox access token" type="password" autoComplete="off"
+            value={upstoxToken} minLength={16} maxLength={4096}
+            onChange={e=>setUpstoxToken(e.target.value)}
+            placeholder="Manually generated token from your Upstox developer app"/>
+        </label>
+        <label className="oc-provider-confirm">
+          <input type="checkbox" checked={upstoxConsent}
+            onChange={e=>setUpstoxConsent(e.target.checked)}/>
+          Store privately on this workstation (0600 permissions). Use for read-only
+          current-option contracts and chain requests, never orders.
+        </label>
+        <div className="oc-controls-actions">
+          <button type="submit" disabled={!upstoxConsent||!upstoxToken||upstoxBusy}>
+            Save Upstox token locally</button>
+          {connections?.providers.some(p=>p.id==='upstox'&&p.configured)&&
+            <button type="button" disabled={upstoxBusy} onClick={()=>void disconnectUpstox()}>
+              Disconnect locally saved Upstox token</button>}
+        </div>
+        <small>Upstox authentication is issued by Upstox. Connection presence
+          does not guarantee entitlement or a valid current session.
+          Never enter your brokerage login password.</small>
+      </form>}
+    </section>
     <div className="oc-controls">
-      <label>Expiry from Dhan
-        <select aria-label="Dhan BANKNIFTY expiry" value={expiry}
+      <label>Index underlying
+        <select aria-label="Option underlying index" value={underlying}
+          onChange={e=>{setUnderlying(e.target.value as 'BANKNIFTY'|'NIFTY50')
+            setExpiry('');setDates(null);setChain(null);setSelected('')}}>
+          <option value="BANKNIFTY">BANKNIFTY</option>
+          <option value="NIFTY50">NIFTY 50</option>
+        </select>
+      </label>
+      <label>Quote source
+        <select aria-label="Option chain provider" value={providerChoice}
+          onChange={e=>{setProviderChoice(e.target.value as 'all'|'dhan'|'upstox')
+            setExpiry('');setDates(null);setChain(null);setSelected('')}}>
+          <option value="all">All connected · Dhan preferred</option>
+          <option value="dhan">Dhan only</option>
+          <option value="upstox">Upstox only</option>
+        </select>
+      </label>
+      <label>Source-listed expiry
+        <select aria-label="Option chain expiry" value={expiry}
           onChange={e=>{setExpiry(e.target.value);setChain(null);setSelected('')}}>
-          {!dates&&<option value="">Connect Dhan for current expiries</option>}
-          {dates?.expiries.map(x=><option key={x} value={x}>{x}</option>)}
+          {!dates&&<option value="">Connect a source for current expiries</option>}
+          {dates?.expiries.map(x=><option key={x} value={x}>
+            {x} · {(dates.expiry_sources?.[x]||[]).join(' + ')}</option>)}
         </select>
       </label>
       <div className="oc-controls-actions">
@@ -244,7 +307,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
     </div>
     {masterNotice&&<p className="oc-timestamp" role="status">{masterNotice}</p>}
     {expiryError&&<div className="oc-alert" role="alert"><AlertTriangle size={18}/>
-      <div><strong>Option-chain connection requires Dhan credentials.</strong>
+      <div><strong>No connected provider returned current option expiries.</strong>
         <p>{expiryError}</p></div>
       <button type="button" onClick={openConnections}>Connections <ArrowRight size={14}/></button>
     </div>}
@@ -253,23 +316,39 @@ export default function OptionChainLive({feedActive,depthIdentity,
         <p>{error}</p></div>
     </div>}
     {chain&&<div className="oc-timestamp"><Clock3 size={14}/>
-      <strong>Dhan REST snapshot, not a live streaming book</strong> ·
+      <strong>Independent REST market-data snapshots, not executable books</strong> ·
       Received {timeIST(chain.received_utc)} IST ·
-      {chain.cache_hit?' Reused cached response':' Original vendor response'} ·
-      Instrument master {chain.market_master_fresh?'recent':'missing / outdated'}.
-      Market data may have changed since capture.</div>}
+      {chain.cache_hit?' Cached responses reused':' Read original vendor responses'} ·
+      Quote sources: {(chain.providers_used||[]).join(' + ')} ·
+      Contract counts: {Object.entries(chain.provider_contract_counts||{}).map(([key,value])=>
+        key+' '+value).join(', ')} · Union {chain.quote_count}.
+      Dhan master {chain.market_master_fresh?'recent':'missing / outdated'}.
+      Provider quotes may have different capture times.</div>}
+    {chain&&Object.keys(chain.provider_errors||{}).length>0&&
+      <div className="oc-alert" role="status"><AlertTriangle size={16}/>
+        Some providers could not respond: {Object.entries(chain.provider_errors||{}).map(
+          ([key,value])=>key+': '+value).join('; ')}.
+        The displayed rows are from providers that did respond.</div>}
+    {dates&&Object.keys(dates.provider_errors||{}).length>0&&
+      <div className="oc-alert" role="status"><AlertTriangle size={16}/>
+        Expiry discovery unavailable for: {Object.entries(dates.provider_errors||{}).map(
+          ([key,value])=>key+': '+value).join('; ')}</div>}
+    {chain&&(chain.source_identity_conflicts||0)>0&&
+      <div className="oc-alert" role="alert"><AlertTriangle size={16}/>
+        {chain.source_identity_conflicts} contract identities disagreed between providers.
+        Their quotes were kept separate; refresh official masters before selecting.</div>}
     {chain&&!chain.market_master_fresh&&<p className="oc-alert" role="status">
       <AlertTriangle size={16}/>
       {chain.master_message} Refresh the official Dhan instrument master from Data Library
       before relying on contract quantity or lot-based premium calculations.</p>}
     <div className="oc-filter">
-      <strong>Listed strikes near the observed spot</strong>
+      <strong>All {chain?.quote_count??0} source-reported current CE / PE contracts · {filtered.length} displayed</strong>
       <div role="group" aria-label="Option-chain contract type">
         {(['ALL','CE','PE'] as const).map(kind=><button key={kind}
           type="button" aria-pressed={side===kind} onClick={()=>setSide(kind)}>
           {kind==='ALL'?'All contracts':kind}</button>)}
       </div>
-      <span>Signal: <b>{currentIndexDirection||'Not ready'}</b>
+      <span>Signal: <b>{underlying==='BANKNIFTY'?(currentIndexDirection||'Not ready'):'Not tracked for this index'}</b>
         {mapSignal?' · '+mapSignal+' contracts are one possible long-options expression':' · no contract suggestion'}</span>
     </div>
     <div className="oc-preferences">
@@ -292,7 +371,8 @@ export default function OptionChainLive({feedActive,depthIdentity,
     <div className="tc-table-scroll oc-table">
       <table><thead><tr><th>Choose</th><th>Strike</th><th>Type</th>
         <th>LTP ₹</th><th>Bid ₹</th><th>Ask ₹</th><th>OI</th><th>Volume</th>
-        <th>IV %</th><th>Delta</th><th>Lot size</th><th>Verified ID</th></tr></thead>
+        <th>IV %</th><th>Delta</th><th>Lot size</th><th>Verified ID</th>
+        <th>Price source</th></tr></thead>
         <tbody>{filtered.map(c=>{
           const atm=chain&&Math.abs(c.strike-chain.underlying_spot)<100
           return <tr key={c.option_type+':'+c.strike}
@@ -307,10 +387,15 @@ export default function OptionChainLive({feedActive,depthIdentity,
             <td>{num(c.oi,0)}</td><td>{num(c.volume,0)}</td><td>{num(c.iv,2)}</td>
             <td>{num(c.delta,3)}</td><td>{c.lot_size??'Unverified'}</td>
             <td>{c.identity||'—'}</td>
+            <td title={c.source_received_utc?
+              'Received '+timeIST(c.source_received_utc)+' IST':''}>
+              {c.quote_provider||'dhan'}{(c.available_sources?.length||0)>1?
+                <small>also {(c.available_sources||[]).filter(p=>p!==c.quote_provider).join(', ')}</small>:null}
+            </td>
           </tr>
         })}
-        {!filtered.length&&<tr><td colSpan={12}>
-          {busy?'Loading original Dhan option chain…':nearTargetOnly?'No contracts in the preferred premium range. Widen the range or turn off the filter.':'No verified original strikes for the selected expiry. Refresh the chain, token or instrument master.'}
+        {!filtered.length&&<tr><td colSpan={13}>
+          {busy?'Loading original connected option chains…':nearTargetOnly?'No contracts in the preferred premium range. Widen the range or turn off the filter.':'No original contract quotes for the selected expiry. Check provider connection and source coverage.'}
         </td></tr>}</tbody></table>
     </div>
     <div className="oc-preview">
@@ -318,7 +403,8 @@ export default function OptionChainLive({feedActive,depthIdentity,
         <div><span className="tc-page-kicker">SELECT A REAL CONTRACT</span>
           <h4>{picked?picked.symbol+' · '+picked.expiry:
             'Select an available CE or PE to calculate lots'}</h4>
-          <p>{picked?picked.identity+' · '+picked.option_type+' '+num(picked.strike,0):'BANKNIFTY index cannot be bought or sold directly.'}</p>
+          <p>{picked?picked.identity+' · '+picked.option_type+' '+num(picked.strike,0)+
+            ' · Quote source '+(picked.quote_provider||'dhan'):'The index cannot be bought or sold as a direct position.'}</p>
           <p>Default 3 lots · currently around {picked?.lot_size===30?'90':'3 × verified lot size'} units · preferred LTP ₹{num(targetPremium)}. Exact premium is based on the ask, not LTP.</p>
         </div>
         <span className="oc-source">{bookCurrent?'Selected for order book':'No order-book subscription selected'}</span>
