@@ -196,7 +196,8 @@ def status() -> dict:
         "continuous_nearby_contract_budget": (120 if wide else None),
         "rotating_far_contract_budget": (80 if wide else None),
         "chain_refresh_seconds": CHAIN_REFRESH_SECONDS,
-        "depth_covers_all_contracts_simultaneously": False,
+        "depth_covers_all_contracts_simultaneously": state.get(
+            "depth_is_all_contracts_simultaneously", False),
         "market_regular_hours": _market_open(now),
         "read_only": True, "historical_depth_download_supported": False,
         "shared_library": "dhan_shared",
