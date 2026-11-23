@@ -785,6 +785,10 @@ def arm(settings: dict, *, confirm_live_data: bool) -> dict:
     if not os.getenv("DHAN_ACCESS_TOKEN", "").strip():
         raise ValueError("Configure a Dhan access token locally before arming")
     normalized = _validate_config({**settings, "enabled": True})
+    if live_market.status().get("active"):
+        raise ValueError(
+            "Stop the separate manual Trading Cockpit live stream before "
+            "arming the four-socket BANKNIFTY recorder plus all-option quote feed")
     with LOCK:
         _save_config(normalized)
         _ensure_worker()
