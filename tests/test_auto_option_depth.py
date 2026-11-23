@@ -128,6 +128,51 @@ class AutomaticDepthRecorderTests(unittest.TestCase):
         self.assertTrue(all(book["full_depth"] for book, _ in paired))
         self.assertEqual(pending, {})
 
+    def test_one_dhan_50_contract_message_contains_100_valid_depth_halves(self):
+        """Official 20-depth stacking: each of 50 securities has bid+ask.
+
+        A genuine 50-ID socket can deliver 33,200 bytes (100 x 332).
+        Earlier code incorrectly rejected any frame larger than 16,600.
+        No synthetic historical fill or relaxed bid-ask book rules here.
+        """
+        now = datetime(2026, 11, 23, 5, 32, tzinfo=timezone.utc)
+        ids = [str(62000 + index) for index in range(50)]
+        selected = {
+            sec: {"identity": "NSE_FNO:" + sec}
+            for sec in ids
+        }
+        # Fifty unique original packet identities; exactly two Dhan
+        # protocol-shaped side packets for each selected security.
+        stream = b"".join(
+            quote_packet(sec, "bid") + quote_packet(sec, "ask")
+            for sec in ids
+        )
+        self.assertEqual(len(stream), 332 * 2 * 50)
+        observed_sides = {}
+        diagnostics = {}
+        pending = {}
+        accepted = auto._paired_books(
+            stream, selected, pending, now,
+            observed_sides=observed_sides, diagnostics=diagnostics)
+        self.assertEqual(len(accepted), 50)
+        self.assertEqual(len({b["identity"] for b, _ in accepted}), 50)
+        self.assertTrue(all(book["full_depth"] for book, _ in accepted))
+        self.assertEqual(len(observed_sides), 50)
+        self.assertTrue(all(sides == {"bid", "ask"}
+                            for sides in observed_sides.values()))
+        self.assertEqual(diagnostics, {})
+        self.assertEqual(pending, {})
+
+        # More than 50 identities (101+ half packets) remains forbidden,
+        # and can never become a fabricated accepted book.
+        oversized = stream + quote_packet("62999", "bid")
+        error_counts = {}
+        rejected = auto._paired_books(
+            oversized, selected, {}, now, diagnostics=error_counts)
+        self.assertEqual(rejected, [])
+        self.assertEqual(error_counts["rejected_frame_count"], 1)
+        self.assertEqual(error_counts["truncated_or_wrong_size_frames"], 1)
+
     def test_three_lot_depth_weighted_prices_require_real_90_units(self):
         now = datetime(2026, 11, 19, 4, 15, tzinfo=timezone.utc)
         selected = auto.select_contracts(fixture_chain(), auto.DEFAULTS)[0]
