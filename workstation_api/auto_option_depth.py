@@ -509,8 +509,23 @@ def _paired_books(blob: bytes, chosen: dict[str, dict],
     output = []
     try:
         packets = market_depth.packet_stream(blob, 20)
-    except ValueError:
+    except ValueError as exc:
         if diagnostics is not None:
+            # These are bounded parser-owned reason categories; do not log
+            # source bytes or raw exception text. Dhan documents a separate
+            # disconnect/control response (code 50) on depth sockets.
+            description = str(exc).lower()
+            response_code = blob[2] if isinstance(blob, bytes) and len(blob) >= 3 else None
+            if response_code == 50:
+                bucket = "disconnect_or_control_frames"
+            elif description.startswith("not a bid/ask"):
+                bucket = "unsupported_response_code_frames"
+            elif ("truncated" in description or "size" in description
+                  or "length" in description):
+                bucket = "truncated_or_wrong_size_frames"
+            else:
+                bucket = "invalid_header_or_level_frames"
+            diagnostics[bucket] = diagnostics.get(bucket, 0) + 1
             diagnostics["rejected_frame_count"] = (
                 diagnostics.get("rejected_frame_count", 0) + 1)
         return output

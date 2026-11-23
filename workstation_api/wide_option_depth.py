@@ -484,7 +484,7 @@ def _select(cfg: dict, previous_ids=(), rotation_step: int = 0,
     if age > 90:
         raise ValueError("Original Dhan BANKNIFTY chain is stale")
     from . import full_option_feed
-    ranked = full_option_feed.ranked_opportunities(limit=60)
+    ranked = full_option_feed.ranked_depth_candidates(limit=60)
     priority_ids = [item["identity"] for item in ranked
                     if item["expiry"] == chain["expiry"]]
     selected = select_full_chain_rotation(

@@ -303,6 +303,10 @@ def _ingest(event: dict, received: datetime, session: str) -> None:
         })
         should_store = True
         if event["kind"] == "quote":
+            # A source Quote packet may legitimately carry a Dhan last trade
+            # from hours ago. Distinguish packet DELIVERY from a RECENT trade.
+            # Do not turn old last-trade prices into new timestamped trades.
+            entry["last_quote_packet_received_utc"] = received_iso
             if event["packet_sha256"] == previous.get("packet_sha256"):
                 should_store = False
                 STATUS["unchanged_quote_packets"] += 1
@@ -324,8 +328,11 @@ def _ingest(event: dict, received: datetime, session: str) -> None:
                         or event["packet_sha256"] != previous["packet_sha256"]):
                     prior.append((received.timestamp(), event_epoch,
                                   event["price"], event["volume"]))
-                cutoff = received.timestamp()-SCORE_WINDOW_SECONDS
-                while prior and prior[0][0] < cutoff:
+                # Retain the last pre-window source trade as a real
+                # comparison anchor. Deleting every older print made a
+                # genuine 5-minute return impossible to calculate.
+                cutoff = event_epoch - SCORE_WINDOW_SECONDS - 30
+                while len(prior) > 1 and prior[1][1] <= cutoff:
                     prior.popleft()
                 entry["packet_sha256"] = event["packet_sha256"]
                 score = _opportunity(prior)
@@ -366,47 +373,113 @@ def _ingest(event: dict, received: datetime, session: str) -> None:
 
 
 def _opportunity(history: deque) -> dict:
+    """Research movement over *observed* Dhan trade times only.
+
+    An option trading for seven seconds has an observed seven-second move,
+    NOT a measured 60-second or 300-second return. Longer windows require
+    original trades straddling their respective horizons. Never interpolate.
+    """
+    empty = {"score": 0., "move_60s_pct": None, "move_5m_pct": None,
+             "observed_change_pct": None, "observed_span_seconds": 0,
+             "volume_increase": 0, "distinct_trade_times": 0}
     if len(history) < 2:
-        return {"score": 0., "move_60s_pct": None,
-                "move_5m_pct": None, "volume_increase": 0}
-    now = history[-1][0]
-    ref_60 = next((record for record in history if record[0] >= now-60),
-                  history[0])
-    ref_300 = history[0]
-    last = history[-1]
-    if last[1] < ref_300[1] or (
-            last[1] == ref_300[1] and last[3] <= ref_300[3]):
-        return {"score": 0., "move_60s_pct": None,
-                "move_5m_pct": None, "volume_increase": 0}
-    change60 = (last[2]/ref_60[2]-1)*100 if ref_60[2] > 0 else 0.
-    change300 = (last[2]/ref_300[2]-1)*100 if ref_300[2] > 0 else 0.
-    gain_volume = max(0, last[3]-ref_300[3])
-    # A new Dhan last-trade timestamp is itself source evidence even if
-    # aggregate volume has not yet advanced in the broker's quote packet.
-    # Volume confirms activity, but cannot veto an observed option price jump.
-    importance = max(abs(change60),abs(change300))
-    score = round(min(100., max(0., (importance-5)*2
-                   + min(20., gain_volume/1000.))), 2)
-    return {"score": score, "move_60s_pct": round(change60,2),
-            "move_5m_pct": round(change300,2),
-            "volume_increase": gain_volume}
+        return empty
+    first, last = history[0], history[-1]
+    trade_times = {item[1] for item in history}
+    span = max(0, last[1] - first[1])
+    if (len(trade_times) < 2 or span <= 0
+            or first[2] <= 0 or last[2] <= 0):
+        return {**empty, "observed_span_seconds": span,
+                "distinct_trade_times": len(trade_times)}
+    volume_gain = max(0, last[3] - first[3])
+    observed = round((last[2] / first[2] - 1) * 100, 2)
+
+    def window_change(seconds: int, max_anchor_lag: int) -> float | None:
+        threshold = last[1] - seconds
+        anchors = [row for row in history
+                   if row[1] <= threshold
+                   and threshold - row[1] <= max_anchor_lag
+                   and row[2] > 0]
+        if not anchors:
+            return None
+        anchor = max(anchors, key=lambda row: row[1])
+        return round((last[2] / anchor[2] - 1) * 100, 2)
+
+    move60 = window_change(60, 15)
+    move300 = window_change(300, 30)
+    # A confirmed sub-minute jump (e.g. 99 -> 500) remains visible and
+    # research-rankable without falsely claiming five minutes of history.
+    importance = max(abs(observed),
+                     abs(move60) if move60 is not None else 0.,
+                     abs(move300) if move300 is not None else 0.)
+    score = round(min(100., max(0.,
+                  (importance - 5) * 2 + min(20., volume_gain / 1000.))), 2)
+    return {"score": score, "move_60s_pct": move60,
+            "move_5m_pct": move300, "observed_change_pct": observed,
+            "observed_span_seconds": span, "volume_increase": volume_gain,
+            "distinct_trade_times": len(trade_times)}
 
 
-def ranked_opportunities(limit: int = 40) -> list[dict]:
-    """Only truly observed, fresh moving option quotes can win depth slots."""
+def _eligible_for_depth(row: dict) -> tuple[bool, str]:
+    """Source-activity filter, *not* a liquidity/fill or profitability claim.
+
+    Every option stays in the full-universe stream and in saved history.
+    Penny-print percentage spikes must not consume scarce deep-book slots.
+    """
+    price = row.get("price")
+    span = row.get("observed_span_seconds", 0)
+    volume_gain = row.get("volume_increase", 0)
+    if not isinstance(price, (int, float)) or not 25 <= price <= 2000:
+        return False, "premium_outside_25_to_2000"
+    if not isinstance(span, (int, float)) or span < 1:
+        return False, "insufficient_distinct_trade_times"
+    if not isinstance(volume_gain, (int, float)) or volume_gain < 100:
+        return False, "insufficient_recent_volume_change"
+    if row.get("score", 0) < 12:
+        return False, "below_activity_threshold"
+    return True, "passes_source_activity_screen"
+
+
+def _ranked_candidates(limit: int, *, for_depth: bool) -> list[dict]:
+    """Separate all observed movers from candidates for 20-level promotion."""
     now = _utc()
+    if not isinstance(limit, int) or not 0 <= limit <= 80:
+        raise ValueError("Select up to 80 source-observed option candidates")
     with LOCK:
         rows = []
         for row in LATEST.values():
             if not row.get("quote_received_utc") or row.get("score", 0) < 12:
                 continue
-            age = (now-datetime.fromisoformat(row["quote_received_utc"])).total_seconds()
-            if 0 <= age <= 45:
-                rows.append({k: row.get(k) for k in
-                    ("identity","expiry","strike","option_type","price",
-                     "volume","open_interest","score","move_60s_pct",
-                     "move_5m_pct","volume_increase","quote_received_utc")})
-        return sorted(rows,key=lambda r:(-r["score"],r["identity"]))[:max(0,min(limit,80))]
+            age = (now-datetime.fromisoformat(
+                row["quote_received_utc"])).total_seconds()
+            if not 0 <= age <= 45:
+                continue
+            eligible, reason = _eligible_for_depth(row)
+            if for_depth and not eligible:
+                continue
+            fields = ("identity", "expiry", "strike", "option_type",
+                      "price", "volume", "open_interest", "score",
+                      "move_60s_pct", "move_5m_pct",
+                      "observed_change_pct", "observed_span_seconds",
+                      "distinct_trade_times", "volume_increase",
+                      "quote_received_utc")
+            candidate = {key: row.get(key) for key in fields}
+            candidate.update(
+                {"eligible_for_depth": eligible, "screen_reason": reason})
+            rows.append(candidate)
+        return sorted(rows, key=lambda row:
+                      (-int(row["eligible_for_depth"]), -row["score"],
+                       -row["volume_increase"], row["identity"]))[:limit]
+
+
+def ranked_opportunities(limit: int = 40) -> list[dict]:
+    """ALL source-observed movers, including penny options for research."""
+    return _ranked_candidates(limit, for_depth=False)
+
+
+def ranked_depth_candidates(limit: int = 40) -> list[dict]:
+    """Only source-activity-screened movers may replace rotating depth IDs."""
+    return _ranked_candidates(limit, for_depth=True)
 
 
 def _write_batches(stop: Event) -> None:
@@ -623,30 +696,87 @@ def suspend_for_shutdown() -> None:
 
 def status() -> dict:
     now = _utc()
+    def recent(stamp: str | None, seconds: int) -> bool:
+        if not stamp:
+            return False
+        try:
+            age = (now - datetime.fromisoformat(stamp)).total_seconds()
+            return 0 <= age <= seconds
+        except (ValueError, TypeError):
+            return False
+
     with LOCK:
-        recent = sum(1 for item in LATEST.values()
-                     if item.get("quote_received_utc") and
-                     0 <= (now-datetime.fromisoformat(
-                         item["quote_received_utc"])).total_seconds() <= 60)
+        by_expiry: dict[str, dict] = {}
+        for identity, contract in CATALOG.items():
+            expiry = contract["expiry"]
+            row = by_expiry.setdefault(expiry, {
+                "expiry": expiry, "subscribed": 0, "with_any_quote": 0,
+                "fresh_quote_60s": 0, "with_any_oi": 0,
+                "received_quote_packet_ids": 0, "source_quote_60s": 0,
+                "stale_quote_packet_only": 0, "never_received_quote_packet": 0,
+                "oi_only": 0, "never_quoted": 0,
+                "activity_screen_passed_45s": 0})
+            row["subscribed"] += 1
+            item = LATEST.get(identity, {})
+            has_quote = bool(item.get("quote_received_utc"))
+            has_source_packet = bool(item.get("last_quote_packet_received_utc"))
+            has_oi = bool(item.get("oi_received_utc"))
+            row["with_any_quote"] += int(has_quote)
+            row["received_quote_packet_ids"] += int(has_source_packet)
+            row["source_quote_60s"] += int(
+                recent(item.get("last_quote_packet_received_utc"), 60))
+            row["stale_quote_packet_only"] += int(
+                has_source_packet and not has_quote)
+            row["never_received_quote_packet"] += int(not has_source_packet)
+            row["fresh_quote_60s"] += int(
+                recent(item.get("quote_received_utc"), 60))
+            row["with_any_oi"] += int(has_oi)
+            row["oi_only"] += int(has_oi and not has_source_packet)
+            row["never_quoted"] += int(not has_quote)
+            eligible, _ = _eligible_for_depth(item)
+            row["activity_screen_passed_45s"] += int(
+                eligible and recent(item.get("quote_received_utc"), 45))
+
         snapshot = dict(STATUS)
         snapshot["observed_contracts"] = sum(
-            bool(entry.get("quote_received_utc")) for entry in LATEST.values())
-        snapshot["recent_price_contracts"] = recent
+            row["with_any_quote"] for row in by_expiry.values())
+        snapshot["recent_price_contracts"] = sum(
+            row["fresh_quote_60s"] for row in by_expiry.values())
+        snapshot["source_quote_delivered_contracts"] = sum(
+            row["received_quote_packet_ids"] for row in by_expiry.values())
+        snapshot["recent_source_quote_contracts"] = sum(
+            row["source_quote_60s"] for row in by_expiry.values())
+        snapshot["stale_source_quote_only_contracts"] = sum(
+            row["stale_quote_packet_only"] for row in by_expiry.values())
+        snapshot["never_received_source_quote_ids"] = sum(
+            row["never_received_quote_packet"] for row in by_expiry.values())
+        snapshot["observed_oi_contracts"] = sum(
+            row["with_any_oi"] for row in by_expiry.values())
+        snapshot["requested_not_yet_quoted"] = sum(
+            row["never_quoted"] for row in by_expiry.values())
         snapshot["queue_depth"] = WRITES.qsize()
+        snapshot["coverage_by_expiry"] = sorted(
+            by_expiry.values(), key=lambda row: row["expiry"])
         snapshot["opportunity_count"] = sum(
-            item.get("score",0)>=12 and bool(item.get("quote_received_utc"))
-            and 0 <= (now-datetime.fromisoformat(
-                item["quote_received_utc"])).total_seconds() <= 45
+            item.get("score", 0) >= 12 and
+            recent(item.get("quote_received_utc"), 45)
             for item in LATEST.values())
-    return {**snapshot,"armed":_armed(),
-            "full_universe_consent":_consented(),
-            "depth_armed":bool(auto._config()["enabled"]),
-            "market_regular_hours":auto._market_open(),
-            "source":"Dhan v2 original NSE_FNO Quote(4) and OI(5) packets",
-            "read_only":True,"shared_library":"dhan_shared",
-            "continuous_20_depth_for_all":False,
-            "note":"Subscribed does not prove trades or packets for each contract; "
-                   "venue-silent options and source gaps remain explicit."}
+        snapshot["depth_candidate_count"] = sum(
+            _eligible_for_depth(item)[0] and
+            recent(item.get("quote_received_utc"), 45)
+            for item in LATEST.values())
+    return {**snapshot, "armed": _armed(),
+            "full_universe_consent": _consented(),
+            "depth_armed": bool(auto._config()["enabled"]),
+            "market_regular_hours": auto._market_open(),
+            "source": "Dhan v2 original NSE_FNO Quote(4) and OI(5) packets",
+            "read_only": True, "shared_library": "dhan_shared",
+            "continuous_20_depth_for_all": False,
+            "note": "All contracts remain subscribed and recorded. "
+                    "Dhan does not guarantee source packet emission for "
+                    "silent contracts; each expiry has separate observed "
+                    "quote and OI evidence. Price movers and candidates "
+                    "for detailed-book promotion are not identical."}
 
 
 def contracts_page(offset: int = 0, limit: int = 100) -> dict:

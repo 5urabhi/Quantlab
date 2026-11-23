@@ -5,6 +5,7 @@ All fixtures are synthetic and do not represent a real broker entitlement.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import struct
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -88,7 +89,23 @@ class DhanSideReceiptObservabilityTests(TestCase):
                 b"broken", {"62539": _contract(62539)}, {}, NOW,
                 diagnostics=diagnostics)
         self.assertEqual(accepted, [])
-        self.assertEqual(diagnostics, {"rejected_frame_count": 1})
+        self.assertEqual(diagnostics["rejected_frame_count"], 1)
+        self.assertEqual(diagnostics["truncated_or_wrong_size_frames"], 1)
+
+    def test_depth_disconnect_control_is_classified_not_a_fake_book(self):
+        contract = _contract(62539)
+        chosen = {"62539": contract}
+        control = struct.pack("<hBBiI", 12, 50, 2, 62539, 805)
+        with patch.object(auto.market_depth, "packet_stream",
+                          side_effect=ValueError(
+                              "Not a bid/ask full-depth binary packet")):
+            diagnostics = {}
+            accepted = auto._paired_books(
+                control, chosen, {}, NOW, diagnostics=diagnostics)
+        self.assertEqual(accepted, [])
+        self.assertEqual(diagnostics["rejected_frame_count"], 1)
+        self.assertEqual(diagnostics["disconnect_or_control_frames"], 1)
+        self.assertNotIn("805", str(diagnostics))
 
     def test_status_explains_each_missing_book_reason_and_socket_coverage(self):
         contracts = [_contract(62539+i) for i in range(7)]

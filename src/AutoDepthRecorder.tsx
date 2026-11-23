@@ -290,7 +290,11 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{n(state?.contracts_with_saved_books)}</strong> contracts with saved source books</span>
       <span><strong>{n(state?.contracts_with_recent_packets)}</strong> contracts with paired packets in last 10s</span>
       <span><strong>{n(state?.active_contracts_with_no_valid_pairs_60s)}</strong> selected IDs without a valid pair in last 60s</span>
-      <span><strong>{n(state?.depth_parser_diagnostics?.rejected_frame_count)}</strong> rejected Dhan binary frames this session</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.rejected_frame_count)}</strong> non-book / invalid Dhan depth frames (see reasons)</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.disconnect_or_control_frames)}</strong> Dhan depth control/disconnect frames</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.unsupported_response_code_frames)}</strong> unsupported depth response-code frames</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.truncated_or_wrong_size_frames)}</strong> truncated or wrong-length depth frames</span>
+      <span><strong>{n(state?.depth_parser_diagnostics?.invalid_header_or_level_frames)}</strong> invalid depth headers or level values</span>
       <span><strong>{n(state?.depth_parser_diagnostics?.unpaired_time_window_count)}</strong> source bid/ask halves outside 1s pairing window</span>
       <span><strong>{n(state?.depth_parser_diagnostics?.rejected_book_pair_count)}</strong> decoded pairs rejected by original-book validation</span>
       <span><strong>{state?.sockets_connected??0} / {state?.sockets_requested??0}</strong> connected depth sockets</span>
