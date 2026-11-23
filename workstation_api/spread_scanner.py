@@ -108,6 +108,18 @@ def _lot_outcomes(book: dict, stats: dict, budget: float, max_lots: int,
             "passive_stressed_upper_net_inr": passive[
                 "after_adverse_move_stress_inr"],
             "marketable_net_inr": market["estimated_net_inr"],
+            "marketable_buy_cash_debit_inr": (
+                market["fees"]["buy_leg"]["cash_debit"]
+                if market.get("fees") else None),
+            "marketable_sell_cash_credit_inr": (
+                market["fees"]["sell_leg"]["cash_credit"]
+                if market.get("fees") else None),
+            "marketable_buy_fees_inr": (
+                market["fees"]["buy_leg"]["fees_total"]
+                if market.get("fees") else None),
+            "marketable_sell_fees_inr": (
+                market["fees"]["sell_leg"]["fees_total"]
+                if market.get("fees") else None),
         })
         if under_budget and marketable_full and top_depth:
             eligible.append(trace[-1])
