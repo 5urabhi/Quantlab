@@ -144,8 +144,9 @@ export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerP
     <SpreadExecutionDecision decision={data?.execution_decision}
       scope="Multi-leg options"/>
     <p className="ml-muted">Hard execution-quality gate: each leg ≤8s old,
-      quote skew ≤2s, at least 3 saved packets over ≥15s, sufficient
-      top-level depth, narrow relative spreads, and maximum theoretical
+      quote skew ≤2s, ≥3 saved packets over ≥15s, ≥2 source trade
+      times with ≥1 lot of volume growth per leg, sufficient top-level
+      depth, narrow relative spreads, and maximum theoretical
       loss ≤25% of the entered capital. Changing the display windows above
       does not override these safety screens.</p>
     {page==='discover'&&<>
