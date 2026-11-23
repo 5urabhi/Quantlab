@@ -155,6 +155,13 @@ def status() -> dict:
         state["latest"] = {k: dict(v) for k, v in STATE.get("latest", {}).items()}
         state["observed_by_contract"] = dict(STATE.get("observed_by_contract", {}))
         state["socket_last_paired_utc"] = dict(STATE.get("socket_last_paired_utc", {}))
+        state["observed_sides_by_contract"] = {
+            key: dict(value) for key, value in
+            STATE.get("observed_sides_by_contract", {}).items()}
+        state["connected_socket_indices"] = list(
+            STATE.get("connected_socket_indices", []))
+        state["depth_parser_diagnostics"] = dict(
+            STATE.get("depth_parser_diagnostics", {}))
     now = _now()
     market_open = _market_open(now)
     def _age(stamp) -> float:
@@ -185,9 +192,77 @@ def status() -> dict:
     state["sockets_with_recent_pairs"] = sum(
         1 for ts in state["socket_last_paired_utc"].values()
         if _age(ts) <= 60 and state.get("connected") and market_open)
-    # Aggregate only; no broker credentials or raw packet data are exposed.
+    # Per-selected-contract provenance: distinguish a missing original Dhan
+    # packet from missing/invalid bid/ask pairing and a saved sampled book.
+    # Only computed ages and status labels leave the server. Raw packets,
+    # prices from rejected books, and provider credentials are never exposed.
+    if wide:
+        receipts = {}
+        selected = state["contracts"]
+        sides = state["observed_sides_by_contract"]
+        for index, contract in enumerate(selected):
+            identity = contract["identity"]
+            stamps = sides.get(identity, {})
+            bid_age = _age(stamps.get("bid"))
+            ask_age = _age(stamps.get("ask"))
+            pair_age = _age(observed.get(identity))
+            saved_age = _age(state["latest"].get(identity, {}).get("received_utc"))
+            recent_bid = bid_age <= 60
+            recent_ask = ask_age <= 60
+            recent_pair = pair_age <= 60
+            if recent_pair and saved_age < 999999:
+                label = "valid_book_saved"
+            elif recent_pair:
+                label = "valid_pair_not_yet_saved"
+            elif recent_bid and recent_ask:
+                label = "bid_ask_seen_no_valid_pair"
+            elif recent_bid:
+                label = "bid_only"
+            elif recent_ask:
+                label = "ask_only"
+            elif saved_age < 999999:
+                label = "previously_saved_feed_quiet"
+            else:
+                label = "no_decoded_depth_yet"
+            def readable_age(value: float) -> float | None:
+                return round(value, 1) if value < 999999 else None
+            receipts[identity] = {
+                "status": label,
+                "socket": index // 50 + 1,
+                "bid_age_seconds": readable_age(bid_age),
+                "ask_age_seconds": readable_age(ask_age),
+                "pair_age_seconds": readable_age(pair_age),
+                "saved_age_seconds": readable_age(saved_age),
+                "has_ever_saved_book": saved_age < 999999,
+            }
+        connected_indices = set(state["connected_socket_indices"])
+        state["socket_health"] = [{
+            "socket": slot + 1,
+            "connected": slot in connected_indices,
+            "subscribed": len(selected[slot*50:(slot+1)*50]),
+            "with_recent_pairs_60s": sum(
+                receipts[row["identity"]]["pair_age_seconds"] is not None
+                and receipts[row["identity"]]["pair_age_seconds"] <= 60
+                for row in selected[slot*50:(slot+1)*50]),
+            "with_recent_bids_60s": sum(
+                receipts[row["identity"]]["bid_age_seconds"] is not None
+                and receipts[row["identity"]]["bid_age_seconds"] <= 60
+                for row in selected[slot*50:(slot+1)*50]),
+            "with_recent_asks_60s": sum(
+                receipts[row["identity"]]["ask_age_seconds"] is not None
+                and receipts[row["identity"]]["ask_age_seconds"] <= 60
+                for row in selected[slot*50:(slot+1)*50]),
+        } for slot in range((len(selected)+49)//50)]
+        state["contract_receipts"] = receipts
+        state["active_contracts_with_no_valid_pairs_60s"] = sum(
+            receipt["pair_age_seconds"] is None
+            or receipt["pair_age_seconds"] > 60
+            for receipt in receipts.values())
+    # No unrestricted per-security receipt store or raw packet data in API.
     state.pop("observed_by_contract", None)
     state.pop("socket_last_paired_utc", None)
+    state.pop("observed_sides_by_contract", None)
+    state.pop("connected_socket_indices", None)
     return {
         **state, "settings": cfg, "armed": cfg["enabled"],
         "requested_contracts_above": None,
