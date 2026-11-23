@@ -233,6 +233,56 @@ def _escaped_previous_range(spot: float, previous: list[dict]) -> bool:
                 (spot < min(strikes) or spot > max(strikes)))
 
 
+def _retain_if_market_inside_core(chain: dict, previous: list[dict]) -> list[dict]:
+    """Avoid dropping four healthy sockets for a tiny ATM flicker.
+
+    Only retain a subscription while Dhan's new spot is still inside the
+    middle 40% of the previous 120-contract core and every previous ID is
+    still independently verified for the same exchange term and lot.
+    """
+    spot = chain.get("underlying_spot")
+    if not isinstance(spot, (int, float)) or not math.isfinite(spot):
+        return []
+    core = [row for row in previous if row.get("coverage_role") == "core"]
+    if not core or any(row.get("expiry") != chain.get("expiry") for row in previous):
+        return []
+    distances = [float(row["strike"]) for row in core]
+    floor, ceiling = min(distances), max(distances)
+    if not floor < ceiling or not (floor + .30 * (ceiling - floor)
+                                   <= spot <= ceiling - .30 * (ceiling - floor)):
+        return []
+    by_id = {}
+    duplicates = set()
+    for option in chain.get("contracts", []):
+        if not isinstance(option, dict) or not _verified(option, chain["expiry"]):
+            continue
+        identity = option["identity"]
+        if identity in by_id:
+            duplicates.add(identity)
+        by_id[identity] = option
+    if not previous or any(item["identity"] in duplicates or
+          item["identity"] not in by_id or
+          float(by_id[item["identity"]]["strike"]) != item["strike"] or
+          by_id[item["identity"]]["option_type"] != item["side"] or
+          by_id[item["identity"]]["lot_size"] != item["lot_size"]
+          for item in previous):
+        return []
+    kept = []
+    for item in previous:
+        quote = by_id[item["identity"]]
+        last = quote.get("ltp")
+        kept.append({
+            **item,
+            "ltp": (float(last) if isinstance(last, (int, float)) and
+                    math.isfinite(last) and last > 0 else None),
+            "bid": quote.get("bid"), "ask": quote.get("ask"),
+            "volume": (quote.get("volume") if isinstance(quote.get("volume"), int)
+                       else 0),
+            "chain_received_utc": chain.get("received_utc"),
+        })
+    return kept
+
+
 def _coverage_diagnostics(chain: dict, selected: list[dict]) -> dict:
     """Explain source-limited ATM coverage without guessing missing options."""
     atm = selected[0]["atm_strike"] if selected else None
@@ -382,7 +432,8 @@ def _read_socket(index: int, group: list[dict], url: str,
                                 connected=bool(connected))
 
 
-def _select(cfg: dict, previous_ids=(), rotation_step: int = 0) -> list[dict]:
+def _select(cfg: dict, previous_ids=(), rotation_step: int = 0,
+            previous_contracts=(), hold_if_safe: bool = False) -> list[dict]:
     auto._refresh_master_if_needed()
     expiries = option_chain_live.expiries()
     chain = option_chain_live.chain(expiries["nearest_expiry"], force_refresh=True)
@@ -390,6 +441,8 @@ def _select(cfg: dict, previous_ids=(), rotation_step: int = 0) -> list[dict]:
     if age > 90:
         raise ValueError("Original Dhan BANKNIFTY chain is stale")
     selected = select_full_chain_rotation(chain, cfg, rotation_step)
+    if hold_if_safe:
+        selected = _retain_if_market_inside_core(chain, previous_contracts) or selected
     coverage = _full_chain_coverage(chain, selected)
     diagnostic = _coverage_diagnostics(chain, selected)
     counts = {"above": 0, "below": 0, "atm": 0}
@@ -520,7 +573,9 @@ def run(stop: Event) -> None:
                         requested_step = rotation_step + int(rotate)
                         updated = _select(updated_cfg,
                                           tuple(c["identity"] for c in selected),
-                                          rotation_step=requested_step)
+                                          rotation_step=requested_step,
+                                          previous_contracts=selected,
+                                          hold_if_safe=(not rotate and updated_cfg == cfg))
                         rotation_step = requested_step
                         if rotate:
                             next_rotation_due = time.monotonic() + ROTATION_SECONDS
