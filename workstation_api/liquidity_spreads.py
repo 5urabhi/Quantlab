@@ -44,7 +44,7 @@ SOURCE_NOTES = [
 ]
 WARN_FEES = (
     "Illustrative NSE equity-options intraday charges, not a broker contract "
-    "note: ₹20 Dhan brokerage per executed order; sell-side option STT 0.15% "
+    "note: brokerage depends on selected Dhan/Zerodha tariff; sell-side STT 0.15% "
     "effective 1 Apr 2026; indicative NSE option exchange 0.03553%, SEBI "
     "0.0001%, buy-side stamp 0.003%, GST 18% on brokerage/transaction/SEBI. "
     "IPFT, additional levies, clearing/physical delivery, expiry exercise, "
