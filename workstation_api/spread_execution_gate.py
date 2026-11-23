@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from math import isfinite
+import sqlite3
 
 from . import live_market, liquidity_spreads as spreads
 
@@ -23,6 +24,8 @@ CAPTURE_POLICY = {
     "min_distinct_packets": 2,
     "min_receipt_span_seconds": 15.0,
     "receipt_window_seconds": 120,
+    "min_source_trade_times": 2,
+    "min_volume_increase_lots": 1.0,
 }
 MULTILEG_POLICY = {
     "max_age_seconds": 8.0,
@@ -32,6 +35,8 @@ MULTILEG_POLICY = {
     "max_theoretical_loss_fraction_of_budget": 0.25,
     "max_entry_crossing_drag_to_terminal_max_gain": 0.50,
     "max_leg_quote_skew_seconds": 2.0,
+    "min_source_trade_times": 2,
+    "min_volume_increase_lots": 1.0,
     "min_receipts": 3,
     "min_distinct_packets": 2,
     "min_receipt_span_seconds": 15.0,
@@ -86,6 +91,71 @@ def recent_depth_receipts(*, day: str | None,
     return observed
 
 
+def recent_trade_activity(*, day: str | None,
+                          now: datetime | None = None,
+                          window_seconds: int = 120) -> dict[str, dict]:
+    """Aggregate *other participants'* fresh Dhan exchange-trade observations.
+
+    Original Dhan quote events include cumulative session volume and the
+    exchange's last-trade timestamp. They are NOT order fills for our user,
+    queue statistics, or a matched trade tape. Missing table/feed is a
+    blocked evidence state, never synthetic volume.
+    """
+    if not isinstance(window_seconds, int) or not 30 <= window_seconds <= 600:
+        raise ValueError("Trade window must be 30–600 seconds")
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        raise ValueError("Clock must be timezone aware")
+    chosen, _, _ = spreads._day_bounds(day)
+    if chosen != now.astimezone(spreads.IST).date().isoformat():
+        return {}
+    cutoff = (now - timedelta(seconds=window_seconds)).isoformat()
+    live_market._init_db()
+    try:
+        with live_market._database() as db:
+            rows = db.execute(
+                """SELECT identity,
+                          COUNT(DISTINCT exchange_trade_utc),
+                          COUNT(*),
+                          MAX(COALESCE(volume,0)) -
+                          MIN(COALESCE(volume,0)),
+                          MAX(received_utc)
+                   FROM dhan_option_live_events
+                   WHERE kind = 'quote' AND received_utc >= ?
+                     AND received_utc <= ?
+                     AND exchange_trade_utc >= ?
+                     AND exchange_trade_utc <= ?
+                   GROUP BY identity""",
+                (cutoff, now.isoformat(), cutoff, now.isoformat())).fetchall()
+    except sqlite3.OperationalError:
+        # The optional full options Quote/OI feed may never have been armed.
+        return {}
+    return {
+        identity: {
+            "source_distinct_exchange_trade_times": max(0, ticks or 0),
+            "observed_quote_packets_with_recent_trade": count,
+            "cumulative_volume_delta_units": max(0, volume_change or 0),
+            "last_quote_receive_utc": last,
+            "user_order_fills_observed": False,
+            "full_exchange_trade_tape_available": False,
+        }
+        for identity, ticks, count, volume_change, last in rows
+    }
+
+
+def _trade_reasons(trade: dict | None, lot_size: int, policy: dict) -> list[str]:
+    if trade is None:
+        return ["MISSING_FRESH_SOURCE_TRADE_ACTIVITY"]
+    reasons = []
+    if trade.get("source_distinct_exchange_trade_times", 0) < policy[
+            "min_source_trade_times"]:
+        reasons.append("TOO_FEW_DISTINCT_SOURCE_TRADE_TIMES")
+    minimum_units = max(1, lot_size) * policy["min_volume_increase_lots"]
+    if trade.get("cumulative_volume_delta_units", 0) < minimum_units:
+        reasons.append("TOO_LITTLE_RECORDED_TRADE_VOLUME")
+    return reasons
+
+
 def _receipt_reasons(receipt: dict | None, policy: dict) -> list[str]:
     if receipt is None:
         return ["MISSING_RECENT_DEPTH_SEQUENCE"]
@@ -106,6 +176,7 @@ def _safe_positive(value: object) -> bool:
 
 def capture_feasibility(row: dict, *, capital_inr: float,
                         receipt: dict | None,
+                        trade: dict | None = None,
                         policy: dict | None = None) -> dict:
     """Exclude penny/illiquid/stale/liquidity-poor quotes from top choices.
 
@@ -150,6 +221,7 @@ def capture_feasibility(row: dict, *, capital_inr: float,
     if row.get("failed_exit_net_inr") is None:
         reasons.append("NO_RECORDED_FORCED_EXIT_DEPTH")
     reasons.extend(_receipt_reasons(receipt, policy))
+    reasons.extend(_trade_reasons(trade, row.get("lot_size") or 0, policy))
     qualified = not reasons
     conservative_hurdle = None
     if _safe_positive(entry_debit) and _safe_positive(stressed):
@@ -186,6 +258,7 @@ def capture_feasibility(row: dict, *, capital_inr: float,
         "receipt_evidence": receipt or {
             "packet_receipts_120s": 0, "distinct_packet_pairs_120s": 0,
             "receipt_span_seconds": 0, "history_is_verified_fills": False},
+        "trade_activity_evidence": trade,
         "policy": dict(policy),
     }
 
@@ -193,6 +266,7 @@ def capture_feasibility(row: dict, *, capital_inr: float,
 def multileg_feasibility(candidate: dict, *, books: list[dict],
                          capital_inr: float,
                          receipts: dict[str, dict],
+                         trades: dict[str, dict] | None = None,
                          policy: dict | None = None) -> dict:
     """Same negative evidence gate for hedged multi-leg structures.
 
@@ -221,6 +295,8 @@ def multileg_feasibility(candidate: dict, *, books: list[dict],
                 policy["minimum_top_depth_multiple"] * units):
             reasons.append("INSUFFICIENT_TOP_LEVEL_LEG_LIQUIDITY")
         reasons.extend(_receipt_reasons(receipts.get(b["identity"]), policy))
+        reasons.extend(_trade_reasons(
+            (trades or {}).get(b["identity"]), b["lot_size"], policy))
         spreads_bps.append(b["spread_bps"])
     loss = candidate.get("max_loss_inr")
     gain = candidate.get("max_profit_inr")
@@ -260,6 +336,8 @@ def multileg_feasibility(candidate: dict, *, books: list[dict],
         "expected_net_profit_inr": None,
         "receipt_evidence_by_leg": {
             b["identity"]: receipts.get(b["identity"]) for b in books},
+        "trade_evidence_by_leg": {
+            b["identity"]: (trades or {}).get(b["identity"]) for b in books},
         "policy": dict(policy),
         "note": "Payoff and source-depth quality only. Actual broker margin, "
                 "sequenced fills, pin/expiry settlement and profit odds UNKNOWN.",
