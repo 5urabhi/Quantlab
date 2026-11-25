@@ -1,5 +1,4 @@
 import ResearchPlot from './ResearchPlots'
-import {useState} from 'react'
 import {AlertTriangle,ArrowDownRight,ArrowUpRight,ShieldCheck} from 'lucide-react'
 import './index-exposure.css'
 

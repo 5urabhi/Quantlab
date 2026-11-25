@@ -739,14 +739,14 @@ try{
    await page.getByRole('heading',{name:'EMA Explorer',exact:true}).waitFor()
  })
  await step('V3 every default route renders its title and captures desktop QA screenshot',async()=>{
-   const routes=['overview','trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper','tradinganalytics','tradingdirectional','customscanners','strategies','strategyema','strategypython','strategybacktest','pythonmonitors','mathematics','models','research','factors','construction','risk','rolling','robustness','modelgrids','indexstudio','custommodels','journey','data','dhan','dataexplorer','dataquality','datadownloads','nse','evidence','history','workspace','chartstudio','comparisons','visual','workspacejobs','projects','reports','resourcebrowser','connections','recordingsettings','storage','preferences','diagnostics','settings','guide','pythonenvironment']
-   for(const route of routes){
+   const routes={"overview":"Home","trading":"Live Market","tradingchain":"Option Chain","tradingdepth":"20-Level Order Book","tradingspreads":"Liquidity & Spreads","tradingreplay":"Market Replay","tradingjournal":"Trade Journal","tradingpaper":"Paper Trading","tradinganalytics":"Options Analytics","tradingdirectional":"Directional Trading","strategies":"Strategy Library","strategyema":"EMA Explorer","strategypython":"Python Editor","strategybacktest":"BANKNIFTY Backtests","pythonmonitors":"Running Python","custommodels":"Custom Models","customscanners":"Custom Scanners","pythonenvironment":"Python Environment","mathematics":"Model Catalog","models":"Advanced Research Tools","research":"Index Builder","factors":"Factor Research","construction":"Portfolio Construction","risk":"Risk Attribution","rolling":"Rolling Validation","robustness":"Robustness & Sensitivity","modelgrids":"Guided Model Grids","indexstudio":"Index Research Studio","data":"Market Library","dhan":"Get Market Data","dataexplorer":"Data Explorer","dataquality":"Quality & Coverage","datadownloads":"Downloads","nse":"NSE Source Evidence","evidence":"Evidence & Machine Learning","history":"All Research Results","workspace":"Compare Runs","chartstudio":"Chart Studio","comparisons":"Index Comparison","visual":"Historical Charts","workspacejobs":"Research Job History","projects":"My Projects & Notebooks","reports":"Research Reports","resourcebrowser":"Saved Resource Library","connections":"Connections","recordingsettings":"Automatic Recording","storage":"Storage & Data Management","preferences":"Preferences","diagnostics":"System Diagnostics","settings":"Backend & Privacy","guide":"Help & How It Works","journey":"New Guided Study"}
+   for(const [route,title] of Object.entries(routes)){
      await page.goto(base+'#/'+route,{waitUntil:'domcontentloaded'})
-     await page.locator('.ws-titlebar h1').waitFor()
+     const heading=page.locator('.ws-titlebar h1').getByText(title,{exact:true})
+     await heading.waitFor()
      assert.equal(new URL(page.url()).hash,'#/'+route)
      await page.locator('main.ws-content').waitFor()
-     assert((await page.locator('.ws-titlebar h1').innerText()).trim().length>0,'Missing route title: '+route)
-     await shot('route-'+route)
+     await page.screenshot({path:path.join(dir,'v3-route-'+route+'.png'),fullPage:false})
    }
  })
  await step('390-pixel responsive sidebar drawer and eight navigable pages',async()=>{

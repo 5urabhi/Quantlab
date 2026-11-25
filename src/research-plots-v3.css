@@ -21,3 +21,14 @@
 .ql-chart-data td,.ql-chart-data th{padding:7px 9px;border-bottom:1px solid #343438;text-align:left;white-space:nowrap}
 .ql-chart-card:fullscreen{overflow:auto;background:#151518;padding:24px}
 .ql-chart-card:fullscreen .ql-svg-chart{max-height:70vh;width:100%}
+
+/* Preserve tick readability instead of shrinking a dense scientific figure to
+   illegible text in half-width cards and narrow screens. */
+.ql-chart-card .ql-plot{max-width:100%;overflow-x:auto;min-width:0}
+.ql-chart-card .ql-svg-chart{min-width:620px}
+.ql-chart-card .ql-chart-title-row h4{overflow-wrap:anywhere}
+.ql-chart-card .ql-inspection{font-variant-numeric:tabular-nums}
+.ql-chart-card .ql-plot-hover-help{white-space:normal}
+.ql-chart-card .ql-legend{flex-wrap:wrap}
+.ql-chart-card:fullscreen .ql-svg-chart{min-width:0}
+@media(max-width:700px){.ql-chart-card{padding:10px}.ql-chart-card .ql-svg-chart{min-width:600px}.ql-chart-card button{min-height:34px}}
