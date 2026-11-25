@@ -93,6 +93,8 @@ if [ "\${1:-}" = "--version" ]; then echo v22.23.5; else exec "${process.execPat
 
 test('workstation launcher waits for heavy saved-market FastAPI startup without 10s false failure',()=>{
   const launcher=readFileSync(join(root,'scripts/run_workstation.sh'),'utf8')
+  const syntax=spawnSync('bash',['-n',join(root,'scripts/run_workstation.sh')],{encoding:'utf8'})
+  assert.equal(syntax.status,0,syntax.stderr)
   assert.match(launcher,/QUANTLAB_API_READY_TIMEOUT_SECONDS:-120/)
   assert.match(launcher,/API_READY_DEADLINE/)
   assert.match(launcher,/while :; do/)
