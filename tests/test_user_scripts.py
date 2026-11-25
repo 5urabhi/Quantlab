@@ -108,6 +108,33 @@ class UserScriptTests(unittest.TestCase):
                 monitor.remove(row["id"])
                 self.assertEqual(monitor.list_monitors(),[])
 
+    def test_chain_spot_history_validates_receipt_and_caches_only_metadata(self):
+        import sqlite3
+        from collections import OrderedDict
+        from hashlib import sha256
+        path=self.tmp/"market.sqlite3"
+        stamp="2026-11-25T04:29:30+00:00"
+        receipt={"received_utc":stamp,"underlying":"BANKNIFTY","expiry":"2026-12-29",
+                 "underlying_spot":63000,"contracts":[{"identity":"NSE_FNO:1"}]}
+        raw=json.dumps(receipt)
+        digest=sha256(raw.encode()).hexdigest()
+        with sqlite3.connect(path) as db:
+            db.execute("CREATE TABLE option_chain_observations(underlying TEXT,expiry TEXT,captured_utc TEXT,snapshot_sha256 TEXT,normalized_json TEXT)")
+            db.execute("INSERT INTO option_chain_observations VALUES(?,?,?,?,?)",("BANKNIFTY",receipt["expiry"],stamp,digest,raw))
+        now=datetime(2026,11,25,4,30,tzinfo=timezone.utc)
+        with patch.object(monitor.shared_market_data,"database_path",return_value=path), \
+             patch.object(monitor,"SPOT_CACHE",OrderedDict()):
+            result=monitor._chain_rows(now,150,spot_only=True)
+            self.assertEqual(result[0][2]["underlying_spot"],63000)
+            self.assertNotIn("contracts",result[0][2])
+            self.assertEqual(len(monitor.SPOT_CACHE),1)
+            self.assertEqual(monitor._chain_rows(now,150,spot_only=True),result)
+            self.assertEqual(monitor._chain_rows(now,1)[0][2]["contracts"],receipt["contracts"])
+            with sqlite3.connect(path) as db:
+                db.execute("UPDATE option_chain_observations SET snapshot_sha256=?",("bad-digest",))
+            with self.assertRaisesRegex(ValueError,"integrity"):
+                monitor._chain_rows(now,150,spot_only=True)
+
     def test_monitor_source_freshness_and_market_window(self):
         now=datetime(2026,11,25,4,30,tzinfo=timezone.utc)
         self.assertTrue(monitor._regular(now))

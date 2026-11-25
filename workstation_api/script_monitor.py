@@ -7,6 +7,7 @@ starts disabled after a server restart; enabling is an explicit session action.
 from __future__ import annotations
 
 from contextlib import closing
+from collections import OrderedDict
 from datetime import datetime, timezone, timedelta
 from hashlib import sha256
 from threading import Event, RLock, Thread
@@ -29,6 +30,12 @@ COMPATIBLE = {"index_minutes": {"strategy","indicator","chart","research","model
               "chain_spot_receipts": {"indicator","chart","research","model","risk","transform"}}
 MAX_ENABLED = 4
 MAX_MONITORS = 100
+# Store only validated spot metadata, never full option-chain payloads.
+# A fixed cache keyed by immutable receipt digest avoids reparsing 150 large
+# JSON chain snapshots on each chart poll or monitor cycle.
+SPOT_CACHE_LOCK = RLock()
+SPOT_CACHE = OrderedDict()
+MAX_SPOT_CACHE = 384
 
 
 def _now():
@@ -116,14 +123,18 @@ def remove(ident):
     return {"removed":ident}
 
 
-def _chain_rows(now, limit=1, *, recent=True):
+def _chain_rows(now, limit=1, *, recent=True, spot_only=False):
     path = shared_market_data.database_path()
     if not path.is_file() or path.is_symlink():
         return []
+    if not 1 <= limit <= 150:
+        raise ValueError("At most 150 saved chain receipts")
+    stat = path.stat()
+    database_key = (str(path.resolve()), stat.st_dev, stat.st_ino)
+    result = []
     try:
         with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro", uri=True, timeout=2)) as db:
-            # Choose the nearest currently valid expiry that has a saved recent
-            # receipt. Never switch expiry within a time series.
+            # Choose one expiry; never stitch different option chains together.
             if recent:
                 expiry = db.execute("""SELECT expiry FROM option_chain_observations
                     WHERE underlying='BANKNIFTY' AND expiry>=? AND captured_utc>=?
@@ -132,30 +143,57 @@ def _chain_rows(now, limit=1, *, recent=True):
                      (now-timedelta(seconds=120)).isoformat())).fetchone()
                 cutoff = (now-timedelta(hours=7)).isoformat()
             else:
-                # Historical viewing is allowed with the source time visible.
-                # Do not reuse a previous session to drive a running monitor.
                 latest = db.execute("""SELECT expiry,captured_utc FROM option_chain_observations
                     WHERE underlying='BANKNIFTY' ORDER BY captured_utc DESC LIMIT 1""").fetchone()
                 expiry = (latest[0],) if latest else None
                 cutoff = (_stamp(latest[1])-timedelta(hours=7)).isoformat() if latest else ""
             if not expiry:
                 return []
-            rows = db.execute("""SELECT captured_utc,snapshot_sha256,normalized_json
+            # Metadata query is small even for thousands of contracts per receipt.
+            rows = db.execute("""SELECT captured_utc,snapshot_sha256
                 FROM option_chain_observations WHERE underlying='BANKNIFTY' AND expiry=?
                 AND captured_utc>=? ORDER BY captured_utc DESC LIMIT ?""",
                 (expiry[0],cutoff,limit)).fetchall()
+            for stamp,digest in reversed(rows):
+                key = (database_key,expiry[0],stamp,digest)
+                if spot_only:
+                    with SPOT_CACHE_LOCK:
+                        cached = SPOT_CACHE.get(key)
+                        if cached is not None:
+                            SPOT_CACHE.move_to_end(key)
+                    if cached is not None:
+                        result.append((stamp,digest,dict(cached)))
+                        continue
+                # Fetch one receipt at a time and refuse oversized payloads in SQL
+                # before returning them to Python. No database writes or locks
+                # spanning an entire history download.
+                row = db.execute("""SELECT normalized_json FROM option_chain_observations
+                    WHERE underlying='BANKNIFTY' AND expiry=? AND captured_utc=?
+                    AND snapshot_sha256=? AND length(normalized_json)<=8000000""",
+                    (expiry[0],stamp,digest)).fetchone()
+                if row is None:
+                    raise ValueError("Saved chain receipt changed or exceeds the research size limit")
+                raw = row[0]
+                if sha256(raw.encode()).hexdigest() != digest:
+                    raise ValueError("Saved chain receipt integrity check failed")
+                data = json.loads(raw)
+                if data.get("received_utc") != stamp or data.get("underlying") != "BANKNIFTY" or data.get("expiry") != expiry[0]:
+                    raise ValueError("Saved chain receipt metadata mismatch")
+                if spot_only:
+                    spot = data.get("underlying_spot")
+                    if type(spot) not in (int,float) or not math.isfinite(spot) or spot <= 0:
+                        raise ValueError("Saved chain spot is missing or invalid")
+                    data = {"received_utc":stamp,"underlying":"BANKNIFTY","expiry":expiry[0],"underlying_spot":spot}
+                    with SPOT_CACHE_LOCK:
+                        SPOT_CACHE[key] = dict(data)
+                        SPOT_CACHE.move_to_end(key)
+                        while len(SPOT_CACHE) > MAX_SPOT_CACHE:
+                            SPOT_CACHE.popitem(last=False)
+                result.append((stamp,digest,data))
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc):
             return []
         raise
-    result = []
-    for stamp,digest,raw in reversed(rows):
-        if len(raw) > 8_000_000 or sha256(raw.encode()).hexdigest() != digest:
-            raise ValueError("Saved chain receipt integrity check failed")
-        data = json.loads(raw)
-        if data.get("received_utc") != stamp or data.get("underlying") != "BANKNIFTY" or data.get("expiry") != expiry[0]:
-            raise ValueError("Saved chain receipt metadata mismatch")
-        result.append((stamp,digest,data))
     return result
 
 
@@ -179,7 +217,8 @@ def source_snapshot(source, now=None):
         return stamp,stamp,snap,bars
     if source not in SOURCES:
         raise ValueError("Unknown source")
-    receipts = _chain_rows(now, 150 if source=="chain_spot_receipts" else 1)
+    receipts = _chain_rows(now, 150 if source=="chain_spot_receipts" else 1,
+                           spot_only=source=="chain_spot_receipts")
     if not receipts or not _fresh(receipts[-1][0],now,0,120):
         return None
     stamp,digest,data = receipts[-1]
