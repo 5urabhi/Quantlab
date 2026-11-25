@@ -12,3 +12,8 @@ export type PythonApplied={snapshot:PythonSnapshot;plot:ResearchPlotData;runId:s
 export function applyPythonResult(detail:PythonApplied){
   return !window.dispatchEvent(new CustomEvent(PYTHON_APPLY_EVENT,{detail,cancelable:true}))
 }
+
+export const PYTHON_SCRIPT_EVENT='quantlab:python-script'
+export function openScriptInPython(name:string,code:string){
+  window.dispatchEvent(new CustomEvent(PYTHON_SCRIPT_EVENT,{detail:{name,code,kind:'strategy'}}))
+}

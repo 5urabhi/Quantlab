@@ -1,8 +1,9 @@
 import {useEffect,useState} from 'react'
 import ResearchPlot,{type ResearchPlotData} from './ResearchPlots'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
-import {PYTHON_SNAPSHOT_EVENT,STRATEGY_SCRIPT_EVENT,applyPythonResult,type PythonSnapshot} from './pythonBridge'
+import {PYTHON_SNAPSHOT_EVENT,PYTHON_SCRIPT_EVENT,STRATEGY_SCRIPT_EVENT,applyPythonResult,type PythonSnapshot} from './pythonBridge'
 import './python-workbench.css'
+import PythonCodeEditor from './PythonCodeEditor'
 
 type Kind='strategy'|'indicator'|'chart'|'research'|'model'|'scanner'|'risk'|'transform'
 type Meta={id:string;name:string;kind:Kind;revision:number;updated_utc:string}
@@ -61,8 +62,10 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
     const handler=(e:Event)=>{
       setSnapshot((e as CustomEvent<PythonSnapshot>).detail);setError('');setNotice('Snapshot attached. It is fixed until you attach another.');setView('input');onOpen()
     }
+    const scriptHandler=(e:Event)=>{const item=(e as CustomEvent<{name:string;code:string;kind:Kind}>).detail;setCurrent(null);setDraft(item);setNotice('Strategy attached. Save to keep a backend revision.');onOpen()}
     window.addEventListener(PYTHON_SNAPSHOT_EVENT,handler)
-    return()=>window.removeEventListener(PYTHON_SNAPSHOT_EVENT,handler)
+    window.addEventListener(PYTHON_SCRIPT_EVENT,scriptHandler)
+    return()=>{window.removeEventListener(PYTHON_SNAPSHOT_EVENT,handler);window.removeEventListener(PYTHON_SCRIPT_EVENT,scriptHandler)}
   },[onOpen])
   const refresh=async()=>{
     try{const data=await marketApi<{scripts:Meta[];sandbox:{available:boolean}}>('/api/user-scripts');setScripts(data.scripts);setAvailable(data.sandbox.available)}
@@ -150,7 +153,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
       <div className="qpw-editor">
         <div className="qpw-actions"><label>Name<input value={draft.name} maxLength={100} onChange={e=>setDraft(d=>({...d,name:e.target.value}))}/></label><label>Category<select value={draft.kind} onChange={e=>setDraft(d=>({...d,kind:e.target.value as Kind}))}>{KINDS.map(k=><option key={k}>{k}</option>)}</select></label>
           <button type="button" disabled={locked} onClick={()=>setDraft(d=>({...d,code:d.kind==='strategy'?STRATEGY:EXAMPLE}))}>Load example</button></div>
-        <div className="qpw-code"><pre aria-hidden="true">{draft.code.split('\n').map((_,i)=>i+1).join('\n')}</pre><textarea aria-label="Reusable Python code" value={draft.code} maxLength={20000} spellCheck={false} wrap="off" onChange={e=>setDraft(d=>({...d,code:e.target.value}))} onKeyDown={e=>{if(e.key==='Tab'){e.preventDefault();const el=e.currentTarget;const start=el.selectionStart;setDraft(d=>({...d,code:d.code.slice(0,start)+'    '+d.code.slice(el.selectionEnd)}));requestAnimationFrame(()=>el.setSelectionRange(start+4,start+4))}}}/></div>
+        <PythonCodeEditor value={draft.code} onChange={code=>setDraft(d=>({...d,code}))} label="Reusable Python code"/>
         <div className="qpw-actions"><button className="primary" type="button" disabled={locked} onClick={()=>void save()}>Save</button><button type="button" disabled={locked} onClick={()=>void save(true)}>Save as new</button><button type="button" onClick={exportCode}>Export .py</button>
           {current&&<label>Version<select value={current.revision} disabled={locked} onChange={e=>void load(current.script_id,Number(e.target.value))}>{current.revisions.map(v=><option key={v.revision} value={v.revision}>v{v.revision} · {v.created_utc.slice(0,10)}</option>)}</select></label>}
           {jobId&&<button type="button" onClick={()=>void stopJob()}>Stop job</button>}

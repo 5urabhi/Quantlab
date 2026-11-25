@@ -1,7 +1,8 @@
 import {useEffect,useMemo,useRef,useState} from 'react'
 import {Activity,Code2,Database,Download,Play,Save,ShieldCheck,SlidersHorizontal} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
-import {STRATEGY_SCRIPT_EVENT} from './pythonBridge'
+import {STRATEGY_SCRIPT_EVENT,openScriptInPython} from './pythonBridge'
+import PythonCodeEditor from './PythonCodeEditor'
 import './research-python-lab.css'
 
 type SourceMode='historical'|'recorded_live'
@@ -497,29 +498,14 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
           <code> "UP"</code>, <code>"DOWN"</code>, or <code>"HOLD"</code>.
           The function receives only completed original candles up through the
           current minute, never future candles. Standard-library Python only.</p>
-        <div className="rpl-editor-frame">
-          <pre aria-hidden="true" className="rpl-line-numbers">
-            {script.split('\n').map((_,i)=>i+1).join('\n')}</pre>
-          <textarea ref={editor} aria-label="Paste or type Python backtest code"
-            spellCheck={false} autoComplete="off" autoCapitalize="off" wrap="off"
-            value={script} onChange={e=>setScript(e.target.value)}
-            onKeyDown={e=>{
-              if(e.key==='Tab'){
-                e.preventDefault()
-                const el=e.currentTarget
-                const start=el.selectionStart,end=el.selectionEnd
-                setScript(s=>s.slice(0,start)+'    '+s.slice(end))
-                requestAnimationFrame(()=>{el.selectionStart=el.selectionEnd=start+4})
-              }
-              if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();runPython()}
-            }} />
-        </div>
+        <PythonCodeEditor ref={editor} value={script} onChange={setScript} label="Paste or type Python backtest code" onRun={runPython}/>
         <div className="rpl-editor-foot">
           <div className="rpl-editor-actions">
             <input aria-label="Custom strategy name" value={savedName}
               onChange={e=>setSavedName(e.target.value)} maxLength={65}/>
             <button type="button" onClick={saveScript}><Save size={15}/> Save code locally</button>
             <button type="button" onClick={downloadScript}><Download size={15}/> Export Python file</button>
+            <button type="button" onClick={()=>openScriptInPython(savedName,script)}>Open in My Scripts</button>
             <button type="button" onClick={loadSavedList}>Load saved code</button>
             {localNames.length>0&&<select aria-label="Locally saved Python scripts"
               defaultValue="" onChange={e=>loadCode(e.target.value)}>
