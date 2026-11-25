@@ -338,6 +338,8 @@ function App(){
   const [connectionEditing,setConnectionEditing]=useState(false)
   const [searchOpen,setSearchOpen]=useState(false)
   const [menu,setMenu]=useState(false)
+  const [compactNav,setCompactNav]=useState(()=>{try{return localStorage.getItem('ql-v3-compact-nav')==='1'}catch{return false}})
+  useEffect(()=>{try{localStorage.setItem('ql-v3-compact-nav',compactNav?'1':'0')}catch{/* optional preference */}},[compactNav])
   const [health,setHealth]=useState<Health|null>(null)
   const [datasets,setDatasets]=useState<Dataset[]>([])
   const [selectedDataset,setSelectedDataset]=useState('')
@@ -524,18 +526,19 @@ function App(){
   const classification=<Tag tone={detail?.source.dataset_kind==='synthetic'?'warn':'blue'}>{detail?.source.dataset_kind==='synthetic'?'SYNTHETIC DATA — DEMONSTRATION':detail?'USER DATA · NOT INDEPENDENTLY AUDITED':'NO RESEARCH RUN'}</Tag>
   const chart=detail?<EquityChart rows={detail.returns}/>:null
   const panel=(key: keyof Detail,description:string)=>withRun(<Card title={description}><Table rows={(detail?.[key] as Dict[]|undefined)??[]} max={20}/></Card>)
-  return <div className="ws-shell ws-v2">
+  return <div className={'ws-shell ws-v2 ql-v3 '+(compactNav?'ql-nav-compact':'')}>
     <aside className={'ws-sidebar '+(menu?'open':'')}>
       <div className="ws-brand"><span className="ws-brand-mark"><Activity size={23}/></span><div><strong>QUANT<span>LAB</span></strong><small>RESEARCH WORKSTATION</small></div><button type="button" className="ws-mobile-close" onClick={()=>setMenu(false)}><X size={19}/></button></div>
       <div className="ws-env"><span className={'ws-status-dot '+(health?.ok?'':'offline')}/><div><strong>{health?.ok?'LOCAL ENGINE CONNECTED':'ENGINE DISCONNECTED'}</strong><small>127.0.0.1 · NO BROKER EXECUTION</small></div></div>
       <nav aria-label="Primary QuantLab navigation">
         <div className="ws-nav-group"><span className="ws-nav-label">WORKSPACES</span>
+          <button type="button" className="ws-nav-item ql-nav-toggle" onClick={()=>setCompactNav(v=>!v)} aria-label={compactNav?'Expand sidebar':'Collapse sidebar'} aria-expanded={!compactNav}><Menu size={17}/><span className="ql-nav-text">Collapse sidebar</span></button>
           {primarySections.map((section,index)=><button type="button" key={section.id}
             title={'Ctrl+Alt+'+(index+1)+' · '+section.label}
             onClick={()=>begin(section.id)}
             aria-current={section.tabs.includes(tab)?'page':undefined}
             className={'ws-nav-item '+(section.tabs.includes(tab)?'active':'')}>
-            <section.icon size={17} strokeWidth={1.9}/>{section.label}
+            <section.icon size={17} strokeWidth={1.9}/><span className="ql-nav-text">{section.label}</span>
             {section.tabs.includes(tab)&&<span className="ws-nav-select"/>}</button>)}
         </div></nav>
       <div className="ws-sidefoot"><LockKeyhole size={15}/><div><strong>PRIVATE / LOCAL FIRST</strong><small>Credentials never sent to browser</small></div></div>
@@ -556,6 +559,7 @@ function App(){
             aria-label="Search QuantLab" title="Search QuantLab · Ctrl K">
             <Search size={16}/><span>Search</span></button>
           <RecorderBadge onOpen={()=>begin('recordingsettings')}/>
+          <button type="button" className="v2-top-btn" onClick={()=>begin('strategypython')} title="Open existing isolated Python strategy editor"><Sigma size={16}/><span>Python</span></button>
           <button type="button" className="v2-top-btn" onClick={()=>setJobsOpen(true)}
             aria-label="Open Jobs and downloads" title="Jobs and downloads">
             <Clock3 size={16}/><span>Jobs</span></button>
@@ -580,9 +584,7 @@ function App(){
           <div><div className="ws-overline">LOCAL QUANTITATIVE RESEARCH WORKSTATION</div>
             <h1>{titles[tab]}</h1><p>{descriptions[tab]}</p></div>
           <div className="ws-title-actions">
-            {(['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal'].includes(tab))&&
-              <button className="ws-button secondary" onClick={()=>begin('recordingsettings')}>
-                <Activity size={15}/> Recorder settings</button>}
+
             {(['strategies','strategyema','strategypython','strategybacktest'].includes(tab))&&
               <button className="ws-button secondary" onClick={()=>begin('data')}>
                 <Database size={15}/> Data coverage</button>}
@@ -995,6 +997,7 @@ function App(){
         </Suspense>
         <footer className="ws-footer"><span>QUANTLAB / RESEARCH WORKSTATION</span><span>LOCAL ENGINE · HISTORICAL CLAIMS REQUIRE EXTERNAL VALIDATION</span><span>© PERSONAL RESEARCH</span></footer>
       </main>
+      <div className="ql-statusbar" aria-label="Workstation status"><button type="button" onClick={()=>begin('diagnostics')}>Engine: {health?.ok?'Online':health?'Offline':'Checking'}</button><button type="button" onClick={()=>begin('connections')}>Dhan: {dhan?.token_configured?'Token configured':'Not confirmed'}</button><span>Read-only research · no orders</span><button type="button" onClick={()=>setJobsOpen(true)}>Jobs &amp; downloads</button></div>
     </div>
   </div>
 }
