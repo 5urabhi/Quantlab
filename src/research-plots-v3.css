@@ -1,0 +1,23 @@
+/* Shared research renderer is available even outside Model Laboratory. */
+.ql-chart-card{min-width:0;border:1px solid #343438;border-radius:10px;padding:14px;background:#151518;color:#f1f1f3;overflow:hidden}
+.ql-chart-title-row,.ql-chart-viewport,.ql-chart-export,.ql-series-controls,.ql-legend,.ql-inspection{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.ql-chart-title-row{justify-content:space-between}
+.ql-chart-title-row h4{font-size:15px;margin:4px 0;flex:1;min-width:180px}
+.ql-chart-card button{font-size:11px;padding:7px 9px;border:1px solid #45454a;background:#1c1c20;color:#e8e8eb;border-radius:5px}
+.ql-chart-card button:hover:not(:disabled){border-color:#f5c542}
+.ql-chart-card button[aria-pressed=true]{background:#332b17;color:#f5c542;border-color:#9a7931}
+.ql-chart-card button:disabled{opacity:.5}
+.ql-series-controls{margin:8px 0}
+.ql-series-controls button{display:inline-flex;align-items:center;gap:6px}
+.ql-series-controls i,.ql-legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}
+.ql-chart-viewport{margin:8px 0;font-size:11px;color:#b5b5bc}
+.ql-svg-chart{width:100%;height:auto;display:block;min-width:0}
+.ql-chart-card .ql-muted,.ql-chart-card .ql-note,.ql-plot-hover-help{font-size:12px;line-height:1.5;color:#b5b5bc}
+.ql-legend,.ql-inspection{font-size:12px;color:#d6d6db;margin:8px 0}
+.ql-inspection{border-top:1px solid #343438;padding-top:8px;overflow-wrap:anywhere}
+.ql-chart-data summary{cursor:pointer;color:#f5c542;font-size:12px;padding:8px 0}
+.ql-chart-data .ql-table-scroll,.ql-heat-scroll{overflow:auto;max-width:100%}
+.ql-chart-data table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+.ql-chart-data td,.ql-chart-data th{padding:7px 9px;border-bottom:1px solid #343438;text-align:left;white-space:nowrap}
+.ql-chart-card:fullscreen{overflow:auto;background:#151518;padding:24px}
+.ql-chart-card:fullscreen .ql-svg-chart{max-height:70vh;width:100%}

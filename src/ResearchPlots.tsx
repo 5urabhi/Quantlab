@@ -1,18 +1,20 @@
 import {useEffect, useMemo, useRef, useState} from 'react'
-import {openSnapshotInPython} from './pythonBridge'
+import {openSnapshotInPython,type SnapshotCell} from './pythonBridge'
+import './research-plots-v3.css'
 
 export type ResearchTrace={name:string;y:(number|null)[];color?:string}
 export type ResearchPlotData={
   kind:string;title:string;x?:(string|number)[];y?:number[];
   traces?:ResearchTrace[];x_label?:string;y_label?:string;
   z_label?:string;z?:number[][];band?:{lower:number[];upper:number[]};
+  band_label?:string;break_before?:boolean[];
   labels?:string[];row_labels?:string[];scale?:string;values?:number[][];threshold?:number;
   annotations?:{x:string|number;label:string}[];
   regions?:{start:string|number;end:string|number;label:string}[]
   units?:{numeric?:string;price_currency?:string;price_currency_declared_by_user?:boolean;
     currency_verified_by_source?:boolean;stored_values_unscaled?:boolean}
 }
-const COLORS=['#66e3c3','#ffca83','#78a8ff','#ce9dff','#ff8c9b','#a2f6e2']
+const COLORS=['#f5c542','#78a8ff','#c19dff','#f09366','#f38eac','#d0e0ef','#79d5c2','#e4b06a']
 const finite=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n)
 const fmt=(v:number)=>Math.abs(v)<.001&&v!==0?v.toExponential(1):Math.abs(v)>1000?v.toLocaleString('en-US',{maximumFractionDigits:0}):v.toLocaleString('en-US',{maximumFractionDigits:3})
 const clamp=(v:number,l:number,h:number)=>Math.min(h,Math.max(l,v))
@@ -28,16 +30,18 @@ function yBounds(plot:ResearchPlotData){
   const ys=(plot.traces||[]).flatMap(t=>t.y).filter(finite)
   if(plot.kind==='scatter2d'&&plot.y)ys.push(...plot.y.filter(finite))
   if(plot.band){ys.push(...plot.band.lower.filter(finite),...plot.band.upper.filter(finite))}
+  if(plot.kind==='bar2d'||plot.kind==='histogram2d')ys.push(0)
   if(!ys.length)return [0,1] as const
   let lo=Math.min(...ys),hi=Math.max(...ys)
   if(lo===hi){lo-=Math.max(.01,Math.abs(lo)*.07);hi+=Math.max(.01,Math.abs(hi)*.07)}
   const pad=(hi-lo)*.07
   return [lo-pad,hi+pad] as const
 }
-function Canvas2D({plot,syncHover=true}:{plot:ResearchPlotData;syncHover?:boolean}){
+function Canvas2D({plot,syncHover=true,formatX,formatY}:{plot:ResearchPlotData;syncHover?:boolean;formatX:(x:string|number)=>string;formatY:(y:number)=>string}){
   const x=plot.x||[]
   const [activeIndex,setActiveIndex]=useState<number|null>(null)
   const [pinned,setPinned]=useState(false)
+  useEffect(()=>{setActiveIndex(null);setPinned(false)},[plot.title,x.length])
   useEffect(()=>{
     if(!syncHover)return
     const handler=(event:Event)=>{
@@ -62,14 +66,16 @@ function Canvas2D({plot,syncHover=true}:{plot:ResearchPlotData;syncHover?:boolea
   const xp=(i:number)=>GRID_LEFT+(x.length<2?.5:i/(x.length-1))*width
   const yp=(value:number)=>GRID_BOTTOM-(value-lo)/(hi-lo)*height
   const traces=plot.traces||[]
-  const numerical=x.every(finite)
-  const [minX,maxX]=numerical&&x.length>1?[Math.min(...(x as number[])),Math.max(...(x as number[]))]:[0,1]
-  const xcoord=(i:number)=>numerical&&maxX>minX
-    ?GRID_LEFT+(Number(x[i])-minX)/(maxX-minX)*width:xp(i)
+  const numerical=x.length>0&&x.every(finite)
+  const temporal=x.length>0&&x.every(v=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(v)&&Number.isFinite(Date.parse(v)))
+  const coords=numerical?x as number[]:temporal?x.map(v=>Date.parse(String(v))):[]
+  const [minX,maxX]=coords.length>1?[Math.min(...coords),Math.max(...coords)]:[0,1]
+  const xcoord=(i:number)=>coords.length===x.length&&coords.length>1&&maxX>minX
+    ?GRID_LEFT+(coords[i]-minX)/(maxX-minX)*width:xp(i)
   const isBar=plot.kind==='bar2d'||plot.kind==='histogram2d'
   const path=(v:(number|null)[])=>v.map((y,i)=>{
     if(!finite(y))return null
-    return (i&&finite(v[i-1])?'L':'M')+xcoord(i).toFixed(2)+','+yp(y).toFixed(2)
+    return (i&&finite(v[i-1])&&!plot.break_before?.[i]?'L':'M')+xcoord(i).toFixed(2)+','+yp(y).toFixed(2)
   }).filter(Boolean).join(' ')
   const ticks=[0,.25,.5,.75,1]
   return <div className="ql-plot">
@@ -77,7 +83,7 @@ function Canvas2D({plot,syncHover=true}:{plot:ResearchPlotData;syncHover?:boolea
       aria-label={plot.title+'; '+(plot.x_label||'x axis')+' versus '+(plot.y_label||'y axis')+
         '. Hover for values or use keyboard arrows.'}
       onPointerMove={event=>{
-        if(!x.length)return
+        if(!x.length||pinned)return
         const rect=event.currentTarget.getBoundingClientRect()
         const mouse=(event.clientX-rect.left)/rect.width*880
         let nearest=0,best=Number.POSITIVE_INFINITY
@@ -110,7 +116,7 @@ function Canvas2D({plot,syncHover=true}:{plot:ResearchPlotData;syncHover?:boolea
       {ticks.map(t=><g key={t}>
         <line x1={GRID_LEFT} x2={GRID_RIGHT} y1={GRID_TOP+t*height} y2={GRID_TOP+t*height}
           stroke="#304353" strokeDasharray="3 7" opacity=".8"/>
-        <text x="60" y={GRID_TOP+t*height+4} fill="#8fa3b4" fontSize="11" textAnchor="end">{fmt(hi-t*(hi-lo))}</text>
+        <text x="60" y={GRID_TOP+t*height+4} fill="#c0c0c8" fontSize="11" textAnchor="end">{formatY(hi-t*(hi-lo))}</text>
       </g>)}
       {(plot.regions||[]).slice(0,3).map((region,i)=>{
         const start=x.findIndex(v=>String(v)===String(region.start))
@@ -130,9 +136,9 @@ function Canvas2D({plot,syncHover=true}:{plot:ResearchPlotData;syncHover?:boolea
           ...plot.band.lower.map((v,i)=>xcoord(i)+','+yp(v)).reverse(),
         ].join(' ')} fill="#58dfbf" opacity=".13"/>}
       {plot.kind==='scatter2d'&&plot.y?.length===x.length?
-        plot.y.map((y,i)=><circle key={i} cx={xcoord(i)} cy={yp(y)} r="3.3" fill={COLORS[0]} opacity=".7">
-          <title>{String(x[i])+' : '+fmt(y)}</title>
-        </circle>)
+        plot.y.map((y,i)=>finite(y)?<circle key={i} cx={xcoord(i)} cy={yp(y)} r="3.3" fill={COLORS[0]} opacity=".7">
+          <title>{formatX(x[i])+' : '+formatY(y)}</title>
+        </circle>:null)
       :isBar?traces.flatMap((trace,t)=>trace.y.map((v,i)=>{
         if(!finite(v))return null
         const center=xcoord(i)
@@ -191,20 +197,18 @@ function Canvas2D({plot,syncHover=true}:{plot:ResearchPlotData;syncHover?:boolea
           height={28+19*Math.min(4,plot.kind==='scatter2d'?1:traces.length)}
           fill="#092332" stroke="#6e9f9d" opacity=".96"/>
         <text x={GRID_RIGHT-240} y={GRID_TOP+22} fontSize="12" fill="#e0fffb">
-          {String(x[activeIndex]).slice(0,30)}
+          {formatX(x[activeIndex]).slice(0,36)}
         </text>
         {(plot.kind==='scatter2d'?[
           {name:plot.y_label||'Value',value:plot.y?.[activeIndex]},
         ]:traces.slice(0,4).map(t=>({name:t.name,value:t.y[activeIndex]})))
           .map((r,i)=><text key={r.name} x={GRID_RIGHT-240} y={GRID_TOP+41+i*19}
             fontSize="11" fill={COLORS[i%COLORS.length]}>
-            {r.name.slice(0,18)+': '+(finite(r.value)?fmt(r.value):'missing')}
+            {r.name.slice(0,18)+': '+(finite(r.value)?formatY(r.value):'missing')}
           </text>)}
       </g>}
-      {[0,.25,.5,.75,1].map((t,i)=>{const idx=Math.min(x.length-1,Math.round(t*(x.length-1)))
-        return idx>=0?<text key={i} x={xcoord(idx)} y="300" textAnchor={i===0?'start':i===4?'end':'middle'}
-          fill="#8ca0b5" fontSize="10">{String(x[idx]).slice(0,14)}</text>:null
-      })}
+      {Array.from(new Set([0,.25,.5,.75,1].map(t=>Math.round(t*(x.length-1))))).filter(i=>i>=0&&i<x.length).map((idx,i,indices)=><text key={idx} x={xcoord(idx)} y="300" textAnchor={i===0?'start':i===indices.length-1?'end':'middle'}
+          fill="#b9b9c1" fontSize="11">{formatX(x[idx]).slice(0,24)}</text>)}
       <text x="450" y="336" textAnchor="middle" fill="#b1c1d0" fontSize="12">{plot.x_label}</text>
       <text x="18" y="152" fill="#b1c1d0" fontSize="11" textAnchor="middle"
         transform="rotate(-90,18,152)">{plot.y_label}</text>
@@ -214,7 +218,8 @@ function Canvas2D({plot,syncHover=true}:{plot:ResearchPlotData;syncHover?:boolea
       {pinned?' Cursor pinned.':''}</p>
     <div className="ql-legend">{traces.map((t,i)=><span key={t.name}>
       <i style={{background:t.color||COLORS[i%COLORS.length]}}/>{t.name}
-    </span>)}</div>
+    </span>)}{plot.kind==='scatter2d'&&<span><i style={{background:COLORS[0]}}/>{plot.y_label||'Observations'}</span>}{plot.band&&<span><i style={{background:'#79d5c2'}}/>{plot.band_label||'Model lower/upper band'}</span>}</div>
+    {activeIndex!==null&&x[activeIndex]!==undefined&&<div className="ql-inspection" aria-live="off"><strong>{plot.x_label||'X'}: {formatX(x[activeIndex])}</strong>{(plot.kind==='scatter2d'?[{name:plot.y_label||'Value',value:plot.y?.[activeIndex]}]:traces.map(t=>({name:t.name,value:t.y[activeIndex]}))).map(t=><span key={t.name}>{t.name}: {finite(t.value)?formatY(t.value):'Missing'}</span>)}</div>}
   </div>
 }
 function Heatmap({plot}:{plot:ResearchPlotData}){
@@ -321,7 +326,7 @@ const csvCell=(value:unknown)=>{
   const safe=/^[=+@\\-]/.test(text)?"'"+text:text
   return '"'+safe.replaceAll('"','""')+'"'
 }
-function dataTable(plot:ResearchPlotData):{columns:string[];rows:unknown[][]}{
+function dataTable(plot:ResearchPlotData):{columns:string[];rows:SnapshotCell[][]}{
   if(plot.kind==='surface3d'){
     const xs=plot.x||[],ys=plot.y||[],z=plot.z||[]
     return {columns:[plot.x_label||'x',plot.y_label||'y',plot.z_label||'z'],
@@ -336,7 +341,7 @@ function dataTable(plot:ResearchPlotData):{columns:string[];rows:unknown[][]}{
   const traces=plot.traces||[]
   const columns=[plot.x_label||'X',
     ...(plot.kind==='scatter2d'?[plot.y_label||'Value']:traces.map(t=>t.name)),
-    ...(plot.band?['95% fan lower','95% fan upper']:[])]
+    ...(plot.band?['Band lower','Band upper']:[])]
   return {columns,rows:axes.map((x,i)=>[
     x,...(plot.kind==='scatter2d'?[plot.y?.[i]??null]:traces.map(t=>t.y[i]??null)),
     ...(plot.band?[plot.band.lower[i]??null,plot.band.upper[i]??null]:[])
@@ -352,7 +357,10 @@ function downloadFile(name:string,contents:string,mime:string){
 function safeName(name:string){
   return name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,70)||'plot'
 }
-export default function ResearchPlot({plot,provenance}:{plot:ResearchPlotData;provenance?:string}){
+export default function ResearchPlot({plot,provenance,formatX,formatY=fmt}:{plot:ResearchPlotData;provenance?:string;formatX?:(x:string|number)=>string;formatY?:(y:number)=>string}){
+  const displayX=formatX||((x:string|number)=>typeof x==='number'?fmt(x):String(x))
+  const [hidden,setHidden]=useState<string[]>([])
+  useEffect(()=>setHidden([]),[plot.title])
   const chart=useRef<HTMLElement|null>(null)
   const [view,setView]=useState<{start:number;end:number}|null>(null)
   const [syncHover,setSyncHover]=useState(true)
@@ -400,9 +408,11 @@ export default function ResearchPlot({plot,provenance}:{plot:ResearchPlotData;pr
     return {...plot,x:plot.x?.slice(view.start,view.end),
       y:plot.y?.slice(view.start,view.end),
       traces:plot.traces?.map(t=>({...t,y:t.y.slice(view.start,view.end)})),
+      break_before:plot.break_before?.slice(view.start,view.end),
       band:plot.band?{lower:plot.band.lower.slice(view.start,view.end),
         upper:plot.band.upper.slice(view.start,view.end)}:undefined}
   },[plot,view,zoomable])
+  const shown=useMemo(()=>({...visible,traces:visible.traces?.filter(t=>!hidden.includes(t.name)).map((t)=>({...t,color:t.color||COLORS[(plot.traces||[]).findIndex(x=>x.name===t.name)%COLORS.length]}))}),[visible,hidden,plot.traces])
   const table=useMemo(()=>dataTable(plot),[plot])
   const saveSvg=()=>{
     const original=chart.current?.querySelector('svg')
@@ -474,9 +484,10 @@ export default function ResearchPlot({plot,provenance}:{plot:ResearchPlotData;pr
         Link zoom/pan on exact dates</label>}
       <span>{right-left} of {n} observations visible · full-series CSV export</span>
     </div>}
+    {!!plot.traces?.length&&plot.kind!=='surface3d'&&plot.kind!=='heatmap2d'&&<div className="ql-series-controls" aria-label="Visible chart series">{plot.traces.map((t,i)=><button type="button" key={t.name} aria-pressed={!hidden.includes(t.name)} disabled={!hidden.includes(t.name)&&plot.traces!.length-hidden.length<=1} onClick={()=>setHidden(h=>h.includes(t.name)?h.filter(x=>x!==t.name):[...h,t.name])}><i style={{background:t.color||COLORS[i%COLORS.length]}}/>{t.name}</button>)}</div>}
     {plot.kind==='surface3d'?<Surface3D plot={plot}/>:
      plot.kind==='heatmap2d'?<Heatmap plot={plot}/>:
-     <Canvas2D plot={visible} syncHover={syncHover}/>}
+     <Canvas2D plot={shown} syncHover={syncHover&&syncable} formatX={displayX} formatY={formatY}/>}
     <details className="ql-chart-data">
       <summary>Inspect plotted observations ({table.rows.length.toLocaleString('en-US')} rows)</summary>
       <div className="ql-table-scroll">
@@ -502,6 +513,9 @@ export default function ResearchPlot({plot,provenance}:{plot:ResearchPlotData;pr
       'ORIGINAL QUOTE INPUT · Computed prices, surfaces and payoff paths are MODEL outputs, not historical fills.':
       provenance==='theoretical'?
       'THEORETICAL MODEL · User-assumed inputs, not observed quotes.':
+      provenance==='custom-python-snapshot'?'CUSTOM PYTHON · Client-provided snapshot; not independently source-verified. Not a live signal.':
+      provenance==='observed-index'?'OBSERVED MINUTE CLOSES · No manufactured OHLC or volume.':
+      provenance==='options-snapshot'?'OPTIONS SNAPSHOT · Provider observations and model-derived quantities; not executable fills.':
       'Source: Python research engine · computed values with explicit evidence classification.'}</p>
   </section>
 }

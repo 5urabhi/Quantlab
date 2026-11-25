@@ -191,7 +191,7 @@ export default function LiveFeedPanel({
       Broker index packet not supported by the published binary layout · {feed.unsupported_index_packets} observed.
       {' '}{feed.index_packet_note}</p>}
     {view==='signals'&&<>
-      <ObservedIndexChartV2 rows={signal?.rows||[]}
+      <ObservedIndexChartV2 rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'}
         sourceWarning={signal?.source_warning||''}/>
       <div className="lf-cards">
       <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>

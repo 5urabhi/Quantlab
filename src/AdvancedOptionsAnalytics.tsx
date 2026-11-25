@@ -3,6 +3,7 @@ import {Activity,AlertTriangle,ArrowDownUp,Calculator,Check,Clock3,RefreshCw,Sta
 import {marketApi,readableError} from './tradingCockpitApi'
 import type {Chain,OptionContract} from './OptionChainLive'
 import './advanced-options.css'
+import ResearchPlot from './ResearchPlots'
 import ManualOptionsWorkflow,{IndiaVixMetric} from './ManualOptionsWorkflow'
 
 type Settings={
@@ -110,31 +111,13 @@ function Metric({label,value,detail}:{label:string;value:string;detail?:string})
 }
 type Point={x:number;y:number|null;label?:string}
 type Series={label:string;points:Point[];color:string}
-function Plot({title,series,xFormat=nf,yFormat=nf,description}:{
-  title:string;series:Series[];xFormat?:(v:number)=>string;yFormat?:(v:number)=>string;description:string
+function Plot({title,series,xFormat=nf,yFormat=nf,description,xLabel,yLabel}:{
+  title:string;series:Series[];xFormat?:(v:number)=>string;yFormat?:(v:number)=>string;description:string;xLabel?:string;yLabel?:string
 }){
-  const valid=series.flatMap(s=>s.points.filter(p=>p.y!==null&&Number.isFinite(p.y)&&Number.isFinite(p.x)))
-  if(!valid.length)return <div className="ao-plot"><strong>{title}</strong><p>No source-backed values available.</p></div>
-  const xmin=Math.min(...valid.map(p=>p.x)),xmax=Math.max(...valid.map(p=>p.x))
-  const ymin=Math.min(...valid.map(p=>p.y!)),ymax=Math.max(...valid.map(p=>p.y!))
-  const px=(v:number)=>68+(v-xmin)/Math.max(xmax-xmin,1)*682
-  const py=(v:number)=>18+(ymax-v)/Math.max(ymax-ymin,Math.abs(ymax)*.00001,.000001)*148
-  return <div className="ao-plot"><strong>{title}</strong>
-    <svg viewBox="0 0 790 205" role="img" aria-label={title+' · '+description}>
-      {[0,1,2,3,4].map(i=>{const y=ymin+(ymax-ymin)*i/4;return <g key={i}>
-        <line x1={68} x2={750} y1={py(y)} y2={py(y)} stroke="#385364" strokeDasharray="3 5"/>
-        <text x={60} y={py(y)+3} textAnchor="end">{yFormat(y)}</text></g>})}
-      {[0,1,2,3,4].map(i=>{const x=xmin+(xmax-xmin)*i/4;return <text key={i} x={px(x)} y={187} textAnchor="middle">{xFormat(x)}</text>})}
-      {series.map(s=>{let pen=false;const path=[...s.points].sort((a,b)=>a.x-b.x).map(p=>{
-        if(p.y===null||!Number.isFinite(p.y)){pen=false;return ''}
-        const command=pen?'L':'M';pen=true;return command+px(p.x)+','+py(p.y)
-      }).join(' ');return <g key={s.label}>
-        <path d={path} fill="none" stroke={s.color} strokeWidth={2.2}/>
-        {s.points.filter(p=>p.y!==null&&Number.isFinite(p.y)).map((p,i)=>
-          <circle key={i} cx={px(p.x)} cy={py(p.y!)} r={2.8} fill={s.color}>
-            <title>{s.label}: {p.label||xFormat(p.x)} · {yFormat(p.y!)}</title></circle>)}</g>})}
-    </svg><div className="ao-legend">{series.map(s=><span key={s.label}><i style={{background:s.color}}/>{s.label}</span>)}</div>
-    <small>{description} · Hover points for observed values.</small></div>
+  const xs=Array.from(new Set(series.flatMap(s=>s.points.filter(p=>Number.isFinite(p.x)).map(p=>p.x)))).sort((a,b)=>a-b)
+  const traces=series.map(s=>{const byX=new Map(s.points.map(p=>[p.x,p.y]));return {name:s.label,color:s.color,y:xs.map(x=>{const y=byX.get(x);return y!==null&&y!==undefined&&Number.isFinite(y)?y:null})}})
+  if(!traces.some(s=>s.y.some(v=>v!==null)))return <div className="ao-plot"><strong>{title}</strong><p>No source-backed values available.</p></div>
+  return <div className="ao-plot"><ResearchPlot plot={{kind:'line2d',title,x:xs,traces,x_label:xLabel||'Strike (index points)',y_label:yLabel||title}} provenance="options-snapshot" formatX={x=>xFormat(Number(x))} formatY={yFormat}/><small>{description}</small></div>
 }
 function Table({rows,cols,selected,onSelect,sortKey,onSort,ascending}:{
   rows:Row[];cols:Column[];selected:string;onSelect:(id:string)=>void
@@ -305,10 +288,10 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
       {tab==='greeks'&&<section className="ao-panel"><h4>Independent model sensitivities</h4>
         <p>BSM Greeks per option unit, calibrated to this contract's quoted midpoint. Theta is per calendar day; Vega and Rho are per percentage point. Dhan values are displayed separately as reported, without assuming their units.</p>
         <div className="ao-charts">
-          <Plot title="Delta across strikes" series={chainPlot(r=>r.model_greeks?.delta)} description="Within ±5% of observed BANKNIFTY spot"/>
-          <Plot title="Gamma across strikes" series={chainPlot(r=>r.model_greeks?.gamma)} yFormat={v=>nf(v,6)} description="Per underlying point · within ±5% of spot"/>
-          <Plot title="Theta per calendar day" series={chainPlot(r=>r.model_greeks?.theta_day)} description="Per option unit · within ±5% of spot"/>
-          <Plot title="Vega per IV percentage point" series={chainPlot(r=>r.model_greeks?.vega_iv_point)} description="Per option unit · within ±5% of spot"/>
+          <Plot title="Delta across strikes" yLabel="Delta (unitless)" series={chainPlot(r=>r.model_greeks?.delta)} description="Within ±5% of observed BANKNIFTY spot"/>
+          <Plot title="Gamma across strikes" yLabel="Gamma (per index point)" series={chainPlot(r=>r.model_greeks?.gamma)} yFormat={v=>nf(v,6)} description="Per underlying point · within ±5% of spot"/>
+          <Plot title="Theta per calendar day" yLabel="Theta (premium points/day)" series={chainPlot(r=>r.model_greeks?.theta_day)} description="Per option unit · within ±5% of spot"/>
+          <Plot title="Vega per IV percentage point" yLabel="Vega (premium points/IV pp)" series={chainPlot(r=>r.model_greeks?.vega_iv_point)} description="Per option unit · within ±5% of spot"/>
         </div></section>}
       {tab==='volatility'&&<section className="ao-panel"><h4>Volatility and historical context</h4>
         <div className="ao-grid ao-summary">
@@ -318,9 +301,9 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
           <IndiaVixMetric/>
         </div>
         <div className="ao-charts">
-          <Plot title="Implied volatility smile / skew" series={chainPlot(r=>r.iv_mid_pct)} description="Independent midpoint IV %, within ±5% of spot"/>
-          <Plot title="ATM IV term structure" series={historySeries('ATM Dhan IV',result.volatility.term_structure)} xFormat={dateLabel} description="Latest recorded receipt per expiry; times may differ"/>
-          <Plot title="Recorded same-expiry ATM IV history" series={historySeries('ATM Dhan IV',result.volatility.iv_history)} xFormat={dateLabel} description="One observed snapshot per date, current receipt appended"/>
+          <Plot title="Implied volatility smile / skew" yLabel="Implied volatility (%)" series={chainPlot(r=>r.iv_mid_pct)} description="Independent midpoint IV %, within ±5% of spot"/>
+          <Plot title="ATM IV term structure" xLabel="Expiry date (epoch ms in exported data)" yLabel="Dhan IV (%)" series={historySeries('ATM Dhan IV',result.volatility.term_structure)} xFormat={dateLabel} description="Latest recorded receipt per expiry; times may differ"/>
+          <Plot title="Recorded same-expiry ATM IV history" xLabel="Receipt date (epoch ms in exported data)" yLabel="Dhan IV (%)" series={historySeries('ATM Dhan IV',result.volatility.iv_history)} xFormat={dateLabel} description="One observed snapshot per date, current receipt appended"/>
         </div><p className="ao-muted">Realized volatility is based on saved index ticks aggregated into contiguous one-minute closes; no missing bars are filled. The IV horizon move is a calendar-time square-root model magnitude, not a confidence-certified price range.</p>
       </section>}
       {tab==='oi'&&<section className="ao-panel"><h4>Open interest and volume</h4>
@@ -330,14 +313,14 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
           <Metric label="Put / call OI ratio" value={nf(result.oi.pcr,3)} detail="Only if returned OI coverage complete"/>
           <Metric label="Max pain strike" value={nf(result.oi.max_pain_strike,0)} detail="Descriptive payout minimum, not a forecast"/>
         </div><p>Changes are relative to prior saved same-expiry receipt: {fmtTime(result.oi.previous_snapshot_utc)}. Missing changes remain unavailable. OI changes do not identify which participant opened or closed a position.</p>
-        <div className="ao-charts"><Plot title="Open interest by strike" series={chainPlot(r=>r.oi)} description="Provider-reported OI, within ±5% of spot"/>
-          <Plot title="OI change by strike" series={chainPlot(r=>r.oi_change)} description="Difference from previous saved same-session snapshot"/>
-          <Plot title="Unsigned gamma × OI proxy" series={chainPlot(r=>r.unsigned_gamma_oi_proxy)} description="Gamma × reported OI × spot² × 1%; dealer sign / OI unit convention unknown"/>
+        <div className="ao-charts"><Plot title="Open interest by strike" yLabel="Provider-reported OI (unit convention unverified)" series={chainPlot(r=>r.oi)} description="Provider-reported OI, within ±5% of spot"/>
+          <Plot title="OI change by strike" yLabel="Change in reported OI" series={chainPlot(r=>r.oi_change)} description="Difference from previous saved same-session snapshot"/>
+          <Plot title="Unsigned gamma × OI proxy" yLabel="Unsigned gamma × OI proxy" series={chainPlot(r=>r.unsigned_gamma_oi_proxy)} description="Gamma × reported OI × spot² × 1%; dealer sign / OI unit convention unknown"/>
         </div><p className="ao-muted">Dealer gamma exposure is unavailable: public OI does not reveal net dealer positioning. The unsigned proxy must not be interpreted as dealer GEX.</p></section>}
       {tab==='liquidity'&&<section className="ao-panel"><h4>Quote and original-depth evidence</h4>
         <p>Chain top-level bid/ask and quantities are snapshots. Depth is checked only for up to 60 leading candidates plus the inspected contract. Recent trade observations and original depth do not establish your own fill or queue position.</p>
-        <div className="ao-charts"><Plot title="Relative bid–ask spread" series={chainPlot(r=>r.spread_bps)} description="Basis points, within ±5% of spot"/>
-          <Plot title="Recent reported volume increase" series={chainPlot(r=>r.trade_activity?.volume_delta)} description="Saved Quote/OI feed, preceding 120 seconds"/></div></section>}
+        <div className="ao-charts"><Plot title="Relative bid–ask spread" yLabel="Bid–ask spread (bps)" series={chainPlot(r=>r.spread_bps)} description="Basis points, within ±5% of spot"/>
+          <Plot title="Recent reported volume increase" yLabel="Reported volume change (120 s)" series={chainPlot(r=>r.trade_activity?.volume_delta)} description="Saved Quote/OI feed, preceding 120 seconds"/></div></section>}
       {active&&<section className="ao-panel ao-inspect">
         <header className="ao-header"><div><span className="ao-eyebrow">INSPECT CONTRACT · {active.identity||'Unverified identity'}</span>
           <h4>{nf(active.strike,0)} {active.option_type} · {active.expiry}</h4>
@@ -375,7 +358,7 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
             {Object.keys(scenarioNames).map(k=>{const v=active.scenarios[k];return <tr key={k}>
               <td>{scenarioNames[k]}</td><td>{nf(v?.move_points)}</td><td>{nf(v?.iv_change_points)}</td><td>{nf(v?.minutes,0)}</td>
               <td>{rs(v?.model_mid)}</td><td>{rs(v?.assumed_exit_bid)}</td><td>{rs(v?.charges_inr)}</td><td className={signed(v?.net_pnl_inr)}>{rs(v?.net_pnl_inr)}</td></tr>})}</tbody></table></div>
-          <Plot title="Conditional net P&L versus BANKNIFTY move" series={[{label:'Applied IV shock + horizon',color:'#75d6c5',points:['double_adverse','adverse','flat','favorable','double_favorable'].map(k=>active.scenarios[k]).filter((s):s is Scenario=>!!s).map(s=>({x:s.move_points,y:s.net_pnl_inr}))}]} yFormat={rs} description="Scenario repricing, not a price or profit forecast"/>
+          <Plot title="Conditional net P&L versus BANKNIFTY move" xLabel="Underlying move (index points)" yLabel="Conditional net P&L (₹)" series={[{label:'Applied IV shock + horizon',color:'#75d6c5',points:['double_adverse','adverse','flat','favorable','double_favorable'].map(k=>active.scenarios[k]).filter((s):s is Scenario=>!!s).map(s=>({x:s.move_points,y:s.net_pnl_inr}))}]} yFormat={rs} description="Scenario repricing, not a price or profit forecast"/>
           {active.roundtrip_fees&&<details className="ao-assumptions"><summary>Estimated same-quote charge breakdown</summary><div className="ao-grid ao-summary">
             {Object.entries({Brokerage:active.roundtrip_fees.brokerage,STT:active.roundtrip_fees.stt_sell,GST:active.roundtrip_fees.gst,Exchange:active.roundtrip_fees.exchange_indicative,SEBI:active.roundtrip_fees.sebi,Stamp:active.roundtrip_fees.stamp_buy,Total:active.roundtrip_fees.total_estimated}).map(([name,v])=><Metric key={name} label={name} value={rs(v)}/>)}</div></details>}
           <button type="button" disabled={!active.identity||!active.units||!usable||!active.contract_master_verified} onClick={()=>onDraftJournal(active,active.scenario_lots)}>Prepare manual journal entry (no order)</button>
@@ -383,7 +366,7 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
         {active.identity===result.selected_history_identity&&<div className="ao-history">
           <label>Recorded selected-contract history<select value={historyMetric} onChange={e=>setHistoryMetric(e.target.value as typeof historyMetric)}>
             {(['ltp','iv','delta','gamma','theta','vega','oi','volume'] as const).map(k=><option key={k} value={k}>{k.toUpperCase()}</option>)}</select></label>
-          <Plot title={'Recorded '+historyMetric.toUpperCase()} series={[{label:'Original provider snapshots',color:'#95c8fd',points:result.selected_history.map(p=>({x:Date.parse(p.captured_utc),y:p[historyMetric],label:fmtTime(p.captured_utc)}))}]} xFormat={x=>new Date(x).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit'})} yFormat={v=>nf(v,historyMetric==='gamma'?7:3)} description="Up to 40 saved prior receipts in the same session; raw provider Greek units"/>
+          <Plot title={'Recorded '+historyMetric.toUpperCase()} xLabel="Receipt time (IST; epoch ms exported)" yLabel={historyMetric==='ltp'?'Premium (₹ per unit)':historyMetric.toUpperCase()+' (provider units)'} series={[{label:'Original provider snapshots',color:'#95c8fd',points:result.selected_history.map(p=>({x:Date.parse(p.captured_utc),y:p[historyMetric],label:fmtTime(p.captured_utc)}))}]} xFormat={x=>new Date(x).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit'})} yFormat={v=>nf(v,historyMetric==='gamma'?7:3)} description="Up to 40 saved prior receipts in the same session; raw provider Greek units"/>
         </div>}
       </section>}
       {tab==='calculator'&&!active&&<div className="ao-warning">No contract selected. Open Greeks or Best-fit contracts and inspect a verified identity.</div>}
