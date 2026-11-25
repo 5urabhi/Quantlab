@@ -201,7 +201,6 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
           if(value.result){
             setResult(value.result)
             if(value.result.kind==='ema_sweep')setSweep(value.result)
-            setHover(null)
             setZoom(100)
             setSavedRuns(old=>[{run_id:value.result!.run_id,
               modified_utc:new Date().toISOString(),file_bytes:0},

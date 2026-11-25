@@ -52,6 +52,12 @@ export default function OptionChainLive({feedActive,depthIdentity,
   const [chain,setChain]=useState<Chain|null>(null)
   const [selected,setSelected]=useState<string>('')
   const [sort,setSort]=useState<'premium'|'strike'|'spread'|'oi'>('strike')
+  const [layout,setLayout]=useState<'paired'|'list'>('paired')
+  const [strikeRange,setStrikeRange]=useState<10|20|50|0>(20)
+  const [detailsOpen,setDetailsOpen]=useState(false)
+  const [showGreeks,setShowGreeks]=useState(true)
+  const [showLiquidity,setShowLiquidity]=useState(true)
+  useEffect(()=>{if(!detailsOpen)return;const escape=(e:KeyboardEvent)=>{if(e.key==='Escape')setDetailsOpen(false)};window.addEventListener('keydown',escape);return()=>window.removeEventListener('keydown',escape)},[detailsOpen])
   const [side,setSide]=useState<'ALL'|'CE'|'PE'>('ALL')
   const [lots,setLots]=useState(3)
   const [targetPremium,setTargetPremium]=useState(300)
@@ -143,9 +149,15 @@ export default function OptionChainLive({feedActive,depthIdentity,
     const clock=window.setInterval(()=>setNow(Date.now()),1000)
     return()=>window.clearInterval(clock)
   },[])
+  const strikeWindow=useMemo(()=>{
+    const strikes=Array.from(new Set((chain?.expiry===expiry?chain.contracts:[]).map(c=>c.strike))).sort((a,b)=>a-b)
+    if(!chain||!strikeRange||!strikes.length)return new Set(strikes)
+    const at=strikes.reduce((best,s,i)=>Math.abs(s-chain.underlying_spot)<Math.abs(strikes[best]-chain.underlying_spot)?i:best,0)
+    return new Set(strikes.slice(Math.max(0,at-strikeRange),at+strikeRange+1))
+  },[chain,expiry,strikeRange])
   const filtered=useMemo(()=>{
     const rows=(chain?.expiry===expiry?chain.contracts:[]).filter(c=>
-      (side==='ALL'||c.option_type===side)&&
+      strikeWindow.has(c.strike)&&(side==='ALL'||c.option_type===side)&&
       (!nearTargetOnly||(c.ltp!==null&&Math.abs(c.ltp-targetPremium)<=premiumTolerance)))
     return [...rows].sort((a,b)=>{
       // Closest to preferred premium first; ties resolved by strike and type.
@@ -155,7 +167,13 @@ export default function OptionChainLive({feedActive,depthIdentity,
       const primary=sort==='strike'?a.strike-b.strike:sort==='spread'?spread(a)-spread(b):sort==='oi'?(b.oi??-1)-(a.oi??-1):aPrice-bPrice
       return primary||a.strike-b.strike||a.option_type.localeCompare(b.option_type)
     })
-  },[chain,expiry,side,nearTargetOnly,targetPremium,premiumTolerance,sort])
+  },[chain,expiry,side,nearTargetOnly,targetPremium,premiumTolerance,sort,strikeWindow])
+  const pairs=useMemo(()=>{
+    const map=new Map<number,{strike:number;ce?:OptionContract;pe?:OptionContract}>()
+    for(const c of filtered){const row=map.get(c.strike)||{strike:c.strike};if(c.option_type==='CE')row.ce=c;else row.pe=c;map.set(c.strike,row)}
+    return Array.from(map.values())
+  },[filtered])
+  const choose=(c:OptionContract)=>{if(!c.identity||!c.contract_master_verified)return;setSelected(c.identity);setDetailsOpen(true)}
   const picked=chain?.expiry===expiry
     ?chain.contracts.find(c=>c.identity&&c.identity===selected):null
   const valid=Boolean(picked?.contract_master_verified&&picked?.quote_valid&&
@@ -171,6 +189,9 @@ export default function OptionChainLive({feedActive,depthIdentity,
     Math.abs(c.ltp-targetPremium)<=premiumTolerance).length
   const age=chain?.received_utc?Math.max(0,Math.round((now-Date.parse(chain.received_utc))/1000)):null
   const bookCurrent=Boolean(picked?.identity&&picked.identity===depthIdentity)
+  const columns=[...(showLiquidity?['oi','volume']:[]),...(showGreeks?['iv','delta']:[]),'bid','ask','ltp'] as const
+  const cellLabel:Record<string,string>={oi:'OI',volume:'Vol',iv:'IV %',delta:'Δ',bid:'Bid ₹',ask:'Ask ₹',ltp:'LTP ₹'}
+  const cellValue=(c:OptionContract|undefined,k:typeof columns[number])=>c?num(c[k],k==='oi'||k==='volume'?0:k==='delta'?3:2):'—'
   const mapSignal=currentIndexDirection==='UP'?'CE':
     currentIndexDirection==='DOWN'?'PE':null
   return <section className="oc-root" aria-label="BANKNIFTY option chain and lot calculator">
@@ -255,10 +276,16 @@ export default function OptionChainLive({feedActive,depthIdentity,
           onChange={e=>setNearTargetOnly(e.target.checked)}/>
         Only show premiums near target
       </label>
+      <label>Strike window<select aria-label="Option chain strike range" value={strikeRange} onChange={e=>setStrikeRange(Number(e.target.value) as typeof strikeRange)}><option value={10}>ATM ±10</option><option value={20}>ATM ±20</option><option value={50}>ATM ±50</option><option value={0}>All returned strikes</option></select></label>
+      <label>Layout<select aria-label="Option chain layout" value={layout} onChange={e=>setLayout(e.target.value as typeof layout)}><option value="paired">Calls / Puts</option><option value="list">Contract list</option></select></label>
       <label>Sort contracts<select value={sort} onChange={e=>setSort(e.target.value as typeof sort)}><option value="strike">Strike</option><option value="premium">Closest to preferred premium</option><option value="spread">Smallest quoted spread</option><option value="oi">Highest reported OI</option></select></label>
-      <span>{matchingPremiumCount} matching contract(s). Bid/ask, spread and liquidity still matter.</span>
+      <span>{filtered.length} visible contracts · {matchingPremiumCount} matching the preferred premium across selected side(s). Bid/ask, spread and liquidity still matter.</span>
     </div>
-    <div className="oc-controls-actions"><button type="button" disabled={!filtered.length} onClick={()=>openSnapshotInPython({title:'BANKNIFTY option chain '+expiry,provenance:'Dhan REST snapshot · '+(chain?.received_utc||'unknown receipt'),columns:['Strike (points)','Side','LTP (₹)','Bid (₹)','Ask (₹)','OI (provider units)','Volume (provider units)','IV (%)','Delta','Lot size'],rows:filtered.map(c=>[c.strike,c.option_type,c.ltp,c.bid,c.ask,c.oi,c.volume,c.iv,c.delta,c.lot_size])})}>Analyze visible contracts in Python</button></div>
+    <div className="oc-controls-actions"><button type="button" disabled={!filtered.length} onClick={()=>openSnapshotInPython({title:'BANKNIFTY option chain '+expiry,provenance:'Dhan REST snapshot · '+(chain?.received_utc||'unknown receipt'),columns:['Contract ID','Strike (points)','Side','LTP (₹)','Bid (₹)','Ask (₹)','OI (provider units)','Volume (provider units)','IV (%)','Delta','Lot size'],rows:filtered.map(c=>[c.identity||c.symbol,c.strike,c.option_type,c.ltp,c.bid,c.ask,c.oi,c.volume,c.iv,c.delta,c.lot_size])})}>Analyze visible contracts in Python</button></div>
+    {layout==='paired'?<><div className="oc-column-controls"><label><input type="checkbox" checked={showGreeks} onChange={e=>setShowGreeks(e.target.checked)}/> Greeks / IV</label><label><input type="checkbox" checked={showLiquidity} onChange={e=>setShowLiquidity(e.target.checked)}/> OI / volume</label>{picked&&<button type="button" onClick={()=>setDetailsOpen(true)}>Inspect selected contract</button>}</div>
+    <div className="tc-table-scroll oc-table oc-paired"><table aria-label="Calls and puts by strike"><thead><tr><th colSpan={columns.length+1}>CALLS (CE)</th><th rowSpan={2} className="oc-strike">Strike (points)</th><th colSpan={columns.length+1}>PUTS (PE)</th></tr><tr><th>Inspect</th>{columns.map(k=><th key={'ce-'+k}>{cellLabel[k]}</th>)}{[...columns].reverse().map(k=><th key={'pe-'+k}>{cellLabel[k]}</th>)}<th>Inspect</th></tr></thead><tbody>{pairs.map(r=><tr key={r.strike} className={chain&&Math.abs(chain.underlying_spot-r.strike)<100?'oc-near-atm':''}>
+      <td><button type="button" disabled={!r.ce?.contract_master_verified||!r.ce.identity} aria-label={'Select '+r.strike+' CE'} aria-pressed={!!r.ce?.identity&&selected===r.ce.identity} onClick={()=>{if(r.ce)choose(r.ce)}}>CE</button></td>{columns.map(k=><td key={'ce-'+k}>{cellValue(r.ce,k)}</td>)}<td className="oc-strike"><strong>{num(r.strike,0)}</strong>{chain&&Math.abs(chain.underlying_spot-r.strike)<100&&<small>Near ATM</small>}</td>{[...columns].reverse().map(k=><td key={'pe-'+k}>{cellValue(r.pe,k)}</td>)}<td><button type="button" disabled={!r.pe?.contract_master_verified||!r.pe.identity} aria-label={'Select '+r.strike+' PE'} aria-pressed={!!r.pe?.identity&&selected===r.pe.identity} onClick={()=>{if(r.pe)choose(r.pe)}}>PE</button></td></tr>)}
+      {!pairs.length&&<tr><td colSpan={columns.length*2+3}>{busy?'Loading original Dhan option chain…':'No returned contracts match this window and filter.'}</td></tr>}</tbody></table></div></>:
     <div className="tc-table-scroll oc-table">
       <table><thead><tr><th>Choose</th><th>Strike</th><th>Type</th>
         <th>LTP ₹</th><th>Bid ₹</th><th>Ask ₹</th><th>OI</th><th>Volume</th>
@@ -270,7 +297,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
             <td><input type="radio" name="oc-selected" aria-label={'Select '+c.strike+' '+c.option_type}
               checked={Boolean(c.identity&&selected===c.identity)}
               disabled={!c.contract_master_verified||!c.identity}
-              onChange={()=>{setSelected(c.identity||'');setLots(3)}}/></td>
+              onChange={()=>choose(c)}/></td>
             <td>{num(c.strike,0)} {atm&&<small>ATM vicinity</small>}</td>
             <td><span className={'tc-direction '+(c.option_type==='CE'?'up':'down')}>{c.option_type}</span></td>
             <td>{num(c.ltp)}</td><td>{num(c.bid)}</td><td>{num(c.ask)}</td>
@@ -282,8 +309,9 @@ export default function OptionChainLive({feedActive,depthIdentity,
         {!filtered.length&&<tr><td colSpan={12}>
           {busy?'Loading original Dhan option chain…':nearTargetOnly?'No contracts in the preferred premium range. Widen the range or turn off the filter.':'No verified original strikes for the selected expiry. Refresh the chain, token or instrument master.'}
         </td></tr>}</tbody></table>
-    </div>
-    <div className="oc-preview">
+    </div>}
+    <aside className={'oc-preview '+(detailsOpen&&picked?'oc-details-drawer':'')} aria-label="Selected option contract details" hidden={!detailsOpen||!picked}>
+      <div className="oc-drawer-head"><strong>Contract details</strong><button type="button" onClick={()=>setDetailsOpen(false)} aria-label="Close contract details">Close</button></div>
       <div className="oc-preview-title">
         <div><span className="tc-page-kicker">SELECT A REAL CONTRACT</span>
           <h4>{picked?picked.symbol+' · '+picked.expiry:
@@ -300,6 +328,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
         <label>Paper capital (₹) <input type="number" aria-label="Option paper capital"
           min={1000} max={100000000} step={1000} value={capital}
           onChange={e=>setCapital(Math.max(1000,Math.min(100000000,Number(e.target.value)||1000)))}/></label>
+        <button type="button" disabled={!valid||maxLots<1} onClick={()=>setLots(Math.max(1,Math.min(50,maxLots)))}>Fit lots to premium budget</button>
         <div><span>Units</span><b>{valid?num(units,0):'—'}</b></div>
         <div><span>Premium required at ask</span><b>{money(totalAsk)}</b></div>
         <div><span>Immediate bid / ask spread cost</span><b>{money(spread)}</b></div>
@@ -323,7 +352,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
       <p className="tc-muted">Paper premium = observed best ask × selected lots × official lot size; the bid/ask spread
         is an immediate crossing-cost illustration, not an executed fill. Confirm the actual
         price and quantity with your broker. Selecting a contract does not send an order.</p>
-    </div>
+    </aside>
     </>}
   </section>
 }

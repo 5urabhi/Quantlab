@@ -43,3 +43,22 @@
 .ql-monitor-row{padding:14px 0;border-top:1px solid var(--ql-border)}
 .ql-monitor-head{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
 .ql-monitor-head small{display:block;color:var(--ql-muted);font-size:12px;margin-top:4px}
+
+.ws-v2.ql-v3 .oc-column-controls{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:10px 0}
+.ws-v2.ql-v3 .oc-column-controls label{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ql-muted)}
+.ws-v2.ql-v3 .oc-paired{max-height:min(60vh,680px);overflow:auto}
+.ws-v2.ql-v3 .oc-paired th,.ws-v2.ql-v3 .oc-paired td{text-align:right;padding:9px 10px;white-space:nowrap}
+.ws-v2.ql-v3 .oc-paired th[colspan]{text-align:center;letter-spacing:.08em;color:var(--ql-accent)}
+.ws-v2.ql-v3 .oc-paired th,.ws-v2.ql-v3 .oc-paired td.oc-strike{background:#232326}
+.ws-v2.ql-v3 .oc-paired .oc-strike{text-align:center;min-width:95px;box-shadow:inset 1px 0 #45454a,inset -1px 0 #45454a}
+.ws-v2.ql-v3 .oc-paired th{position:static}
+.ws-v2.ql-v3 .oc-paired thead{position:sticky;top:0;z-index:2}
+.ws-v2.ql-v3 .oc-paired td button{padding:5px 9px;color:var(--ql-text);background:var(--ql-raised);border:1px solid var(--ql-border);border-radius:5px}
+.ws-v2.ql-v3 .oc-paired td button[aria-pressed=true]{background:var(--ql-accent-soft);border-color:var(--ql-accent);color:var(--ql-accent)}
+.ws-v2.ql-v3 .oc-preview[hidden]{display:none!important}
+.ws-v2.ql-v3 .oc-details-drawer{position:fixed;right:0;top:72px;bottom:0;width:min(460px,96vw);z-index:45;margin:0;overflow:auto;background:var(--ql-panel);border-left:1px solid var(--ql-accent);box-shadow:-12px 0 36px #0008;padding:18px}
+.ws-v2.ql-v3 .oc-drawer-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px;border-bottom:1px solid var(--ql-border);padding-bottom:10px}
+.ws-v2.ql-v3 .oc-details-drawer .oc-preview-title,.ws-v2.ql-v3 .oc-details-drawer .oc-lot-inputs{display:flex;flex-wrap:wrap;gap:12px}
+.ws-v2.ql-v3 .oc-details-drawer .oc-lot-inputs>div{flex:1 1 42%}
+.ws-v2.ql-v3 .oc-details-drawer .oc-preview-actions{flex-wrap:wrap}
+@media(max-width:700px){.ws-v2.ql-v3 .oc-details-drawer{top:0;width:min(100vw,460px)}}

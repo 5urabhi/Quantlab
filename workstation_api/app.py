@@ -4579,7 +4579,7 @@ def recorded_chain_spot():
     """The latest saved same-expiry spot receipts; no new broker request."""
     try:
         now = datetime.now(timezone.utc)
-        rows = script_monitor._chain_rows(now,150)
+        rows = script_monitor._chain_rows(now,150,recent=False)
         points = [{"timestamp_utc":stamp,"spot":data["underlying_spot"]}
                   for stamp,_,data in rows
                   if isinstance(data.get("underlying_spot"), (int,float))]

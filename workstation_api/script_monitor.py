@@ -116,7 +116,7 @@ def remove(ident):
     return {"removed":ident}
 
 
-def _chain_rows(now, limit=1):
+def _chain_rows(now, limit=1, *, recent=True):
     path = shared_market_data.database_path()
     if not path.is_file() or path.is_symlink():
         return []
@@ -124,17 +124,26 @@ def _chain_rows(now, limit=1):
         with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro", uri=True, timeout=2)) as db:
             # Choose the nearest currently valid expiry that has a saved recent
             # receipt. Never switch expiry within a time series.
-            expiry = db.execute("""SELECT expiry FROM option_chain_observations
-               WHERE underlying='BANKNIFTY' AND expiry>=? AND captured_utc>=?
-               ORDER BY expiry LIMIT 1""",
-               (now.astimezone(IST).date().isoformat(),
-                (now-timedelta(seconds=120)).isoformat())).fetchone()
+            if recent:
+                expiry = db.execute("""SELECT expiry FROM option_chain_observations
+                    WHERE underlying='BANKNIFTY' AND expiry>=? AND captured_utc>=?
+                    ORDER BY expiry LIMIT 1""",
+                    (now.astimezone(IST).date().isoformat(),
+                     (now-timedelta(seconds=120)).isoformat())).fetchone()
+                cutoff = (now-timedelta(hours=7)).isoformat()
+            else:
+                # Historical viewing is allowed with the source time visible.
+                # Do not reuse a previous session to drive a running monitor.
+                latest = db.execute("""SELECT expiry,captured_utc FROM option_chain_observations
+                    WHERE underlying='BANKNIFTY' ORDER BY captured_utc DESC LIMIT 1""").fetchone()
+                expiry = (latest[0],) if latest else None
+                cutoff = (_stamp(latest[1])-timedelta(hours=7)).isoformat() if latest else ""
             if not expiry:
                 return []
             rows = db.execute("""SELECT captured_utc,snapshot_sha256,normalized_json
                 FROM option_chain_observations WHERE underlying='BANKNIFTY' AND expiry=?
                 AND captured_utc>=? ORDER BY captured_utc DESC LIMIT ?""",
-                (expiry[0],(now-timedelta(hours=7)).isoformat(),limit)).fetchall()
+                (expiry[0],cutoff,limit)).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc):
             return []
