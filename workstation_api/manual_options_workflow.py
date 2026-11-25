@@ -6,11 +6,9 @@ worker only reads already-saved receipts and writes a small local audit ledger.
 """
 from __future__ import annotations
 
-from collections import Counter
 from contextlib import closing, contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from hashlib import sha256
-from math import isfinite
 from threading import Event, Lock, Thread
 import json
 import sqlite3
@@ -126,8 +124,10 @@ def _first(expiry, start, end, now):
               ORDER BY captured_utc ASC LIMIT 1""",
               (expiry,_iso(start),_iso(min(end,now)))).fetchone()
         return bool(row),_snapshot(row)
-    except (sqlite3.Error,OSError):
-        return False,None
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc) or "unable to open database file" in str(exc):
+            return False,None
+        raise
 
 
 def latest_expiries(now):
@@ -408,6 +408,8 @@ def record_if_enabled(analysis,*,now=None):
     now=now or _now()
     if not _regular(now):
         return 0
+    if "chain" in analysis and analysis["chain"].get("source")!=CHAIN_SOURCE:
+        return 0
     settings=analysis.get("assumptions",analysis.get("settings",{}))
     rows=sorted([r for r in analysis.get("rows",[]) if r.get("rank")],key=lambda r:r["rank"])
     chosen=[r for side in ("CE","PE") for r in [x for x in rows if x["option_type"]==side][:2]]
@@ -440,7 +442,8 @@ def create_alert(identity,conditions,*,now=None):
         raise ValueError("Choose a verified exact option identity")
     master=option_chain_live._contracts()
     c=master.get("by_id",{}).get(identity.split(":")[1])
-    if not master.get("fresh") or not c or c["identity"]!=identity or now>=_end(now,c["expiry"]):
+    if (not master.get("fresh") or not c or c["identity"]!=identity or
+        now>=datetime.combine(date.fromisoformat(c["expiry"]),time(15,30),IST)):
         raise ValueError("A current verified BANKNIFTY contract is required")
     bounds={"max_ask":(.01,1e6),"max_spread_bps":(0,10000),"min_abs_delta":(0,1),
         "max_abs_delta":(0,1),"min_iv_pct":(0,500),"max_iv_pct":(0,500),
@@ -516,7 +519,7 @@ def _evaluate_alerts(db,now):
             db.execute("UPDATE option_alert_rules SET state='awaiting_recent_receipt' WHERE id=?",(a["id"],))
             continue
         stamp=snapshot["received_utc"]
-        if stamp==a["last_receipt_utc"]:
+        if stamp==a["last_receipt_utc"] or ao.timestamp(stamp)<ao.timestamp(a["created_utc"]):
             continue
         row=_contract(snapshot,a["identity"],expiry,a["strike"],a["side"],a["lot_size"])
         values=_alert_values(snapshot,row)
@@ -532,8 +535,9 @@ def _evaluate_alerts(db,now):
 
 def _evaluate_rank(db,now):
     rows=db.execute("""SELECT * FROM option_rank_observations
-        WHERE state IN ('waiting_entry','waiting_exit')
-        ORDER BY decision_utc LIMIT 200""").fetchall()
+        WHERE state='waiting_entry' OR (state='waiting_exit' AND exit_due_utc<=?)
+        ORDER BY CASE WHEN state='waiting_entry' THEN decision_utc ELSE exit_due_utc END
+        LIMIT 200""",(_iso(now),)).fetchall()
     for r in rows:
         entering=r["state"]=="waiting_entry"
         start=ao.timestamp(r["decision_utc"] if entering else r["exit_due_utc"])
