@@ -949,9 +949,9 @@ def trading_cockpit_advanced_options(
     broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"] = "zerodha",
 ):
     """Read-only option analytics on one original Dhan chain receipt."""
-    from . import advanced_options
+    from . import advanced_options, manual_options_workflow
     try:
-        return advanced_options.current(
+        result = advanced_options.current(
             expiry, capital=capital, max_lots=max_lots, direction=direction,
             move_points=move_points, horizon_minutes=horizon_minutes,
             iv_change_points=iv_change_points, rate_pct=rate_pct,
@@ -959,8 +959,110 @@ def trading_cockpit_advanced_options(
             risk_pct=risk_pct, target_premium=target_premium,
             slippage_bps=slippage_bps, broker_profile=broker_profile,
             selected=selected)
+        try:
+            result["shortlist_records_saved"]=manual_options_workflow.record_if_enabled(result)
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            result["shortlist_recording_error"]=type(exc).__name__
+        return result
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
+
+
+class OptionsComparisonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    capital: float = Field(default=50000, ge=1000, le=1e8)
+    max_lots: int = Field(default=3, ge=1, le=50)
+    direction: Literal["BOTH","UP","DOWN"] = "BOTH"
+    move_points: float = Field(default=100, ge=1, le=10000)
+    horizon_minutes: int = Field(default=5, ge=1, le=1440)
+    iv_change_points: float = Field(default=0, ge=-50, le=50)
+    rate_pct: float = Field(default=6.5, ge=-5, le=25)
+    dividend_pct: float = Field(default=0, ge=0, le=25)
+    max_spread_bps: float = Field(default=250, ge=10, le=5000)
+    risk_pct: float = Field(default=100, ge=1, le=100)
+    target_premium: float = Field(default=300, ge=1, le=100000)
+    slippage_bps: float = Field(default=10, ge=0, le=500)
+    broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"] = "zerodha"
+
+
+@app.post("/api/trading-cockpit/options/compare")
+def compare_option_expiries(body: OptionsComparisonRequest):
+    from . import manual_options_workflow
+    try:
+        result=manual_options_workflow.compare(**body.model_dump())
+        try:
+            result["shortlist_records_saved"]=manual_options_workflow.record_if_enabled(result)
+        except (ValueError,OSError,sqlite3.Error) as exc:
+            result["shortlist_recording_error"]=type(exc).__name__
+        return result
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/options/positions")
+def option_position_marks(target_pct: float = 5, stop_pct: float = 2.5,
+        horizon_minutes: int = 5, iv_change_points: float = 0,
+        rate_pct: float = 6.5, dividend_pct: float = 0, slippage_bps: float = 10):
+    from . import manual_options_workflow
+    try:
+        return manual_options_workflow.position_marks(target_pct=target_pct,stop_pct=stop_pct,
+           horizon_minutes=horizon_minutes,iv_change_points=iv_change_points,
+           rate_pct=rate_pct,dividend_pct=dividend_pct,slippage_bps=slippage_bps)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/options/workflow")
+def option_workflow_status():
+    from . import manual_options_workflow
+    try:
+        return manual_options_workflow.overview()
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+class OptionTrackingRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    enabled: bool
+
+
+@app.post("/api/trading-cockpit/options/workflow/tracking")
+def option_workflow_tracking(body: OptionTrackingRequest):
+    from . import manual_options_workflow
+    try:
+        return manual_options_workflow.set_tracking(body.enabled)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+class OptionAlertRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    identity: str = Field(min_length=9,max_length=20)
+    conditions: dict[str,float]
+
+
+@app.post("/api/trading-cockpit/options/workflow/alerts")
+def option_workflow_create_alert(body: OptionAlertRequest):
+    from . import manual_options_workflow
+    try:
+        return manual_options_workflow.create_alert(body.identity,body.conditions)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/options/workflow/alerts/{alert_id}/disable")
+def option_workflow_disable_alert(alert_id: str):
+    from . import manual_options_workflow
+    try:
+        return manual_options_workflow.disable_alert(alert_id)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/options/india-vix")
+def option_india_vix():
+    from . import india_vix
+    return india_vix.current()
 
 
 @app.get("/api/trading-cockpit/live/contracts")
@@ -1104,6 +1206,8 @@ class ManualScalpEntryRequest(BaseModel):
     quantity: int = Field(gt=0, le=1_000_000)
     entry_price: float = Field(gt=0, le=1_000_000)
     note: str = Field(default="", max_length=250)
+    contract_identity: str | None = Field(default=None,max_length=20)
+    broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"] = "zerodha"
 
 
 class ManualScalpExitRequest(BaseModel):
@@ -1125,8 +1229,22 @@ def trading_cockpit_trade_enter(body: ManualScalpEntryRequest):
     try:
         return manual_trade_journal.enter(
             body.symbol, body.direction, body.quantity, body.entry_price,
-            body.note)
+            body.note,body.contract_identity,body.broker_profile)
     except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+class ManualTradeLinkRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    contract_identity: str = Field(min_length=9,max_length=20)
+    broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"] = "zerodha"
+
+
+@app.post("/api/trading-cockpit/trades/{trade_id}/link")
+def trading_cockpit_trade_link(trade_id: str, body: ManualTradeLinkRequest):
+    try:
+        return manual_trade_journal.link_trade(trade_id,body.contract_identity,body.broker_profile)
+    except (ValueError,OSError,sqlite3.Error) as exc:
         bad(exc)
 
 
@@ -4085,6 +4203,20 @@ def suspend_banknifty_depth_on_local_shutdown():
     auto_option_depth.suspend_for_shutdown()
     auto_option_chain.suspend_for_shutdown()
     full_option_feed.suspend_for_shutdown()
+
+
+# Independent lightweight saved-receipt monitor. No broker requests or new
+# recorder subscriptions; no work until rules or pending evaluations exist.
+@app.on_event("startup")
+def start_manual_options_monitor():
+    from . import manual_options_workflow
+    manual_options_workflow.start()
+
+
+@app.on_event("shutdown")
+def stop_manual_options_monitor():
+    from . import manual_options_workflow
+    manual_options_workflow.stop()
 
 
 # Missing or interrupted SHARED DERIVED VIEW publications are repaired at startup
