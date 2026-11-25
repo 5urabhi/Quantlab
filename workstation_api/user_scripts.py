@@ -267,7 +267,18 @@ with open("/work/result.json","w",encoding="utf-8") as f:
 '''
 
 
-def run_chart(*, code, snapshot, profile="stdlib", persist=True, progress=None):
+def rank_snapshot(plot, snapshot):
+    """Rank actual input rows by the first validated custom output trace."""
+    scores = plot["traces"][0]["y"]
+    ranked = sorted(((i, score) for i, score in enumerate(scores) if score is not None),
+                    key=lambda pair: (-pair[1], pair[0]))[:50]
+    return {"ranking": [{"rank": j+1, "key": str(snapshot["rows"][i][0]), "score": score,
+                         "row": snapshot["rows"][i]} for j, (i, score) in enumerate(ranked)],
+            "ranking_columns": snapshot["columns"],
+            "ranking_note": "First output trace is the custom score; descending, not certified profit."}
+
+
+def run_chart(*, code, snapshot, profile="stdlib", kind="chart", persist=True, progress=None):
     """Only copied snapshots enter the same fail-closed sandbox as strategies."""
     if not isinstance(code, str) or not 1 <= len(code) <= python_strategy_sandbox.MAX_SOURCE_CHARS:
         raise ValueError("Paste 1-20,000 characters of Python")
@@ -333,4 +344,6 @@ def run_chart(*, code, snapshot, profile="stdlib", persist=True, progress=None):
             "snapshot_sha256": sha256(payload).hexdigest(),
             "input_rows": count, "provenance": "user_snapshot_custom_python",
             "warning": "Custom Python output from client-provided snapshot; not source-verified market history, not a causal trading signal."}
+    if kind == "scanner":
+        output.update(rank_snapshot(plot, snapshot))
     return _save_chart_run(output) if persist else output

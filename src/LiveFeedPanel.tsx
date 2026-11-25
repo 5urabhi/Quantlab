@@ -1,3 +1,4 @@
+import LivePythonResults from './LivePythonResults'
 import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Activity,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
 import './live-feed.css'
@@ -208,6 +209,7 @@ export default function LiveFeedPanel({
       }}
       onDraftJournal={(contract,lots)=>onDraftJournal?.(contract,lots)}
     />}
+    {view==='options'&&<LivePythonResults mode="options"/>}
     {feed?.index_packet_note&&!livePrice&&<p className="tc-warning" role="status">
       Broker index packet not supported by the published binary layout · {feed.unsupported_index_packets} observed.
       {' '}{feed.index_packet_note}</p>}
@@ -215,6 +217,7 @@ export default function LiveFeedPanel({
       <ObservedIndexChartV2 rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'}
         sourceWarning={signal?.source_warning||''}/>
       {automatic?.armed&&!feed?.active&&<RecordedChainSpot/>}
+      {watchedIndex!=='INDEX:NIFTY50'&&<LivePythonResults mode="index"/>}
       <div className="lf-cards">
       <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
         <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':

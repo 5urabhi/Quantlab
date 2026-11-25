@@ -4449,6 +4449,7 @@ class ChartPythonRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str = Field(min_length=1, max_length=20000)
     snapshot: dict
+    kind: Literal["strategy","indicator","chart","research","model","scanner","risk","transform"] = "chart"
     profile: Literal["stdlib", "scientific"] = "stdlib"
     confirm_readonly: bool = False
 
@@ -4486,7 +4487,7 @@ def user_chart_run(body: ChartPythonRequest):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return _spawn("user_snapshot_chart", user_scripts.run_chart,
-                  code=body.code, snapshot=body.snapshot, profile=body.profile)
+                  code=body.code, snapshot=body.snapshot, profile=body.profile, kind=body.kind)
 
 
 @app.get("/api/user-script-runs")

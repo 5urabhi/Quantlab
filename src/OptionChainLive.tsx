@@ -189,7 +189,9 @@ export default function OptionChainLive({feedActive,depthIdentity,
     Math.abs(c.ltp-targetPremium)<=premiumTolerance).length
   const age=chain?.received_utc?Math.max(0,Math.round((now-Date.parse(chain.received_utc))/1000)):null
   const bookCurrent=Boolean(picked?.identity&&picked.identity===depthIdentity)
-  const columns=[...(showLiquidity?['oi','volume']:[]),...(showGreeks?['iv','delta']:[]),'bid','ask','ltp'] as const
+  const columns:('oi'|'volume'|'iv'|'delta'|'bid'|'ask'|'ltp')[]=['bid','ask','ltp']
+  if(showGreeks)columns.unshift('iv','delta')
+  if(showLiquidity)columns.unshift('oi','volume')
   const cellLabel:Record<string,string>={oi:'OI',volume:'Vol',iv:'IV %',delta:'Δ',bid:'Bid ₹',ask:'Ask ₹',ltp:'LTP ₹'}
   const cellValue=(c:OptionContract|undefined,k:typeof columns[number])=>c?num(c[k],k==='oi'||k==='volume'?0:k==='delta'?3:2):'—'
   const mapSignal=currentIndexDirection==='UP'?'CE':
@@ -202,12 +204,12 @@ export default function OptionChainLive({feedActive,depthIdentity,
     </div><span className="oc-source"><ShieldCheck size={15}/> Read-only · no orders</span></header>
     <div className="ao-mode" role="group" aria-label="Option chain workspace mode">
       <button type="button" aria-pressed={!advanced} onClick={()=>setAdvanced(false)}>Overview</button>
-      <button type="button" aria-pressed={advanced} onClick={()=>setAdvanced(true)}>Advanced Analytics</button>
+      <button type="button" aria-pressed={advanced} onClick={()=>{setAdvanced(true);setDetailsOpen(false)}}>Advanced Analytics</button>
     </div>
     <div className="oc-controls">
       <label>Expiry from Dhan
         <select aria-label="Dhan BANKNIFTY expiry" value={expiry}
-          onChange={e=>{setExpiry(e.target.value);setChain(null);setSelected('')}}>
+          onChange={e=>{setExpiry(e.target.value);setChain(null);setSelected('');setDetailsOpen(false)}}>
           {!dates&&<option value="">Connect Dhan for current expiries</option>}
           {dates?.expiries.map(x=><option key={x} value={x}>{x}</option>)}
         </select>

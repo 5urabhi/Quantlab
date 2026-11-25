@@ -215,16 +215,8 @@ def _evaluate(row, snap, bars):
         decisions,meta = sandbox.run_python(script["code"],bars,row["profile"])
         return {"signal":decisions[-1],"source_sha256":meta["source_sha256"],
                 "note":"Custom research signal on completed observed index minutes; no order or fill"}
-    output = library.run_chart(code=script["code"],snapshot=snap,profile=row["profile"],persist=False)
+    output = library.run_chart(code=script["code"],snapshot=snap,profile=row["profile"],kind=script["kind"],persist=False)
     output["warning"] = "Saved source observations; custom result is unvalidated research, not broker execution."
-    if script["kind"] == "scanner":
-        scores = output["plot"]["traces"][0]["y"]
-        ranking = sorted(((i,v) for i,v in enumerate(scores) if v is not None),
-                         key=lambda x: -x[1])[:50]
-        output["ranking"] = [{"rank":j+1,"key":snap["rows"][i][0],"score":v,
-                              "row":snap["rows"][i]} for j,(i,v) in enumerate(ranking)]
-        output["ranking_columns"] = snap["columns"]
-        output["ranking_note"] = "First output trace is the custom score; descending, not certified profit."
     return output
 
 

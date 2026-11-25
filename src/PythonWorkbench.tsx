@@ -10,7 +10,7 @@ type Meta={id:string;name:string;kind:Kind;revision:number;updated_utc:string}
 type Revision={revision:number;created_utc:string;name:string;kind:Kind}
 type Script={script_id:string;revision:number;name:string;kind:Kind;code:string;revisions:Revision[]}
 type SavedRun={id:string;title:string;created_utc:string;input_rows:number}
-type Result={run_id:string;plot:ResearchPlotData;source_sha256:string;snapshot_sha256:string;input_rows:number;warning:string}
+type Result={run_id:string;plot:ResearchPlotData;source_sha256:string;snapshot_sha256:string;input_rows:number;warning:string;ranking?:{rank:number;key:string;score:number;row:(string|number|null)[]}[];ranking_columns?:string[];ranking_note?:string}
 type Job={id:string;status:string;stage?:string;error?:string;result?:Result}
 const KINDS:Kind[]=['strategy','indicator','chart','research','model','scanner','risk','transform']
 const EXAMPLE=`# Standard-library Python. The first column is the chart X coordinate.
@@ -112,7 +112,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
   const run=async()=>{
     if(!snapshot||jobId)return
     setBusy(true);setError('');setNotice('');setRunSource(snapshot);setResult(null)
-    try{const data=await marketPost<{job_id:string;status:string}>('/api/user-scripts/chart/run',{code:draft.code,snapshot,profile,confirm_readonly:true})
+    try{const data=await marketPost<{job_id:string;status:string}>('/api/user-scripts/chart/run',{code:draft.code,snapshot,profile,kind:draft.kind,confirm_readonly:true})
       setJobId(data.job_id);setJob({id:data.job_id,status:data.status});setView('output');try{sessionStorage.setItem('ql-v3-chart-job',data.job_id)}catch{/* optional */}
     }catch(e){setError(readableError(e))}finally{setBusy(false)}
   }
@@ -167,7 +167,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
       <div className="qpw-context"><div className="qpw-actions"><button type="button" onClick={()=>setView('input')} aria-pressed={view==='input'}>Input</button><button type="button" onClick={()=>setView('output')} aria-pressed={view==='output'}>Output</button></div>
         {error&&<p role="alert" className="qpw-error">{error}</p>}{notice&&<p role="status">{notice}</p>}
         <p className="qpw-note">Sandbox: {available===null?'Checking':available?'Installed · kernel permission checked at run':'Unavailable · install bubblewrap and prlimit'}. {profile==='scientific'?'Scientific system packages must pass the isolated import test in Settings → Python Environment.':'Standard library profile.'} No orders or broker credentials.</p>
-        {view==='input'?snapshot?<><h4>{snapshot.title}</h4><p>{snapshot.rows.length} rows · {snapshot.provenance}</p><p>Columns: {snapshot.columns.join(' · ')}</p><pre>{JSON.stringify(snapshot.rows.slice(0,5),null,2)}</pre><button type="button" disabled={locked} onClick={()=>setSnapshot(null)}>Detach snapshot</button></>:<p>Choose Python analysis on a compatible chart to attach a fixed data snapshot.</p>:<>{jobId&&<p role="status">{job?.status||'queued'} · {job?.stage||'Isolated analysis'}</p>}{result?<><p>{result.warning} · {result.input_rows} rows</p>{runSource?.targetId&&<div className="qpw-actions"><button type="button" onClick={()=>apply('companion')}>Add companion chart</button><button type="button" onClick={()=>apply('overlay')}>Overlay same units</button></div>}<ResearchPlot plot={result.plot} provenance="custom-python-snapshot" allowApply={false}/><details><summary>Reproducibility hashes</summary><p>Code: {result.source_sha256}</p><p>Input: {result.snapshot_sha256}</p></details></>:<p>No custom result yet.</p>}</>}
+        {view==='input'?snapshot?<><h4>{snapshot.title}</h4><p>{snapshot.rows.length} rows · {snapshot.provenance}</p><p>Columns: {snapshot.columns.join(' · ')}</p><pre>{JSON.stringify(snapshot.rows.slice(0,5),null,2)}</pre><button type="button" disabled={locked} onClick={()=>setSnapshot(null)}>Detach snapshot</button></>:<p>Choose Python analysis on a compatible chart to attach a fixed data snapshot.</p>:<>{jobId&&<p role="status">{job?.status||'queued'} · {job?.stage||'Isolated analysis'}</p>}{result?<><p>{result.warning} · {result.input_rows} rows</p>{runSource?.targetId&&<div className="qpw-actions"><button type="button" onClick={()=>apply('companion')}>Add companion chart</button><button type="button" onClick={()=>apply('overlay')}>Overlay same units</button></div>}{result.ranking&&<><p>{result.ranking_note}</p><div className="ws-table-scroll"><table><thead><tr><th>Rank</th><th>Custom score</th>{result.ranking_columns?.map((c,i)=><th key={i}>{c}</th>)}</tr></thead><tbody>{result.ranking.map(r=><tr key={r.rank}><td>{r.rank}</td><td>{r.score.toPrecision(5)}</td>{r.row.map((v,i)=><td key={i}>{v??'Missing'}</td>)}</tr>)}</tbody></table></div></>}<ResearchPlot plot={result.plot} provenance="custom-python-snapshot" allowApply={false}/><details><summary>Reproducibility hashes</summary><p>Code: {result.source_sha256}</p><p>Input: {result.snapshot_sha256}</p></details></>:<p>No custom result yet.</p>}</>}
       </div>
     </div>
   </section>
