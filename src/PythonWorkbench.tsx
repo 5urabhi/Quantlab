@@ -44,6 +44,8 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
   const [draft,setDraft]=useState(initialDraft)
   const [scripts,setScripts]=useState<Meta[]>([])
   const [current,setCurrent]=useState<Script|null>(null)
+  const [profile,setProfile]=useState<'stdlib'|'scientific'>(()=>{try{return localStorage.getItem('ql-python-profile')==='scientific'?'scientific':'stdlib'}catch{return 'stdlib'}})
+  useEffect(()=>{try{localStorage.setItem('ql-python-profile',profile)}catch{/* optional */}},[profile])
   const [snapshot,setSnapshot]=useState<PythonSnapshot|null>(null)
   const [available,setAvailable]=useState<boolean|null>(null)
   const [error,setError]=useState('')
@@ -100,6 +102,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
       setCurrent(item);setDraft({name:item.name,kind:item.kind,code:item.code});setNotice('Loaded revision '+item.revision+'. Saving an older revision requires Save as new.')
     }catch(e){setError(readableError(e))}finally{setBusy(false)}
   }
+  useEffect(()=>{const handler=(e:Event)=>{const id=(e as CustomEvent<string>).detail;if(typeof id==='string')void load(id)};window.addEventListener('quantlab:open-saved-script',handler);return()=>window.removeEventListener('quantlab:open-saved-script',handler)},[])
   const save=async(asNew=false)=>{
     setBusy(true);setError('');setNotice('')
     try{const item=await marketPost<Script>('/api/user-scripts',{...draft,...(current&&!asNew?{script_id:current.script_id,expected_revision:current.revision}:{})})
@@ -109,7 +112,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
   const run=async()=>{
     if(!snapshot||jobId)return
     setBusy(true);setError('');setNotice('');setRunSource(snapshot);setResult(null)
-    try{const data=await marketPost<{job_id:string;status:string}>('/api/user-scripts/chart/run',{code:draft.code,snapshot,confirm_readonly:true})
+    try{const data=await marketPost<{job_id:string;status:string}>('/api/user-scripts/chart/run',{code:draft.code,snapshot,profile,confirm_readonly:true})
       setJobId(data.job_id);setJob({id:data.job_id,status:data.status});setView('output');try{sessionStorage.setItem('ql-v3-chart-job',data.job_id)}catch{/* optional */}
     }catch(e){setError(readableError(e))}finally{setBusy(false)}
   }
@@ -130,7 +133,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
   }
   const launchStrategy=()=>{
     if(draft.kind!=='strategy')return
-    try{sessionStorage.setItem('ql-v2-python-unsaved-draft',draft.code)}catch{setError('Browser draft storage unavailable. Export and paste into the strategy editor.');return}
+    try{sessionStorage.setItem('ql-v2-python-unsaved-draft',draft.code);localStorage.setItem('ql-python-profile',profile)}catch{setError('Browser draft storage unavailable. Export and paste into the strategy editor.');return}
     onStrategy();window.dispatchEvent(new CustomEvent(STRATEGY_SCRIPT_EVENT,{detail:draft.code}));onClose()
   }
   const exportCode=()=>{
@@ -152,18 +155,18 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
       </aside>
       <div className="qpw-editor">
         <div className="qpw-actions"><label>Name<input value={draft.name} maxLength={100} onChange={e=>setDraft(d=>({...d,name:e.target.value}))}/></label><label>Category<select value={draft.kind} onChange={e=>setDraft(d=>({...d,kind:e.target.value as Kind}))}>{KINDS.map(k=><option key={k}>{k}</option>)}</select></label>
-          <button type="button" disabled={locked} onClick={()=>setDraft(d=>({...d,code:d.kind==='strategy'?STRATEGY:EXAMPLE}))}>Load example</button></div>
+          <label>Profile<select value={profile} onChange={e=>setProfile(e.target.value as typeof profile)}><option value="stdlib">Standard library</option><option value="scientific">Scientific packages</option></select></label><button type="button" disabled={locked} onClick={()=>setDraft(d=>({...d,code:d.kind==='strategy'?STRATEGY:EXAMPLE}))}>Load example</button></div>
         <PythonCodeEditor value={draft.code} onChange={code=>setDraft(d=>({...d,code}))} label="Reusable Python code"/>
         <div className="qpw-actions"><button className="primary" type="button" disabled={locked} onClick={()=>void save()}>Save</button><button type="button" disabled={locked} onClick={()=>void save(true)}>Save as new</button><button type="button" onClick={exportCode}>Export .py</button>
           {current&&<label>Version<select value={current.revision} disabled={locked} onChange={e=>void load(current.script_id,Number(e.target.value))}>{current.revisions.map(v=><option key={v.revision} value={v.revision}>v{v.revision} · {v.created_utc.slice(0,10)}</option>)}</select></label>}
           {jobId&&<button type="button" onClick={()=>void stopJob()}>Stop job</button>}
           {draft.kind==='strategy'?<button className="primary" type="button" onClick={launchStrategy}>Open in strategy editor</button>:<button className="primary" type="button" onClick={()=>void run()} disabled={!runnable||!snapshot||locked||available===false}>Run snapshot</button>}
         </div>
-        <p className="qpw-note">{draft.kind==='strategy'?'Strategies run through the existing causal BANKNIFTY backtest editor.':'Define analyze(data) returning title, x_label, y_label and traces (one finite number or null per input row). Other categories share this snapshot interface; they are not registered live trading hooks.'}</p>
+        <p className="qpw-note">{draft.kind==='strategy'?'Strategies run through the existing causal BANKNIFTY backtest editor.':'Define analyze(data) returning title, x_label, y_label and traces (one finite number or null per input row). Other categories use this snapshot interface. Saved revisions can also be scheduled in Strategies → Running Python or the custom model/scanner catalog.'}</p>
       </div>
       <div className="qpw-context"><div className="qpw-actions"><button type="button" onClick={()=>setView('input')} aria-pressed={view==='input'}>Input</button><button type="button" onClick={()=>setView('output')} aria-pressed={view==='output'}>Output</button></div>
         {error&&<p role="alert" className="qpw-error">{error}</p>}{notice&&<p role="status">{notice}</p>}
-        <p className="qpw-note">Sandbox: {available===null?'Checking':available?'Installed · kernel permission checked at run':'Unavailable · install bubblewrap and prlimit'}. Standard library only. No orders or broker credentials.</p>
+        <p className="qpw-note">Sandbox: {available===null?'Checking':available?'Installed · kernel permission checked at run':'Unavailable · install bubblewrap and prlimit'}. {profile==='scientific'?'Scientific system packages must pass the isolated import test in Settings → Python Environment.':'Standard library profile.'} No orders or broker credentials.</p>
         {view==='input'?snapshot?<><h4>{snapshot.title}</h4><p>{snapshot.rows.length} rows · {snapshot.provenance}</p><p>Columns: {snapshot.columns.join(' · ')}</p><pre>{JSON.stringify(snapshot.rows.slice(0,5),null,2)}</pre><button type="button" disabled={locked} onClick={()=>setSnapshot(null)}>Detach snapshot</button></>:<p>Choose Python analysis on a compatible chart to attach a fixed data snapshot.</p>:<>{jobId&&<p role="status">{job?.status||'queued'} · {job?.stage||'Isolated analysis'}</p>}{result?<><p>{result.warning} · {result.input_rows} rows</p>{runSource?.targetId&&<div className="qpw-actions"><button type="button" onClick={()=>apply('companion')}>Add companion chart</button><button type="button" onClick={()=>apply('overlay')}>Overlay same units</button></div>}<ResearchPlot plot={result.plot} provenance="custom-python-snapshot" allowApply={false}/><details><summary>Reproducibility hashes</summary><p>Code: {result.source_sha256}</p><p>Input: {result.snapshot_sha256}</p></details></>:<p>No custom result yet.</p>}</>}
       </div>
     </div>

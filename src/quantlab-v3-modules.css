@@ -35,3 +35,11 @@
 .ws-v2.ql-v3 .ws-context-tabs{overflow:visible}
 .ws-v2.ql-v3 .ws-context-primary{min-width:0;flex-wrap:wrap}
 @media(max-width:700px){.ws-v2.ql-v3 .ws-context-primary{flex-wrap:nowrap;overflow-x:auto}.ws-v2.ql-v3 .ws-context-more{min-width:0}}
+
+.ql-monitor-form{display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin:16px 0}
+.ql-monitor-form label{display:grid;gap:5px;color:var(--ql-muted);font-size:12px}
+.ql-monitor-form select{background:var(--ql-bg);color:var(--ql-text);border:1px solid var(--ql-border);padding:9px;border-radius:6px;max-width:100%}
+.ql-monitor-form .ql-monitor-consent{display:flex;align-items:center;max-width:320px}
+.ql-monitor-row{padding:14px 0;border-top:1px solid var(--ql-border)}
+.ql-monitor-head{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.ql-monitor-head small{display:block;color:var(--ql-muted);font-size:12px;margin-top:4px}

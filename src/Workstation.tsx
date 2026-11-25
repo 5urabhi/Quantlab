@@ -15,6 +15,8 @@ import DataManager from './DataManager'
 import IndexBuilderWorkspace from './IndexBuilderWorkspace'
 import GlobalSearchV2 from './GlobalSearchV2'
 import PythonWorkbench from './PythonWorkbench'
+import PythonMonitors from './PythonMonitors'
+import PythonEnvironment from './PythonEnvironment'
 const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
@@ -56,18 +58,18 @@ type Tab =
   'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|'evidence'|
   'history'|'workspace'|'chartstudio'|'comparisons'|'visual'|'workspacejobs'|
   'projects'|'reports'|'resourcebrowser'|'settings'|'connections'|'recordingsettings'|
-  'storage'|'preferences'|'diagnostics'|'guide'|'journey'
+  'storage'|'preferences'|'diagnostics'|'guide'|'journey'|'pythonmonitors'|'pythonenvironment'|'custommodels'|'customscanners'
 type PrimarySection={id:Tab;label:string;icon:typeof Activity;tabs:Tab[];navTabs:Tab[]}
 const primarySections:PrimarySection[]=[
   {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
   {id:'trading',label:'Trading',icon:Activity,
-    tabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper','tradinganalytics','tradingdirectional'],
+    tabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper','tradinganalytics','tradingdirectional','customscanners'],
     navTabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper']},
   {id:'strategies',label:'Strategies',icon:TrendingUp,
-    tabs:['strategies','strategyema','strategypython','strategybacktest'],
+    tabs:['strategies','strategyema','strategypython','strategybacktest','pythonmonitors'],
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
   {id:'mathematics',label:'Models',icon:Sigma,
-    tabs:['mathematics','models','research','factors','construction','risk','rolling','robustness','modelgrids','indexstudio','journey'],
+    tabs:['mathematics','models','research','factors','construction','risk','rolling','robustness','modelgrids','indexstudio','journey','custommodels'],
     navTabs:['mathematics','research','models']},
   {id:'data',label:'Data Center',icon:Database,
     tabs:['data','dhan','dataexplorer','dataquality','datadownloads','nse','evidence'],
@@ -78,7 +80,7 @@ const primarySections:PrimarySection[]=[
   {id:'projects',label:'Projects',icon:BookOpen,
     tabs:['projects','reports','resourcebrowser'],navTabs:['projects','reports']},
   {id:'connections',label:'Settings',icon:Settings2,
-    tabs:['connections','recordingsettings','storage','preferences','diagnostics','settings','guide'],
+    tabs:['connections','recordingsettings','storage','preferences','diagnostics','settings','guide','pythonenvironment'],
     navTabs:['connections','recordingsettings','diagnostics']},
 ]
 const titles:Record<Tab,string>={
@@ -87,7 +89,7 @@ const titles:Record<Tab,string>={
   tradingreplay:'Market Replay',
   tradingjournal:'Trade Journal',tradingpaper:'Paper Trading',tradinganalytics:'Options Analytics',tradingdirectional:'Directional Trading',strategies:'Strategy Library',
   strategyema:'EMA Explorer',strategypython:'Python Editor',
-  strategybacktest:'BANKNIFTY Backtests',
+  strategybacktest:'BANKNIFTY Backtests',pythonmonitors:'Running Python',custommodels:'Custom Models',customscanners:'Custom Scanners',pythonenvironment:'Python Environment',
   mathematics:'Model Catalog',models:'Advanced Research Tools',
   research:'Index Builder',factors:'Factor Research',
   construction:'Portfolio Construction',risk:'Risk Attribution',
@@ -122,6 +124,10 @@ const descriptions:Record<Tab,string>={
   strategyema:'Test one EMA pair, chosen combinations or all 11,026 valid pairs.',
   strategypython:'Paste, run and save isolated Python research without interrupting Dhan capture.',
   strategybacktest:'Compare directional signal timing and original-contract CE/PE paper P&L.',
+  pythonmonitors:'Run saved Python revisions on incoming recorded observations.',
+  custommodels:'Maintain and execute user-defined snapshot-based quantitative calculations.',
+  customscanners:'Rank source-backed option contracts using your saved Python score.',
+  pythonenvironment:'Inspect and test optional scientific packages in an isolated environment.',
   mathematics:'Choose stochastic, volatility, options, risk and portfolio mathematical models.',
   models:'Sweep parameters, test walk-forward stability, study shocks and inspect advanced research tools.',
   research:'Construct, backtest and validate factor-based equity indices.',
@@ -1001,6 +1007,8 @@ function App(){
         {tab==='storage'&&<DataManager initialSection="database" integrated
           onSelectDataset={setSelectedDataset} onChanged={refresh}
           onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
+        {tab==='pythonenvironment'&&<PythonEnvironment/>}
+        {(['pythonmonitors','custommodels','customscanners'].includes(tab))&&<PythonMonitors key={tab} initialKind={tab==='custommodels'?'model':tab==='customscanners'?'scanner':undefined} onEdit={id=>{showPython();if(id)window.dispatchEvent(new CustomEvent('quantlab:open-saved-script',{detail:id}))}}/>}
         {tab==='preferences'&&<SettingsPreferencesV2/>}
         {tab==='diagnostics'&&<DiagnosticsV2 onRepair={()=>begin('settings')}
           onData={()=>begin('dataquality')}/>}

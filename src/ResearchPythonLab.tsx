@@ -258,6 +258,8 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
     window.addEventListener(STRATEGY_SCRIPT_EVENT,load)
     return()=>window.removeEventListener(STRATEGY_SCRIPT_EVENT,load)
   },[])
+  const [profile,setProfile]=useState<'stdlib'|'scientific'>(()=>{try{return localStorage.getItem('ql-python-profile')==='scientific'?'scientific':'stdlib'}catch{return 'stdlib'}})
+  useEffect(()=>{try{localStorage.setItem('ql-python-profile',profile)}catch{/* optional */}},[profile])
   const [savedName,setSavedName]=useState('EMA 9/21 example')
   const [status,setStatus]=useState<Status|null>(null)
   const [jobId,setJobId]=useState(()=>sessionStorage.getItem(JOB)||'')
@@ -366,7 +368,7 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
       setError('Define def signal(history): returning UP, DOWN or HOLD; maximum 20,000 characters.')
       return
     }
-    void start('python',{code:script})
+    void start('python',{code:script,profile})
   }
   const runPair=(f:number,s:number)=>{
     setTab('sweep');void start('ema-pair',{fast:f,slow:s})
@@ -498,6 +500,7 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
           <code> "UP"</code>, <code>"DOWN"</code>, or <code>"HOLD"</code>.
           The function receives only completed original candles up through the
           current minute, never future candles. Standard-library Python only.</p>
+        <label>Python profile <select value={profile} onChange={e=>setProfile(e.target.value as typeof profile)}><option value="stdlib">Standard library</option><option value="scientific">Scientific packages (test in Settings)</option></select></label>
         <PythonCodeEditor ref={editor} value={script} onChange={setScript} label="Paste or type Python backtest code" onRun={runPython}/>
         <div className="rpl-editor-foot">
           <div className="rpl-editor-actions">
