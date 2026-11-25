@@ -96,6 +96,14 @@ def _db(*,write=False):
           marked_equity REAL,realized REAL NOT NULL,marked_count INTEGER NOT NULL,
           position_count INTEGER NOT NULL,PRIMARY KEY(account_id,minute_utc));
         """)
+        columns={r[1] for r in db.execute("PRAGMA table_info(paper_orders)")}
+        if "last_checked_utc" not in columns:
+            try:
+                db.execute("ALTER TABLE paper_orders ADD COLUMN last_checked_utc TEXT")
+            except sqlite3.OperationalError:
+                if "last_checked_utc" not in {r[1] for r in db.execute("PRAGMA table_info(paper_orders)")}:
+                    raise
+        db.commit()
         try:
             if write:
                 db.execute("BEGIN IMMEDIATE")
@@ -162,7 +170,8 @@ def _contract(identity):
         raise ValueError("Select an exact verified NSE_FNO contract identity")
     master=option_chain_live._contracts()
     c=master.get("by_id",{}).get(identity.split(":")[1])
-    if not master.get("fresh") or not c or c["identity"]!=identity:
+    if (not master.get("fresh") or not c or c["identity"]!=identity
+            or not isinstance(c.get("lot_size"),int) or not 1<=c["lot_size"]<=1000):
         raise ValueError("Refresh the official Dhan BANKNIFTY instrument master")
     return c
 
@@ -342,7 +351,9 @@ def _apply_fill(db,o,stamp,digest,result):
         new_qty=p["quantity"]-units
     db.execute("""INSERT INTO paper_positions(account_id,identity,symbol,expiry,strike,side,lot_size,quantity,cost_basis)
         VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,identity) DO UPDATE SET
-        quantity=excluded.quantity,cost_basis=excluded.cost_basis""",
+        quantity=excluded.quantity,cost_basis=excluded.cost_basis,
+        symbol=excluded.symbol,expiry=excluded.expiry,strike=excluded.strike,
+        side=excluded.side,lot_size=excluded.lot_size""",
         (o["account_id"],o["identity"],o["symbol"],o["expiry"],o["strike"],o["side"],o["lot_size"],new_qty,basis))
     db.execute("UPDATE paper_accounts SET cash=?,realized=?,fees_paid=? WHERE id=?",
         (cash,fees._money(a["realized"]+realized),fees._money(a["fees_paid"]+increment),a["id"]))
@@ -364,6 +375,7 @@ def _apply_fill(db,o,stamp,digest,result):
 
 
 def _advance(db,o,now):
+    db.execute("UPDATE paper_orders SET last_checked_utc=? WHERE id=?",(_iso(now),o["id"]))
     deadline=ao.timestamp(o["deadline_utc"])
     cancel=ao.timestamp(o["cancel_requested_utc"]) if o["cancel_requested_utc"] else None
     end=min(now,deadline,cancel or deadline)
@@ -376,9 +388,12 @@ def _advance(db,o,now):
         o=_order(db,o["id"])
         if o["state"] not in WORKING:
             return
-        t=ao.timestamp(stamp)
         db.execute("UPDATE paper_orders SET cursor_utc=? WHERE id=?",(stamp,o["id"]))
-        valid=ao.timestamp(o["created_utc"])<t<=end and _regular(t) and t<_close(t,o["expiry"])
+        try:
+            t=ao.timestamp(stamp)
+            valid=ao.timestamp(o["created_utc"])<t<=end and _regular(t) and t<_close(t,o["expiry"])
+        except (ValueError,TypeError):
+            valid=False
         book=_verified(o["identity"],stamp,raw,digest,o) if valid else None
         if not book:
             db.execute("UPDATE paper_orders SET invalid_books=invalid_books+1 WHERE id=?",(o["id"],))
@@ -455,9 +470,11 @@ def cycle(now=None):
         return
     with _db(write=True) as db:
         orders=db.execute("""SELECT * FROM paper_orders WHERE state IN ('working','partially_filled')
-            ORDER BY created_utc,id LIMIT 500""").fetchall()
+            ORDER BY COALESCE(last_checked_utc,created_utc),created_utc,id LIMIT 40""").fetchall()
         for o in orders:
             _advance(db,o,now)
+        if not _regular(now):
+            return
         minute=_iso(now.replace(second=0,microsecond=0))
         for a in db.execute("SELECT * FROM paper_accounts").fetchall():
             if db.execute("SELECT 1 FROM paper_equity WHERE account_id=? AND minute_utc=?",(a["id"],minute)).fetchone():
@@ -492,6 +509,7 @@ def overview(aid,*,now=None):
         "warning":"All fills are hypothetical displayed-depth walks after the paper order time. "
             "No queue position, actual passive fill, broker margin, expiry settlement or trading profitability is verified. "
             "Limit orders execute only against subsequent contra-side prices satisfying protection. "
+            "Late writes older than the processed receipt cursor cannot be replayed automatically. "
             "Missing marks leave equity unavailable; do not treat them as zero."}
 
 
