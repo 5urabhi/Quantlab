@@ -4429,3 +4429,59 @@ def reconcile_interrupted_research():
                 break
         except (OSError, ValueError):
             LOG.warning("Read-only Dhan batch recovery inventory unavailable")
+
+
+# Versioned user scripts and isolated snapshot analysis (UI V3).
+from . import user_scripts
+
+
+class ScriptSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    kind: Literal["strategy","indicator","chart","research","model","scanner","risk","transform"]
+    code: str = Field(min_length=1, max_length=20000)
+    script_id: str | None = Field(default=None, max_length=32)
+    expected_revision: int | None = Field(default=None, ge=1, le=100)
+
+
+class ChartPythonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(min_length=1, max_length=20000)
+    snapshot: dict
+    confirm_readonly: bool = False
+
+
+@app.get("/api/user-scripts")
+def user_script_list():
+    return {"scripts": user_scripts.list_scripts(),
+            "sandbox": python_strategy_sandbox.availability()}
+
+
+@app.get("/api/user-scripts/{script_id}")
+def user_script_read(script_id: str, revision: int | None = None):
+    try:
+        return user_scripts.read_script(script_id, revision)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/user-scripts")
+def user_script_save(body: ScriptSaveRequest):
+    try:
+        return user_scripts.save_script(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/user-scripts/chart/run")
+def user_chart_run(body: ChartPythonRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Confirm isolated read-only snapshot research")
+    if not python_strategy_sandbox.availability()["available"]:
+        raise HTTPException(409, "Ubuntu bubblewrap and prlimit are required; no unsafe fallback")
+    try:
+        user_scripts.snapshot_json(body.snapshot)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _spawn("user_snapshot_chart", user_scripts.run_chart,
+                  code=body.code, snapshot=body.snapshot)
