@@ -29,8 +29,18 @@ const time=(v:string|null|undefined)=>v?new Date(v).toLocaleString('en-IN',{time
 function loadSaved():Saved[]{try{const v:unknown=JSON.parse(localStorage.getItem(STORE)||'[]');return Array.isArray(v)?(v as Saved[]).slice(0,40):[]}catch{return []}}
 function Metric({name,value,detail}:{name:string;value:string;detail:string}){return <div className="ml-metric"><small>{name}</small><strong>{value}</strong><span>{detail}</span></div>}
 function PayoffChart({points,breakEven=[]}:{points:Point[];breakEven?:number[]}){
+  const [index,setIndex]=useState(()=>Math.floor(points.length/2))
   if(!points.length)return <p>Payoff points unavailable.</p>
-  return <div className="ml-chart"><ResearchPlot plot={{kind:'line2d',title:'Theoretical expiration payoff curve, excluding exercise and settlement costs',x_label:'BANKNIFTY expiry level (points)',y_label:'Terminal net payoff (₹)',x:points.map(p=>p.underlying),traces:[{name:'Theoretical net payoff',y:points.map(p=>p.net_payoff_inr)}],reference_lines:[{value:0,label:'Break-even payoff'}],point_markers:breakEven.filter(b=>points.some(p=>p.underlying===b)).map(b=>({x:b,y:0,label:'Break-even',color:'#f5c542'}))}} provenance="theoretical" formatY={money}/><p>Hypothetical terminal payoffs, not current prices, actual fills or verified broker margin.</p></div>
+  const safeIndex=Math.max(0,Math.min(index,points.length-1)),point=points[safeIndex]
+  const markers=[...breakEven.filter(b=>points.some(p=>p.underlying===b)).map(b=>({x:b,y:0,label:'Break-even',color:'#f5c542'})),{x:point.underlying,y:point.net_payoff_inr,label:'Selected expiry scenario',color:'#78a8ff'}]
+  return <div className="ml-chart">
+    <ResearchPlot plot={{kind:'line2d',title:'Theoretical expiration payoff curve, excluding exercise and settlement costs',x_label:'BANKNIFTY expiry level (points)',y_label:'Terminal net payoff (₹)',x:points.map(p=>p.underlying),traces:[{name:'Theoretical net payoff',y:points.map(p=>p.net_payoff_inr)}],reference_lines:[{value:0,label:'Break-even payoff'}],point_markers:markers}} provenance="theoretical" formatY={money}/>
+    <label>Explore hypothetical expiry BANKNIFTY level
+      <input type="range" min={0} max={points.length-1} step={1} value={safeIndex} onChange={e=>setIndex(Number(e.target.value))} aria-valuetext={n(point.underlying,2)+' points; terminal payoff '+money(point.net_payoff_inr)}/>
+    </label>
+    <div className="ml-chart-pnl" aria-live="polite">BANKNIFTY {n(point.underlying,2)} · terminal payoff <strong>{money(point.net_payoff_inr)}</strong></div>
+    <p>Hypothetical terminal payoffs at the supplied scenario points, not current prices, actual fills or verified broker margin.</p>
+  </div>
 }
 export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerProfileChange}:{day:string;expiry:string;brokerProfile:BrokerProfile;onBrokerProfileChange:(v:BrokerProfile)=>void}){
   const [page,setPage]=useState<Page>('discover')
