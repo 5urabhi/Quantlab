@@ -192,3 +192,48 @@
  .ws-context-extra{left:0;right:auto;width:100%;min-width:0}
 }
 @media(prefers-reduced-motion:reduce){.ws-context-more summary svg{transition:none}}
+
+/* QuantLab graphite / amber workstation. Semantic market and status colors
+   remain independent from navigation and interaction colors. */
+:root {
+  color-scheme: dark;
+  --ql-bg: #0b0b0d;
+  --ql-panel: #151518;
+  --ql-raised: #1c1c20;
+  --ql-border: #343438;
+  --ql-text: #f1f1f3;
+  --ql-muted: #a5a5ad;
+  --ql-accent: #f5c542;
+  --ql-accent-soft: #332b17;
+  color: var(--ql-text);
+  background: var(--ql-bg);
+}
+.ws-shell { background: var(--ql-bg); }
+.ws-sidebar, .ws-topbar { background: #101012; border-color: var(--ql-border); }
+.ws-brand, .ws-sidefoot { border-color: var(--ql-border); }
+.ws-brand-mark { background: var(--ql-accent); color: #151105; box-shadow: none; }
+.ws-brand strong span, .ws-overline, .ws-textlink, .ws-sidefoot { color: var(--ql-accent); }
+.ws-brand small, .ws-nav-label, .ws-titlebar p, .ws-caption, .ws-top-left span { color: var(--ql-muted); }
+.ws-env, .ws-icon, .ws-menu, .ws-mobile-close { background: var(--ql-raised); border-color: var(--ql-border); color: var(--ql-text); }
+.ws-nav-item { color: var(--ql-muted); }
+.ws-nav-item:hover { background: var(--ql-raised); color: var(--ql-text); }
+.ws-nav-item.active { background: var(--ql-accent-soft); color: var(--ql-accent); }
+.ws-nav-item.active svg { color: var(--ql-accent); }
+.ws-nav-select { background: var(--ql-accent); }
+.ws-button, .ws-button.secondary { background: var(--ql-raised); border-color: var(--ql-border); color: var(--ql-text); }
+.ws-button.primary { background: var(--ql-accent); border-color: var(--ql-accent); color: #151105; }
+.ws-card, .ws-metric, .ws-data-library-card { background: var(--ql-panel); border-color: var(--ql-border); }
+.ws-metric.highlight { background: var(--ql-accent-soft); border-color: #685424; }
+.ws-metric.highlight strong, .ws-overview-banner h2 em { color: var(--ql-accent); }
+.ws-overview-banner { background: radial-gradient(ellipse at 82% 48%,#302819 0%,#1a1918 45%,#151518 80%); border-color: var(--ql-border); }
+.ws-orbit { border-color: #8d743a; }
+.ws-center-glow { background: var(--ql-accent-soft); color: var(--ql-accent); box-shadow: 0 0 0 15px #f5c54209,0 0 65px #f5c54216; }
+.ws-orbit-label { color: #d9c78d; }
+.ws-context-tabs, .ws-context-extra { background: var(--ql-panel); border-color: var(--ql-border); }
+.ws-context-tabs button, .ws-context-more summary, .ws-chart-views button { background: var(--ql-raised); border-color: var(--ql-border); color: var(--ql-text); }
+.ws-context-tabs button.active, .ws-context-more[open] summary, .ws-context-tabs .ws-context-extra button:hover, .ws-context-tabs .ws-context-extra button.active, .ws-chart-views button.active, .ws-chart-views button[aria-pressed=true] { background: var(--ql-accent-soft); border-color: #92752d; color: var(--ql-accent); }
+.ws-context-more summary svg, .ws-context-extra button svg { color: var(--ql-accent); }
+.ws-dataset-manage-row, .ws-data-library-card .ws-dataset-manage-row, .ws-delete-dialog, .ws-delete-dependencies, .ws-delete-dependencies li { background: var(--ql-panel); border-color: var(--ql-border); }
+.ws-shell :is(button,input,select,textarea,a,summary,[tabindex]):focus-visible { outline: 2px solid var(--ql-accent); outline-offset: 3px; }
+.ws-shell :is(input[type=checkbox],input[type=radio],input[type=range]) { accent-color: var(--ql-accent); }
+.ws-shell ::selection { background: var(--ql-accent); color: #151105; }
