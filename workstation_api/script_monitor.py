@@ -230,7 +230,7 @@ def source_snapshot(source, now=None):
             return None
         snap = {"title":"BANKNIFTY underlying spot at recorded chain receipts",
                 "provenance":"Original Dhan REST receipts; irregular local receipt times, not OHLC or streaming index ticks",
-                "columns":["Receipt time (UTC)","Underlying spot (points)"],"rows":points}
+                "columns":["Receipt time (UTC)","Underlying spot (points)"],"rows":points,"source_expiry":data["expiry"]}
     else:
         # Exact contract IDs (not duplicated CE/PE strikes) identify scores.
         rows = [[c["identity"],c["strike"],c["option_type"],c.get("ltp"),c.get("bid"),c.get("ask"),
@@ -256,6 +256,11 @@ def _evaluate(row, snap, bars):
                 "note":"Custom research signal on completed observed index minutes; no order or fill"}
     output = library.run_chart(code=script["code"],snapshot=snap,profile=row["profile"],kind=script["kind"],persist=False)
     output["warning"] = "Saved source observations; custom result is unvalidated research, not broker execution."
+    if script["kind"]=="indicator" and row["source"] in ("index_minutes","chain_spot_receipts"):
+        # Alignment evidence comes from the original copied inputs, never from
+        # the user-produced plot. It lets the frontend reject stale overlays.
+        output["alignment"]={"source":row["source"],"expiry":snap.get("source_expiry"),
+                             "columns":snap["columns"],"rows":snap["rows"]}
     return output
 
 
@@ -333,3 +338,23 @@ def stop():
     STOP.set()
     if WORKER and WORKER.is_alive():
         WORKER.join(timeout=1)
+
+
+def chart_overlays(source):
+    if source not in {"index_minutes","chain_spot_receipts"}:
+        raise ValueError("Unsupported indicator chart source")
+    now=_now()
+    if not _regular(now):
+        return {"overlays":[]}
+    overlays=[]
+    for row in list_monitors():
+        out=row.get("output") or {}
+        if (not row["enabled"] or row["state"]!="complete" or row["kind"]!="indicator"
+                or row["source"]!=source or not out.get("alignment") or not out.get("plot")):
+            continue
+        min_age,max_age=(60,150) if source=="index_minutes" else (0,120)
+        if not _fresh(row.get("last_utc"),now,min_age,max_age):
+            continue
+        overlays.append({"id":row["id"],"name":row["name"],"revision":row["revision"],
+                         "last_utc":row["last_utc"],"alignment":out["alignment"],"plot":out["plot"]})
+    return {"overlays":overlays[:MAX_ENABLED]}

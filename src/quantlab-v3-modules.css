@@ -70,3 +70,8 @@
 .ql-saved-runner-wrap>summary{cursor:pointer;color:#f5c542;margin:12px 0}
 .ql-saved-runner .ws-table-scroll{max-height:420px;overflow:auto}
 .ql-saved-runner .ql-monitor-form input:not([type=checkbox]){padding:9px;border:1px solid var(--ql-border);border-radius:6px;background:var(--ql-bg);color:var(--ql-text)}
+
+.ql-indicator-controls{margin:10px 0;padding:10px 12px;border:1px solid var(--ql-border,#343438);background:var(--ql-raised,#1c1c20);border-radius:8px}
+.ql-indicator-controls summary{cursor:pointer;color:var(--ql-accent,#f5c542)}
+.ql-indicator-controls label{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:12px}
+.ql-indicator-chart{min-width:0}

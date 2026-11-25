@@ -4675,3 +4675,8 @@ def user_saved_script_run(script_id: str,body: SavedScriptRunRequest):
     except ValueError as exc:
         raise HTTPException(400,str(exc)) from exc
     return _spawn("user_snapshot_chart",user_scripts.run_saved,script_id=script_id,revision=body.revision,snapshot=body.snapshot,profile=body.profile)
+
+
+@app.get("/api/script-monitor-overlays")
+def script_monitor_chart_overlays(source: Literal["index_minutes","chain_spot_receipts"]):
+    return script_monitor.chart_overlays(source)

@@ -1,5 +1,6 @@
 import {useMemo,useState} from 'react'
-import ResearchPlot,{type ResearchPlotData} from './ResearchPlots'
+import type {ResearchPlotData} from './ResearchPlots'
+import IndicatorChart from './IndicatorChart'
 import './quantlab-v2.css'
 type ObservedClose={timestamp_utc:string;close:number;open?:number;high?:number;low?:number}
 type Point=ObservedClose&{time:number;index:number}
@@ -20,7 +21,6 @@ function ema(points:Point[],period:number):(number|null)[]{
   }
   return result
 }
-const time=(value:string|number)=>new Date(value).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false})
 export default function ObservedIndexChartV2({rows,sourceWarning='',instrument='BANKNIFTY'}:{
   rows:ObservedClose[];sourceWarning?:string;instrument?:string
 }){
@@ -41,7 +41,7 @@ export default function ObservedIndexChartV2({rows,sourceWarning='',instrument='
     <header className="v2-observed-head"><div><strong>Observed {instrument} closes</strong><p>Dhan · completed 1-minute closes · index points · IST</p></div>
       <div className="ws-actions"><label>Chart type <select aria-label="Index chart type" value={candleMode?'candle':'close'} onChange={e=>setMode(e.target.value as typeof mode)}><option value="close">Observed close</option><option value="candle" disabled={!hasOhlc}>Observed OHLC candles</option></select></label><label>Visible observations <select value={length} onChange={e=>setLength(Number(e.target.value) as typeof length)}><option value={30}>Latest 30</option><option value={60}>Latest 60</option><option value={150}>Latest 150</option></select></label></div>
     </header>
-    {(plot.x?.length||0)<2?<div className="v2-chart-empty">No complete observed one-minute index series is currently available. QuantLab will not draw a synthetic live chart.</div>:<ResearchPlot plot={plot} provenance={candleMode?"observed-index-ohlc":"observed-index"} formatX={time} formatY={v=>v.toLocaleString('en-IN',{maximumFractionDigits:2})}/>}
+    {(plot.x?.length||0)<2?<div className="v2-chart-empty">No complete observed one-minute index series is currently available. QuantLab will not draw a synthetic live chart.</div>:<IndicatorChart source="index_minutes" enabled={instrument==='BANKNIFTY'} rows={rows.filter(r=>Number.isFinite(r.close)&&Number.isFinite(Date.parse(r.timestamp_utc))).slice().sort((a,b)=>Date.parse(a.timestamp_utc)-Date.parse(b.timestamp_utc)).map(r=>[r.timestamp_utc,r.open,r.high,r.low,r.close])} plot={plot} provenance={candleMode?"observed-index-ohlc":"observed-index"}/>}
     {sourceWarning&&<p className="v2-chart-warning">{sourceWarning}</p>}
     <p className="v2-chart-source">EMA warmup uses all available received minute closes before slicing the visible range. Source gaps break lines and reset the EMA. Candles use only genuine source OHLC fields when present. No synthetic open/high/low, authenticated traded volume or option execution evidence.</p>
   </section>
