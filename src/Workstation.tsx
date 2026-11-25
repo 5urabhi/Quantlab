@@ -13,6 +13,7 @@ import AutoDepthRecorder from './AutoDepthRecorder'
 import DataManager from './DataManager'
 import IndexBuilderWorkspace from './IndexBuilderWorkspace'
 import GlobalSearchV2 from './GlobalSearchV2'
+import PythonWorkbench from './PythonWorkbench'
 const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
@@ -339,6 +340,8 @@ function App(){
   const [jobsOpen,setJobsOpen]=useState(false)
   const [connectionEditing,setConnectionEditing]=useState(false)
   const [searchOpen,setSearchOpen]=useState(false)
+  const [pythonOpen,setPythonOpen]=useState(false)
+  const showPython=useCallback(()=>setPythonOpen(true),[])
   const [menu,setMenu]=useState(false)
   const [compactNav,setCompactNav]=useState(()=>{try{return localStorage.getItem('ql-v3-compact-nav')==='1'}catch{return false}})
   useEffect(()=>{try{localStorage.setItem('ql-v3-compact-nav',compactNav?'1':'0')}catch{/* optional preference */}},[compactNav])
@@ -561,7 +564,7 @@ function App(){
             aria-label="Search QuantLab" title="Search QuantLab · Ctrl K">
             <Search size={16}/><span>Search</span></button>
           <RecorderBadge onOpen={()=>begin('recordingsettings')}/>
-          <button type="button" className="v2-top-btn" onClick={()=>begin('strategypython')} title="Open existing isolated Python strategy editor"><Sigma size={16}/><span>Python</span></button>
+          <button type="button" className="v2-top-btn" onClick={showPython} title="Open reusable Python workspace"><Sigma size={16}/><span>Python</span></button>
           <button type="button" className="v2-top-btn" onClick={()=>setJobsOpen(true)}
             aria-label="Open Jobs and downloads" title="Jobs and downloads">
             <Clock3 size={16}/><span>Jobs</span></button>
@@ -578,6 +581,7 @@ function App(){
         onOpenFull={()=>begin('workspacejobs')}/>
       <GlobalSearchV2 open={searchOpen} onClose={()=>setSearchOpen(false)}
         onOpen={destination=>begin(destination)}/>
+      <PythonWorkbench open={pythonOpen} onOpen={showPython} onClose={()=>setPythonOpen(false)} onStrategy={()=>begin('strategypython')} contextLabel={titles[tab]}/>
       <main className="ws-content">
         <div className={'ws-titlebar '+(
           ['mathematics','history','data','dataexplorer','workspace','chartstudio',

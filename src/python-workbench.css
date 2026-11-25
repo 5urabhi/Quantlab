@@ -1,0 +1,23 @@
+.qpw-shell[hidden]{display:none!important}
+.qpw-shell{position:fixed;z-index:65;left:0;right:0;bottom:0;height:min(68vh,680px);display:flex;flex-direction:column;background:#111113;border-top:2px solid #f5c542;color:#f1f1f3;box-shadow:0 -12px 42px #0009;overflow:auto}
+.qpw-shell.qpw-expanded{height:100dvh}
+.qpw-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;border-bottom:1px solid #343438;background:#1c1c20}
+.qpw-header small,.qpw-library small{display:block;color:#a5a5ad;font-size:11px;margin-top:4px}
+.qpw-body{display:grid;grid-template-columns:minmax(160px,1fr) minmax(300px,2.4fr) minmax(260px,1.6fr);gap:0;min-height:0;flex:1}
+.qpw-library,.qpw-editor,.qpw-context{min-width:0;overflow:auto;padding:14px;border-right:1px solid #343438}
+.qpw-library h3{margin:0 0 12px;font-size:14px}
+.qpw-library button{width:100%;text-align:left;margin:4px 0}
+.qpw-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-bottom:8px}
+.qpw-shell button,.qpw-shell input,.qpw-shell select{font:inherit;font-size:12px;color:#f1f1f3;background:#1c1c20;border:1px solid #45454a;border-radius:6px;padding:8px 10px}
+.qpw-shell button:hover:not(:disabled),.qpw-shell button.selected,.qpw-shell button[aria-pressed=true]{border-color:#f5c542;color:#f5c542}
+.qpw-shell button.primary{background:#f5c542;color:#151105;border-color:#f5c542;font-weight:700}
+.qpw-shell label{display:grid;gap:4px;font-size:11px;color:#a5a5ad;min-width:0}
+.qpw-code{display:flex;height:min(30vh,320px);min-height:180px;border:1px solid #45454a;background:#0b0b0d;margin:8px 0;border-radius:6px;overflow:auto}
+.qpw-code pre,.qpw-code textarea{font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;margin:0;padding:10px;tab-size:4}
+.qpw-code pre{color:#777781;user-select:none;min-width:40px;overflow:hidden}
+.qpw-code textarea{flex:1;min-width:0;resize:none;border:0;outline:none;background:#0b0b0d;color:#f4d787}
+.qpw-context pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#e4e4e8;font-size:11px}
+.qpw-context p{overflow-wrap:anywhere}
+.qpw-note{font-size:12px;color:#a5a5ad;line-height:1.5}
+.qpw-error{color:#ffb5b5;background:#352022;border:1px solid #805052;padding:8px;border-radius:6px}
+@media(max-width:900px){.qpw-shell{height:85dvh}.qpw-body{grid-template-columns:1fr;display:block;overflow:auto}.qpw-library,.qpw-editor,.qpw-context{border-right:0;border-bottom:1px solid #343438}}

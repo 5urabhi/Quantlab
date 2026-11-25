@@ -1,6 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react'
 import {Activity,Code2,Database,Download,Play,Save,ShieldCheck,SlidersHorizontal} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
+import {STRATEGY_SCRIPT_EVENT} from './pythonBridge'
 import './research-python-lab.css'
 
 type SourceMode='historical'|'recorded_live'
@@ -251,6 +252,11 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
     try{sessionStorage.setItem('ql-v2-python-unsaved-draft',script.slice(0,50000))}
     catch{/* session storage can be disabled without affecting explicit Save */}
   },[script])
+  useEffect(()=>{
+    const load=(e:Event)=>{const code=(e as CustomEvent<string>).detail;if(typeof code==='string'){setScript(code);setTab('python')}}
+    window.addEventListener(STRATEGY_SCRIPT_EVENT,load)
+    return()=>window.removeEventListener(STRATEGY_SCRIPT_EVENT,load)
+  },[])
   const [savedName,setSavedName]=useState('EMA 9/21 example')
   const [status,setStatus]=useState<Status|null>(null)
   const [jobId,setJobId]=useState(()=>sessionStorage.getItem(JOB)||'')

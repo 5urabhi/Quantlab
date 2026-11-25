@@ -1,4 +1,5 @@
 import {useEffect, useMemo, useRef, useState} from 'react'
+import {openSnapshotInPython} from './pythonBridge'
 
 export type ResearchTrace={name:string;y:(number|null)[];color?:string}
 export type ResearchPlotData={
@@ -443,6 +444,10 @@ export default function ResearchPlot({plot,provenance}:{plot:ResearchPlotData;pr
     <div className="ql-chart-title-row"><h4>{plot.title}</h4>
       <div className="ql-chart-export">
         <button type="button" onClick={()=>void expand()}>Full screen / exit</button>
+        {zoomable||(!['surface3d','heatmap2d'].includes(plot.kind)&&!!plot.x?.length)?<button type="button" onClick={()=>{
+          const input=dataTable(visible)
+          openSnapshotInPython({title:plot.title,provenance:(provenance||'computed chart')+' · visible viewport snapshot',columns:input.columns,rows:input.rows})
+        }} title="Attach visible observations to isolated Python workspace">Python analysis</button>:null}
         <button type="button" onClick={exportPython} title="Download a Python script with the full plotted dataset for offline analysis">Python snapshot</button>
         <button type="button" onClick={saveSvg} aria-label={'Export SVG of '+plot.title}>Export SVG</button>
         <button type="button" onClick={saveCsv} aria-label={'Export CSV of '+plot.title}>Export CSV</button>
