@@ -395,6 +395,9 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
         # Pick a lot count automatically, using risk capital as a *proxy*,
         # never asserting that Zerodha SPAN or basket margin is sufficient.
         choice = None
+        qualified_choices = []
+        age = (now - min(b["stamp"] for b in books)).total_seconds()
+        fresh = chosen == today and 0 <= age <= max_source_age_seconds
         for lots in range(1, max_lots + 1):
             if lots == 1:
                 result = candidate
@@ -410,9 +413,18 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
                     result["risk_capital_proxy_inr"] <= capital_inr *
                     gate.MULTILEG_POLICY[
                         "max_theoretical_loss_fraction_of_budget"]):
-                choice = result
-            else:
-                break
+                result["source_age_seconds"] = age
+                result["fresh_reference"] = fresh
+                assessment = gate.multileg_feasibility(
+                    result, books=books, capital_inr=capital_inr,
+                    receipts=activity, trades=trades)
+                if result["max_profit_inr"] > 0:
+                    choice = result
+                if assessment["paper_research_qualified"]:
+                    qualified_choices.append((assessment["research_priority_score"], result))
+        if qualified_choices:
+            choice = max(qualified_choices, key=lambda item: (
+                item[0], item[1]["risk_reward_ratio_proxy"], -item[1]["lots"]))[1]
         if choice is None:
             rejections["risk_capital_budget_or_depth"] += 1
             continue
@@ -435,7 +447,7 @@ def scan(*, day: str | None = None, capital_inr: float = 50000,
                          max(1.0, max_quote_skew_seconds))), 2)
         # The short option introduces margin and leg-execution uncertainty:
         # no quote-only result is a broker-approved or executable trade.
-        choice["source_age_seconds"] = round(age, 1)
+        choice["source_age_seconds"] = age
         choice["fresh_reference"] = fresh
         choice["risk_budget_proxy_pass"] = True
         choice["structural_reward_risk_score"] = score

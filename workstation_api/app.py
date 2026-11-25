@@ -1012,6 +1012,129 @@ def option_position_marks(target_pct: float = 5, stop_pct: float = 2.5,
         bad(exc)
 
 
+class PaperAccountRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    label: str=Field(min_length=1,max_length=80)
+    initial_cash: float=Field(ge=1000,le=1e7)
+    risk_pct: float=Field(default=25,ge=1,le=100)
+    loss_limit_pct: float=Field(default=10,ge=1,le=100)
+    max_positions: int=Field(default=4,ge=1,le=20)
+    broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"]="zerodha"
+
+
+class PaperOrderRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    identity: str=Field(min_length=9,max_length=20)
+    action: Literal["BUY","SELL"]
+    kind: Literal["PROTECTED_MARKET","LIMIT"]="PROTECTED_MARKET"
+    lots: int=Field(default=1,ge=1,le=50)
+    protection_price: float=Field(ge=.01,le=1e6)
+    latency_ms: int=Field(default=1000,ge=0,le=60000)
+    ttl_seconds: int=Field(default=60,ge=1,le=1800)
+    participation_pct: float=Field(default=25,ge=1,le=100)
+    slippage_bps: float=Field(default=5,ge=0,le=500)
+
+
+class DepthReplayRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    strategy: Literal["LONG_OPTION","bull_call_debit","bear_put_debit","bull_put_credit","bear_call_credit","iron_condor","iron_butterfly"]
+    identities: list[str]=Field(min_length=1,max_length=4)
+    decision_utc: str=Field(min_length=20,max_length=40)
+    lots: int=Field(default=1,ge=1,le=50)
+    capital: float=Field(default=50000,ge=1000,le=1e7)
+    hold_minutes: int=Field(default=5,ge=1,le=1440)
+    latency_ms: int=Field(default=1000,ge=0,le=60000)
+    window_seconds: int=Field(default=60,ge=1,le=180)
+    max_skew_seconds: float=Field(default=2,ge=0,le=30)
+    participation_pct: float=Field(default=25,ge=1,le=100)
+    slippage_bps: float=Field(default=5,ge=0,le=500)
+    broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"]="zerodha"
+
+
+class RuleDepthReplayRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    day: str
+    call_identity: str=Field(min_length=9,max_length=20)
+    put_identity: str=Field(min_length=9,max_length=20)
+    rule: Literal["EMA_CROSSOVER","MOMENTUM","MEAN_REVERSION"]="EMA_CROSSOVER"
+    fast: int=Field(default=9,ge=2,le=149)
+    slow: int=Field(default=21,ge=3,le=150)
+    lookback: int=Field(default=10,ge=2,le=150)
+    threshold: float=Field(default=.1,ge=.001,le=100)
+    hold_rule: Literal["FIXED","FLIP"]="FIXED"
+    hold_minutes: int=Field(default=5,ge=1,le=1440)
+    lots: int=Field(default=1,ge=1,le=50)
+    capital: float=Field(default=50000,ge=1000,le=1e7)
+    latency_ms: int=Field(default=1000,ge=0,le=60000)
+    window_seconds: int=Field(default=60,ge=1,le=180)
+    participation_pct: float=Field(default=25,ge=1,le=100)
+    slippage_bps: float=Field(default=5,ge=0,le=500)
+    broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"]="zerodha"
+
+
+@app.get("/api/trading-cockpit/paper/accounts")
+def paper_accounts():
+    from . import paper_execution
+    try:
+        return {"accounts":paper_execution.accounts(),"broker_orders_enabled":False}
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/paper/accounts")
+def paper_create_account(body: PaperAccountRequest):
+    from . import paper_execution
+    try:
+        return paper_execution.create_account(**body.model_dump())
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/paper/accounts/{account_id}")
+def paper_account_status(account_id: str):
+    from . import paper_execution
+    try:
+        return paper_execution.overview(account_id)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/paper/accounts/{account_id}/orders")
+def paper_submit_order(account_id: str, body: PaperOrderRequest):
+    from . import paper_execution
+    try:
+        return paper_execution.submit(account_id,**body.model_dump())
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/paper/orders/{order_id}/cancel")
+def paper_cancel_order(order_id: str):
+    from . import paper_execution
+    try:
+        return paper_execution.request_cancel(order_id)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/paper/depth-replay")
+def paper_depth_replay(body: DepthReplayRequest):
+    from . import depth_replay
+    try:
+        return depth_replay.replay(**body.model_dump())
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/paper/rule-replay")
+def paper_rule_replay(body: RuleDepthReplayRequest):
+    from . import depth_replay
+    try:
+        return depth_replay.rule_replay(**body.model_dump())
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/options/workflow")
 def option_workflow_status():
     from . import manual_options_workflow
@@ -4211,11 +4334,14 @@ def suspend_banknifty_depth_on_local_shutdown():
 def start_manual_options_monitor():
     from . import manual_options_workflow
     manual_options_workflow.start()
+    from . import paper_execution
+    paper_execution.start()
 
 
 @app.on_event("shutdown")
 def stop_manual_options_monitor():
-    from . import manual_options_workflow
+    from . import manual_options_workflow, paper_execution
+    paper_execution.stop()
     manual_options_workflow.stop()
 
 

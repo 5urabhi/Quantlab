@@ -161,6 +161,30 @@ def _lot_outcomes(book: dict, stats: dict, budget: float, max_lots: int,
     return trace, best
 
 
+def _select_gated_lot(trace, fallback, *, base_row, capital_inr, receipt, trade):
+    """Rank only sizes that independently clear all source and risk checks."""
+    passed = []
+    for lot in trace:
+        candidate = dict(base_row,
+            best_hypothetical_lots=lot["lots"] if (
+                lot["within_budget"] and lot["marketable_full_depth"] and
+                lot["top_of_book_both_sides_sufficient"]) else None,
+            required_capital_inr=lot["capital_required_inr"],
+            passive_stressed_upper_net_inr=lot["passive_stressed_upper_net_inr"],
+            failed_exit_net_inr=lot["failed_exit_net_inr"])
+        verdict = gate.capture_feasibility(candidate, capital_inr=capital_inr,
+                                           receipt=receipt, trade=trade)
+        lot["paper_research_qualified"] = verdict["paper_research_qualified"]
+        lot["research_priority_score"] = verdict["research_priority_score"]
+        lot["rejection_reasons"] = verdict["reasons"]
+        if verdict["paper_research_qualified"]:
+            passed.append(lot)
+    return max(passed, key=lambda row: (
+        row["research_priority_score"],
+        row["passive_stressed_upper_net_inr"] / max(1., row["capital_required_inr"]),
+        -row["lots"])) if passed else fallback
+
+
 def scan(*, day: str | None = None, broker_profile: str = "zerodha",
          capital_inr: float = 50000.0, max_lots: int = 10,
          executed_orders_per_side: int = 1, adverse_move_bps: float = 25.0,
@@ -229,6 +253,17 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             original, stats, capital_inr, max_lots,
             broker_profile, executed_orders_per_side, adverse_move_bps,
             exit_slippage_bps)
+        best = _select_gated_lot(
+            trace, best, base_row={
+                "expiry": features.get("expiry"),
+                "lot_size": stats["lot_size"],
+                "best_bid": stats["bid"], "spread_bps": stats["spread_bps"],
+                "top_bid_quantity": stats["top_bid_quantity"],
+                "top_ask_quantity": stats["top_ask_quantity"],
+                "saved_book_age_seconds": age,
+                "fresh_original_saved_book": fresh,
+            }, capital_inr=capital_inr, receipt=activity.get(identity),
+            trade=trades.get(identity))
         if best is None:
             counters["no_feasible_lots"] += 1
         else:
@@ -255,7 +290,7 @@ def scan(*, day: str | None = None, broker_profile: str = "zerodha",
             "option_type": features.get("side"),
             "lot_size": stats["lot_size"],
             "received_utc": received_utc,
-            "saved_book_age_seconds": round(age, 1),
+            "saved_book_age_seconds": age,
             "fresh_original_saved_book": fresh,
             "spread_inr": stats["spread_inr"],
             "spread_bps": stats["spread_bps"],

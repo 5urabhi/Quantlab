@@ -11,7 +11,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from workstation_api import (
-    live_market, service, spread_execution_gate as gate)
+    live_market, service, spread_execution_gate as gate, spread_scanner)
 
 
 def recent_receipt():
@@ -75,6 +75,22 @@ def legs():
 
 
 class SpreadExecutionGateTests(TestCase):
+    def test_smaller_feasible_lot_beats_larger_blocked_lot(self):
+        one = dict(lots=1, within_budget=True, marketable_full_depth=True,
+                   top_of_book_both_sides_sufficient=True,
+                   capital_required_inr=6055., passive_stressed_upper_net_inr=70.,
+                   failed_exit_net_inr=-80.)
+        two = dict(one, lots=2, capital_required_inr=12100.,
+                   passive_stressed_upper_net_inr=200.)
+        chosen = spread_scanner._select_gated_lot(
+            [one, two], two,
+            base_row=capture_row(top_bid_quantity=60, top_ask_quantity=60),
+            capital_inr=50000, receipt=recent_receipt(), trade=recent_trade())
+        self.assertEqual(chosen["lots"], 1)
+        self.assertTrue(one["paper_research_qualified"])
+        self.assertFalse(two["paper_research_qualified"])
+        self.assertIn("TOP_OF_BOOK_DEPTH_TOO_THIN", two["rejection_reasons"])
+
     def test_penny_wide_option_from_screenshot_never_gets_green_light(self):
         sample = capture_row(
             best_bid=1.50, best_ask=2.70, spread_bps=5714.,
@@ -220,7 +236,17 @@ class SpreadExecutionGateTests(TestCase):
                   (now-timedelta(seconds=delta)).isoformat(),
                   (now-timedelta(seconds=delta+1)).isoformat(),
                   "quote", 1000+30*i)
-                 for i, delta in enumerate((50, 35, 20))])
+                 for i, delta in enumerate((50, 35, 20))]
+                + [("NSE_FNO:3000",
+                    (now-timedelta(seconds=delta)).isoformat(),
+                    (now-timedelta(seconds=delta+1)).isoformat(),
+                    "quote", volume)
+                   for delta, volume in ((50, 1000), (35, None), (20, 1000))]
+                + [("NSE_FNO:3001",
+                    (now-timedelta(seconds=delta)).isoformat(),
+                    (now-timedelta(seconds=delta+1)).isoformat(),
+                    "quote", volume)
+                   for delta, volume in ((50, 1000), (35, 10), (20, 50))])
         activity = gate.recent_depth_receipts(
             day="2026-11-23", now=now, window_seconds=120)
         self.assertEqual(activity["NSE_FNO:1999"][
@@ -237,6 +263,8 @@ class SpreadExecutionGateTests(TestCase):
         self.assertEqual(trades["NSE_FNO:1999"][
             "cumulative_volume_delta_units"], 60)
         self.assertIs(trades["NSE_FNO:1999"]["user_order_fills_observed"], False)
+        self.assertEqual(trades["NSE_FNO:3000"]["cumulative_volume_delta_units"], 0)
+        self.assertEqual(trades["NSE_FNO:3001"]["cumulative_volume_delta_units"], 0)
         self.assertEqual(gate.recent_depth_receipts(
             day="2026-11-22", now=now), {})
         self.assertEqual(gate.recent_trade_activity(
