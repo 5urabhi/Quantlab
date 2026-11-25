@@ -516,6 +516,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt}:{plot
       provenance==='custom-python-snapshot'?'CUSTOM PYTHON · Client-provided snapshot; not independently source-verified. Not a live signal.':
       provenance==='observed-index'?'OBSERVED MINUTE CLOSES · No manufactured OHLC or volume.':
       provenance==='options-snapshot'?'OPTIONS SNAPSHOT · Provider observations and model-derived quantities; not executable fills.':
+      provenance==='original-depth-snapshot'?'ORIGINAL DISPLAYED DEPTH · Snapshot quantities, not executed volume or fills.':
       'Source: Python research engine · computed values with explicit evidence classification.'}</p>
   </section>
 }

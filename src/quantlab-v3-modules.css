@@ -1,0 +1,37 @@
+/* QuantLab V3 module surfaces. Scoped to the new shell; no chart-series,
+   positive/negative P&L, source-quality or recorder status color is replaced. */
+.ws-v2.ql-v3 {
+ --ql-bg:#0b0b0d;--ql-panel:#151518;--ql-raised:#1c1c20;
+ --ql-border:#343438;--ql-text:#f1f1f3;--ql-muted:#a5a5ad;--ql-accent:#f5c542;--ql-accent-soft:#332b17;
+ color-scheme:dark;font-variant-numeric:tabular-nums;
+}
+.ws-v2.ql-v3 :is(.tc-shell,.lf-root,.oc-root,.ao-root,.lq-workspace,.sos-workspace,.ml-studio,.pt-workspace,.rpl-shell,.ql-workbench,.mdw-root,.rs-root,.rw-root,.qm-root,.idx-root,.ad-root){color:var(--ql-text);min-width:0}
+.ws-v2.ql-v3 .rw-root{--rw-bg:var(--ql-bg);--rw-card:var(--ql-panel);--rw-soft:var(--ql-raised);--rw-stroke:var(--ql-border);--rw-text:var(--ql-text);--rw-muted:var(--ql-muted);--rw-accent:var(--ql-accent)}
+.ws-v2.ql-v3 .rs-root{--rs-accent:var(--ql-accent);--rs-border:var(--ql-border);--rs-surface:var(--ql-panel);--rs-muted:var(--ql-muted)}
+.ws-v2.ql-v3 .mdw-root{--mdw-line:var(--ql-border);--mdw-muted:var(--ql-muted);--mdw-mint:var(--ql-accent)}
+.ws-v2.ql-v3 .ql-workbench{--ql-line:var(--ql-border);--ql-ink:var(--ql-text);--ql-mute:var(--ql-muted)}
+.ws-v2.ql-v3 :is(.tc-header,.tc-panel,.tc-v4-intro,.tc-live-next,.lf-start-form,.lf-connect-block,.lf-depth-summary,.lf-stat,.oc-root,.oc-controls,.oc-preview,.oc-preferences,.ao-header,.ao-panel,.ao-settings,.ao-metric,.ao-plot,.ao-assumptions,.lq-intro,.lq-workspace,.lq-tabs,.sos-workspace,.sos-options,.sos-summary>div,.ml-studio,.ml-controls,.ml-filters,.rpl-intro,.rpl-panel,.rpl-results,.rpl-ranking,.rpl-tabs,.tc-signal-controls,.ql-intro,.ql-family-tabs,.mdw-hero,.mdw-tabs,.rs-hero,.rw-top,.rw-box,.qm-hero,.qm-panel,.qm-stat-grid>div,.idx-advanced,.ad-root,.ad-controls,.ad-diagnostics){
+ background:var(--ql-panel);border-color:var(--ql-border);box-shadow:none;
+}
+.ws-v2.ql-v3 :is(.rs-hero,.mdw-hero,.qm-hero,.rpl-intro,.ql-intro,.tc-header,.lq-intro,.rw-top){padding:18px 20px;border-radius:9px}
+.ws-v2.ql-v3 .rs-hero:after{display:none}
+.ws-v2.ql-v3 :is(.tc-eyebrow,.tc-page-kicker,.lq-eyebrow,.sos-overline,.ml-overline,.ql-kicker,.mdw-eyebrow,.mdw-kicker,.ao-eyebrow,.qm-eyebrow,.v2-eyebrow,.ql-family-index){color:var(--ql-accent)}
+.ws-v2.ql-v3 :is(.tc-header,.tc-panel,.lf-title,.oc-head,.ao-header,.lq-intro,.sos-title,.ml-head,.rpl-intro,.ql-intro,.mdw-hero,.rs-hero,.rw-top,.qm-hero) :is(h2,h3,h4,strong){color:var(--ql-text)}
+.ws-v2.ql-v3 :is(.tc-toolbar,.tc-actions,.lf-start-form,.lf-live-actions,.lf-replay-actions,.oc-controls,.oc-preview-actions,.oc-filter,.ao-mode,.ao-settings,.lq-actions,.lq-tabs,.sos-title,.sos-options,.ml-tabs,.ml-detail-tabs,.rpl-tabs,.rpl-editor-actions,.ql-family-tabs,.mdw-tabs,.qm-tabs) button:not([disabled]):not(.primary):not(.ao-primary):not(.lf-primary):not(.tc-primary):not(.ad-start):not(.ad-stop){
+ background:var(--ql-raised);color:var(--ql-text);border-color:var(--ql-border);box-shadow:none;
+}
+.ws-v2.ql-v3 :is(.tc-toolbar,.tc-actions,.lf-start-form,.oc-controls,.oc-preferences,.ao-settings,.lq-fieldrow,.sos-options,.ml-controls,.ml-filters,.rpl-controls,.rpl-editor-actions,.ql-workbench,.mdw-root,.rs-root,.rw-root,.qm-root,.ad-controls) :is(input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea){
+ background:var(--ql-bg);color:var(--ql-text);border-color:var(--ql-border)
+}
+.ws-v2.ql-v3 :is(.tc-primary,.lf-primary,.ao-primary,.ml-btn.primary,.rs-root .rs-primary,.mdw-primary,.rpl-primary,.ql-guide-button,.v2-primary,.ws-button.primary){background:var(--ql-accent);color:#151105;border-color:var(--ql-accent);box-shadow:none}
+.ws-v2.ql-v3 :is(.tc-v4-tabs,.tc-subnav,.lf-view-tabs,.oc-filter,.ao-mode,.lq-tabs,.ml-tabs,.ml-detail-tabs,.rpl-tabs,.mdw-tabs,.qm-tabs) button:is([aria-selected=true],[aria-pressed=true],.active,.selected),
+.ws-v2.ql-v3 .ql-family-button.active{background:var(--ql-accent-soft);color:var(--ql-accent);border-color:#8d7132;box-shadow:none}
+.ws-v2.ql-v3 :is(.tc-table-scroll,.oc-table,.ao-table-wrap,.qm-scroll,.rw-scroll,.ql-table-scroll,.ws-table-scroll) th{background:#1c1c20;border-color:var(--ql-border);color:#dedee3;position:sticky;top:0;z-index:1}
+.ws-v2.ql-v3 :is(.tc-table-scroll,.oc-table,.ao-table-wrap,.qm-scroll,.rw-scroll,.ql-table-scroll,.ws-table-scroll) td{border-color:var(--ql-border);font-variant-numeric:tabular-nums}
+.ws-v2.ql-v3 .oc-table tr.oc-chosen,.ws-v2.ql-v3 .ao-table tr.ao-selected{background:var(--ql-accent-soft);outline:1px solid #8d7132;outline-offset:-1px}
+.ws-v2.ql-v3 :is(.tc-panel,.ql-chart-card,.qm-panel,.rw-box,.rs-root,.ao-panel){overflow-wrap:anywhere}
+.ws-v2.ql-v3 :is(.tc-panel,.ql-chart-card,.qm-panel,.rw-box,.ao-panel){border-radius:9px}
+.ws-v2.ql-v3 .oc-preferences select{min-height:36px;padding:6px 8px;border:1px solid var(--ql-border);border-radius:6px;background:var(--ql-bg);color:var(--ql-text)}
+.ws-v2.ql-v3 .ws-context-tabs{overflow:visible}
+.ws-v2.ql-v3 .ws-context-primary{min-width:0;flex-wrap:wrap}
+@media(max-width:700px){.ws-v2.ql-v3 .ws-context-primary{flex-wrap:nowrap;overflow-x:auto}.ws-v2.ql-v3 .ws-context-more{min-width:0}}

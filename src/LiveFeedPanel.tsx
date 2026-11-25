@@ -196,7 +196,7 @@ export default function LiveFeedPanel({
         onClick={()=>changeView('depth')}><Database size={16}/> 20-level order book</button>
     </nav>}
     {view==='options'&&!hideNavigation&&<AutoDepthRecorder onOpenSaved={onOpenSaved}/>}
-    {view==='options'&&<OptionChainLive initialMode={initialOptionMode}
+    {view==='options'&&<OptionChainLive initialMode={initialOptionMode} automaticRecording={Boolean(automatic?.armed)}
       feedActive={Boolean(feed?.active)} depthIdentity={feed?.active?feed.depth_identity||'':depthIdentity}
       currentIndexDirection={hasSignal?signal?.direction||null:null}
       openConnections={()=>onOpenSetup?.()}

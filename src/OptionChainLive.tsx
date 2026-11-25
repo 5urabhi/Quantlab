@@ -41,9 +41,10 @@ type Props={
   openConnections:()=>void
   currentIndexDirection:'UP'|'DOWN'|'NO_TRADE'|null
   initialMode?:'overview'|'analytics'|'directional'
+  automaticRecording?:boolean
 }
 export default function OptionChainLive({feedActive,depthIdentity,
-  onSelectDepth,onDraftJournal,openConnections,currentIndexDirection,initialMode}:Props){
+  onSelectDepth,onDraftJournal,openConnections,currentIndexDirection,initialMode,automaticRecording=false}:Props){
   const [advanced,setAdvanced]=useState(initialMode==='analytics'||initialMode==='directional')
   useEffect(()=>{if(initialMode)setAdvanced(initialMode!=='overview')},[initialMode])
   const [dates,setDates]=useState<Expiries|null>(null)
@@ -176,7 +177,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
     <header className="oc-head"><div><span className="tc-page-kicker">TRADE THE CONTRACT, NOT THE INDEX</span>
       <h3>BANKNIFTY CE / PE option chain</h3>
       <p>Current Dhan option snapshots, real contract IDs and exchange lot sizes.
-        Subscribe separately to one selected NSE_FNO contract for live 20-level depth.</p>
+        {automaticRecording?'Inspect the latest automatically recorded book without opening a new socket.':'The separate manual feed supports one selected NSE_FNO depth instrument.'}</p>
     </div><span className="oc-source"><ShieldCheck size={15}/> Read-only · no orders</span></header>
     <div className="ao-mode" role="group" aria-label="Option chain workspace mode">
       <button type="button" aria-pressed={!advanced} onClick={()=>setAdvanced(false)}>Overview</button>
@@ -312,7 +313,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
         <button type="button" disabled={!picked?.identity||!picked.contract_master_verified||
           (feedActive&&!bookCurrent)} onClick={()=>{if(picked?.identity)onSelectDepth(picked.identity)}}>
           <TrendingUp size={16}/>{bookCurrent?'Current 20-level target':
-            feedActive?'Stop current stream to change instrument':'Use for live 20-level depth'}
+            feedActive?'Stop current stream to change instrument':automaticRecording?'Inspect saved 20-level depth':'Use for live 20-level depth'}
         </button>
         <button type="button" className="oc-secondary" disabled={!valid||totalAsk===null||
           totalAsk>capital||!picked} onClick={()=>{if(picked)onDraftJournal(picked,lots)}}>

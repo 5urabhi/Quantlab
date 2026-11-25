@@ -7,6 +7,7 @@ import {
   ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp
 } from 'lucide-react'
 import './workstation.css'
+import './quantlab-v3-modules.css'
 import {RecorderBadge,JobsDrawer,V2HomeLaunchers,StrategyLibraryV2,ConnectionsLandingV2,SettingsPreferencesV2,DiagnosticsV2,QuickPageNote} from './QuantLabV2Components'
 import ResearchPythonLab from './ResearchPythonLab'
 import AutoDepthRecorder from './AutoDepthRecorder'
