@@ -114,18 +114,25 @@ def recent_trade_activity(*, day: str | None,
     try:
         with live_market._database() as db:
             rows = db.execute(
-                """SELECT identity,
-                          COUNT(DISTINCT exchange_trade_utc),
-                          COUNT(*),
-                          MAX(COALESCE(volume,0)) -
-                          MIN(COALESCE(volume,0)),
+                """WITH observed AS (
+                     SELECT identity, received_utc, exchange_trade_utc, volume,
+                            LAG(volume) OVER (
+                              PARTITION BY identity
+                              ORDER BY exchange_trade_utc, received_utc
+                            ) AS previous_volume
+                     FROM dhan_option_live_events
+                     WHERE kind = 'quote' AND received_utc >= ?
+                       AND received_utc <= ?
+                       AND exchange_trade_utc >= ?
+                       AND exchange_trade_utc <= ?
+                       AND volume IS NOT NULL AND volume >= 0
+                   )
+                   SELECT identity, COUNT(DISTINCT exchange_trade_utc), COUNT(*),
+                          CASE WHEN MAX(CASE WHEN volume < previous_volume
+                                             THEN 1 ELSE 0 END) = 1
+                               THEN 0 ELSE MAX(volume) - MIN(volume) END,
                           MAX(received_utc)
-                   FROM dhan_option_live_events
-                   WHERE kind = 'quote' AND received_utc >= ?
-                     AND received_utc <= ?
-                     AND exchange_trade_utc >= ?
-                     AND exchange_trade_utc <= ?
-                   GROUP BY identity""",
+                   FROM observed GROUP BY identity""",
                 (cutoff, now.isoformat(), cutoff, now.isoformat())).fetchall()
     except sqlite3.OperationalError:
         # The optional full options Quote/OI feed may never have been armed.
