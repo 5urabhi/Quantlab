@@ -534,7 +534,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
         Link crosshair by exact observations</label>
       {canLink&&<label><input type="checkbox" checked={syncViewport}
         onChange={e=>setSyncViewport(e.target.checked)}/>
-        Link zoom/pan on exact observations</label>}
+        {syncGroup?'Link zoom/pan on exact observations':'Link zoom/pan on exact dates'}</label>}
       <span>{right-left} of {n} observations visible · full-series CSV export</span>
     </div>}
     {!!plot.traces?.length&&plot.kind!=='surface3d'&&plot.kind!=='heatmap2d'&&<div className="ql-series-controls" aria-label="Visible chart series">{plot.traces.map((t,i)=><button type="button" key={t.name} aria-pressed={!hidden.includes(t.name)} disabled={!hidden.includes(t.name)&&plot.traces!.length-hidden.length<=1} onClick={()=>setHidden(h=>h.includes(t.name)?h.filter(x=>x!==t.name):[...h,t.name])}><i style={{background:t.color||COLORS[i%COLORS.length]}}/>{t.name}</button>)}</div>}

@@ -62,6 +62,19 @@ def _connect():
             state TEXT NOT NULL, last_key TEXT, last_utc TEXT, output TEXT,
             message TEXT, FOREIGN KEY(script_id, revision) REFERENCES versions(script_id, revision)
         );
+        CREATE TABLE IF NOT EXISTS research_notebooks (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL, revision INTEGER NOT NULL, updated_utc TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS notebook_revisions (
+            notebook_id TEXT NOT NULL REFERENCES research_notebooks(id),
+            revision INTEGER NOT NULL, payload TEXT NOT NULL, source_sha256 TEXT NOT NULL,
+            created_utc TEXT NOT NULL, PRIMARY KEY(notebook_id,revision)
+        );
+        CREATE TABLE IF NOT EXISTS notebook_runs (
+            id TEXT PRIMARY KEY, notebook_id TEXT NOT NULL, revision INTEGER NOT NULL,
+            created_utc TEXT NOT NULL, payload TEXT NOT NULL,
+            FOREIGN KEY(notebook_id,revision) REFERENCES notebook_revisions(notebook_id,revision)
+        );
         CREATE TABLE IF NOT EXISTS chart_runs (
             id TEXT PRIMARY KEY, created_utc TEXT NOT NULL,
             title TEXT NOT NULL, input_rows INTEGER NOT NULL, payload TEXT NOT NULL
@@ -278,16 +291,13 @@ def rank_snapshot(plot, snapshot):
             "ranking_note": "First output trace is the custom score; descending, not certified profit."}
 
 
-def run_chart(*, code, snapshot, profile="stdlib", kind="chart", persist=True, progress=None):
-    """Only copied snapshots enter the same fail-closed sandbox as strategies."""
-    if not isinstance(code, str) or not 1 <= len(code) <= python_strategy_sandbox.MAX_SOURCE_CHARS:
-        raise ValueError("Paste 1-20,000 characters of Python")
-    payload = snapshot_json(snapshot)
-    count = len(snapshot["rows"])
-    with tempfile.TemporaryDirectory(prefix="quantlab_chart_isolated_") as directory:
+def isolated_json(runner, files, profile="stdlib", progress=None):
+    """Run a trusted runner with copied input bytes and read bounded JSON output."""
+    if any(name not in {"strategy.py","snapshot.json","notebook.json"} for name in files):
+        raise ValueError("Invalid sandbox input filename")
+    with tempfile.TemporaryDirectory(prefix="quantlab_research_isolated_") as directory:
         work = Path(directory)
-        for name, value in (("runner.py", RUNNER.encode()), ("strategy.py", code.encode()),
-                            ("snapshot.json", payload)):
+        for name, value in (("runner.py", runner.encode()), *files.items()):
             path = work / name
             path.write_bytes(value)
             path.chmod(0o600)
@@ -305,7 +315,7 @@ def run_chart(*, code, snapshot, profile="stdlib", kind="chart", persist=True, p
             while process.poll() is None:
                 elapsed = time.monotonic() - started
                 if elapsed >= python_strategy_sandbox.WALL_TIMEOUT:
-                    raise ValueError("Isolated chart worker exceeded its time limit")
+                    raise ValueError("Isolated research worker exceeded its time limit")
                 if progress:
                     progress(min(85, 15 + 70 * elapsed / python_strategy_sandbox.WALL_TIMEOUT),
                              "Running isolated snapshot analysis")
@@ -320,7 +330,7 @@ def run_chart(*, code, snapshot, profile="stdlib", kind="chart", persist=True, p
                     pass
                 process.wait(timeout=5)
         if process.returncode != 0:
-            raise ValueError("Ubuntu sandbox or chart worker failed; no unsafe fallback")
+            raise ValueError("Ubuntu sandbox or research worker failed; no unsafe fallback")
         try:
             fd = os.open(work / "result.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(fd, "rb") as f:
@@ -330,6 +340,16 @@ def run_chart(*, code, snapshot, profile="stdlib", kind="chart", persist=True, p
                 result = json.loads(f.read(python_strategy_sandbox.MAX_OUTPUT_BYTES + 1))
         except (OSError, ValueError, UnicodeError) as exc:
             raise ValueError("Sandbox returned invalid or oversized JSON") from exc
+    return result
+
+
+def run_chart(*, code, snapshot, profile="stdlib", kind="chart", persist=True, progress=None):
+    """Only copied snapshots enter the same fail-closed sandbox as strategies."""
+    if not isinstance(code, str) or not 1 <= len(code) <= python_strategy_sandbox.MAX_SOURCE_CHARS:
+        raise ValueError("Paste 1-20,000 characters of Python")
+    payload = snapshot_json(snapshot)
+    count = len(snapshot["rows"])
+    result = isolated_json(RUNNER, {"strategy.py":code.encode(),"snapshot.json":payload}, profile, progress)
     if not isinstance(result, dict) or "error" in result:
         raise ValueError("Custom analysis failed: " + str(result.get("error", "invalid output") if isinstance(result, dict) else "invalid output")[:80])
     if progress:

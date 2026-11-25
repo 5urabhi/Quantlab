@@ -55,7 +55,7 @@ JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -4589,3 +4589,65 @@ def recorded_chain_spot():
                 "last_utc":points[-1]["timestamp_utc"] if points else None}
     except (ValueError,OSError,sqlite3.Error) as exc:
         bad(exc)
+
+
+from . import user_notebooks
+
+
+class NotebookSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1,max_length=100)
+    cells: list[dict] = Field(min_length=1,max_length=30)
+    snapshot: dict | None = None
+    notebook_id: str | None = Field(default=None,max_length=32)
+    expected_revision: int | None = Field(default=None,ge=1)
+
+
+class NotebookRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=1)
+    through: int | None = Field(default=None,ge=0,le=29)
+    profile: Literal["stdlib","scientific"] = "stdlib"
+    confirm_readonly: bool = False
+
+
+@app.get("/api/research-notebooks")
+def research_notebook_list():
+    return {"notebooks":user_notebooks.list_notebooks()}
+
+
+@app.get("/api/research-notebooks/{notebook_id}")
+def research_notebook_read(notebook_id: str,revision: int | None = None):
+    try:
+        return user_notebooks.read_notebook(notebook_id,revision)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.post("/api/research-notebooks")
+def research_notebook_save(body: NotebookSaveRequest):
+    try:
+        return user_notebooks.save_notebook(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.post("/api/research-notebooks/{notebook_id}/run")
+def research_notebook_run(notebook_id: str,body: NotebookRunRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400,"Confirm isolated read-only notebook execution")
+    if not python_strategy_sandbox.availability()["available"]:
+        raise HTTPException(409,"Isolated Python unavailable; no unsafe fallback")
+    try:
+        user_notebooks.read_notebook(notebook_id,body.revision)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+    return _spawn("user_notebook",user_notebooks.run_notebook,notebook_id=notebook_id,revision=body.revision,through=body.through,profile=body.profile)
+
+
+@app.get("/api/research-notebooks/{notebook_id}/runs/{run_id}")
+def research_notebook_result(notebook_id: str,run_id: str):
+    try:
+        return user_notebooks.read_run(notebook_id,run_id)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
