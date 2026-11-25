@@ -27,6 +27,9 @@ type Row=OptionContract&{
   depth_state:string;depth:{received_utc:string;age_seconds:number;bid:number;ask:number;spread_bps:number
     imbalance_20:number;bid_quantity_20:number;ask_quantity_20:number;top_bid_quantity:number;top_ask_quantity:number}|null
   unsigned_gamma_oi_proxy:number|null
+  premium_change?:number|null;price_oi_state?:string|null
+  score_components?:{reward_risk:number;spread:number;premium_fit:number;favorable_return:number
+    favorable_return_pct:number;adverse_loss_pct:number;flat_loss_pct:number;iv_contraction_drag_pct:number}|null
 }
 type IVPoint={day?:string;expiry?:string;captured_utc:string;strike:number;iv_pct:number;spot:number}
 type HistoryPoint={captured_utc:string;spot:number;ltp:number|null;iv:number|null;delta:number|null
@@ -87,6 +90,8 @@ const columns:Record<Exclude<Tab,'calculator'>,Column[]>={
     {key:'askiv',label:'Ask IV %',get:r=>r.iv_ask_pct},{key:'change',label:'Δ IV (pp)',get:r=>r.iv_change_pct_points},
     {key:'theta',label:'Theta/day',get:r=>r.model_greeks?.theta_day,digits:4}],
   oi:[...baseColumns,{key:'oi',label:'OI',get:r=>r.oi,digits:0},{key:'oichg',label:'Δ OI',get:r=>r.oi_change,digits:0},
+    {key:'price_oi',label:'Price / OI change',get:r=>r.price_oi_state},
+    {key:'premium_change',label:'Δ premium',get:r=>r.premium_change,money:true},
     {key:'volume',label:'Volume',get:r=>r.volume,digits:0},{key:'volchg',label:'Δ volume',get:r=>r.volume_change,digits:0},
     {key:'traded',label:'Recent trade times',get:r=>r.trade_activity?.trade_times,digits:0},
     {key:'gex',label:'Unsigned gamma × OI proxy',get:r=>r.unsigned_gamma_oi_proxy,digits:0}],
@@ -199,6 +204,8 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
   const usable=Boolean(result?.recent_receipt&&age!==null&&age<=30&&!error&&scenarioMatches&&!inputChanged)
   const effectiveRows=useMemo(()=>result?(usable?result.rows:result.rows.map(r=>({...r,rank:undefined,rank_quality:undefined,score:null}))):[],[result,usable])
   const ranked=useMemo(()=>effectiveRows.filter(r=>r.rank!==undefined).sort((a,b)=>a.rank!-b.rank!),[effectiveRows])
+  const picks=applied.direction==='BOTH'?
+    [...ranked.filter(r=>r.option_type==='CE').slice(0,2),...ranked.filter(r=>r.option_type==='PE').slice(0,2)]:ranked.slice(0,4)
   const active=effectiveRows.find(r=>r.identity===selected)||ranked[0]||null
   const shownCols=tab==='calculator'?rankColumns:columns[tab]
   const tableRows=useMemo(()=>{
@@ -272,10 +279,10 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
         type="button" role="tab" aria-selected={tab===key} onClick={()=>switchTab(key)}>{label}{key==='watch'?' ('+watch.length+')':''}</button>)}</nav>
       {tab==='rank'&&<section className="ao-panel">
         <h4>Best fit for the selected scenario</h4>
-        <p>Sorted by source-evidence tier, then a heuristic comparing favorable net gain, adverse loss, time decay, spread and preferred premium. Not a predicted win rate. Each contract is sized to budget, exposure cap and displayed top quantity.</p>
+        <p>Sorted by source-evidence tier, then a heuristic comparing favorable net gain, adverse loss, time decay, IV-contraction drag, spread and preferred premium. In both-directions mode, the top two calls and top two puts are shown separately. Not a predicted win rate. Each contract is sized to budget, exposure cap and displayed top quantity.</p>
         {!usable||!ranked.length?<div className="ao-warning"><AlertTriangle size={17}/>
           No current qualified shortlist. Inspect rejected rows below to distinguish unavailable evidence, liquidity and scenario economics.</div>:
-          <div className="ao-grid ao-picks">{ranked.slice(0,4).map(r=><button type="button" className="ao-pick" key={r.identity} onClick={()=>{if(r.identity)onSelect(r.identity);switchTab('calculator')}}>
+          <div className="ao-grid ao-picks">{picks.map(r=><button type="button" className="ao-pick" key={r.identity} onClick={()=>{if(r.identity)onSelect(r.identity);switchTab('calculator')}}>
             <span className="ao-eyebrow">#{r.rank} · {r.option_type} · {status(r.rank_quality)}</span>
             <strong>{nf(r.strike,0)} {r.option_type}</strong>
             <small>Ask {rs(r.ask)} · {r.scenario_lots} lots · {rs(r.entry_debit_inr)} cash debit</small>
@@ -336,6 +343,15 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
           <Metric label="20-level evidence" value={status(active.depth_state)} detail={active.depth?fmtTime(active.depth.received_utc):'No confirmed original book in lookback'}/>
         </div>
         {active.reasons.length>0&&<div className="ao-warning"><AlertTriangle size={15}/><span>Not shortlist-qualified: {active.reasons.join(' · ')}.</span></div>}
+        {active.score_components&&usable&&<details className="ao-assumptions"><summary>Why this contract ranks here · {nf(active.score,2)}/100</summary>
+          <div className="ao-grid ao-summary">
+            <Metric label="Reward / risk" value={nf(active.score_components.reward_risk)+'/50'} detail="Includes adverse, flat and IV-contraction drag"/>
+            <Metric label="Spread quality" value={nf(active.score_components.spread)+'/20'}/>
+            <Metric label="Preferred premium fit" value={nf(active.score_components.premium_fit)+'/15'}/>
+            <Metric label="Favorable return component" value={nf(active.score_components.favorable_return)+'/15'}/>
+            <Metric label="Adverse scenario loss / debit" value={nf(active.score_components.adverse_loss_pct)+'%'}/>
+            <Metric label="IV-contraction drag / debit" value={nf(active.score_components.iv_contraction_drag_pct)+'%'}/>
+          </div></details>}
         {active.model_greeks&&<div className="ao-grid ao-summary">
           <Metric label="Position delta" value={nf(active.model_greeks.delta*active.units,3)} detail="₹ per underlying point"/>
           <Metric label="Position gamma" value={nf(active.model_greeks.gamma*active.units,5)} detail="₹ per point²"/>
