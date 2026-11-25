@@ -158,6 +158,16 @@ try{
    const chainRegion=page.getByRole('region',{name:'BANKNIFTY option chain and lot calculator'})
    await chainRegion.getByRole('button',{name:'Refresh expiry list',exact:true}).click()
    await chainRegion.getByLabel('Dhan BANKNIFTY expiry').locator('option',{hasText:fixtureExpiry}).waitFor({state:'attached'})
+   const paired=chainRegion.getByRole('table',{name:'Calls and puts by strike'})
+   await paired.getByRole('button',{name:'Select 63000 CE',exact:true}).click()
+   const drawer=chainRegion.getByRole('complementary',{name:'Selected option contract details'})
+   await drawer.waitFor()
+   await drawer.getByRole('button',{name:'Fit lots to premium budget'}).click()
+   assert(Number(await drawer.getByLabel('BANKNIFTY option lots').inputValue())>=1)
+   await drawer.getByRole('button',{name:'Close contract details'}).click()
+   await drawer.waitFor({state:'hidden'})
+   await chainRegion.getByLabel('Option chain layout').selectOption('list')
+   await chainRegion.getByLabel('Option chain layout').selectOption('paired')
    await chainRegion.getByRole('button',{name:'Advanced Analytics',exact:true}).click()
    const advanced=page.getByRole('region',{name:'Advanced Options Analytics'})
    await advanced.getByRole('heading',{name:'Best fit for the selected scenario'}).waitFor()
@@ -708,6 +718,12 @@ try{
      await page.locator('.rw-root').waitFor()
    }
    await shot('08-advanced-research-library')
+ })
+ await step('V3 custom Python libraries and scientific environment routes',async()=>{
+   for(const [route,label] of [['pythonmonitors','Running Python monitors'],['custommodels','Custom model library'],['customscanners','Custom scanner library'],['pythonenvironment','Python environment manager']]){
+     await page.goto(base+'#/'+route,{waitUntil:'domcontentloaded'})
+     await page.getByRole('region',{name:label,exact:true}).waitFor()
+   }
  })
  await step('Deep-link, browser back and Help / New Study buttons',async()=>{
    await page.goto(base+'#/strategyema',{waitUntil:'domcontentloaded'})

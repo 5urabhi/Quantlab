@@ -51,6 +51,14 @@ class UserScriptTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scripts.validate_output(output,2)
 
+    def test_scanner_ranking_preserves_source_rows_and_ignores_missing_scores(self):
+        snap={"columns":["contract","bid","ask"],"rows":[["A",1,2],["B",2,3],["C",3,4],["D",4,5]]}
+        plot={"traces":[{"name":"score","y":[2,None,5,5]}]}
+        result=scripts.rank_snapshot(plot,snap)
+        self.assertEqual([r["key"] for r in result["ranking"]],["C","D","A"])
+        self.assertEqual(result["ranking"][0]["row"],["C",3,4])
+        self.assertEqual(result["ranking_columns"],snap["columns"])
+
     def test_sandbox_unavailable_fails_closed(self):
         with patch.object(sandbox,"_command",side_effect=ValueError("isolated runner unavailable")):
             with self.assertRaisesRegex(ValueError,"unavailable"):
