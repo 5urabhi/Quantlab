@@ -37,6 +37,7 @@ try{
         })
         assert.equal(new URL(page.url()).hash,'#/'+route)
         assert.ok(metrics.mainWidth>100&&metrics.titleWidth>0,'Page content is not visible')
+        assert.ok(metrics.documentWidth<=metrics.viewport+2,`Horizontal page overflow: ${metrics.documentWidth}px at ${metrics.viewport}px`)
         await page.screenshot({path:path.join(dir,file),fullPage:false})
         assert.deepEqual(errors,[],'Unhandled page exceptions')
         assert.deepEqual(badApi,[],'Backend 5xx')

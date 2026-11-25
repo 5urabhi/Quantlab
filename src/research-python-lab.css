@@ -94,3 +94,23 @@
 @media(max-width:1180px){.rpl-top-five{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:750px){.rpl-ema-modes{grid-template-columns:1fr}.rpl-top-five{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:460px){.rpl-top-five{grid-template-columns:1fr}}
+
+/* Keep the editor and long native-select labels within a narrow viewport.
+   Only code and result tables scroll horizontally, never the whole route. */
+.rpl-shell,.rpl-panel,.rpl-results,.rpl-ranking{min-width:0;max-width:100%;box-sizing:border-box}
+.rpl-shell{grid-template-columns:minmax(0,1fr)}
+.rpl-controls label,.rpl-ema-inputs label,.rpl-editor-actions,.rpl-editor-foot>*,.rpl-intro>*,.rpl-graph-controls label{min-width:0;max-width:100%}
+.rpl-controls select,.rpl-controls input,.rpl-ema-inputs input{width:100%}
+.rpl-editor-actions input,.rpl-editor-actions select,.rpl-panel>label select{min-width:0;max-width:100%}
+.rpl-panel>label{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.rpl-note{display:block;overflow-wrap:anywhere}
+.rpl-note svg{vertical-align:middle;margin-right:4px}
+.rpl-note code,.rpl-error code{white-space:normal;overflow-wrap:anywhere}
+.rpl-panel .ql-python-editor{min-width:0;max-width:100%;box-sizing:border-box}
+@media(max-width:740px){
+ .rpl-controls,.rpl-ema-inputs,.rpl-graph-grid,.rpl-ema-modes{grid-template-columns:minmax(0,1fr)}
+ .rpl-safety{min-width:0}
+ .rpl-editor-actions{width:100%}
+ .rpl-editor-actions input,.rpl-editor-actions select{width:100%}
+ .rpl-panel .rpl-run{max-width:100%;white-space:normal}
+}
