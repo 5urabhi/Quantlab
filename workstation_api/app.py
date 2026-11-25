@@ -1252,8 +1252,11 @@ def trading_cockpit_live_signal(identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY5
                     "reason":"No completed observed 1-minute candles yet",
                     "quote_mode":"NO_LIVE_OBSERVATIONS"}
         result=trading_cockpit.snapshot(identity,original["rows"])
-        fresh=(state.get("active") and state.get("ticker_connection")=="connected"
+        manual_fresh=(state.get("active") and state.get("ticker_connection")=="connected"
                and state.get("quotes",{}).get(identity,{}).get("fresh",False))
+        shared_fresh=shared_index_feed.status().get('quotes',{}).get(identity,{}).get('fresh',False)
+        fresh=bool(manual_fresh or shared_fresh)
+        result['ticker_connection_source']='manual' if manual_fresh else 'shared_option_socket' if shared_fresh else 'none'
         recent=(result["quote_mode"]=="RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE")
         result["source_kind"]="locally_aggregated_Dhan_live_LTP"
         result["quote_mode"]="LIVE_OBSERVED" if fresh and recent else "HISTORICAL_OR_STALE"
@@ -4680,3 +4683,11 @@ def user_saved_script_run(script_id: str,body: SavedScriptRunRequest):
 @app.get("/api/script-monitor-overlays")
 def script_monitor_chart_overlays(source: Literal["index_minutes","chain_spot_receipts"]):
     return script_monitor.chart_overlays(source)
+
+
+from . import shared_index_feed
+
+
+@app.get("/api/trading-cockpit/auto-index/status")
+def shared_index_status():
+    return shared_index_feed.status()

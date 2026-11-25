@@ -15,6 +15,7 @@ type Book={identity:string;received_utc:string;bid:DepthLevel[];ask:DepthLevel[]
   best_bid:number;best_ask:number;spread_bps:number;imbalance:number;bid_levels:number;
   ask_levels:number;full_depth:boolean;age_seconds:number;fresh:boolean;source_clock:string}
 type AutoRecorder={armed:boolean;state:string;connected:boolean;chain_spot?:number;last_chain_utc?:string;contracts?:{identity:string;side:string;strike:number;expiry:string}[];snapshots_saved?:number;last_packet_utc?:string;last_error?:string}
+type SharedIndex={connected:boolean;state:string;requested:string[];quotes:Record<string,Quote>;saved_ticks:number;dropped_ticks:number;unsupported_packets:number;error:string|null}
 type Quote={price:number;exchange_utc:string;received_utc:string;age_seconds:number;fresh:boolean;source:string}
 type Feed={active:boolean;session_id?:string;index_identity?:string;depth_identity?:string|null;
   ticker_connection?:string;depth_connection?:string;auto_audit?:boolean;
@@ -58,6 +59,8 @@ export default function LiveFeedPanel({
   }
   const [feed,setFeed]=useState<Feed|null>(null)
   const [automatic,setAutomatic]=useState<AutoRecorder|null>(null)
+  const [sharedIndex,setSharedIndex]=useState<SharedIndex|null>(null)
+  useEffect(()=>{let alive=true,reading=false;const poll=async()=>{if(reading)return;reading=true;try{const d=await marketApi<SharedIndex>('/api/trading-cockpit/auto-index/status');if(alive)setSharedIndex(d)}catch{if(alive)setSharedIndex(null)}finally{reading=false}};void poll();const timer=window.setInterval(()=>void poll(),2000);return()=>{alive=false;window.clearInterval(timer)}},[])
   const [savedBook,setSavedBook]=useState<Book|null>(null)
   const [savedBookError,setSavedBookError]=useState('')
   useEffect(()=>{let active=true;let busy=false;const poll=async()=>{if(busy)return;busy=true;try{const v=await marketApi<AutoRecorder>('/api/trading-cockpit/auto-depth/status');if(active)setAutomatic(v)}catch{if(active)setAutomatic(null)}finally{busy=false}};void poll();const timer=window.setInterval(()=>void poll(),8000);return()=>{active=false;window.clearInterval(timer)}},[])
@@ -154,13 +157,13 @@ export default function LiveFeedPanel({
     }catch(e){setError(readableError(e))}
     finally{setBusy(false)}
   }
-  const quote=feed?.quotes?.[watchedIndex]
+  const quote=feed?.active?feed.quotes?.[watchedIndex]:sharedIndex?.quotes?.[watchedIndex]
   const optionQuote=feed?.depth_identity?feed.quotes?.[feed.depth_identity]:undefined
   const usingSaved=Boolean(automatic?.armed&&!feed?.active)
   const liveBook=usingSaved?(savedBook?.identity===depthIdentity?savedBook:null):feed?.latest_book
   const quoteAge=quote?Math.max(0,(now-Date.parse(quote.received_utc))/1000):null
-  const livePrice=Boolean(feed?.active&&feed.ticker_connection==='connected'
-    &&quoteAge!==null&&quoteAge<=8&&quote?.fresh)
+  const livePrice=Boolean((feed?.active?feed.ticker_connection==='connected':sharedIndex?.connected)
+    &&quoteAge!==null&&quoteAge<=8&&quote?.fresh&&now-Date.parse(quote.exchange_utc)<=8000)
   const bookAge=liveBook?Math.max(0,(now-Date.parse(liveBook.received_utc))/1000):null
   const bookFresh=Boolean(feed?.active&&feed.depth_connection==='connected'
     &&bookAge!==null&&bookAge<=8&&liveBook?.fresh)
@@ -184,7 +187,7 @@ export default function LiveFeedPanel({
         {livePrice?'LIVE INDEX · FRESH':feed?.active?'INDEX FEED STARTING / STALE':automatic?.armed?'AUTOMATIC RECORDER ARMED':'NOT STREAMING'}</span>
     </div>
     <div className="lf-meta"><span>Local UI stream <b>{connectedToLocal?'Connected':'Reconnecting'}</b></span>
-      <span>Index ticker <b>{feed?.ticker_connection||'Not started'}</b></span>
+      <span>Index ticker <b>{feed?.active?feed.ticker_connection||'Starting':sharedIndex?.state?.replaceAll('_',' ')||'Not started'}</b></span>
       <span>20-level feed <b>{feed?.depth_connection||'Not started'}</b></span>
       <span>Stored in <b>dhan_shared</b></span><span>Automatic recorder <b>{automatic?automatic.armed?automatic.state.replaceAll('_',' '):'Off':'Checking'}</b></span></div>
     {error&&<p role="alert" className="tc-error">{error}</p>}
@@ -216,7 +219,7 @@ export default function LiveFeedPanel({
     {view==='signals'&&<>
       <ObservedIndexChartV2 rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'}
         sourceWarning={signal?.source_warning||''}/>
-      {automatic?.armed&&!feed?.active&&<RecordedChainSpot/>}
+      {automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'&&<RecordedChainSpot/>}
       {watchedIndex!=='INDEX:NIFTY50'&&<LivePythonResults mode="index"/>}
       <div className="lf-cards">
       <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
@@ -281,7 +284,7 @@ export default function LiveFeedPanel({
       <button type="button" onClick={()=>void stop()} disabled={busy}><Square size={15}/> Stop streams</button>
       <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Check connection</button>
     </div>}
-    {automatic?.armed&&!feed?.active&&<div className="lf-connect-block"><div><strong>Automatic BANKNIFTY recording is armed</strong><p>Original CE/PE capture runs independently using the reserved Dhan sockets. {automatic.last_chain_utc?'Last recorded chain spot: '+fmt(automatic.chain_spot)+' points · '+timeIST(automatic.last_chain_utc)+' IST. ':''}The manual index ticker is separate and cannot run concurrently; a chain snapshot is not a live directional signal.</p></div>{onOpenSaved&&<button type="button" onClick={onOpenSaved}>View recorded market</button>}</div>}
+    {automatic?.armed&&!feed?.active&&<div className="lf-connect-block"><div><strong>Automatic BANKNIFTY recording is armed</strong><p>Original CE/PE capture runs independently using the reserved Dhan sockets. {automatic.last_chain_utc?'Last recorded chain spot: '+fmt(automatic.chain_spot)+' points · '+timeIST(automatic.last_chain_utc)+' IST. ':''}The automatic collector requests documented index tickers on the same option socket only if there is spare instrument capacity. A chain receipt is not a live directional signal. </p>{sharedIndex&&<><p>Shared index: {sharedIndex.state.replaceAll('_',' ')} · {sharedIndex.saved_ticks} saved · {sharedIndex.dropped_ticks} dropped · {sharedIndex.unsupported_packets} unsupported.</p>{sharedIndex.error&&<p role="status">{sharedIndex.error}</p>}{view==='signals'&&<label>Index to inspect<select aria-label="Shared index to inspect" value={index} onChange={e=>setIndex(e.target.value as typeof index)}><option value="INDEX:BANKNIFTY">BANKNIFTY</option><option value="INDEX:NIFTY50">NIFTY 50</option></select></label>}</>}</div>{onOpenSaved&&<button type="button" onClick={onOpenSaved}>View recorded market</button>}</div>}
     {(view==='depth'||(view==='options'&&!hideNavigation))&&
       <div className="lf-depth-summary">
       <div className="tc-panel-title"><strong>20-level market depth · {configuredDepth||'select a stock / option'}</strong>
