@@ -95,6 +95,8 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
   const [optionSide,setOptionSide]=useState<'CALL'|'PUT'>('PUT')
   const [optionQty,setOptionQty]=useState('1')
   const [optionLotSize,setOptionLotSize]=useState<number|null>(null)
+  const [optionIdentity,setOptionIdentity]=useState('')
+  const [optionBroker,setOptionBroker]=useState<'zerodha'|'dhan'|'zerodha_debit_balance'>('zerodha')
   const [optionDraftNote,setOptionDraftNote]=useState('')
   const [optionEntry,setOptionEntry]=useState('')
   const [tradeNote,setTradeNote]=useState('')
@@ -155,7 +157,8 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
       }
       await post('/api/trading-cockpit/trades',{
         symbol:optionSymbol.trim().toUpperCase(),direction:optionSide,
-        quantity:Number(optionQty),entry_price:Number(optionEntry),note:tradeNote})
+        quantity:Number(optionQty),entry_price:Number(optionEntry),note:tradeNote,
+        ...(optionIdentity.trim()?{contract_identity:optionIdentity.trim(),broker_profile:optionBroker}:{})})
       setOptionEntry('');setTradeNote('');setOptionDraftNote('')
       setRecordMessage('Manual position opened. No forced holding timer or broker order.')
       await loadJournal()
@@ -352,6 +355,7 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
         onDraftJournal={(contract:OptionContract,lots:number)=>{
           if(!contract.lot_size||!contract.identity)return
           setOptionSymbol(contract.symbol)
+          setOptionIdentity(contract.identity)
           setOptionSide(contract.option_type==='CE'?'CALL':'PUT')
           setOptionQty(String(contract.lot_size*lots))
           setOptionLotSize(contract.lot_size)
@@ -420,10 +424,12 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
         Quantity is entered in units (lots × lot size). Current entry quantity:
         {' '}{Number(optionQty)/optionLotSize} lot(s). Only whole lots are accepted for this draft.</p>}
       <form className="tc-trade-form" onSubmit={event=>void recordEntry(event)}>
-        <label>Exact contract symbol<input required maxLength={48} value={optionSymbol} placeholder="BANKNIFTY23NOV61900PE" onChange={event=>setOptionSymbol(event.target.value.toUpperCase())}/></label>
-        <label>Type<select value={optionSide} onChange={event=>setOptionSide(event.target.value as 'CALL'|'PUT')}><option value="PUT">Long put</option><option value="CALL">Long call</option></select></label>
+        <label>Exact contract symbol<input required maxLength={48} value={optionSymbol} placeholder="BANKNIFTY23NOV61900PE" onChange={event=>{setOptionSymbol(event.target.value.toUpperCase());setOptionIdentity('');setOptionLotSize(null)}}/></label>
+        <label>Type<select value={optionSide} onChange={event=>{setOptionSide(event.target.value as 'CALL'|'PUT');setOptionIdentity('');setOptionLotSize(null)}}><option value="PUT">Long put</option><option value="CALL">Long call</option></select></label>
         <label>Quantity (units = lots × lot size)<input aria-label="Trade quantity" required type="number" min="1" max="1000000" step="1" value={optionQty} onChange={event=>setOptionQty(event.target.value)}/></label>
         <label>Entry premium (₹)<input aria-label="Trade entry premium" required type="number" min="0.01" step="0.01" value={optionEntry} onChange={event=>setOptionEntry(event.target.value)}/></label>
+        <label>Verified Dhan contract ID (optional)<input aria-label="Journal exact contract identity" maxLength={20} value={optionIdentity} placeholder="NSE_FNO:12345" onChange={event=>{setOptionIdentity(event.target.value.toUpperCase());setOptionLotSize(null)}}/></label>
+        <label>Estimated fee profile<select value={optionBroker} onChange={event=>setOptionBroker(event.target.value as typeof optionBroker)}><option value="zerodha">Zerodha regular</option><option value="dhan">Dhan regular</option><option value="zerodha_debit_balance">Zerodha debit-balance</option></select></label>
         <label>Note (optional)<input maxLength={250} value={tradeNote} onChange={event=>setTradeNote(event.target.value)}/></label>
         <button className="tc-primary" disabled={journalBusy||
           (optionLotSize!==null&&(Number(optionQty)<optionLotSize||
@@ -431,6 +437,7 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
           Record actual broker fill manually
         </button>
       </form>
+      <p className="tc-muted">A verified exact Dhan identity links the user-entered fill to Advanced Analytics → Manual trading workflow → Positions &amp; exits. Unlinked records remain in the journal without invented market marks.</p>
       <div className="tc-ledger-summary"><span>Open positions <strong>{journal?.summary.open??0}</strong></span><span>Closed trades <strong>{journal?.summary.closed??0}</strong></span><span>Net realized from entered fills <strong>₹{fmt(journal?.summary.closed_net_pnl_inr)}</strong></span></div>
       <details className="tc-optional-hold-metrics"><summary>Optional six-minute review statistics</summary>
         <p className="tc-muted">Historical timing metadata only. This is not a fixed exit rule or trade limit.</p>
