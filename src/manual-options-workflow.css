@@ -1,0 +1,11 @@
+.mw-monitor-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid #45667a;background:#152f40;border-radius:8px;padding:9px 12px;color:#bdd9e8;font-size:11px}
+.mw-monitor-banner span{flex:1;min-width:180px;line-height:1.5}.mw-monitor-banner svg{flex-shrink:0}
+.mw-root{min-width:0;display:grid;gap:13px}.mw-root h3{font-size:18px;margin:3px 0}.mw-root h4{margin:3px 0}
+.mw-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;align-items:end;background:#153346;padding:12px;border:1px solid #36566a;border-radius:8px}
+.mw-form button{min-height:34px}.mw-position{border-color:#466979;background:#102838}.mw-position h4{overflow-wrap:anywhere}
+.mw-badge{padding:6px 9px;border:1px solid #3b8073;background:#18433d;color:#b8f1dd;font-size:10px;border-radius:6px;text-transform:capitalize}
+.mw-badge.mw-delayed{border-color:#8d7651;background:#44382d;color:#efcc98}
+.mw-state-counts{display:flex;gap:7px;flex-wrap:wrap}.mw-state-counts span{background:#16394c;border:1px solid #3a5b6c;padding:7px 9px;border-radius:5px;font-size:10px;color:#bfd8e3}
+.mw-root td{white-space:normal;min-width:75px;max-width:260px}.mw-root td:first-child{white-space:nowrap}
+@media(max-width:950px){.mw-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.mw-form{grid-template-columns:1fr}}
