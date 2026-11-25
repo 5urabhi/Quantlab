@@ -89,3 +89,15 @@ if [ "\${1:-}" = "--version" ]; then echo v22.23.5; else exec "${process.execPat
     assert.equal(result.stdout.trim(),'system')
   }finally{rmSync(temp,{recursive:true,force:true})}
 })
+
+
+test('workstation launcher waits for heavy saved-market FastAPI startup without 10s false failure',()=>{
+  const launcher=readFileSync(join(root,'scripts/run_workstation.sh'),'utf8')
+  assert.match(launcher,/QUANTLAB_API_READY_TIMEOUT_SECONDS:-120/)
+  assert.match(launcher,/API_READY_DEADLINE/)
+  assert.match(launcher,/while :; do/)
+  assert.match(launcher,/curl --fail --silent --max-time 3/)
+  assert.match(launcher,/kill -0 "\$API_PID"/)
+  assert.doesNotMatch(launcher,/seq 1 40/)
+  assert.match(launcher,/Python API healthy; starting browser UI/)
+})
