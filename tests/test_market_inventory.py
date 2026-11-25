@@ -76,3 +76,20 @@ class MarketInventoryTests(unittest.TestCase):
         row=next(r for r in report["sources"] if r["id"]=="raw_daily")
         self.assertEqual(row["state"],"partial")
         self.assertIsNone(row["count"])
+
+    def test_scalar_preview_matches_kind_and_excludes_payload(self):
+        path=inv.shared_market_data.database_path()
+        path.parent.mkdir(parents=True)
+        with sqlite3.connect(path) as db:
+            db.executescript("""
+            CREATE TABLE dhan_option_live_events(identity TEXT,received_utc TEXT,kind TEXT,price REAL,open_interest INTEGER,private TEXT);
+            INSERT INTO dhan_option_live_events VALUES('NSE_FNO:8','2026-11-25T04:00:00+00:00','quote',100,NULL,'private'),('NSE_FNO:8','2026-11-25T04:01:00+00:00','oi',NULL,1000,'private');
+            """)
+        quote=inv.records("option_quote","NSE_FNO:8")
+        self.assertEqual(len(quote["rows"]),1)
+        self.assertEqual(quote["rows"][0][quote["columns"].index("price")],100)
+        self.assertNotIn("private",json.dumps(quote))
+        oi=inv.records("option_oi","NSE_FNO:8")
+        self.assertEqual(oi["rows"][0][oi["columns"].index("open_interest")],1000)
+        with self.assertRaises(ValueError):
+            inv.records("raw_intraday","NSE_EQ:123")
