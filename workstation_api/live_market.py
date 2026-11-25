@@ -241,30 +241,34 @@ def ingest_tick(identity: str, packet: dict, *, received: datetime | None = None
     receive_utc = _iso(now)
     if not recorder_storage.allow("live_ticks", dropped=1):
         return False
-    _init_db()
-    with _database() as db:
-        inserted = db.execute("""INSERT OR IGNORE INTO live_ticks
-             (identity,exchange_utc,received_utc,price,packet_sha256,session_id)
-             VALUES(?,?,?,?,?,?)""",
-            (identity,event_utc,receive_utc,price,raw_sha,session_id)).rowcount
-        if not inserted:
-            return False
-        db.execute("""INSERT INTO live_minute_bars
-            (identity,minute_utc,session_ist,open,high,low,close,tick_count,
-             first_exchange_utc,last_exchange_utc,last_received_utc)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(identity,minute_utc) DO UPDATE SET
-              high=MAX(high,excluded.high), low=MIN(low,excluded.low),
-              close=CASE WHEN excluded.last_exchange_utc>=last_exchange_utc
-                THEN excluded.close ELSE close END,
-              open=CASE WHEN excluded.first_exchange_utc<first_exchange_utc
-                THEN excluded.open ELSE open END,
-              first_exchange_utc=MIN(first_exchange_utc,excluded.first_exchange_utc),
-              last_exchange_utc=MAX(last_exchange_utc,excluded.last_exchange_utc),
-              last_received_utc=excluded.last_received_utc,
-              tick_count=tick_count+1""",
-            (identity,minute_utc,session.date().isoformat(),
-             price,price,price,price,1,event_utc,event_utc,receive_utc))
+    try:
+        _init_db()
+        with _database() as db:
+            inserted = db.execute("""INSERT OR IGNORE INTO live_ticks
+                 (identity,exchange_utc,received_utc,price,packet_sha256,session_id)
+                 VALUES(?,?,?,?,?,?)""",
+                (identity,event_utc,receive_utc,price,raw_sha,session_id)).rowcount
+            if not inserted:
+                return False
+            db.execute("""INSERT INTO live_minute_bars
+                (identity,minute_utc,session_ist,open,high,low,close,tick_count,
+                 first_exchange_utc,last_exchange_utc,last_received_utc)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(identity,minute_utc) DO UPDATE SET
+                  high=MAX(high,excluded.high), low=MIN(low,excluded.low),
+                  close=CASE WHEN excluded.last_exchange_utc>=last_exchange_utc
+                    THEN excluded.close ELSE close END,
+                  open=CASE WHEN excluded.first_exchange_utc<first_exchange_utc
+                    THEN excluded.open ELSE open END,
+                  first_exchange_utc=MIN(first_exchange_utc,excluded.first_exchange_utc),
+                  last_exchange_utc=MAX(last_exchange_utc,excluded.last_exchange_utc),
+                  last_received_utc=excluded.last_received_utc,
+                  tick_count=tick_count+1""",
+                (identity,minute_utc,session.date().isoformat(),
+                 price,price,price,price,1,event_utc,event_utc,receive_utc))
+    except (OSError, sqlite3.Error):
+        recorder_storage.failure("live_ticks", "sqlite_write_failed", dropped=1)
+        raise
     recorder_storage.saved("live_ticks", receive_utc)
     return True
 
@@ -415,13 +419,17 @@ def _receive_depth(book: dict) -> None:
     if not recorder_storage.allow("individual_depth", dropped=1):
         _update(depth_recording="storage_paused_disk_reserve")
         return
-    _init_db()
-    pair_sha=sha256((book["bid_packet_sha256"]+book["ask_packet_sha256"]).encode()).hexdigest()
-    with _database() as db:
-        changed = db.execute("""INSERT OR IGNORE INTO live_depth_books
-            (identity,received_utc,session_id,book_json,packet_pair_sha256)
-            VALUES(?,?,?,?,?)""",(book["identity"],book["received_utc"],
-                ACTIVE.get("session_id",""),json.dumps(book,sort_keys=True),pair_sha)).rowcount
+    try:
+        _init_db()
+        pair_sha=sha256((book["bid_packet_sha256"]+book["ask_packet_sha256"]).encode()).hexdigest()
+        with _database() as db:
+            changed = db.execute("""INSERT OR IGNORE INTO live_depth_books
+                (identity,received_utc,session_id,book_json,packet_pair_sha256)
+                VALUES(?,?,?,?,?)""",(book["identity"],book["received_utc"],
+                    ACTIVE.get("session_id",""),json.dumps(book,sort_keys=True),pair_sha)).rowcount
+    except (OSError, sqlite3.Error):
+        recorder_storage.failure("individual_depth", "sqlite_write_failed", dropped=1)
+        raise
     if not changed:
         return
     recorder_storage.saved("individual_depth", book["received_utc"])

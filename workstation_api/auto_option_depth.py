@@ -501,27 +501,31 @@ def _daily_count(now: datetime) -> int:
 def _store_book(session_id: str, book: dict, feature: dict) -> bool:
     if not recorder_storage.allow("auto_depth", dropped=1):
         return False
-    _storage()
-    pair_hash = sha256(
-        (book["bid_packet_sha256"] + book["ask_packet_sha256"]).encode()
-    ).hexdigest()
-    enriched = {**book, "collection_mode": "auto_banknifty_20_level",
-                "computed_features": feature,
-                "source": "original_Dhan_full_market_depth_websocket"}
-    with live_market._database() as db:
-        changed = db.execute(
-            """INSERT OR IGNORE INTO live_depth_books
-                 (identity,received_utc,session_id,book_json,packet_pair_sha256)
-                 VALUES(?,?,?,?,?)""",
-            (book["identity"], book["received_utc"], session_id,
-             json.dumps(enriched, sort_keys=True), pair_hash)).rowcount
-        if changed:
-            db.execute(
-                """INSERT OR IGNORE INTO auto_banknifty_depth_features
-                 (identity,received_utc,session_id,feature_json,book_pair_sha256)
-                 VALUES(?,?,?,?,?)""",
+    try:
+        _storage()
+        pair_hash = sha256(
+            (book["bid_packet_sha256"] + book["ask_packet_sha256"]).encode()
+        ).hexdigest()
+        enriched = {**book, "collection_mode": "auto_banknifty_20_level",
+                    "computed_features": feature,
+                    "source": "original_Dhan_full_market_depth_websocket"}
+        with live_market._database() as db:
+            changed = db.execute(
+                """INSERT OR IGNORE INTO live_depth_books
+                     (identity,received_utc,session_id,book_json,packet_pair_sha256)
+                     VALUES(?,?,?,?,?)""",
                 (book["identity"], book["received_utc"], session_id,
-                 json.dumps(feature, sort_keys=True), pair_hash))
+                 json.dumps(enriched, sort_keys=True), pair_hash)).rowcount
+            if changed:
+                db.execute(
+                    """INSERT OR IGNORE INTO auto_banknifty_depth_features
+                     (identity,received_utc,session_id,feature_json,book_pair_sha256)
+                     VALUES(?,?,?,?,?)""",
+                    (book["identity"], book["received_utc"], session_id,
+                     json.dumps(feature, sort_keys=True), pair_hash))
+    except (OSError, sqlite3.Error):
+        recorder_storage.failure("auto_depth", "sqlite_write_failed", dropped=1)
+        raise
     if changed:
         recorder_storage.saved("auto_depth", book["received_utc"])
     return bool(changed)

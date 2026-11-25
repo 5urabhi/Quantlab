@@ -391,6 +391,8 @@ def _ingest(event: dict, received: datetime, session: str) -> None:
                 if STATUS["storage_gap_started_utc"] is None:
                     STATUS["storage_gap_started_utc"] = received_iso
                 STATUS["storage_last_drop_utc"] = received_iso
+                from . import recorder_storage
+                recorder_storage.failure("quote_oi_queue", "queue_overflow", dropped=1)
 
 
 def _opportunity(history: deque) -> dict:
@@ -635,19 +637,27 @@ def _write_batches(stop: Event) -> None:
                           (identity,received_utc,exchange_trade_utc,kind,price,
                            volume,open_interest,last_trade_quantity,packet_sha256,session_id)
                           VALUES(?,?,?,?,?,?,?,?,?,?)""", batch)
-                        inserted = db.total_changes - before
+                        candidate_count = db.total_changes - before
+                    # Context manager commits on exit. Do not count an insert
+                    # until the transaction has actually committed.
+                    inserted = candidate_count
                     break
                 except sqlite3.OperationalError:
+                    inserted = None
                     if attempt < 2:
                         with LOCK:
                             STATUS["storage_write_retries"] += 1
                         time.sleep(0.2 * (2 ** attempt))
                 except sqlite3.Error:
+                    inserted = None
                     break
             if inserted is None:
                 _record_storage_drop(batch, "sqlite_storage_write_failure")
                 continue
             saved += inserted
+            if inserted:
+                from . import recorder_storage
+                recorder_storage.saved("quote_oi_queue", batch[-1][1], inserted)
             with LOCK:
                 STATUS["stored_events"] += inserted
                 STATUS["storage_daily_events"] = saved

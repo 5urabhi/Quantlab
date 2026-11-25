@@ -56,6 +56,14 @@ case "${1:-workstation}" in
     # Execute as a module: the repo root must be on sys.path for workstation_api.
     exec nice -n 10 .venv/bin/python -m scripts.audit_all_models "$@"
     ;;
+  archive-market)
+    if [ ! -x .venv/bin/python ]; then
+      printf 'Python environment missing. First run: bash run.sh setup\n' >&2
+      exit 2
+    fi
+    shift
+    exec nice -n 10 .venv/bin/python -m workstation_api.market_session_archive "$@"
+    ;;
   legacy-streamlit)
     exec bash scripts/start.sh research
     ;;
@@ -78,6 +86,8 @@ bash run.sh verify-saved --strict  Nonzero exit if any original inputs remain mi
 bash run.sh audit-models     Read-only audit of every model and active dataset
 bash run.sh audit-models --dataset dhan_shared  Audit shared Dhan only
 bash run.sh audit-models --preflight-only  Check inputs without running models
+bash run.sh archive-market --day YYYY-MM-DD  Verified non-destructive market archive (off-hours)
+bash run.sh archive-market --verify PATH  Verify archive checksums and row counts
 bash run.sh legacy-streamlit Launch preserved legacy Streamlit UI if needed
 HELP
     ;;
