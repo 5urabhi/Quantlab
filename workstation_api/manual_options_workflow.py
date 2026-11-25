@@ -57,12 +57,6 @@ def _age(stamp, now, max_seconds=RECEIPT_AGE):
         return None,False
 
 
-def _valid_expiry(expiry):
-    if date.fromisoformat(expiry).isoformat()!=expiry:
-        raise ValueError("Use the original YYYY-MM-DD expiry")
-    return expiry
-
-
 def _snapshot(row):
     if row is None:
         return None
@@ -464,6 +458,9 @@ def record_if_enabled(analysis,*,now=None):
                      item["lot_size"],item["units"],item["score"],item["rank_quality"],item["ask"],horizon,
                      settings["broker_profile"],payload,cohort,pair,item["rank"]))
                 inserted+=cur.rowcount
+                if cohort=="top" and cur.rowcount==0:
+                    # Do not retroactively attach controls to registered decisions.
+                    break
     return inserted
 
 
