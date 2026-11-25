@@ -355,6 +355,7 @@ export default function ResearchPlot({plot,provenance}:{plot:ResearchPlotData;pr
   const chart=useRef<HTMLElement|null>(null)
   const [view,setView]=useState<{start:number;end:number}|null>(null)
   const [syncHover,setSyncHover]=useState(true)
+  const [expandError,setExpandError]=useState('')
   const [syncViewport,setSyncViewport]=useState(true)
   const n=plot.x?.length||0
   const zoomable=n>=8&&plot.kind!=='surface3d'&&plot.kind!=='heatmap2d'
@@ -424,13 +425,31 @@ export default function ResearchPlot({plot,provenance}:{plot:ResearchPlotData;pr
       ...table.rows.map(row=>row.map(csvCell).join(','))].join('\n')
     downloadFile('quantlab-'+safeName(plot.title)+'.csv',contents,'text/csv;charset=utf-8')
   }
+  const exportPython=()=>{
+    // Explicit download only: never execute arbitrary chart code in the browser.
+    const payload=JSON.stringify({title:plot.title,provenance:provenance??null,columns:table.columns,rows:table.rows})
+    const code='# QuantLab research snapshot; source and units are preserved.\nimport json\n\ndata = json.loads('+JSON.stringify(payload)+')\ncolumns = data["columns"]\nrows = data["rows"]\n\n# Add your own analysis below. Missing observations are None.\nprint(data["title"], columns, len(rows))\n'
+    downloadFile('quantlab-'+safeName(plot.title)+'.py',code,'text/x-python;charset=utf-8')
+  }
+  const expand=async()=>{
+    setExpandError('')
+    try{
+      if(document.fullscreenElement===chart.current)await document.exitFullscreen()
+      else if(chart.current?.requestFullscreen)await chart.current.requestFullscreen()
+      else setExpandError('Full screen is not supported by this browser.')
+    }catch{setExpandError('Unable to expand this chart in the current browser.')}
+  }
   return <section className="ql-chart-card" ref={chart}>
     <div className="ql-chart-title-row"><h4>{plot.title}</h4>
       <div className="ql-chart-export">
+        <button type="button" onClick={()=>void expand()}>Full screen / exit</button>
+        <button type="button" onClick={exportPython} title="Download a Python script with the full plotted dataset for offline analysis">Python snapshot</button>
         <button type="button" onClick={saveSvg} aria-label={'Export SVG of '+plot.title}>Export SVG</button>
         <button type="button" onClick={saveCsv} aria-label={'Export CSV of '+plot.title}>Export CSV</button>
       </div>
     </div>
+    {expandError&&<p role="alert">{expandError}</p>}
+    <p className="ql-muted">X: {plot.x_label||'Not specified by model'} · Y: {plot.y_label||'Not specified by model'}{plot.z_label?' · Z: '+plot.z_label:''}</p>
     {zoomable&&<div className="ql-chart-viewport" role="group"
       aria-label={'Chart zoom and synchronized pointer for '+plot.title}>
       <button type="button" onClick={zoomIn} disabled={right-left<=5}
