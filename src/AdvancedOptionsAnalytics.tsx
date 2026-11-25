@@ -139,7 +139,7 @@ function Table({rows,cols,selected,onSelect,sortKey,onSort,ascending}:{
     </tbody></table></div>
 }
 type Props={
-  initialWorkflow?:booleanexpiry:string;selected:string;onSelect:(id:string)=>void;onSnapshot:(chain:Chain)=>void
+  initialWorkflow?:boolean;expiry:string;selected:string;onSelect:(id:string)=>void;onSnapshot:(chain:Chain)=>void
   capital:number;lots:number;targetPremium:number;onSettings:(capital:number,lots:number,premium:number)=>void
   onDraftJournal:(contract:OptionContract,lots:number)=>void
   onChooseContract:(expiry:string,identity:string)=>void}
