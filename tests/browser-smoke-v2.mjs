@@ -738,6 +738,17 @@ try{
    await page.goBack()
    await page.getByRole('heading',{name:'EMA Explorer',exact:true}).waitFor()
  })
+ await step('V3 every default route renders its title and captures desktop QA screenshot',async()=>{
+   const routes=['overview','trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper','tradinganalytics','tradingdirectional','customscanners','strategies','strategyema','strategypython','strategybacktest','pythonmonitors','mathematics','models','research','factors','construction','risk','rolling','robustness','modelgrids','indexstudio','custommodels','journey','data','dhan','dataexplorer','dataquality','datadownloads','nse','evidence','history','workspace','chartstudio','comparisons','visual','workspacejobs','projects','reports','resourcebrowser','connections','recordingsettings','storage','preferences','diagnostics','settings','guide','pythonenvironment']
+   for(const route of routes){
+     await page.goto(base+'#/'+route,{waitUntil:'domcontentloaded'})
+     await page.locator('.ws-titlebar h1').waitFor()
+     assert.equal(new URL(page.url()).hash,'#/'+route)
+     await page.locator('main.ws-content').waitFor()
+     assert((await page.locator('.ws-titlebar h1').innerText()).trim().length>0,'Missing route title: '+route)
+     await shot('route-'+route)
+   }
+ })
  await step('390-pixel responsive sidebar drawer and eight navigable pages',async()=>{
    await page.setViewportSize({width:390,height:844})
    await page.getByRole('button',{name:'Open navigation'}).click()

@@ -201,7 +201,7 @@ function Table({rows,max=15}:{rows:Dict[];max?:number}){
   const keys=Object.keys(rows[0]).slice(0,11)
   return <div className="ws-table-scroll"><table><thead><tr>{keys.map(k=><th key={k}>{label(k)}</th>)}</tr></thead><tbody>{rows.slice(0,max).map((row,i)=><tr key={i}>{keys.map(k=><td key={k} title={String(row[k]??'')}>{typeof row[k]==='number'?number(row[k],4):String(row[k]??'—')}</td>)}</tr>)}</tbody></table></div>
 }
-function EquityChart({rows,caption='Strategy vs benchmark'}:{rows:Dict[];caption?:string}){
+function EquityChart({rows,caption='Strategy vs benchmark',provenance='historical'}:{rows:Dict[];caption?:string;provenance?:string}){
   type View='wealth'|'excess'|'drawdown'
   const [view,setView]=useState<View>('wealth')
   const points=useMemo(()=>{
@@ -218,7 +218,7 @@ function EquityChart({rows,caption='Strategy vs benchmark'}:{rows:Dict[];caption
   const label=view==='wealth'?'Cumulative wealth (× initial capital)':view==='drawdown'?'Drawdown (%)':'Net monthly excess return (percentage points)'
   const traces=view==='excess'?[{name:'Strategy − benchmark',y:points.map(p=>p.excess)}]:[{name:'Strategy',color:'#f5c542',y:points.map(p=>view==='wealth'?p.strategy:p.strategyDrawdown)},{name:'Benchmark',color:'#78a8ff',y:points.map(p=>view==='wealth'?p.benchmark:p.benchmarkDrawdown)}]
   return <div className="ws-chart ws-interactive-chart"><div className="ws-chart-views" role="group" aria-label="Performance graph type">{([['wealth','Growth line'],['excess','Monthly difference'],['drawdown','Drawdown area']] as const).map(([id,name])=><button type="button" key={id} aria-pressed={view===id} className={view===id?'active':''} onClick={()=>setView(id)}>{name}</button>)}</div>
-    <ResearchPlot plot={{kind:view==='excess'?'bar2d':view==='drawdown'?'area2d':'line2d',title:caption+' · '+label,x_label:'Observation date',y_label:label,x:points.map(p=>p.date),traces,reference_lines:[{value:view==='wealth'?1:0,label:view==='wealth'?'Initial capital = 1×':'Zero'}]}} provenance="historical" formatY={v=>v.toFixed(view==='wealth'?3:2)}/>
+    <ResearchPlot plot={{kind:view==='excess'?'bar2d':view==='drawdown'?'area2d':'line2d',title:caption+' · '+label,x_label:'Observation date',y_label:label,x:points.map(p=>p.date),traces,reference_lines:[{value:view==='wealth'?1:0,label:view==='wealth'?'Initial capital = 1×':'Zero'}]}} provenance={provenance} formatY={v=>v.toFixed(view==='wealth'?3:2)}/>
     <p className="ws-caption">Cumulative wealth starts at 1× before the first observed return. Missing or invalid returns stop the cumulative path rather than silently fill missing data. Historical simulation, not proof of investability.</p></div>
 }
 function BarRows({rows,valueKey='weight',nameKey='name'}:{rows:Dict[];valueKey?:string;nameKey?:string}){
@@ -421,7 +421,7 @@ function App(){
   const runPicker=<select aria-label="Select completed experiment" className="ws-select" value={selectedRun} onChange={e=>setSelectedRun(e.target.value)}>{runs.length===0?<option value="">No runs yet</option>:runs.map(r=><option key={r.id} value={r.id}>{r.name} · {r.id}</option>)}</select>
   const withRun=(content:React.ReactNode)=><>{runs.length===0?<Empty title="No research run selected" onAction={()=>begin('research')} action="Run an experiment">All charts are generated from Python research outputs, not hardcoded sample performance.</Empty>:<>{runPicker}{content}</>}</>
   const classification=<Tag tone={detail?.source.dataset_kind==='synthetic'?'warn':'blue'}>{detail?.source.dataset_kind==='synthetic'?'SYNTHETIC DATA — DEMONSTRATION':detail?'USER DATA · NOT INDEPENDENTLY AUDITED':'NO RESEARCH RUN'}</Tag>
-  const chart=detail?<EquityChart rows={detail.returns}/>:null
+  const chart=detail?<EquityChart rows={detail.returns} provenance={detail.source.dataset_kind==='synthetic'?'synthetic':'historical'}/>:null
   const panel=(key: keyof Detail,description:string)=>withRun(<Card title={description}><Table rows={(detail?.[key] as Dict[]|undefined)??[]} max={20}/></Card>)
   return <div className={'ws-shell ws-v2 ql-v3 '+(compactNav?'ql-nav-compact':'')}>
     <aside className={'ws-sidebar '+(menu?'open':'')}>
