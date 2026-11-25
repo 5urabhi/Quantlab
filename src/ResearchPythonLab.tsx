@@ -369,9 +369,8 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
       const key=savedName.trim().slice(0,65)||'My custom strategy'
       const current=JSON.parse(localStorage.getItem(KEY)||'{}') as Record<string,string>
       current[key]=script
-      const names=Object.keys(current)
-      if(names.length>12)delete current[names[0]]
       localStorage.setItem(KEY,JSON.stringify(current))
+      setLocalNames(Object.keys(current))
       setNotice('Saved '+key+' in this browser only. The code is never sent to Dhan.')
     }catch{setError('Browser storage unavailable; copy your code to a private file.')}
   }
@@ -380,6 +379,14 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
     try{
       setLocalNames(Object.keys(JSON.parse(localStorage.getItem(KEY)||'{}')))
     }catch{setLocalNames([])}
+  }
+  const downloadScript=()=>{
+    const url=URL.createObjectURL(new Blob([script],{type:'text/x-python;charset=utf-8'}))
+    const anchor=document.createElement('a')
+    anchor.href=url
+    anchor.download=(savedName.trim().replace(/[^a-zA-Z0-9_-]+/g,'-')||'quantlab-strategy')+'.py'
+    anchor.click()
+    setTimeout(()=>URL.revokeObjectURL(url),1000)
   }
   const loadCode=(name:string)=>{
     try{
@@ -506,6 +513,7 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
             <input aria-label="Custom strategy name" value={savedName}
               onChange={e=>setSavedName(e.target.value)} maxLength={65}/>
             <button type="button" onClick={saveScript}><Save size={15}/> Save code locally</button>
+            <button type="button" onClick={downloadScript}><Download size={15}/> Export Python file</button>
             <button type="button" onClick={loadSavedList}>Load saved code</button>
             {localNames.length>0&&<select aria-label="Locally saved Python scripts"
               defaultValue="" onChange={e=>loadCode(e.target.value)}>
