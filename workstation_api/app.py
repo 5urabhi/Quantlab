@@ -4705,3 +4705,15 @@ from . import shared_index_feed
 @app.get("/api/trading-cockpit/auto-index/status")
 def shared_index_status():
     return shared_index_feed.status()
+
+
+from . import market_inventory
+
+
+@app.get("/api/data-manager/inventory")
+def unified_market_inventory(source: str = "all", query: str = "", page: int = 1,
+                             per_page: int = 50, refresh: bool = False):
+    try:
+        return market_inventory.inventory(source, query, page, per_page, refresh)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
