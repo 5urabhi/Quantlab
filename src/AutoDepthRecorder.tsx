@@ -34,7 +34,9 @@ type SocketHealth={
   socket:number;connected:boolean;subscribed:number
   with_recent_pairs_60s:number;with_recent_bids_60s:number;with_recent_asks_60s:number
 }
+type StorageHealth={state:string;saved:number;gap_count:number;dropped:number;last_saved_utc:string|null;last_error:string|null;free_bytes:number|null;reserve_bytes:number|null;ledger_error:boolean}
 type Recorder={
+  storage_health?:StorageHealth
   armed:boolean;state:string;connected:boolean
   market_regular_hours:boolean;settings:Settings;session_id:string|null
   snapshots_saved:number;received_pairs:number;invalid_pairs:number
@@ -70,6 +72,7 @@ type Recorder={
   historical_depth_download_supported:boolean
 }
 type AutomaticChainCapture={
+  storage_health?:StorageHealth
   armed:boolean;state:string;snapshot_count_session:number
   snapshots_saved_today:number;expiries_found:number
   expiries_captured_session:number;last_expiry:string|null
@@ -120,7 +123,8 @@ const STATE_NAME:Record<string,string>={
   connected_waiting_for_packets:'Subscribed · awaiting original depth',
   recording_original_depth:'Recording original 20-level books',
   connected_no_depth_packets:'Connected · no fresh depth packets',
-  daily_storage_limit_reached:'Daily storage safety limit reached',
+  daily_storage_limit_reached:'Legacy daily storage limit reached',
+  storage_paused_disk_reserve:'Recording paused: disk reserve',
   connection_or_source_error:'Data source needs attention',
   other_local_worker:'Other local QuantLab server is recording',
   local_server_stopping:'Local server stopping',
@@ -347,6 +351,17 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       {chainCapture?.last_error&&<span className="ad-warning"> {chainCapture.last_error}</span>}
       {chainCapture?.token_renewal_opted_in&&<span> Token maintenance: {chainCapture.token_maintenance_message||"checking"}.</span>}
     </p>
+    <div className="ad-armed-note" role="status"><Database size={16}/>
+      {([['20-level depth',state?.storage_health],['Chain archive',chainCapture?.storage_health]] as const).map(([label,h])=><span key={label}>
+        {' · '}{label}: {h? h.state.replaceAll('_',' '):'not reported'}
+        {h&&<> · committed {n(h.saved)} · detected gaps {h.gap_count} · known dropped {h.dropped}
+          {h.free_bytes!=null&&<> · free {n(h.free_bytes/1024**3,1)} GiB</>}
+          {h.last_error&&<span className="ad-warning"> · {h.last_error}</span>}
+          {h.ledger_error&&<span className="ad-warning"> · gap ledger write failed</span>}
+        </>}
+      </span>)}
+      {' · '}No fixed row-count cap; sampling and disk safety still apply.
+    </div>
     <OptionUniverseMonitor/>
     {Boolean(state?.socket_health?.length)&&<section className="ad-socket-health"
       aria-label="Original Dhan depth receipt health by socket">

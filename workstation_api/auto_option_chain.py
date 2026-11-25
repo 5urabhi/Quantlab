@@ -26,7 +26,7 @@ STOP = Event()
 WORKER: Thread | None = None
 RESTART_PENDING = False
 SHUTTING_DOWN = False
-MAX_DAILY_SNAPSHOTS = 2500
+MAX_DAILY_SNAPSHOTS = None  # Disk-aware, not count-limited.
 DISCOVERY_INTERVAL_SECONDS = 300
 STATE = {
     "state": "disabled", "snapshot_count_session": 0,
@@ -107,6 +107,7 @@ def status() -> dict:
     with LOCK:
         snapshot = dict(STATE)
     return {**snapshot,
+            "storage_health": auto_option_depth.recorder_storage.status("option_chain"),
             "armed": _enabled(), "market_regular_hours": _market_open(),
             "token_renewal_opted_in": bool(auto_option_depth._config().get("allow_token_renewal")),
             "read_only": True, "shared_library": shared_market_data.SHARED_ID,
@@ -213,8 +214,8 @@ def _run(stop: Event) -> None:
                 stop.wait(30)
                 continue
             _status(snapshots_saved_today=total)
-            if total >= MAX_DAILY_SNAPSHOTS:
-                _status(state="daily_storage_limit_reached", last_error=None)
+            if not auto_option_depth.recorder_storage.allow("option_chain"):
+                _status(state="storage_paused_disk_reserve", last_error="Disk safety reserve reached; coverage gap")
                 stop.wait(60)
                 continue
             expiry = _choose_due(expiries, schedule, time.monotonic())
@@ -233,6 +234,9 @@ def _run(stop: Event) -> None:
                 quote_count = int(result["quote_count"])
                 if quote_count <= 0:
                     raise ValueError("Empty authenticated contract snapshot")
+                if result.get("storage_result") == "disk_paused":
+                    _status(state="storage_paused_disk_reserve", last_error="Snapshot received but not stored")
+                    continue
                 captured.add(expiry)
                 _status(state="recording_original_chains",
                         last_error=None, last_expiry=expiry,

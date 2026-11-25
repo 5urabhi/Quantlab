@@ -24,7 +24,7 @@ import time
 import uuid
 
 from index_research.dhan_data import MASTER_URL
-from . import dhan_workspace, live_market, market_depth, option_chain_live, shared_market_data
+from . import dhan_workspace, live_market, market_depth, option_chain_live, shared_market_data, recorder_storage
 
 IST = ZoneInfo("Asia/Kolkata")
 LOCK = RLock()
@@ -47,7 +47,7 @@ DEFAULTS = {
     "allow_token_renewal": False,
 }
 MAX_INSTRUMENTS = 6
-MAX_DAILY_SNAPSHOTS = 200_000
+MAX_DAILY_SNAPSHOTS = None  # No fixed cap; capacity guard governs persistence.
 CHAIN_REFRESH_SECONDS = 20
 MAX_RECONNECT_DELAY_SECONDS = 60
 MAX_MASTER_BYTES = 100 * 1024 * 1024
@@ -292,6 +292,7 @@ def status() -> dict:
     state.pop("connected_socket_indices", None)
     return {
         **state, "settings": cfg, "armed": cfg["enabled"],
+        "storage_health": recorder_storage.status("auto_depth"),
         "requested_contracts_above": None,
         "requested_contracts_below": None,
         "max_simultaneous_depth_contracts": (200 if wide else MAX_INSTRUMENTS),
@@ -498,27 +499,35 @@ def _daily_count(now: datetime) -> int:
 
 
 def _store_book(session_id: str, book: dict, feature: dict) -> bool:
-    _storage()
-    pair_hash = sha256(
-        (book["bid_packet_sha256"] + book["ask_packet_sha256"]).encode()
-    ).hexdigest()
-    enriched = {**book, "collection_mode": "auto_banknifty_20_level",
-                "computed_features": feature,
-                "source": "original_Dhan_full_market_depth_websocket"}
-    with live_market._database() as db:
-        changed = db.execute(
-            """INSERT OR IGNORE INTO live_depth_books
-                 (identity,received_utc,session_id,book_json,packet_pair_sha256)
-                 VALUES(?,?,?,?,?)""",
-            (book["identity"], book["received_utc"], session_id,
-             json.dumps(enriched, sort_keys=True), pair_hash)).rowcount
-        if changed:
-            db.execute(
-                """INSERT OR IGNORE INTO auto_banknifty_depth_features
-                 (identity,received_utc,session_id,feature_json,book_pair_sha256)
-                 VALUES(?,?,?,?,?)""",
+    if not recorder_storage.allow("auto_depth", dropped=1):
+        return False
+    try:
+        _storage()
+        pair_hash = sha256(
+            (book["bid_packet_sha256"] + book["ask_packet_sha256"]).encode()
+        ).hexdigest()
+        enriched = {**book, "collection_mode": "auto_banknifty_20_level",
+                    "computed_features": feature,
+                    "source": "original_Dhan_full_market_depth_websocket"}
+        with live_market._database() as db:
+            changed = db.execute(
+                """INSERT OR IGNORE INTO live_depth_books
+                     (identity,received_utc,session_id,book_json,packet_pair_sha256)
+                     VALUES(?,?,?,?,?)""",
                 (book["identity"], book["received_utc"], session_id,
-                 json.dumps(feature, sort_keys=True), pair_hash))
+                 json.dumps(enriched, sort_keys=True), pair_hash)).rowcount
+            if changed:
+                db.execute(
+                    """INSERT OR IGNORE INTO auto_banknifty_depth_features
+                     (identity,received_utc,session_id,feature_json,book_pair_sha256)
+                     VALUES(?,?,?,?,?)""",
+                    (book["identity"], book["received_utc"], session_id,
+                     json.dumps(feature, sort_keys=True), pair_hash))
+    except (OSError, sqlite3.Error):
+        recorder_storage.failure("auto_depth", "sqlite_write_failed", dropped=1)
+        raise
+    if changed:
+        recorder_storage.saved("auto_depth", book["received_utc"])
     return bool(changed)
 
 
@@ -695,8 +704,8 @@ def _run(stop: Event) -> None:
                                received_pairs=0, selection_events=0,
                                invalid_pairs=0, latest={}, contracts=[],
                                last_error=None)
-            if daily_saved >= MAX_DAILY_SNAPSHOTS:
-                _status_update(state="daily_storage_limit_reached", connected=False)
+            if not recorder_storage.allow("auto_depth"):
+                _status_update(state="storage_paused_disk_reserve", connected=False)
                 stop.wait(60)
                 continue
             try:
@@ -755,8 +764,8 @@ def _run(stop: Event) -> None:
                             continue
                         if not isinstance(payload, bytes):
                             continue
-                        if daily_saved >= MAX_DAILY_SNAPSHOTS:
-                            _status_update(state="daily_storage_limit_reached")
+                        if not recorder_storage.allow("auto_depth"):
+                            _status_update(state="storage_paused_disk_reserve")
                             break
                         now = _now()
                         for book, candidate in _paired_books(payload, ids, pending, now):
@@ -768,7 +777,7 @@ def _run(stop: Event) -> None:
                             previous = last_sample.get(ident, 0.)
                             if time.monotonic() - previous < cfg["sample_seconds"]:
                                 continue
-                            if daily_saved >= MAX_DAILY_SNAPSHOTS:
+                            if not recorder_storage.allow("auto_depth", dropped=1):
                                 break
                             feature = _features(book, candidate, cfg["lots"])
                             if _store_book(session_id, book, feature):
@@ -785,8 +794,8 @@ def _run(stop: Event) -> None:
                                     }
                                     STATE["state"] = "recording_original_depth"
                                     STATE["last_error"] = None
-                        if daily_saved >= MAX_DAILY_SNAPSHOTS:
-                            _status_update(state="daily_storage_limit_reached")
+                        if not recorder_storage.allow("auto_depth"):
+                            _status_update(state="storage_paused_disk_reserve")
                             break
                     _status_update(connected=False)
             except Exception as exc:

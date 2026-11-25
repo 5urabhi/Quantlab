@@ -244,12 +244,15 @@ def _normalize(raw: dict, expiry: str, captured: datetime, master: dict) -> dict
     }
 
 
-def _save_snapshot(value: dict) -> None:
-    """Append bounded normalized evidence to the existing one Market Library."""
+def _save_snapshot(value: dict) -> str:
+    """Persist original normalized evidence, with independent storage state."""
+    from . import recorder_storage
     now = _clock().timestamp()
     key = ("BANKNIFTY", value["expiry"])
     if now - _LAST_PERSISTED.get(key, 0.0) < 30:
-        return
+        return "sample_throttled"
+    if not recorder_storage.allow("option_chain", dropped=1):
+        return "disk_paused"
     path = shared_market_data.database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path, timeout=8) as db:
@@ -260,11 +263,14 @@ def _save_snapshot(value: dict) -> None:
           normalized_json TEXT NOT NULL,
           PRIMARY KEY(underlying,expiry,captured_utc))""")
         payload = json.dumps(value, sort_keys=True, separators=(",", ":"))
-        db.execute("""INSERT OR IGNORE INTO option_chain_observations
+        changed = db.execute("""INSERT OR IGNORE INTO option_chain_observations
             VALUES(?,?,?,?,?)""", ("BANKNIFTY", value["expiry"],
-            value["received_utc"], sha256(payload.encode()).hexdigest(), payload))
+            value["received_utc"], sha256(payload.encode()).hexdigest(), payload)).rowcount
         db.commit()
     _LAST_PERSISTED[key] = now
+    if changed:
+        recorder_storage.saved("option_chain", value["received_utc"])
+    return "saved" if changed else "duplicate"
 
 
 def expiries(*, sleep=time.sleep) -> dict:
@@ -340,8 +346,14 @@ def chain(expiry: str, *, force_refresh: bool = False, sleep=time.sleep) -> dict
             body={"UnderlyingScrip": 25, "UnderlyingSeg": "IDX_I", "Expiry": expiry})
         _LAST_VENDOR_CALL = time.monotonic()
         source = _normalize(response, expiry, _clock(), _contracts())
+        try:
+            storage_result = _save_snapshot(source)
+        except (OSError, sqlite3.Error):
+            from . import recorder_storage
+            recorder_storage.failure("option_chain", "sqlite_write_failed", dropped=1)
+            raise
+        source = {**source, "storage_result": storage_result}
         _CHAIN_CACHE[key] = (_LAST_VENDOR_CALL, source)
-        _save_snapshot(source)
         return {**source, "cache_hit": False}
 
 

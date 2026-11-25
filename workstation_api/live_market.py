@@ -24,7 +24,7 @@ import struct
 import time
 import uuid
 
-from . import dhan_option_chain, dhan_workspace, market_depth, shared_market_data
+from . import dhan_option_chain, dhan_workspace, market_depth, shared_market_data, recorder_storage
 
 IST = ZoneInfo("Asia/Kolkata")
 LOCK = RLock()
@@ -32,7 +32,7 @@ CHANGED = Condition(LOCK)
 ACTIVE: dict = {}
 WORKERS: list[Thread] = []
 STOP = Event()
-MAX_SAVED_BOOKS = 30_000  # session safety bound; display keeps receiving
+MAX_SAVED_BOOKS = None  # Disk reserve replaces the fixed session cap.
 STALE_AFTER_SECONDS = 8
 MAX_TICK_LATENCY_SECONDS = 45
 DB_INITIALIZED = False
@@ -207,6 +207,8 @@ def status() -> dict:
             "Dhan sent index response code 1, whose binary payload is not "
             "documented in the current public feed specification. "
             "Awaiting supported index price packets; no price was guessed.")
+    state["storage_health"] = {"depth": recorder_storage.status("individual_depth"),
+                               "ticks": recorder_storage.status("live_ticks")}
     state["shared_library"] = shared_market_data.SHARED_ID
     state["read_only"] = True
     return state
@@ -237,30 +239,37 @@ def ingest_tick(identity: str, packet: dict, *, received: datetime | None = None
     minute_utc = _iso(minute)
     event_utc = _iso(event)
     receive_utc = _iso(now)
-    _init_db()
-    with _database() as db:
-        inserted = db.execute("""INSERT OR IGNORE INTO live_ticks
-             (identity,exchange_utc,received_utc,price,packet_sha256,session_id)
-             VALUES(?,?,?,?,?,?)""",
-            (identity,event_utc,receive_utc,price,raw_sha,session_id)).rowcount
-        if not inserted:
-            return False
-        db.execute("""INSERT INTO live_minute_bars
-            (identity,minute_utc,session_ist,open,high,low,close,tick_count,
-             first_exchange_utc,last_exchange_utc,last_received_utc)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(identity,minute_utc) DO UPDATE SET
-              high=MAX(high,excluded.high), low=MIN(low,excluded.low),
-              close=CASE WHEN excluded.last_exchange_utc>=last_exchange_utc
-                THEN excluded.close ELSE close END,
-              open=CASE WHEN excluded.first_exchange_utc<first_exchange_utc
-                THEN excluded.open ELSE open END,
-              first_exchange_utc=MIN(first_exchange_utc,excluded.first_exchange_utc),
-              last_exchange_utc=MAX(last_exchange_utc,excluded.last_exchange_utc),
-              last_received_utc=excluded.last_received_utc,
-              tick_count=tick_count+1""",
-            (identity,minute_utc,session.date().isoformat(),
-             price,price,price,price,1,event_utc,event_utc,receive_utc))
+    if not recorder_storage.allow("live_ticks", dropped=1):
+        return False
+    try:
+        _init_db()
+        with _database() as db:
+            inserted = db.execute("""INSERT OR IGNORE INTO live_ticks
+                 (identity,exchange_utc,received_utc,price,packet_sha256,session_id)
+                 VALUES(?,?,?,?,?,?)""",
+                (identity,event_utc,receive_utc,price,raw_sha,session_id)).rowcount
+            if not inserted:
+                return False
+            db.execute("""INSERT INTO live_minute_bars
+                (identity,minute_utc,session_ist,open,high,low,close,tick_count,
+                 first_exchange_utc,last_exchange_utc,last_received_utc)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(identity,minute_utc) DO UPDATE SET
+                  high=MAX(high,excluded.high), low=MIN(low,excluded.low),
+                  close=CASE WHEN excluded.last_exchange_utc>=last_exchange_utc
+                    THEN excluded.close ELSE close END,
+                  open=CASE WHEN excluded.first_exchange_utc<first_exchange_utc
+                    THEN excluded.open ELSE open END,
+                  first_exchange_utc=MIN(first_exchange_utc,excluded.first_exchange_utc),
+                  last_exchange_utc=MAX(last_exchange_utc,excluded.last_exchange_utc),
+                  last_received_utc=excluded.last_received_utc,
+                  tick_count=tick_count+1""",
+                (identity,minute_utc,session.date().isoformat(),
+                 price,price,price,price,1,event_utc,event_utc,receive_utc))
+    except (OSError, sqlite3.Error):
+        recorder_storage.failure("live_ticks", "sqlite_write_failed", dropped=1)
+        raise
+    recorder_storage.saved("live_ticks", receive_utc)
     return True
 
 
@@ -405,18 +414,25 @@ def _receive_depth(book: dict) -> None:
         CHANGED.notify_all()
         last_saved=ACTIVE.get("last_saved_book_utc")
         saved=ACTIVE.get("saved_books",0)
-    if saved>=MAX_SAVED_BOOKS:
-        _update(depth_recording="storage_limit_reached")
-        return
     if last_saved and (_utc(book["received_utc"])-_utc(last_saved)).total_seconds()<1:
         return
-    _init_db()
-    pair_sha=sha256((book["bid_packet_sha256"]+book["ask_packet_sha256"]).encode()).hexdigest()
-    with _database() as db:
-        db.execute("""INSERT OR IGNORE INTO live_depth_books
-            (identity,received_utc,session_id,book_json,packet_pair_sha256)
-            VALUES(?,?,?,?,?)""",(book["identity"],book["received_utc"],
-                ACTIVE.get("session_id",""),json.dumps(book,sort_keys=True),pair_sha))
+    if not recorder_storage.allow("individual_depth", dropped=1):
+        _update(depth_recording="storage_paused_disk_reserve")
+        return
+    try:
+        _init_db()
+        pair_sha=sha256((book["bid_packet_sha256"]+book["ask_packet_sha256"]).encode()).hexdigest()
+        with _database() as db:
+            changed = db.execute("""INSERT OR IGNORE INTO live_depth_books
+                (identity,received_utc,session_id,book_json,packet_pair_sha256)
+                VALUES(?,?,?,?,?)""",(book["identity"],book["received_utc"],
+                    ACTIVE.get("session_id",""),json.dumps(book,sort_keys=True),pair_sha)).rowcount
+    except (OSError, sqlite3.Error):
+        recorder_storage.failure("individual_depth", "sqlite_write_failed", dropped=1)
+        raise
+    if not changed:
+        return
+    recorder_storage.saved("individual_depth", book["received_utc"])
     _update(saved_books=saved+1,last_saved_book_utc=book["received_utc"],
             depth_recording="sampled_at_most_1_snapshot_per_second")
 
