@@ -220,7 +220,8 @@ export default function OptionChainLive({feedActive,depthIdentity,
     {advanced?<Suspense fallback={<p className="tc-muted">Loading advanced option analytics…</p>}>
       <AdvancedOptionsAnalytics expiry={expiry} selected={selected} onSelect={setSelected}
         onSnapshot={syncAdvancedSnapshot} capital={capital} lots={lots}
-        targetPremium={targetPremium} onSettings={syncAdvancedSettings} onDraftJournal={onDraftJournal}/>
+        targetPremium={targetPremium} onSettings={syncAdvancedSettings} onDraftJournal={onDraftJournal}
+        onChooseContract={(nextExpiry,id)=>{if(nextExpiry!==expiry){setExpiry(nextExpiry);setChain(null)}setSelected(id)}}/>
     </Suspense>:<>
     <div className="oc-filter">
       <strong>Listed strikes near the observed spot</strong>

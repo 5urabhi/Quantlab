@@ -42,6 +42,11 @@ def _conn() -> sqlite3.Connection:
         note TEXT NOT NULL DEFAULT '',
         source_type TEXT NOT NULL DEFAULT 'USER_ENTERED_UNVERIFIED'
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS manual_trade_contracts (
+        trade_id TEXT PRIMARY KEY REFERENCES manual_trades(id),
+        contract_identity TEXT NOT NULL, expiry TEXT NOT NULL, strike REAL NOT NULL,
+        lot_size INTEGER NOT NULL, broker_profile TEXT NOT NULL
+    )""")
     try:
         with conn:
             yield conn
@@ -78,8 +83,31 @@ def _format(row: sqlite3.Row, now: datetime | None = None) -> dict:
     return v
 
 
+def _verified_contract(identity: str, symbol: str, direction: str, quantity: int,
+                       broker_profile: str) -> dict:
+    from . import option_chain_live, liquidity_spreads
+    if not liquidity_spreads.ID.fullmatch(identity) or broker_profile not in liquidity_spreads.BROKER_PROFILES:
+        raise ValueError("Choose a verified exact NSE_FNO identity and supported brokerage profile")
+    master=option_chain_live._contracts()
+    contract=master.get("by_id",{}).get(identity.split(":")[1])
+    if not master.get("fresh") or not contract or contract["identity"]!=identity:
+        raise ValueError("Refresh the current Dhan instrument master before linking a trade")
+    if (contract["symbol"].strip().upper()!=symbol.strip().upper() or
+        contract["option_type"]!=("CE" if direction=="CALL" else "PE") or
+        quantity % contract["lot_size"]):
+        raise ValueError("Contract symbol, direction or lot quantity does not match the verified identity")
+    return contract
+
+
+def _linked_query(where="", suffix=""):
+    return ("SELECT t.*,c.contract_identity,c.expiry,c.strike,c.lot_size,c.broker_profile "
+            "FROM manual_trades t LEFT JOIN manual_trade_contracts c ON c.trade_id=t.id "
+            + where + " " + suffix)
+
+
 def enter(symbol: str, direction: str, quantity: int,
-          entry_price: float, note: str = "") -> dict:
+          entry_price: float, note: str = "", contract_identity: str | None = None,
+          broker_profile: str = "zerodha") -> dict:
     if not SYMBOL.fullmatch(symbol) or direction not in ("CALL", "PUT"):
         raise ValueError("Enter an exact supported option symbol and CALL or PUT")
     if not 1 <= quantity <= 1_000_000:
@@ -87,6 +115,7 @@ def enter(symbol: str, direction: str, quantity: int,
     price = _money(entry_price, "Entry premium")
     if len(note) > 250:
         raise ValueError("Trade note too long")
+    contract=_verified_contract(contract_identity,symbol,direction,quantity,broker_profile) if contract_identity else None
     created = datetime.now(timezone.utc).isoformat()
     trade_id = "trade_" + uuid.uuid4().hex[:20]
     with _conn() as conn:
@@ -94,8 +123,33 @@ def enter(symbol: str, direction: str, quantity: int,
             (id,symbol,direction,quantity,entry_price,entry_recorded_utc,note)
             VALUES(?,?,?,?,?,?,?)""",
             (trade_id, symbol, direction, quantity, price, created, note))
-        row = conn.execute("SELECT * FROM manual_trades WHERE id=?", (trade_id,)).fetchone()
+        if contract:
+            conn.execute("INSERT INTO manual_trade_contracts VALUES(?,?,?,?,?,?)",
+                         (trade_id,contract_identity,contract["expiry"],contract["strike"],
+                          contract["lot_size"],broker_profile))
+        row = conn.execute(_linked_query("WHERE t.id=?"), (trade_id,)).fetchone()
     return _format(row)
+
+
+def link_trade(trade_id: str, contract_identity: str, broker_profile: str = "zerodha") -> dict:
+    """Explicitly link an existing unlinked open user-entered journal position."""
+    if not TRADE.fullmatch(trade_id):
+        raise ValueError("Invalid manual trade identifier")
+    with _conn() as conn:
+        row=conn.execute(_linked_query("WHERE t.id=?"),(trade_id,)).fetchone()
+        if row is None or row["exit_recorded_utc"] or row["contract_identity"]:
+            raise ValueError("Only an open, unlinked manual record can be linked")
+        contract=_verified_contract(contract_identity,row["symbol"],row["direction"],row["quantity"],broker_profile)
+        conn.execute("INSERT INTO manual_trade_contracts VALUES(?,?,?,?,?,?)",
+                     (trade_id,contract_identity,contract["expiry"],contract["strike"],contract["lot_size"],broker_profile))
+        return _format(conn.execute(_linked_query("WHERE t.id=?"),(trade_id,)).fetchone())
+
+
+def open_trades(limit: int = 100) -> list[dict]:
+    with _conn() as conn:
+        rows=conn.execute(_linked_query("WHERE t.exit_recorded_utc IS NULL",
+                    "ORDER BY t.entry_recorded_utc DESC LIMIT ?"),(limit,)).fetchall()
+    return [_format(row) for row in rows]
 
 
 def exit_trade(trade_id: str, exit_price: float, fees_inr: float = 0) -> dict:
@@ -109,7 +163,7 @@ def exit_trade(trade_id: str, exit_price: float, fees_inr: float = 0) -> dict:
             (price, datetime.now(timezone.utc).isoformat(), fees, trade_id))
         if result.rowcount != 1:
             raise ValueError("Trade not found or already closed; original record is immutable")
-        row = conn.execute("SELECT * FROM manual_trades WHERE id=?", (trade_id,)).fetchone()
+        row = conn.execute(_linked_query("WHERE t.id=?"), (trade_id,)).fetchone()
     return _format(row)
 
 
@@ -117,8 +171,8 @@ def list_trades(limit: int = 50) -> dict:
     if not 1 <= limit <= MAX_ITEMS:
         raise ValueError("Invalid trade journal limit")
     with _conn() as conn:
-        rows = conn.execute("""SELECT * FROM manual_trades
-            ORDER BY entry_recorded_utc DESC LIMIT ?""", (limit,)).fetchall()
+        rows = conn.execute(_linked_query(suffix="ORDER BY t.entry_recorded_utc DESC LIMIT ?"),
+                            (limit,)).fetchall()
     trades = [_format(row) for row in rows]
     closed = [row for row in trades if row["status"] == "CLOSED"]
     days: dict[str,dict] = {}

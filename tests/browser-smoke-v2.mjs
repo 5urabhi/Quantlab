@@ -162,6 +162,62 @@ try{
    await advanced.getByRole('tab',{name:/Watchlist \(1\)/}).click()
    await advanced.getByText('1 of 1 returned contracts',{exact:true}).waitFor()
    await shot('02-trading-advanced-options')
+   // Synthetic UI verification of the persistent manual-trading workflow.
+   // Real backend tests separately verify causal storage and no actual orders.
+   let tracking=false
+   let alertEnabled=false
+   let alertConditions={}
+   const workflowUrl='**/api/trading-cockpit/options/workflow'
+   await page.route(workflowUrl,route=>route.fulfill({json:{
+      tracking_enabled:tracking,rules:alertEnabled?[{id:'alert_fixture',identity:optionIdentity,
+        expiry:fixtureExpiry,strike:63000,side:'CE',conditions:alertConditions,enabled:true,
+        state:'waiting_for_receipt',last_receipt_utc:null}]:[],events:[],samples:[],
+      sample_counts:{},observed_count:0,positive_count:0,negative_count:0,
+      mean_markout_inr:null,sum_markout_inr:null,paired_count:0,paired_mean_return_difference_pp:null,
+      control_observed_count:0,worker:{alive:true,state:'running',last_cycle_utc:new Date().toISOString(),last_error:null},
+      warning:'Synthetic workflow fixture, no trade evidence'
+   }}))
+   await page.route('**/api/trading-cockpit/options/workflow/tracking',route=>{
+      tracking=route.request().postDataJSON().enabled
+      return route.fulfill({json:{tracking_enabled:tracking}})
+   })
+   await page.route('**/api/trading-cockpit/options/workflow/alerts',route=>{
+      alertEnabled=true;alertConditions=route.request().postDataJSON().conditions
+      return route.fulfill({json:{id:'alert_fixture',enabled:true}})
+   })
+   await page.route('**/api/trading-cockpit/options/compare',route=>{
+      const now=new Date().toISOString()
+      return route.fulfill({json:{rows:[],ranked_count:0,coverage:[
+        {expiry:fixtureExpiry,state:'recent',age_seconds:0,received_utc:now,ranked_count:0},
+        {expiry:'2027-01-25',state:'delayed_or_closed',age_seconds:80,ranked_count:0}],
+        settings:route.request().postDataJSON(),generated_utc:now,truncated:false,
+        warning:'Saved snapshots only',orders_enabled:false}})
+   })
+   await page.route('**/api/trading-cockpit/options/positions?*',route=>route.fulfill({json:{
+      positions:[],total_open:0,marked_count:0,marked_net_pnl_inr:null,all_positions_marked:true,
+      coverage_limited:false,aggregate_greeks:null,fresh_greeks_count:0,
+      generated_utc:new Date().toISOString(),warning:'User-entered journal only',orders_enabled:false
+   }}))
+   await advanced.getByRole('button',{name:'Manual trading workflow',exact:true}).click()
+   const manual=page.getByRole('region',{name:'Manual options workflow'})
+   await manual.getByRole('heading',{name:'Compare recorded expiries under the same assumptions'}).waitFor()
+   await manual.getByText('2027-01-25',{exact:true}).waitFor()
+   await manual.getByRole('tab',{name:'Positions & Exits',exact:true}).click()
+   await manual.getByText('No open user-entered trades.',{exact:false}).waitFor()
+   await manual.getByRole('tab',{name:'Contract Alerts',exact:true}).click()
+   await manual.getByLabel('Verified contract identity',{exact:true}).fill(optionIdentity)
+   await manual.getByLabel('Maximum ask ₹',{exact:true}).fill('200')
+   await manual.getByRole('button',{name:'Create alert',exact:true}).click()
+   await manual.getByText('Alert saved. Waiting for a new verified receipt.',{exact:true}).waitFor()
+   await manual.getByRole('tab',{name:'Ranking Review',exact:true}).click()
+   await manual.getByRole('button',{name:'Enable automatic shortlist recording',exact:true}).click()
+   await manual.getByRole('button',{name:'Disable automatic shortlist recording',exact:true}).waitFor()
+   await shot('02-trading-manual-options-workflow')
+   await page.unroute(workflowUrl)
+   await page.unroute('**/api/trading-cockpit/options/workflow/tracking')
+   await page.unroute('**/api/trading-cockpit/options/workflow/alerts')
+   await page.unroute('**/api/trading-cockpit/options/compare')
+   await page.unroute('**/api/trading-cockpit/options/positions?*')
    await chainRegion.getByRole('button',{name:'Overview',exact:true}).click()
    await page.unroute('**/api/trading-cockpit/options/analytics?*')
    await page.unroute('**/api/trading-cockpit/options/chain?*')
