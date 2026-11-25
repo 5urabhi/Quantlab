@@ -592,8 +592,8 @@ def run(stop: Event) -> None:
                 source_pairs_above=0, source_pairs_below=0,
                 missing_ltp_selected=0, boundary_escape_events=0,
                 last_boundary_escape_utc=None, coverage_gap_warning=None)
-        if daily_saved >= auto.MAX_DAILY_SNAPSHOTS:
-            auto._status_update(state="daily_storage_limit_reached",
+        if not auto.recorder_storage.allow("auto_depth"):
+            auto._status_update(state="storage_paused_disk_reserve",
                                 connected=False)
             stop.wait(45)
             continue
@@ -647,8 +647,8 @@ def run(stop: Event) -> None:
             last_seen = started
             try:
                 while not stop.is_set() and not abort.is_set() and auto._market_open():
-                    if daily_saved >= auto.MAX_DAILY_SNAPSHOTS:
-                        auto._status_update(state="daily_storage_limit_reached")
+                    if not auto.recorder_storage.allow("auto_depth"):
+                        auto._status_update(state="storage_paused_disk_reserve")
                         break
                     if os.getenv("DHAN_ACCESS_TOKEN", "").strip() != token:
                         break  # Reconnect using explicitly renewed Dhan credentials.
