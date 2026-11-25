@@ -24,6 +24,7 @@ from . import option_quotes, service
 CHAIN_ENDPOINT="https://api.dhan.co/v2/optionchain"
 EXPIRY_ENDPOINT="https://api.dhan.co/v2/optionchain/expirylist"
 PROFILE_ENDPOINT="https://api.dhan.co/v2/profile"
+MARKET_LTP_ENDPOINT="https://api.dhan.co/v2/marketfeed/ltp"
 UNDERLYING={
     "NIFTY50": {"scrip":13,"segment":"IDX_I","symbol":"NIFTY50"},
     "BANKNIFTY": {"scrip":25,"segment":"IDX_I","symbol":"BANKNIFTY"},
@@ -32,7 +33,7 @@ UNDERLYING={
 
 def _json_http(url: str, *, token: str, client_id: str = "",
                body: dict | None = None) -> tuple[dict,bytes]:
-    if url not in {CHAIN_ENDPOINT,EXPIRY_ENDPOINT,PROFILE_ENDPOINT}:
+    if url not in {CHAIN_ENDPOINT,EXPIRY_ENDPOINT,PROFILE_ENDPOINT,MARKET_LTP_ENDPOINT}:
         raise ValueError("Dhan endpoint is not explicitly permitted")
     headers={"access-token":token,"Accept":"application/json"}
     if client_id:
