@@ -3,6 +3,7 @@ import {Activity,AlertTriangle,ArrowDownUp,Calculator,Check,Clock3,RefreshCw,Sta
 import {marketApi,readableError} from './tradingCockpitApi'
 import type {Chain,OptionContract} from './OptionChainLive'
 import './advanced-options.css'
+import ManualOptionsWorkflow,{IndiaVixMetric} from './ManualOptionsWorkflow'
 
 type Settings={
   capital:number;max_lots:number;direction:'BOTH'|'UP'|'DOWN';move_points:number
@@ -156,14 +157,16 @@ function Table({rows,cols,selected,onSelect,sortKey,onSort,ascending}:{
 }
 type Props={expiry:string;selected:string;onSelect:(id:string)=>void;onSnapshot:(chain:Chain)=>void
   capital:number;lots:number;targetPremium:number;onSettings:(capital:number,lots:number,premium:number)=>void
-  onDraftJournal:(contract:OptionContract,lots:number)=>void}
-export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSnapshot,capital,lots,targetPremium,onSettings,onDraftJournal}:Props){
+  onDraftJournal:(contract:OptionContract,lots:number)=>void
+  onChooseContract:(expiry:string,identity:string)=>void}
+export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSnapshot,capital,lots,targetPremium,onSettings,onDraftJournal,onChooseContract}:Props){
   const defaults:Settings={capital,max_lots:lots,direction:'BOTH',move_points:100,horizon_minutes:5,
     iv_change_points:0,rate_pct:6.5,dividend_pct:0,max_spread_bps:250,risk_pct:100,
     target_premium:targetPremium,slippage_bps:10,broker_profile:'zerodha'}
   const [form,setForm]=useState<Settings>(defaults)
   const [applied,setApplied]=useState<Settings>(defaults)
   const [tab,setTab]=useState<Tab>('rank')
+  const [workflowOpen,setWorkflowOpen]=useState(false)
   const [data,setData]=useState<Analysis|null>(null)
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
@@ -180,7 +183,7 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
   useEffect(()=>{try{localStorage.setItem('quantlab:advanced-options-watchlist',JSON.stringify(watch))}catch{/* local preferences unavailable */}},[watch])
   useEffect(()=>{const tick=window.setInterval(()=>setClock(Date.now()),1000);return()=>window.clearInterval(tick)},[])
   useEffect(()=>{
-    if(!expiry)return
+    if(!expiry||workflowOpen)return
     let active=true,running=false
     const controller=new AbortController()
     const poll=async()=>{
@@ -196,7 +199,7 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
     void poll()
     const timer=window.setInterval(()=>{if(!document.hidden)void poll()},30000)
     return()=>{active=false;controller.abort();window.clearInterval(timer)}
-  },[expiry,applied,selected,refresh,onSnapshot])
+  },[expiry,applied,selected,refresh,onSnapshot,workflowOpen])
   const result=data?.chain.expiry===expiry?data:null
   const inputChanged=JSON.stringify(form)!==JSON.stringify(applied)
   const age=result?Math.max(0,(clock-Date.parse(result.as_of_utc))/1000):null
@@ -237,7 +240,11 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
   return <section className="ao-root" aria-label="Advanced Options Analytics">
     <header className="ao-header"><div><span className="ao-eyebrow">SOURCE-BACKED OPTIONS WORKSPACE</span><h3>Advanced Options Analytics</h3>
       <p>Compare long CE / PE contracts using one option-chain receipt, explicit market scenarios and estimated costs. No broker orders.</p></div>
-      <button type="button" onClick={()=>setRefresh(x=>x+1)} disabled={busy||!expiry}><RefreshCw size={15}/>{busy?'Analyzing…':'Refresh analytics'}</button></header>
+      <button type="button" onClick={()=>setRefresh(x=>x+1)} disabled={busy||!expiry||workflowOpen}><RefreshCw size={15}/>{busy&&!workflowOpen?'Analyzing…':'Refresh analytics'}</button></header>
+    <div className="ao-mode" role="group" aria-label="Advanced analytics mode">
+      <button type="button" aria-pressed={!workflowOpen} onClick={()=>setWorkflowOpen(false)}>Contract analytics</button>
+      <button type="button" aria-pressed={workflowOpen} onClick={()=>setWorkflowOpen(true)}>Manual trading workflow</button>
+    </div>
     <form className="ao-settings" onSubmit={e=>{e.preventDefault();setApplied({...form});onSettings(form.capital,form.max_lots,form.target_premium)}}>
       <label>Assumed BANKNIFTY direction<select value={form.direction} onChange={e=>setForm(v=>({...v,direction:e.target.value as Settings['direction']}))}>
         <option value="BOTH">Compare both directions</option><option value="UP">Bullish · CE</option><option value="DOWN">Bearish · PE</option>
@@ -257,9 +264,12 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
         <label>Broker charges<select value={form.broker_profile} onChange={e=>setForm(v=>({...v,broker_profile:e.target.value as Settings['broker_profile']}))}>
           <option value="zerodha">Zerodha regular</option><option value="dhan">Dhan regular</option><option value="zerodha_debit_balance">Zerodha debit-balance scenario</option></select></label>
       </div></details>
-      <button type="submit" className="ao-primary" disabled={!expiry||busy}>Apply scenario &amp; rank</button>
+      <button type="submit" className="ao-primary" disabled={!expiry||(busy&&!workflowOpen)}>Apply scenario &amp; rank</button>
       {inputChanged&&<small className="ao-amber">Inputs changed — displayed values use the last applied scenario.</small>}
     </form>
+    <ManualOptionsWorkflow visible={workflowOpen} onOpen={()=>setWorkflowOpen(true)} scenario={applied}
+      selected={active} onChooseContract={(nextExpiry,id)=>{onChooseContract(nextExpiry,id);setWorkflowOpen(false);switchTab('calculator')}}/>
+    {!workflowOpen&&<>
     {error&&<div className="ao-warning" role="alert"><AlertTriangle size={16}/>{error} · Previous values may be outdated.</div>}
     {!expiry&&<p className="ao-warning">Select a Dhan expiry to calculate analytics.</p>}
     {result&&<>
@@ -305,7 +315,7 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
           <Metric label="Realized intraday vol" value={result.volatility.realized_intraday_pct===null?'Unavailable':nf(result.volatility.realized_intraday_pct)+'%'} detail={result.volatility.realized_returns+' contiguous 1-minute returns · minimum 30'}/>
           <Metric label="Same-expiry IV rank" value={result.volatility.iv_rank===null?'Unavailable':nf(result.volatility.iv_rank)+'%'} detail={result.volatility.iv_prior_sessions+' prior observed dates · minimum 20'}/>
           <Metric label="Same-expiry IV percentile" value={result.volatility.iv_percentile===null?'Unavailable':nf(result.volatility.iv_percentile)+'%'} detail="Not constant-maturity IV"/>
-          <Metric label="India VIX" value="Unavailable" detail="No verified VIX source in this analytics endpoint"/>
+          <IndiaVixMetric/>
         </div>
         <div className="ao-charts">
           <Plot title="Implied volatility smile / skew" series={chainPlot(r=>r.iv_mid_pct)} description="Independent midpoint IV %, within ±5% of spot"/>
@@ -395,5 +405,6 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
       <details className="ao-assumptions"><summary>Data and model limitations <Activity size={15}/></summary>{result.warnings.map(w=><p key={w}><Check size={13}/> {w}</p>)}</details>
     </>}
     {!result&&expiry&&!error&&<p className="ao-muted">Loading source-backed analytics…</p>}
+    </>}
   </section>
 }
