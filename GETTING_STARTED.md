@@ -17,6 +17,53 @@ Open **http://127.0.0.1:5173** in the same Ubuntu machine. The local API normall
 
 This guide describes the verified `main` release. Feature-branch reviewers should check out their own branch and run the same launcher before merge. The launcher may need to install Python/npm dependencies on a fresh checkout.
 
+### FastAPI startup is slow with a large saved Dhan market library
+
+The primary `bash run.sh` command starts the Python API and React frontend
+together. When loading millions of locally recorded Dhan events and rebuilding
+small derived views, the Python application may need longer than ten seconds
+to start. The launcher now allows up to **120 seconds** for the real
+`/api/health` endpoint to respond before failing, and reports its progress
+without repeatedly restarting the API. This does not delay Dhan collection
+after the backend becomes healthy.
+
+If the startup timeout still occurs, **do not delete your SQLite market
+library**. You can start the components separately for diagnosis:
+
+**Terminal A:**
+
+```bash
+cd "$HOME/Desktop/codes/quantlab"
+.venv/bin/uvicorn workstation_api.app:app --host 127.0.0.1 --port 8765 --no-access-log
+```
+
+Wait for `Application startup complete`. **Terminal B:**
+
+```bash
+cd "$HOME/Desktop/codes/quantlab"
+source scripts/node_runtime.sh
+quantlab_activate_node_runtime "$PWD" offline
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+```
+
+In another terminal, confirm local API readiness and separately inspect
+the Quote/OI writer and 20-level depth recorder:
+
+```bash
+curl -fsS http://127.0.0.1:8765/api/health | .venv/bin/python -m json.tool
+curl -fsS http://127.0.0.1:8765/api/trading-cockpit/option-feed/status | .venv/bin/python -m json.tool
+curl -fsS http://127.0.0.1:8765/api/trading-cockpit/auto-depth/status | .venv/bin/python -m json.tool
+```
+
+`armed=true` indicates previous recording consent persists; it is not
+proof the market is currently streaming. During NSE regular hours, check
+the independent `connected`, `storage_writer_alive`,
+`storage_state`, `storage_daily_events` and depth recorder counters.
+Do **not** start a second API on the same port; shut down existing
+API/frontend processes normally before restarting the combined launcher.
+If only startup time is the issue, a controlled override is available:
+`QUANTLAB_API_READY_TIMEOUT_SECONDS=240 bash run.sh` (10–600 seconds).
+
 **Node/npm compatibility (local Ubuntu):** The launcher checks the **Node.js +
 npm pair**, not Node.js alone. For example, npm 12.2.0 does not support
 Node 22.22.1 (it requires Node 22.22.2 or later). When the globally installed
