@@ -48,7 +48,7 @@ type Column={key:string;label:string;get:(r:Row)=>number|string|null|undefined;d
 const nf=(v:number|null|undefined,d=2)=>v==null||!Number.isFinite(v)?'—':v.toLocaleString('en-IN',{maximumFractionDigits:d})
 const rs=(v:number|null|undefined)=>v==null?'—':'₹'+nf(v)
 const fmtTime=(v?:string|null)=>v?new Date(v).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'})+' IST':'Unavailable'
-const status=(v?:string)=>({recent_depth_and_trades:'Recent depth + trades',recent_trades_snapshot_only:'Recent trades · snapshot',indicative_snapshot_only:'Indicative · activity unverified',recent_original_book:'Recent original book',delayed_original_book:'Delayed original book',no_recent_original_book:'No recent original book',not_checked:'Depth not checked',original_book_unavailable:'Depth unavailable',recent_trade_evidence:'Recent trade evidence',insufficient_recent_trades:'Insufficient trade activity',missing_trade_evidence:'Activity evidence missing'}[v||'']||v||'Not ranked')
+const status=(v?:string)=>({recent_depth_and_trades:'Recent depth + trades',recent_trades_snapshot_only:'Recent trades · snapshot',indicative_snapshot_only:'Indicative · activity unverified',recent_original_book:'Recent original book',delayed_original_book:'Delayed original book',no_recent_original_book:'No recent original book',not_checked:'Depth not checked',original_book_unavailable:'Depth unavailable',recent_trade_evidence:'Recent trade evidence',insufficient_recent_trades:'Insufficient trade activity',missing_trade_evidence:'Activity evidence missing'} as Record<string,string>)[v||'']||v||'Not ranked'
 const signed=(n:number|null|undefined)=>n==null?'':n>0?'ao-positive':n<0?'ao-negative':''
 const scenarioNames:Record<string,string>={favorable:'Favorable move',flat:'Flat underlying',adverse:'Adverse move',iv_crush:'Favorable + 2pp IV contraction',iv_expansion:'Favorable + 2pp IV expansion',double_favorable:'Double favorable move',double_adverse:'Double adverse move'}
 const baseColumns:Column[]=[
@@ -195,15 +195,16 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
   const result=data?.chain.expiry===expiry?data:null
   const inputChanged=JSON.stringify(form)!==JSON.stringify(applied)
   const age=result?Math.max(0,(clock-Date.parse(result.as_of_utc))/1000):null
-  const usable=Boolean(result?.recent_receipt&&age!==null&&age<=30&&!error)
-  const effectiveRows=result?.rows||[]
-  const ranked=useMemo(()=>effectiveRows.filter(r=>r.rank!==undefined).sort((a,b)=>a.rank!-b.rank!),[result])
+  const scenarioMatches=Boolean(result&&Object.entries(applied).every(([key,value])=>result.assumptions[key as keyof Settings]===value))
+  const usable=Boolean(result?.recent_receipt&&age!==null&&age<=30&&!error&&scenarioMatches&&!inputChanged)
+  const effectiveRows=useMemo(()=>result?(usable?result.rows:result.rows.map(r=>({...r,rank:undefined,rank_quality:undefined,score:null}))):[],[result,usable])
+  const ranked=useMemo(()=>effectiveRows.filter(r=>r.rank!==undefined).sort((a,b)=>a.rank!-b.rank!),[effectiveRows])
   const active=effectiveRows.find(r=>r.identity===selected)||ranked[0]||null
   const shownCols=tab==='calculator'?rankColumns:columns[tab]
   const tableRows=useMemo(()=>{
     let rows=effectiveRows.filter(r=>(side==='ALL'||r.option_type===side)&&
       (!search||[r.strike,r.symbol,r.identity,r.option_type].join(' ').toLowerCase().includes(search.toLowerCase()))&&
-      (tab!=='rank'||!rankedOnly||r.rank!==undefined)&&(tab!=='watch'||Boolean(r.identity&&watch.includes(r.identity))))
+      (tab!=='rank'||!rankedOnly||!usable||!ranked.length||r.rank!==undefined)&&(tab!=='watch'||Boolean(r.identity&&watch.includes(r.identity))))
     const col=shownCols.find(c=>c.key===sortKey)
     if(col)rows=[...rows].sort((a,b)=>{
       const av=col.get(a),bv=col.get(b)
@@ -212,7 +213,7 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
       return (typeof av==='number'&&typeof bv==='number'?av-bv:String(av).localeCompare(String(bv)))*(ascending?1:-1)
     })
     return rows
-  },[result,side,search,tab,rankedOnly,watch,shownCols,sortKey,ascending])
+  },[effectiveRows,side,search,tab,rankedOnly,watch,shownCols,sortKey,ascending,usable,ranked.length])
   useEffect(()=>setPage(0),[tab,side,search,rankedOnly,sortKey,ascending,expiry])
   const switchTab=(next:Tab)=>{setTab(next);setSortKey(next==='rank'||next==='watch'?'rank':'strike');setAscending(true)}
   const toggleWatch=(id:string)=>setWatch(old=>old.includes(id)?old.filter(x=>x!==id):[id,...old].slice(0,200))
@@ -256,15 +257,15 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
     {!expiry&&<p className="ao-warning">Select a Dhan expiry to calculate analytics.</p>}
     {result&&<>
       <div className={'ao-source '+(usable?'ao-fresh':'ao-delayed')}><Clock3 size={16}/><span>
-        {usable?'Recent chain receipt':'Historical / delayed chain receipt'} · {fmtTime(result.as_of_utc)}
+        {usable?'Recent chain receipt':inputChanged||!scenarioMatches?'Scenario refresh required':'Historical / delayed chain receipt'} · {fmtTime(result.as_of_utc)}
         {' · '}{nf(age,1)}s local receipt age · NOT exchange quote time.
         {result.historical_error?' '+result.historical_error+'.':''}</span></div>
       <div className="ao-grid ao-summary">
         <Metric label="BANKNIFTY spot" value={nf(result.chain.underlying_spot,2)} detail={expiry}/>
         <Metric label="Scenario-ranked contracts" value={String(usable?result.ranked_count:0)} detail={!usable?'No current shortlist':'Not trade signals'}/>
-        <Metric label="Recent depth + trade evidence" value={String(usable?result.confirmed_depth_count:0)} detail="No execution guarantee"/>
+        <Metric label="Recent depth + trade evidence" value={String(usable?result.confirmed_depth_count:0)} detail="At scan · no execution guarantee"/>
         <Metric label="Recent trade activity" value={String(usable?result.recent_trade_count:0)} detail="Among ranked contracts"/>
-        <Metric label="ATM Dhan IV" value={nf(result.volatility.atm_provider_iv_pct)+'%'} detail="Nearest paired strike"/>
+        <Metric label="ATM Dhan IV" value={result.volatility.atm_provider_iv_pct===null?'Unavailable':nf(result.volatility.atm_provider_iv_pct)+'%'} detail="Nearest paired strike"/>
         <Metric label="Assumed horizon move" value={nf(result.volatility.expected_move_points_model,1)+' pts'} detail="IV-scaled model magnitude, not direction"/>
       </div>
       <nav className="ao-tabs" role="tablist" aria-label="Advanced options views">{tabs.map(([key,label])=><button key={key}
@@ -294,9 +295,9 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
         </div></section>}
       {tab==='volatility'&&<section className="ao-panel"><h4>Volatility and historical context</h4>
         <div className="ao-grid ao-summary">
-          <Metric label="Realized intraday vol" value={nf(result.volatility.realized_intraday_pct)+'%'} detail={result.volatility.realized_returns+' contiguous 1-minute returns · minimum 30'}/>
-          <Metric label="Same-expiry IV rank" value={nf(result.volatility.iv_rank)+'%'} detail={result.volatility.iv_prior_sessions+' prior observed dates · minimum 20'}/>
-          <Metric label="Same-expiry IV percentile" value={nf(result.volatility.iv_percentile)+'%'} detail="Not constant-maturity IV"/>
+          <Metric label="Realized intraday vol" value={result.volatility.realized_intraday_pct===null?'Unavailable':nf(result.volatility.realized_intraday_pct)+'%'} detail={result.volatility.realized_returns+' contiguous 1-minute returns · minimum 30'}/>
+          <Metric label="Same-expiry IV rank" value={result.volatility.iv_rank===null?'Unavailable':nf(result.volatility.iv_rank)+'%'} detail={result.volatility.iv_prior_sessions+' prior observed dates · minimum 20'}/>
+          <Metric label="Same-expiry IV percentile" value={result.volatility.iv_percentile===null?'Unavailable':nf(result.volatility.iv_percentile)+'%'} detail="Not constant-maturity IV"/>
           <Metric label="India VIX" value="Unavailable" detail="No verified VIX source in this analytics endpoint"/>
         </div>
         <div className="ao-charts">
@@ -365,7 +366,7 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
         <div className="ao-filters">
           <label>Search contracts<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Strike, symbol or exact ID"/></label>
           <label>Option type<select value={side} onChange={e=>setSide(e.target.value as typeof side)}><option value="ALL">Calls + puts</option><option value="CE">CE</option><option value="PE">PE</option></select></label>
-          {tab==='rank'&&<label className="ao-check"><input type="checkbox" checked={rankedOnly&&usable} onChange={e=>setRankedOnly(e.target.checked)} disabled={!usable}/>Only scenario-ranked rows</label>}
+          {tab==='rank'&&<label className="ao-check"><input type="checkbox" checked={rankedOnly&&usable&&ranked.length>0} onChange={e=>setRankedOnly(e.target.checked)} disabled={!usable||!ranked.length}/>Only scenario-ranked rows</label>}
           <small>{tableRows.length} of {effectiveRows.length} returned contracts</small>
         </div>
         <Table rows={tableRows.slice(Math.min(page,Math.max(0,Math.ceil(tableRows.length/50)-1))*50,(Math.min(page,Math.max(0,Math.ceil(tableRows.length/50)-1))+1)*50)}
