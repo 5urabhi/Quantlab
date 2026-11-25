@@ -21,6 +21,7 @@ import ResearchPlot from './ResearchPlots'
 const CustomModelWorkspace = lazy(() => import('./CustomModelWorkspace'))
 const ResearchNotebook = lazy(() => import('./ResearchNotebook'))
 const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
+const MarketInventory = lazy(() => import('./MarketInventory'))
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
 const LiquiditySpreadsWorkspace = lazy(() => import('./LiquiditySpreadsWorkspace'))
@@ -73,7 +74,7 @@ const primarySections:PrimarySection[]=[
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
   {id:'mathematics',label:'Models',icon:Sigma,
     tabs:['mathematics','models','research','factors','construction','risk','rolling','robustness','modelgrids','indexstudio','journey','custommodels'],
-    navTabs:['mathematics','research','models']},
+    navTabs:['mathematics','research','custommodels','models','modelgrids']},
   {id:'data',label:'Data Center',icon:Database,
     tabs:['data','dhan','dataexplorer','dataquality','datadownloads','nse','evidence'],
     navTabs:['data','dhan','dataexplorer','dataquality','datadownloads']},
@@ -655,6 +656,7 @@ function App(){
             integrated datasets={datasets}
             onDataChanged={refresh} onSelectDataset={setSelectedDataset}
             onOpenModels={()=>begin('mathematics')}
+            onNavigate={page=>begin(page==='get'?'dhan':page==='downloads'?'datadownloads':'data')} onReplay={()=>begin('tradingreplay')}
             onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
               if(d)inspectDatasetDeletion(d)}}/>}
         {tab==='data'&&<>
@@ -776,10 +778,10 @@ function App(){
           </details>
 
         </details></>}
-        {tab==='dataexplorer'&&<DataManager initialSection="explorer" integrated
+        {tab==='dataexplorer'&&<><MarketInventory compact onReplay={()=>begin('tradingreplay')} onAcquire={()=>begin('dhan')}/><DataManager initialSection="explorer" integrated
           onSelectDataset={setSelectedDataset} onChanged={refresh}
-          onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
-        {tab==='dataquality'&&<>
+          onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/></>}
+        {tab==='dataquality'&&<><details className="v2-advanced-links"><summary>Actual saved data coverage by type and instrument</summary><MarketInventory compact onAcquire={()=>begin('dhan')}/></details>
           <ResearchWorkspace key="v2-data-quality"
           initialPage="quality" integrated datasets={datasets}
           selectedDataset={selectedDataset} onSelectDataset={setSelectedDataset}
@@ -876,6 +878,9 @@ function App(){
             </div>
           </details>
         </>}
+        {tab==='models'&&<div className="ql-model-tools" aria-label="Specialized model workflows">{([
+          ['modelgrids','Parameter grids','Compare two parameters and constrained optimization.'],['indexstudio','Index research studio','Index methodology, provenance and attribution.'],['factors','Factor research','Inspect saved scores and exposures.'],['construction','Portfolio construction','Inspect weights and rebalance.'],['risk','Risk attribution','Review portfolio concentration and risk.'],['rolling','Rolling validation','Inspect chronological index windows.'],['robustness','Robustness','Compare sensitivity and stability.'],['custommodels','Custom models','Run saved Python calculations.']
+        ] as const).map(([route,title,desc])=><button type="button" key={route} onClick={()=>begin(route)}><strong>{title}</strong><span>{desc}</span><ArrowRight size={15}/></button>)}</div>}
         {(['models','modelgrids','indexstudio','evidence','resourcebrowser'].includes(tab))&&
           <ResearchWorkspace key={'v2-tool-'+tab}
             initialPage={tab==='models'?'automation':

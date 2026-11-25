@@ -11,8 +11,8 @@ type Report={library_id:string;checked_utc:string;sources:Source[];items:Entry[]
 type Records={columns:string[];rows:(string|number|null)[][];has_more:boolean;before:string|null;note:string}
 const fmt=(n:number|null|undefined)=>n==null?'Not verified':n.toLocaleString('en-IN')
 const stamp=(s:string|null|undefined)=>!s?'—':s.length===10?s:s.replace('T',' ').replace('+00:00',' UTC').replace(/\.\d{1,6} UTC$/,' UTC')
-const stateText=(s:string)=>({stored:'Stored rows',receipt:'Saved receipts',empty:'Empty',not_recorded:'Not recorded',partial:'Partial inventory',not_verified:'Needs inspection'}[s]||s)
-const evidenceText=(s:string)=>({stored_rows:'Stored database rows',receipt_count_csv_edges:'Receipt count + actual file endpoints',receipt_timestamps:'Saved response timestamps',archive_manifest:'Archive manifest'}[s]||s)
+const stateText=(s:string)=>(({stored:'Stored rows',receipt:'Saved receipts',empty:'Empty',not_recorded:'Not recorded',partial:'Partial inventory',not_verified:'Needs inspection'} as Record<string,string>)[s]||s)
+const evidenceText=(s:string)=>(({stored_rows:'Stored database rows',receipt_count_csv_edges:'Receipt count + actual file endpoints',receipt_timestamps:'Saved response timestamps',archive_manifest:'Archive manifest'} as Record<string,string>)[s]||s)
 const sqlSources=new Set(['daily_closes','live_ticks','live_minute_bars','option_quote','option_oi','option_chain','live_depth_books','depth_features','sector_history'])
 const categories=[
  {title:'Historical prices',ids:['daily_closes','raw_daily','raw_intraday','index_history','expired_options']},
