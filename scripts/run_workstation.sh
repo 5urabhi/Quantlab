@@ -37,15 +37,37 @@ info "Starting local Python research API at http://127.0.0.1:8765"
 # local OAuth callback query string; that value must never reach console logs.
 .venv/bin/uvicorn workstation_api.app:app --host 127.0.0.1 --port 8765 --no-access-log &
 API_PID=$!
-# Check that Python's import and startup succeeded before opening the UI.
-for i in $(seq 1 40); do
-  kill -0 "$API_PID" 2>/dev/null || fail "Python API exited during startup"
-  if curl --fail --silent --max-time 1 http://127.0.0.1:8765/api/health >/dev/null; then
+# On existing market libraries, importing analytics and reconciling the
+# source-backed SQLite tables can take longer than 10 seconds. Do not kill
+# a healthy worker solely because application startup took slightly longer.
+# A wall-clock deadline prevents every curl request from extending the wait.
+API_READY_TIMEOUT_SECONDS="${QUANTLAB_API_READY_TIMEOUT_SECONDS:-120}"
+case "$API_READY_TIMEOUT_SECONDS" in
+  ''|*[!0-9]*) fail "QUANTLAB_API_READY_TIMEOUT_SECONDS must be 10–600" ;;
+esac
+if [ "$API_READY_TIMEOUT_SECONDS" -lt 10 ] ||
+   [ "$API_READY_TIMEOUT_SECONDS" -gt 600 ]; then
+  fail "QUANTLAB_API_READY_TIMEOUT_SECONDS must be 10–600"
+fi
+API_READY_DEADLINE=$((SECONDS + API_READY_TIMEOUT_SECONDS))
+API_LAST_STATUS_AT=$SECONDS
+while :; do
+  kill -0 "$API_PID" 2>/dev/null ||
+    fail "Python API exited during startup; check the FastAPI error above"
+  if curl --fail --silent --max-time 3 \
+      http://127.0.0.1:8765/api/health >/dev/null; then
     break
   fi
-  if [ "$i" -eq 40 ]; then fail "Python API health endpoint not ready"; fi
-  sleep 0.25
+  if [ "$SECONDS" -ge "$API_READY_DEADLINE" ]; then
+    fail "Python API health endpoint still unavailable after ${API_READY_TIMEOUT_SECONDS}s; check FastAPI logs above. Use two terminals to start the API separately for diagnosis."
+  fi
+  if [ $((SECONDS - API_LAST_STATUS_AT)) -ge 15 ]; then
+    info "Python API still starting; large saved market databases can delay readiness"
+    API_LAST_STATUS_AT=$SECONDS
+  fi
+  sleep 1
 done
+info "Python API healthy; starting browser UI"
 
 info "Starting the React/Vite RESEARCH WORKSTATION"
 info "Open http://127.0.0.1:5173"
