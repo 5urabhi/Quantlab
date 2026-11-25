@@ -381,10 +381,21 @@ def _ledger():
             score REAL NOT NULL,evidence TEXT NOT NULL,decision_ask REAL NOT NULL,
             horizon_minutes INTEGER NOT NULL,broker_profile TEXT NOT NULL,
             assumptions_json TEXT NOT NULL,state TEXT NOT NULL,
+            cohort TEXT NOT NULL DEFAULT 'top',pair_key TEXT,rank_at_decision INTEGER,
             entry_utc TEXT,entry_ask REAL,exit_due_utc TEXT,exit_utc TEXT,exit_bid REAL,
             net_pnl_inr REAL,charges_inr REAL,reason TEXT);
         CREATE INDEX IF NOT EXISTS option_rank_pending ON option_rank_observations(state,decision_utc);
         """)
+        # Additive repair for prerelease local databases; never remove history.
+        columns={r[1] for r in db.execute("PRAGMA table_info(option_rank_observations)")}
+        for key,declaration in (("cohort","TEXT NOT NULL DEFAULT 'top'"),
+                                ("pair_key","TEXT"),("rank_at_decision","INTEGER")):
+            if key not in columns:
+                try:
+                    db.execute("ALTER TABLE option_rank_observations ADD COLUMN "+key+" "+declaration)
+                except sqlite3.OperationalError:
+                    if key not in {r[1] for r in db.execute("PRAGMA table_info(option_rank_observations)")}:
+                        raise
         yield db
 
 
@@ -414,6 +425,9 @@ def record_if_enabled(analysis,*,now=None):
     rows=sorted([r for r in analysis.get("rows",[]) if r.get("rank")],key=lambda r:r["rank"])
     chosen=[r for side in ("CE","PE") for r in [x for x in rows if x["option_type"]==side][:2]]
     payload=json.dumps(settings,sort_keys=True,separators=(",",":"))
+    scope="selected_expiry" if "chain" in analysis else "across_expiries"
+    chosen_ids={r["identity"] for r in chosen}
+    used_controls=set()
     inserted=0
     with _ledger() as db:
         if not _tracking(db):
@@ -425,14 +439,31 @@ def record_if_enabled(analysis,*,now=None):
             horizon=int(settings["horizon_minutes"])
             if now+timedelta(seconds=ENTRY_WINDOW+60*horizon+EXIT_WINDOW)>_end(now,r["expiry"]):
                 continue
-            key=sha256((r["identity"]+"|"+stamp+"|"+payload).encode()).hexdigest()
-            cur=db.execute("""INSERT OR IGNORE INTO option_rank_observations
-                 (id,decision_utc,quote_utc,identity,expiry,strike,side,lot_size,units,
-                  score,evidence,decision_ask,horizon_minutes,broker_profile,assumptions_json,state)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'waiting_entry')""",
-                (key,_iso(now),stamp,r["identity"],r["expiry"],r["strike"],r["option_type"],r["lot_size"],
-                 r["units"],r["score"],r["rank_quality"],r["ask"],horizon,settings["broker_profile"],payload))
-            inserted+=cur.rowcount
+            pair=sha256((scope+"|"+r["identity"]+"|"+stamp+"|"+payload).encode()).hexdigest()
+            # Match using only information known at decision time. Same expiry,
+            # side, evidence tier and position units; ask within 25%. Control
+            # must be lower-ranked and cannot be another leading selection.
+            candidates=[x for x in rows if x["identity"] not in chosen_ids and
+                x["identity"] not in used_controls and x["rank"]>r["rank"] and
+                x["score"]<r["score"] and x["expiry"]==r["expiry"] and
+                x["option_type"]==r["option_type"] and x["rank_quality"]==r["rank_quality"] and
+                x["units"]==r["units"] and abs(x["ask"]/r["ask"]-1)<=.25 and
+                _age(x.get("as_of_utc",analysis.get("as_of_utc")),now)[1]]
+            control=min(candidates,key=lambda x:(abs(x["ask"]-r["ask"]),x["rank"])) if candidates else None
+            if control:
+                used_controls.add(control["identity"])
+            for cohort,item in [("top",r)]+([("control",control)] if control else []):
+                item_stamp=item.get("as_of_utc",analysis.get("as_of_utc"))
+                key=sha256((pair+"|"+cohort).encode()).hexdigest()
+                cur=db.execute("""INSERT OR IGNORE INTO option_rank_observations
+                     (id,decision_utc,quote_utc,identity,expiry,strike,side,lot_size,units,
+                      score,evidence,decision_ask,horizon_minutes,broker_profile,assumptions_json,state,
+                      cohort,pair_key,rank_at_decision)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'waiting_entry',?,?,?)""",
+                    (key,_iso(now),item_stamp,item["identity"],item["expiry"],item["strike"],item["option_type"],
+                     item["lot_size"],item["units"],item["score"],item["rank_quality"],item["ask"],horizon,
+                     settings["broker_profile"],payload,cohort,pair,item["rank"]))
+                inserted+=cur.rowcount
     return inserted
 
 
@@ -545,7 +576,7 @@ def _evaluate_rank(db,now):
             continue
         end=start+timedelta(seconds=ENTRY_WINDOW if entering else EXIT_WINDOW)
         found,snapshot=_first(r["expiry"],start,end,now)
-        if not found and now<=end:
+        if not found and now<=end+timedelta(seconds=15):
             continue
         row=_contract(snapshot,r["identity"],r["expiry"],r["strike"],r["side"],r["lot_size"])
         price=_quote(row,"ask" if entering else "bid",r["units"])
@@ -590,7 +621,15 @@ def overview():
         counts={r[0]:r[1] for r in db.execute("SELECT state,COUNT(*) FROM option_rank_observations GROUP BY state")}
         stats=db.execute("""SELECT COUNT(*),SUM(CASE WHEN net_pnl_inr>0 THEN 1 ELSE 0 END),
               SUM(CASE WHEN net_pnl_inr<0 THEN 1 ELSE 0 END),AVG(net_pnl_inr),SUM(net_pnl_inr)
-              FROM option_rank_observations WHERE state='observed_quote_markout'""").fetchone()
+              FROM option_rank_observations WHERE state='observed_quote_markout' AND cohort='top'""").fetchone()
+        controls=db.execute("""SELECT COUNT(*) FROM option_rank_observations
+            WHERE state='observed_quote_markout' AND cohort='control'""").fetchone()[0]
+        paired=db.execute("""SELECT COUNT(*),AVG(100.0*(a.net_pnl_inr/(a.entry_ask*a.units)
+                -b.net_pnl_inr/(b.entry_ask*b.units)))
+            FROM option_rank_observations a JOIN option_rank_observations b ON a.pair_key=b.pair_key
+            WHERE a.cohort='top' AND b.cohort='control'
+              AND a.state='observed_quote_markout' AND b.state='observed_quote_markout'
+              AND a.entry_ask>0 AND b.entry_ask>0 AND a.units>0 AND b.units>0""").fetchone()
         tracking=_tracking(db)
     for r in rules:
         r["conditions"]=json.loads(r.pop("conditions_json"));r["enabled"]=bool(r["enabled"])
@@ -601,8 +640,12 @@ def overview():
     return {"tracking_enabled":tracking,"rules":rules,"events":events,"samples":samples,
        "sample_counts":counts,"observed_count":stats[0],"positive_count":stats[1] or 0,
        "negative_count":stats[2] or 0,"mean_markout_inr":stats[3],"sum_markout_inr":stats[4],
+       "control_observed_count":controls,"paired_count":paired[0],
+       "paired_mean_return_difference_pp":paired[1],
        "worker":{**HEALTH,"alive":bool(WORKER and WORKER.is_alive())},"read_only":True,"orders_enabled":False,
        "warning":"Overlapping, conditional hypothetical positions, not realized profit or independent samples. "
+          "Controls are selected before outcomes, matching expiry, side, evidence tier, units and nearby ask; "
+          "paired differences use net markout divided by entry premium notional. No statistical superiority claim. "
           "No fill probability; missing entries/exits are censored, never treated as zero or wins."}
 
 
