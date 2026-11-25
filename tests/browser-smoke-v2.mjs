@@ -792,20 +792,6 @@ try{
    await notebook.getByRole('button',{name:'Export .ipynb',exact:true}).click()
    assert.ok((await saved).suggestedFilename().endsWith('.ipynb'))
  })
- await step('V3 every default route renders its title and captures desktop QA screenshot',async()=>{
-   const routes={"overview":"Home","trading":"Live Market","tradingchain":"Option Chain","tradingdepth":"20-Level Order Book","tradingspreads":"Liquidity & Spreads","tradingreplay":"Market Replay","tradingjournal":"Trade Journal","tradingpaper":"Paper Trading","tradinganalytics":"Options Analytics","tradingdirectional":"Directional Trading","strategies":"Strategy Library","strategyema":"EMA Explorer","strategypython":"Python Editor","strategybacktest":"BANKNIFTY Backtests","pythonmonitors":"Running Python","custommodels":"Custom Models","customscanners":"Custom Scanners","pythonenvironment":"Python Environment","mathematics":"Model Catalog","models":"Advanced Research Tools","research":"Index Builder","factors":"Factor Research","construction":"Portfolio Construction","risk":"Risk Attribution","rolling":"Rolling Validation","robustness":"Robustness & Sensitivity","modelgrids":"Guided Model Grids","indexstudio":"Index Research Studio","data":"Market Library","dhan":"Get Market Data","dataexplorer":"Data Explorer","dataquality":"Quality & Coverage","datadownloads":"Downloads","nse":"NSE Source Evidence","evidence":"Evidence & Machine Learning","history":"All Research Results","workspace":"Compare Runs","chartstudio":"Chart Studio","comparisons":"Index Comparison","visual":"Historical Charts","workspacejobs":"Research Job History","projects":"My Projects & Notebooks","notebooks":"Research Notebooks","reports":"Research Reports","resourcebrowser":"Saved Resource Library","connections":"Connections","recordingsettings":"Automatic Recording","storage":"Storage & Data Management","preferences":"Preferences","diagnostics":"System Diagnostics","settings":"Backend & Privacy","guide":"Help & How It Works","journey":"New Guided Study"}
-   for(const [route,title] of Object.entries(routes)){
-     await page.goto(base+'#/'+route,{waitUntil:'domcontentloaded'})
-     const heading=page.getByRole('heading',{level:1,name:title,exact:true})
-     await heading.waitFor()
-     assert.equal(new URL(page.url()).hash,'#/'+route)
-     await page.locator('main.ws-content').waitFor()
-     await page.getByText('Loading '+title+'…',{exact:true}).waitFor({state:'hidden'})
-     await page.evaluate(()=>document.fonts.ready)
-     await page.screenshot({path:path.join(dir,'v3-route-'+route+'.png'),fullPage:false})
-     console.log('[V3 route] PASS '+route+' · '+title)
-   }
- })
  await step('390-pixel responsive sidebar drawer and eight navigable pages',async()=>{
    await page.setViewportSize({width:390,height:844})
    await page.getByRole('button',{name:'Open navigation'}).click()

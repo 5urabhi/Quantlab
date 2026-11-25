@@ -73,6 +73,9 @@ jobs:
           tail -n 100 /tmp/quantlab-vite.log
           exit 1
 
+      - name: Capture and audit every V3 route on desktop and mobile
+        run: node tests/browser-route-audit.mjs
+
       - name: Regression-test unchanged source-backed features in Classic compatibility mode
         run: node tests/browser-smoke.mjs
 
