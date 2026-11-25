@@ -8,6 +8,7 @@ export type ResearchPlotData={
   traces?:ResearchTrace[];x_label?:string;y_label?:string;
   z_label?:string;z?:number[][];band?:{lower:number[];upper:number[]};
   band_label?:string;break_before?:boolean[];
+  candles?:({open:number;high:number;low:number;close:number}|null)[];
   labels?:string[];row_labels?:string[];scale?:string;values?:number[][];threshold?:number;
   annotations?:{x:string|number;label:string}[];
   regions?:{start:string|number;end:string|number;label:string}[]
@@ -30,6 +31,7 @@ function yBounds(plot:ResearchPlotData){
   const ys=(plot.traces||[]).flatMap(t=>t.y).filter(finite)
   if(plot.kind==='scatter2d'&&plot.y)ys.push(...plot.y.filter(finite))
   if(plot.band){ys.push(...plot.band.lower.filter(finite),...plot.band.upper.filter(finite))}
+  if(plot.candles)for(const c of plot.candles){if(c)ys.push(c.low,c.high)}
   if(plot.kind==='bar2d'||plot.kind==='histogram2d')ys.push(0)
   if(!ys.length)return [0,1] as const
   let lo=Math.min(...ys),hi=Math.max(...ys)
@@ -135,6 +137,15 @@ function Canvas2D({plot,syncHover=true,formatX,formatY}:{plot:ResearchPlotData;s
           ...plot.band.upper.map((v,i)=>xcoord(i)+','+yp(v)),
           ...plot.band.lower.map((v,i)=>xcoord(i)+','+yp(v)).reverse(),
         ].join(' ')} fill="#58dfbf" opacity=".13"/>}
+      {plot.candles?.map((c,i)=>{
+        if(!c||![c.open,c.high,c.low,c.close].every(finite)||c.high<Math.max(c.open,c.close)||c.low>Math.min(c.open,c.close))return null
+        const step=x.length>1?width/(x.length-1):width/3
+        const w=Math.max(1,Math.min(12,step*.62)),at=xcoord(i),color=c.close>=c.open?'#70e1ad':'#ff8192'
+        return <g key={'candle-'+i}><line x1={at} x2={at} y1={yp(c.high)} y2={yp(c.low)} stroke={color} vectorEffect="non-scaling-stroke"/>
+          <rect x={at-w/2} width={w} y={Math.min(yp(c.open),yp(c.close))} height={Math.max(1,Math.abs(yp(c.open)-yp(c.close)))} fill={color}>
+            <title>{formatX(x[i])+' · Open '+formatY(c.open)+' · High '+formatY(c.high)+' · Low '+formatY(c.low)+' · Close '+formatY(c.close)}</title>
+          </rect></g>
+      })}
       {plot.kind==='scatter2d'&&plot.y?.length===x.length?
         plot.y.map((y,i)=>finite(y)?<circle key={i} cx={xcoord(i)} cy={yp(y)} r="3.3" fill={COLORS[0]} opacity=".7">
           <title>{formatX(x[i])+' : '+formatY(y)}</title>
@@ -216,10 +227,10 @@ function Canvas2D({plot,syncHover=true,formatX,formatY}:{plot:ResearchPlotData;s
     <p className="ql-plot-hover-help">Hover or touch to inspect · click (or press Enter) to
       {pinned?' unlock the cursor':' lock the cursor'} · arrow keys move between observations.
       {pinned?' Cursor pinned.':''}</p>
-    <div className="ql-legend">{traces.map((t,i)=><span key={t.name}>
+    <div className="ql-legend">{plot.candles&&<span><i style={{background:'#70e1ad'}}/>Close ≥ open <i style={{background:'#ff8192'}}/>Close &lt; open</span>}{traces.map((t,i)=><span key={t.name}>
       <i style={{background:t.color||COLORS[i%COLORS.length]}}/>{t.name}
     </span>)}{plot.kind==='scatter2d'&&<span><i style={{background:COLORS[0]}}/>{plot.y_label||'Observations'}</span>}{plot.band&&<span><i style={{background:'#79d5c2'}}/>{plot.band_label||'Model lower/upper band'}</span>}</div>
-    {activeIndex!==null&&x[activeIndex]!==undefined&&<div className="ql-inspection" aria-live="off"><strong>{plot.x_label||'X'}: {formatX(x[activeIndex])}</strong>{(plot.kind==='scatter2d'?[{name:plot.y_label||'Value',value:plot.y?.[activeIndex]}]:traces.map(t=>({name:t.name,value:t.y[activeIndex]}))).map(t=><span key={t.name}>{t.name}: {finite(t.value)?formatY(t.value):'Missing'}</span>)}</div>}
+    {activeIndex!==null&&x[activeIndex]!==undefined&&<div className="ql-inspection" aria-live="off"><strong>{plot.x_label||'X'}: {formatX(x[activeIndex])}</strong>{plot.candles?.[activeIndex]&&Object.entries(plot.candles[activeIndex]!).map(([key,v])=><span key={key}>{key}: {formatY(v)}</span>)}{(plot.kind==='scatter2d'?[{name:plot.y_label||'Value',value:plot.y?.[activeIndex]}]:traces.map(t=>({name:t.name,value:t.y[activeIndex]}))).map(t=><span key={t.name}>{t.name}: {finite(t.value)?formatY(t.value):'Missing'}</span>)}</div>}
   </div>
 }
 function Heatmap({plot}:{plot:ResearchPlotData}){
@@ -340,10 +351,11 @@ function dataTable(plot:ResearchPlotData):{columns:string[];rows:SnapshotCell[][
   const axes=plot.x||[]
   const traces=plot.traces||[]
   const columns=[plot.x_label||'X',
+    ...(plot.candles?['Open (points)','High (points)','Low (points)','Close (points)']:[]),
     ...(plot.kind==='scatter2d'?[plot.y_label||'Value']:traces.map(t=>t.name)),
     ...(plot.band?['Band lower','Band upper']:[])]
   return {columns,rows:axes.map((x,i)=>[
-    x,...(plot.kind==='scatter2d'?[plot.y?.[i]??null]:traces.map(t=>t.y[i]??null)),
+    x,...(plot.candles?[plot.candles[i]?.open??null,plot.candles[i]?.high??null,plot.candles[i]?.low??null,plot.candles[i]?.close??null]:[]),...(plot.kind==='scatter2d'?[plot.y?.[i]??null]:traces.map(t=>t.y[i]??null)),
     ...(plot.band?[plot.band.lower[i]??null,plot.band.upper[i]??null]:[])
   ])}
 }
@@ -409,6 +421,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
     if(!view||!zoomable)return plot
     return {...plot,x:plot.x?.slice(view.start,view.end),
       y:plot.y?.slice(view.start,view.end),
+      candles:plot.candles?.slice(view.start,view.end),
       traces:plot.traces?.map(t=>({...t,y:t.y.slice(view.start,view.end)})),
       break_before:plot.break_before?.slice(view.start,view.end),
       band:plot.band?{lower:plot.band.lower.slice(view.start,view.end),
@@ -535,6 +548,8 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
       'THEORETICAL MODEL · User-assumed inputs, not observed quotes.':
       provenance==='custom-python-snapshot'?'CUSTOM PYTHON · Client-provided snapshot; not independently source-verified. Not a live signal.':
       provenance==='observed-index'?'OBSERVED MINUTE CLOSES · No manufactured OHLC or volume.':
+      provenance==='observed-index-ohlc'?'OBSERVED TICK-DERIVED OHLC · Completed minute aggregates; tick delivery can be incomplete; no authenticated volume.':
+      provenance==='recorded-chain-spot'?'RECORDED Dhan REST SPOT RECEIPTS · Irregular timestamps; not live index ticks or OHLC.':
       provenance==='options-snapshot'?'OPTIONS SNAPSHOT · Provider observations and model-derived quantities; not executable fills.':
       provenance==='original-depth-snapshot'?'ORIGINAL DISPLAYED DEPTH · Snapshot quantities, not executed volume or fills.':
       'Source: Python research engine · computed values with explicit evidence classification.'}</p>

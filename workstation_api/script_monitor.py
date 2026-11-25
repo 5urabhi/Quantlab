@@ -231,6 +231,8 @@ def _update(ident, state, message=None, key=None, stamp=None, output=None):
 
 
 def cycle():
+    if not library._db_path().is_file():
+        return
     cache = {}
     for row in list_monitors():
         if STOP.is_set():
@@ -247,6 +249,8 @@ def cycle():
                 continue
             key,stamp,snap,bars = packet
             if key == row["last_key"]:
+                if row['output'] is not None and row['state'] != 'complete':
+                    _update(row['id'],'complete')
                 continue
             _update(row["id"],"running")
             output = _evaluate(row,snap,bars)
@@ -269,7 +273,11 @@ def start():
     global WORKER
     with LOCK:
         if WORKER and WORKER.is_alive():
-            return
+            if not STOP.is_set():
+                return
+            WORKER.join(timeout=2)
+            if WORKER.is_alive():
+                return
         # No automatic execution of user code following a server restart.
         # Do not touch data directories at application startup unless the
         # script library already exists.
@@ -283,3 +291,5 @@ def start():
 
 def stop():
     STOP.set()
+    if WORKER and WORKER.is_alive():
+        WORKER.join(timeout=1)

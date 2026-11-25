@@ -4,6 +4,7 @@ import './live-feed.css'
 import OptionChainLive,{type OptionContract} from './OptionChainLive'
 import AutoDepthRecorder from './AutoDepthRecorder'
 import ObservedIndexChartV2 from './ObservedIndexChartV2'
+import RecordedChainSpot from './RecordedChainSpot'
 import ResearchPlot from './ResearchPlots'
 import {openSnapshotInPython} from './pythonBridge'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
@@ -26,7 +27,7 @@ type Contract={identity:string;symbol:string;display_name:string;instrument:stri
 type Signal={ready:boolean;reason?:string;identity:string;direction?:'UP'|'DOWN'|'NO_TRADE';
   quote_mode:string;latest_close?:number;last_observed_utc?:string;source_age_seconds?:number;
   rsi14?:number|null;ema9?:number|null;ema21?:number|null;
-  contiguous_session_bars?:number;rows?:{timestamp_utc:string;close:number}[];
+  contiguous_session_bars?:number;rows?:{timestamp_utc:string;close:number;open?:number;high?:number;low?:number}[];
   source_warning?:string}
 const request = <T,>(path:string,body?:unknown):Promise<T>=>{
   const url='/api/trading-cockpit/live/'+path
@@ -213,6 +214,7 @@ export default function LiveFeedPanel({
     {view==='signals'&&<>
       <ObservedIndexChartV2 rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'}
         sourceWarning={signal?.source_warning||''}/>
+      {automatic?.armed&&!feed?.active&&<RecordedChainSpot/>}
       <div className="lf-cards">
       <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
         <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':

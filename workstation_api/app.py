@@ -4572,3 +4572,19 @@ def start_user_script_monitor():
 @app.on_event("shutdown")
 def stop_user_script_monitor():
     script_monitor.stop()
+
+
+@app.get("/api/trading-cockpit/recorded-chain-spot")
+def recorded_chain_spot():
+    """The latest saved same-expiry spot receipts; no new broker request."""
+    try:
+        now = datetime.now(timezone.utc)
+        rows = script_monitor._chain_rows(now,150)
+        points = [{"timestamp_utc":stamp,"spot":data["underlying_spot"]}
+                  for stamp,_,data in rows
+                  if isinstance(data.get("underlying_spot"), (int,float))]
+        return {"rows":points,"expiry":rows[-1][2]["expiry"] if rows else None,
+                "source":"Original saved Dhan option-chain REST receipt timestamps, not live index OHLC",
+                "last_utc":points[-1]["timestamp_utc"] if points else None}
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
