@@ -55,6 +55,13 @@ def _connect():
             code TEXT NOT NULL, source_sha256 TEXT NOT NULL, created_utc TEXT NOT NULL,
             PRIMARY KEY(script_id, revision)
         );
+        CREATE TABLE IF NOT EXISTS script_monitors (
+            id TEXT PRIMARY KEY, script_id TEXT NOT NULL REFERENCES scripts(id),
+            revision INTEGER NOT NULL, source TEXT NOT NULL, profile TEXT NOT NULL,
+            enabled INTEGER NOT NULL, created_utc TEXT NOT NULL,
+            state TEXT NOT NULL, last_key TEXT, last_utc TEXT, output TEXT,
+            message TEXT, FOREIGN KEY(script_id, revision) REFERENCES versions(script_id, revision)
+        );
         CREATE TABLE IF NOT EXISTS chart_runs (
             id TEXT PRIMARY KEY, created_utc TEXT NOT NULL,
             title TEXT NOT NULL, input_rows INTEGER NOT NULL, payload TEXT NOT NULL

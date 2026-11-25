@@ -4510,3 +4510,65 @@ def python_environment():
 @app.post("/api/python-environment/probe")
 def python_environment_probe():
     return _spawn("python_scientific_environment_probe", python_strategy_sandbox.probe_scientific)
+
+
+# Script subscriptions are local research only, never broker execution.
+from . import script_monitor
+
+
+class ScriptMonitorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    script_id: str = Field(min_length=32, max_length=32)
+    revision: int = Field(ge=1, le=100)
+    source: Literal["index_minutes","option_chain","chain_spot_receipts"]
+    profile: Literal["stdlib","scientific"] = "stdlib"
+    confirm_readonly: bool = False
+
+
+@app.get("/api/script-monitors")
+def script_monitors():
+    return {"monitors":script_monitor.list_monitors(),"orders_placed":0}
+
+
+@app.post("/api/script-monitors")
+def add_script_monitor(body: ScriptMonitorRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400,"Confirm repeated isolated read-only calculations")
+    try:
+        return script_monitor.register(**body.model_dump(exclude={"confirm_readonly"}))
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+class ScriptMonitorToggle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    confirm_readonly: bool = False
+
+
+@app.post("/api/script-monitors/{monitor_id}")
+def toggle_script_monitor(monitor_id: str, body: ScriptMonitorToggle):
+    if body.enabled and not body.confirm_readonly:
+        raise HTTPException(400,"Confirm read-only execution")
+    try:
+        return script_monitor.set_enabled(monitor_id,body.enabled)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.delete("/api/script-monitors/{monitor_id}")
+def delete_script_monitor(monitor_id: str):
+    try:
+        return script_monitor.remove(monitor_id)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.on_event("startup")
+def start_user_script_monitor():
+    script_monitor.start()
+
+
+@app.on_event("shutdown")
+def stop_user_script_monitor():
+    script_monitor.stop()

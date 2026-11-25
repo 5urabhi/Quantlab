@@ -69,3 +69,39 @@ def test_scientific_profile_uses_only_fixed_readonly_system_packages(monkeypatch
     assert not any("DHAN_ACCESS_TOKEN" in arg for arg in cmd)
     with pytest.raises(ValueError, match="profile"):
         sandbox._command(Path("/tmp/test_snapshot"), "/home/user/custom_venv")
+
+
+def test_monitors_pin_revision_deduplicate_and_pause(tmp_path,monkeypatch):
+    from workstation_api import script_monitor as monitor
+    monkeypatch.setattr(scripts,"_db_path",lambda:tmp_path/"scripts.sqlite3")
+    monkeypatch.setattr(monitor.sandbox,"availability",lambda:{"available":True})
+    monkeypatch.setattr(monitor,"STOP",__import__("threading").Event())
+    item=scripts.save_script(name="Indicator",kind="indicator",code="def analyze(data): return {}")
+    row=monitor.register(script_id=item["script_id"],revision=1,source="index_minutes",profile="stdlib")
+    scripts.save_script(name="Indicator",kind="indicator",code="def analyze(data): return None",
+                        script_id=item["script_id"],expected_revision=1)
+    monkeypatch.setattr(monitor,"source_snapshot",lambda source:("receipt-a","2026-11-25T04:00:00+00:00",{},[]))
+    calls=[]
+    def evaluate(saved,snap,bars):
+        calls.append(saved["revision"])
+        return {"result":"test"}
+    monkeypatch.setattr(monitor,"_evaluate",evaluate)
+    monitor.cycle()
+    monitor.cycle()
+    assert calls == [1]
+    assert monitor.list_monitors()[0]["output"] == {"result":"test"}
+    monitor.set_enabled(row["id"],False)
+    monitor.cycle()
+    assert calls == [1]
+    monitor.remove(row["id"])
+    assert monitor.list_monitors() == []
+
+
+def test_monitor_source_freshness_and_market_window():
+    from datetime import datetime,timezone
+    from workstation_api import script_monitor as monitor
+    now=datetime(2026,11,25,4,30,tzinfo=timezone.utc)
+    assert monitor._regular(now)
+    assert monitor._fresh("2026-11-25T04:29:00+00:00",now,60,150)
+    assert not monitor._fresh("2026-11-25T04:30:00+00:00",now,60,150)
+    assert not monitor._fresh("2026-11-24T04:29:00+00:00",now,60,150)
