@@ -810,16 +810,16 @@ def _run(stop: Event) -> None:
                                 socket.send(json.dumps(msg))
                                 if stop.is_set():break
                                 stop.wait(.03)
-                             # Dhan documents mixed ticker / quote subscriptions on one feed.
-                             # Never displace an option or open a sixth connection.
-                             index_message,shared_index_requested=shared_index_feed.subscriptions(len(contracts)) if index_enabled else (None,[])
-                             shared_index_feed.CAPTURE.begin(session,shared_index_requested)
-                             if index_message and not stop.is_set():
-                                 index_subscription_sent=True
-                                 subscribed_at=time.monotonic()
-                                 socket.send(json.dumps(index_message))
-                             _set(state="subscribed_awaiting_quotes",connected=True,
-                                 session_id=session)
+                            # Dhan documents mixed ticker / quote subscriptions on one feed.
+                            # Never displace an option or open a sixth connection.
+                            index_message,shared_index_requested=shared_index_feed.subscriptions(len(contracts)) if index_enabled else (None,[])
+                            shared_index_feed.CAPTURE.begin(session,shared_index_requested)
+                            if index_message and not stop.is_set():
+                                index_subscription_sent=True
+                                subscribed_at=time.monotonic()
+                                socket.send(json.dumps(index_message))
+                            _set(state="subscribed_awaiting_quotes",connected=True,
+                                session_id=session)
                             failures = 0
                             until = time.monotonic()+DISCOVER_SECONDS
                             while not stop.is_set() and _armed() and auto._market_open():
