@@ -1,5 +1,5 @@
-import {useEffect, useMemo, useRef, useState} from 'react'
-import {openSnapshotInPython,type SnapshotCell} from './pythonBridge'
+import {useEffect, useId, useMemo, useRef, useState} from 'react'
+import {openSnapshotInPython,PYTHON_APPLY_EVENT,type PythonApplied,type SnapshotCell} from './pythonBridge'
 import './research-plots-v3.css'
 
 export type ResearchTrace={name:string;y:(number|null)[];color?:string}
@@ -357,8 +357,10 @@ function downloadFile(name:string,contents:string,mime:string){
 function safeName(name:string){
   return name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,70)||'plot'
 }
-export default function ResearchPlot({plot,provenance,formatX,formatY=fmt}:{plot:ResearchPlotData;provenance?:string;formatX?:(x:string|number)=>string;formatY?:(y:number)=>string}){
+export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowApply=true}:{plot:ResearchPlotData;provenance?:string;formatX?:(x:string|number)=>string;formatY?:(y:number)=>string;allowApply?:boolean}){
   const displayX=formatX||((x:string|number)=>typeof x==='number'?fmt(x):String(x))
+  const targetId=useId()
+  const [attached,setAttached]=useState<PythonApplied|null>(null)
   const [hidden,setHidden]=useState<string[]>([])
   useEffect(()=>setHidden([]),[plot.title])
   const chart=useRef<HTMLElement|null>(null)
@@ -412,7 +414,22 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt}:{plot
       band:plot.band?{lower:plot.band.lower.slice(view.start,view.end),
         upper:plot.band.upper.slice(view.start,view.end)}:undefined}
   },[plot,view,zoomable])
-  const shown=useMemo(()=>({...visible,traces:visible.traces?.filter(t=>!hidden.includes(t.name)).map((t)=>({...t,color:t.color||COLORS[(plot.traces||[]).findIndex(x=>x.name===t.name)%COLORS.length]}))}),[visible,hidden,plot.traces])
+  const inputSignature=useMemo(()=>JSON.stringify(dataTable(visible)),[visible])
+  const attachedMatches=Boolean(attached&&inputSignature===JSON.stringify({columns:attached.snapshot.columns,rows:attached.snapshot.rows}))
+  const overlay=attachedMatches&&attached?.mode==='overlay'?attached.plot.traces||[]:[]
+  useEffect(()=>{
+    if(!allowApply)return
+    const apply=(event:Event)=>{
+      const detail=(event as CustomEvent<PythonApplied>).detail
+      if(!detail||detail.snapshot.targetId!==targetId)return
+      if(inputSignature!==JSON.stringify({columns:detail.snapshot.columns,rows:detail.snapshot.rows}))return
+      if(detail.mode==='overlay'&&(plot.kind!=='line2d'||detail.plot.y_label!==visible.y_label||JSON.stringify(detail.plot.x)!==JSON.stringify(visible.x)))return
+      setAttached(detail);event.preventDefault()
+    }
+    window.addEventListener(PYTHON_APPLY_EVENT,apply)
+    return()=>window.removeEventListener(PYTHON_APPLY_EVENT,apply)
+  },[allowApply,targetId,inputSignature,plot.kind,visible.y_label,visible.x])
+  const shown=useMemo(()=>({...visible,traces:[...(visible.traces||[]).filter(t=>!hidden.includes(t.name)).map(t=>({...t,color:t.color||COLORS[(plot.traces||[]).findIndex(x=>x.name===t.name)%COLORS.length]})),...overlay.map((t,i)=>({...t,name:'Python: '+t.name,color:COLORS[(i+4)%COLORS.length]}))]}),[visible,hidden,plot.traces,overlay])
   const table=useMemo(()=>dataTable(plot),[plot])
   const saveSvg=()=>{
     const original=chart.current?.querySelector('svg')
@@ -456,7 +473,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt}:{plot
         <button type="button" onClick={()=>void expand()}>Full screen / exit</button>
         {zoomable||(!['surface3d','heatmap2d'].includes(plot.kind)&&!!plot.x?.length)?<button type="button" onClick={()=>{
           const input=dataTable(visible)
-          openSnapshotInPython({title:plot.title,provenance:(provenance||'computed chart')+' · visible viewport snapshot',columns:input.columns,rows:input.rows})
+          openSnapshotInPython({targetId:allowApply?targetId:undefined,title:plot.title,provenance:(provenance||'computed chart')+' · visible viewport snapshot',columns:input.columns,rows:input.rows})
         }} title="Attach visible observations to isolated Python workspace">Python analysis</button>:null}
         <button type="button" onClick={exportPython} title="Download a Python script with the full plotted dataset for offline analysis">Python snapshot</button>
         <button type="button" onClick={saveSvg} aria-label={'Export SVG of '+plot.title}>Export SVG</button>
@@ -488,6 +505,9 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt}:{plot
     {plot.kind==='surface3d'?<Surface3D plot={plot}/>:
      plot.kind==='heatmap2d'?<Heatmap plot={plot}/>:
      <Canvas2D plot={shown} syncHover={syncHover&&syncable} formatX={displayX} formatY={formatY}/>}
+    {attached&&<div className="ql-inspection"><span>{attachedMatches?'Custom result '+attached.runId+' · '+attached.mode:'Custom result is no longer aligned to the displayed observations. Recompute from current snapshot.'}</span><button type="button" onClick={()=>setAttached(null)}>Remove custom result</button></div>}
+    {attachedMatches&&attached?.mode==='companion'&&<ResearchPlot plot={attached.plot} provenance="custom-python-snapshot" allowApply={false}/>}
+    {attachedMatches&&attached?.mode==='overlay'&&<details><summary>Custom overlay data and export</summary><ResearchPlot plot={attached.plot} provenance="custom-python-snapshot" allowApply={false}/></details>}
     <details className="ql-chart-data">
       <summary>Inspect plotted observations ({table.rows.length.toLocaleString('en-US')} rows)</summary>
       <div className="ql-table-scroll">

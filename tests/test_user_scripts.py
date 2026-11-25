@@ -46,3 +46,11 @@ def test_sandbox_unavailable_fails_closed(monkeypatch):
     with pytest.raises(ValueError, match="unavailable"):
         scripts.run_chart(code="raise RuntimeError('must not execute')",
                           snapshot={"columns":["x"],"rows":[[1]]})
+
+
+def test_saved_custom_runs_reopen(tmp_path, monkeypatch):
+    monkeypatch.setattr(scripts, "_db_path", lambda: tmp_path / "scripts.sqlite3")
+    result = scripts._save_chart_run({"plot":{"title":"Local chart"}, "input_rows":2,
+                                      "snapshot_sha256":"example"})
+    assert scripts.read_chart_run(result["run_id"]) == result
+    assert scripts.list_chart_runs()[0]["title"] == "Local chart"

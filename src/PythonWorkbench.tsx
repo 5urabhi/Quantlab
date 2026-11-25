@@ -1,14 +1,15 @@
 import {useEffect,useState} from 'react'
 import ResearchPlot,{type ResearchPlotData} from './ResearchPlots'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
-import {PYTHON_SNAPSHOT_EVENT,STRATEGY_SCRIPT_EVENT,type PythonSnapshot} from './pythonBridge'
+import {PYTHON_SNAPSHOT_EVENT,STRATEGY_SCRIPT_EVENT,applyPythonResult,type PythonSnapshot} from './pythonBridge'
 import './python-workbench.css'
 
 type Kind='strategy'|'indicator'|'chart'|'research'|'model'|'scanner'|'risk'|'transform'
 type Meta={id:string;name:string;kind:Kind;revision:number;updated_utc:string}
 type Revision={revision:number;created_utc:string;name:string;kind:Kind}
 type Script={script_id:string;revision:number;name:string;kind:Kind;code:string;revisions:Revision[]}
-type Result={plot:ResearchPlotData;source_sha256:string;snapshot_sha256:string;input_rows:number;warning:string}
+type SavedRun={id:string;title:string;created_utc:string;input_rows:number}
+type Result={run_id:string;plot:ResearchPlotData;source_sha256:string;snapshot_sha256:string;input_rows:number;warning:string}
 type Job={id:string;status:string;stage?:string;error?:string;result?:Result}
 const KINDS:Kind[]=['strategy','indicator','chart','research','model','scanner','risk','transform']
 const EXAMPLE=`# Standard-library Python. The first column is the chart X coordinate.
@@ -50,6 +51,8 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
   const [jobId,setJobId]=useState(()=>{try{return sessionStorage.getItem('ql-v3-chart-job')||''}catch{return ''}})
   const [job,setJob]=useState<Job|null>(null)
   const [result,setResult]=useState<Result|null>(null)
+  const [runSource,setRunSource]=useState<PythonSnapshot|null>(null)
+  const [runs,setRuns]=useState<SavedRun[]>([])
   const [expanded,setExpanded]=useState(false)
   const [view,setView]=useState<'output'|'input'>('output')
   const [legacy,setLegacy]=useState<Record<string,string>>({})
@@ -64,6 +67,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
   const refresh=async()=>{
     try{const data=await marketApi<{scripts:Meta[];sandbox:{available:boolean}}>('/api/user-scripts');setScripts(data.scripts);setAvailable(data.sandbox.available)}
     catch(e){setError(readableError(e))}
+    try{const r=await marketApi<{runs:SavedRun[]}>('/api/user-script-runs');setRuns(r.runs)}catch{/* library may be temporarily unavailable */}
     try{const local=JSON.parse(localStorage.getItem('quantlab_python_editor_v1')||'{}');setLegacy(Object.fromEntries(Object.entries(local).filter(([,v])=>typeof v==='string')) as Record<string,string>)}catch{setLegacy({})}
   }
   useEffect(()=>{if(open)void refresh()},[open])
@@ -75,7 +79,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
       try{const next=await marketApi<Job>('/api/jobs/'+encodeURIComponent(jobId))
         if(!alive)return;setJob(next)
         if(next.status==='complete'){
-          if(next.result?.plot){setResult(next.result);setView('output');setNotice('Custom analysis complete.')}
+          if(next.result?.plot){setResult(next.result);setView('output');setNotice('Custom analysis complete and saved locally.');void refresh()}
           else setError('Completed job has no available chart payload. Rerun with the saved script.')
           setJobId('');try{sessionStorage.removeItem('ql-v3-chart-job')}catch{/* optional */}
         }else if(['error','cancelled','interrupted'].includes(next.status)){
@@ -101,10 +105,25 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
   }
   const run=async()=>{
     if(!snapshot||jobId)return
-    setBusy(true);setError('');setNotice('')
+    setBusy(true);setError('');setNotice('');setRunSource(snapshot);setResult(null)
     try{const data=await marketPost<{job_id:string;status:string}>('/api/user-scripts/chart/run',{code:draft.code,snapshot,confirm_readonly:true})
       setJobId(data.job_id);setJob({id:data.job_id,status:data.status});setView('output');try{sessionStorage.setItem('ql-v3-chart-job',data.job_id)}catch{/* optional */}
     }catch(e){setError(readableError(e))}finally{setBusy(false)}
+  }
+  const stopJob=async()=>{
+    if(!jobId)return
+    try{await marketPost('/api/workspace/jobs/'+encodeURIComponent(jobId)+'/cancel',{});setNotice('Cancellation requested.')}
+    catch(e){setError(readableError(e))}
+  }
+  const openRun=async(id:string)=>{
+    try{const next=await marketApi<Result>('/api/user-script-runs/'+encodeURIComponent(id));setResult(next);setRunSource(null);setView('output')}
+    catch(e){setError(readableError(e))}
+  }
+  const apply=(mode:'companion'|'overlay')=>{
+    if(!result||!runSource?.targetId)return
+    const ok=applyPythonResult({snapshot:runSource,plot:result.plot,runId:result.run_id,mode})
+    if(ok){setNotice('Custom output attached to original chart.');onClose()}
+    else setError('Source chart or its observations changed, or overlay units do not match. Reattach the current snapshot or use a companion plot.')
   }
   const launchStrategy=()=>{
     if(draft.kind!=='strategy')return
@@ -125,6 +144,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
       <aside className="qpw-library"><h3>My scripts</h3><button type="button" disabled={locked} onClick={()=>{setCurrent(null);setDraft({name:'New script',kind:'chart',code:EXAMPLE})}}>New script</button>
         <button type="button" onClick={()=>void refresh()}>Refresh library</button>
         {scripts.map(s=><button className={current?.script_id===s.id?'selected':''} type="button" key={s.id} disabled={locked} onClick={()=>void load(s.id)}>{s.name}<small>{s.kind} · v{s.revision}</small></button>)}
+        {runs.length>0&&<details><summary>Saved custom chart runs</summary>{runs.map(r=><button type="button" key={r.id} disabled={locked} onClick={()=>void openRun(r.id)}>{r.title}<small>{r.created_utc.slice(0,10)} · {r.input_rows} rows</small></button>)}</details>}
         {Object.keys(legacy).length>0&&<details><summary>Browser-saved strategies</summary>{Object.entries(legacy).map(([name,code])=><button type="button" key={name} disabled={locked} onClick={()=>{setCurrent(null);setDraft({name,kind:'strategy',code});setNotice('Use Save to import this script to the local backend.')}}>{name}</button>)}</details>}
       </aside>
       <div className="qpw-editor">
@@ -133,6 +153,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
         <div className="qpw-code"><pre aria-hidden="true">{draft.code.split('\n').map((_,i)=>i+1).join('\n')}</pre><textarea aria-label="Reusable Python code" value={draft.code} maxLength={20000} spellCheck={false} wrap="off" onChange={e=>setDraft(d=>({...d,code:e.target.value}))} onKeyDown={e=>{if(e.key==='Tab'){e.preventDefault();const el=e.currentTarget;const start=el.selectionStart;setDraft(d=>({...d,code:d.code.slice(0,start)+'    '+d.code.slice(el.selectionEnd)}));requestAnimationFrame(()=>el.setSelectionRange(start+4,start+4))}}}/></div>
         <div className="qpw-actions"><button className="primary" type="button" disabled={locked} onClick={()=>void save()}>Save</button><button type="button" disabled={locked} onClick={()=>void save(true)}>Save as new</button><button type="button" onClick={exportCode}>Export .py</button>
           {current&&<label>Version<select value={current.revision} disabled={locked} onChange={e=>void load(current.script_id,Number(e.target.value))}>{current.revisions.map(v=><option key={v.revision} value={v.revision}>v{v.revision} · {v.created_utc.slice(0,10)}</option>)}</select></label>}
+          {jobId&&<button type="button" onClick={()=>void stopJob()}>Stop job</button>}
           {draft.kind==='strategy'?<button className="primary" type="button" onClick={launchStrategy}>Open in strategy editor</button>:<button className="primary" type="button" onClick={()=>void run()} disabled={!runnable||!snapshot||locked||available===false}>Run snapshot</button>}
         </div>
         <p className="qpw-note">{draft.kind==='strategy'?'Strategies run through the existing causal BANKNIFTY backtest editor.':'Define analyze(data) returning title, x_label, y_label and traces (one finite number or null per input row). Other categories share this snapshot interface; they are not registered live trading hooks.'}</p>
@@ -140,7 +161,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
       <div className="qpw-context"><div className="qpw-actions"><button type="button" onClick={()=>setView('input')} aria-pressed={view==='input'}>Input</button><button type="button" onClick={()=>setView('output')} aria-pressed={view==='output'}>Output</button></div>
         {error&&<p role="alert" className="qpw-error">{error}</p>}{notice&&<p role="status">{notice}</p>}
         <p className="qpw-note">Sandbox: {available===null?'Checking':available?'Installed · kernel permission checked at run':'Unavailable · install bubblewrap and prlimit'}. Standard library only. No orders or broker credentials.</p>
-        {view==='input'?snapshot?<><h4>{snapshot.title}</h4><p>{snapshot.rows.length} rows · {snapshot.provenance}</p><p>Columns: {snapshot.columns.join(' · ')}</p><pre>{JSON.stringify(snapshot.rows.slice(0,5),null,2)}</pre><button type="button" disabled={locked} onClick={()=>setSnapshot(null)}>Detach snapshot</button></>:<p>Choose Python analysis on a compatible chart to attach a fixed data snapshot.</p>:<>{jobId&&<p role="status">{job?.status||'queued'} · {job?.stage||'Isolated analysis'}</p>}{result?<><p>{result.warning} · {result.input_rows} rows</p><ResearchPlot plot={result.plot} provenance="custom-python-snapshot"/><details><summary>Reproducibility hashes</summary><p>Code: {result.source_sha256}</p><p>Input: {result.snapshot_sha256}</p></details></>:<p>No custom result yet.</p>}</>}
+        {view==='input'?snapshot?<><h4>{snapshot.title}</h4><p>{snapshot.rows.length} rows · {snapshot.provenance}</p><p>Columns: {snapshot.columns.join(' · ')}</p><pre>{JSON.stringify(snapshot.rows.slice(0,5),null,2)}</pre><button type="button" disabled={locked} onClick={()=>setSnapshot(null)}>Detach snapshot</button></>:<p>Choose Python analysis on a compatible chart to attach a fixed data snapshot.</p>:<>{jobId&&<p role="status">{job?.status||'queued'} · {job?.stage||'Isolated analysis'}</p>}{result?<><p>{result.warning} · {result.input_rows} rows</p>{runSource?.targetId&&<div className="qpw-actions"><button type="button" onClick={()=>apply('companion')}>Add companion chart</button><button type="button" onClick={()=>apply('overlay')}>Overlay same units</button></div>}<ResearchPlot plot={result.plot} provenance="custom-python-snapshot" allowApply={false}/><details><summary>Reproducibility hashes</summary><p>Code: {result.source_sha256}</p><p>Input: {result.snapshot_sha256}</p></details></>:<p>No custom result yet.</p>}</>}
       </div>
     </div>
   </section>

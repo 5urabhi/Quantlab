@@ -55,7 +55,7 @@ JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -4485,3 +4485,16 @@ def user_chart_run(body: ChartPythonRequest):
         raise HTTPException(400, str(exc)) from exc
     return _spawn("user_snapshot_chart", user_scripts.run_chart,
                   code=body.code, snapshot=body.snapshot)
+
+
+@app.get("/api/user-script-runs")
+def user_chart_runs():
+    return {"runs": user_scripts.list_chart_runs()}
+
+
+@app.get("/api/user-script-runs/{run_id}")
+def user_chart_run_read(run_id: str):
+    try:
+        return user_scripts.read_chart_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc

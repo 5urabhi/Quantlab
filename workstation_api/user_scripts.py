@@ -10,7 +10,9 @@ import os
 import re
 import sqlite3
 import stat
+import signal
 import subprocess
+import time
 import tempfile
 import uuid
 
@@ -19,6 +21,7 @@ from . import python_strategy_sandbox, service
 KINDS = {"strategy", "indicator", "chart", "research", "model", "scanner", "risk", "transform"}
 MAX_SCRIPTS = 500
 MAX_REVISIONS = 100
+MAX_CHART_RUNS = 500
 MAX_ROWS = 3000
 MAX_COLUMNS = 40
 MAX_INPUT_BYTES = 2_000_000
@@ -51,6 +54,10 @@ def _connect():
             revision INTEGER NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,
             code TEXT NOT NULL, source_sha256 TEXT NOT NULL, created_utc TEXT NOT NULL,
             PRIMARY KEY(script_id, revision)
+        );
+        CREATE TABLE IF NOT EXISTS chart_runs (
+            id TEXT PRIMARY KEY, created_utc TEXT NOT NULL,
+            title TEXT NOT NULL, input_rows INTEGER NOT NULL, payload TEXT NOT NULL
         );
     """)
     try:
@@ -129,6 +136,41 @@ def save_script(*, name, kind, code, script_id=None, expected_revision=None):
     return read_script(script_id)
 
 
+def list_chart_runs():
+    from contextlib import closing
+    with closing(_connect()) as db:
+        return [dict(row) for row in db.execute(
+            "SELECT id,created_utc,title,input_rows FROM chart_runs ORDER BY created_utc DESC")]
+
+
+def read_chart_run(run_id):
+    from contextlib import closing
+    if not isinstance(run_id, str) or not ID.fullmatch(run_id):
+        raise ValueError("Invalid custom run ID")
+    with closing(_connect()) as db:
+        row = db.execute("SELECT payload FROM chart_runs WHERE id=?", (run_id,)).fetchone()
+        if row is None:
+            raise ValueError("Custom chart result not found")
+        return json.loads(row["payload"])
+
+
+def _save_chart_run(result):
+    from contextlib import closing
+    run_id = uuid.uuid4().hex
+    result = {**result, "run_id": run_id, "created_utc": _now()}
+    encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
+    if len(encoded.encode()) > 3_000_000:
+        raise ValueError("Custom chart result exceeds local storage limit")
+    with closing(_connect()) as db, db:
+        db.execute("BEGIN IMMEDIATE")
+        if db.execute("SELECT count(*) FROM chart_runs").fetchone()[0] >= MAX_CHART_RUNS:
+            raise ValueError("Custom chart run library is full; export existing results")
+        db.execute("INSERT INTO chart_runs VALUES (?,?,?,?,?)",
+                   (run_id, result["created_utc"], result["plot"]["title"],
+                    result["input_rows"], encoded))
+    return result
+
+
 def snapshot_json(snapshot):
     """Untrusted client snapshot, not independent market-source verification."""
     columns, rows = snapshot.get("columns"), snapshot.get("rows")
@@ -153,6 +195,8 @@ def snapshot_json(snapshot):
                 except OverflowError:
                     pass
             raise ValueError("Snapshot cells must be finite numbers, text, booleans or null")
+    if any(type(row[0]) not in (str, int, float) for row in rows):
+        raise ValueError("First snapshot column must contain numeric or text coordinates")
     safe = {"title": str(snapshot.get("title", ""))[:200],
             "provenance": str(snapshot.get("provenance", ""))[:300],
             "columns": columns, "rows": rows}
@@ -210,13 +254,13 @@ try:
         result=fn(data)
     output={"result":result}
 except BaseException as exc:
-    output={"error":type(exc).__name__}
+    output={"error":type(exc).__name__, "detail":str(exc)[:180]}
 with open("/work/result.json","w",encoding="utf-8") as f:
     json.dump(output,f,ensure_ascii=False,allow_nan=False)
 '''
 
 
-def run_chart(*, code, snapshot):
+def run_chart(*, code, snapshot, progress=None):
     """Only copied snapshots enter the same fail-closed sandbox as strategies."""
     if not isinstance(code, str) or not 1 <= len(code) <= python_strategy_sandbox.MAX_SOURCE_CHARS:
         raise ValueError("Paste 1-20,000 characters of Python")
@@ -230,13 +274,32 @@ def run_chart(*, code, snapshot):
             path.write_bytes(value)
             path.chmod(0o600)
         command = python_strategy_sandbox._command(work)
+        if progress:
+            progress(10, "Starting isolated snapshot analysis")
+        process = None
         try:
-            process = subprocess.run(command, cwd=work,
+            process = subprocess.Popen(command, cwd=work,
                 env={"PATH": "/usr/bin:/bin", "HOME": "/tmp", "PYTHONPATH": ""},
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=python_strategy_sandbox.WALL_TIMEOUT, start_new_session=True)
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            raise ValueError("Isolated chart worker could not complete within its limits") from exc
+                start_new_session=True)
+            started = time.monotonic()
+            while process.poll() is None:
+                elapsed = time.monotonic() - started
+                if elapsed >= python_strategy_sandbox.WALL_TIMEOUT:
+                    raise ValueError("Isolated chart worker exceeded its time limit")
+                if progress:
+                    progress(min(85, 15 + 70 * elapsed / python_strategy_sandbox.WALL_TIMEOUT),
+                             "Running isolated snapshot analysis")
+                time.sleep(0.2)
+        except OSError as exc:
+            raise ValueError("Isolated chart worker could not start") from exc
+        finally:
+            if process is not None and process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=5)
         if process.returncode != 0:
             raise ValueError("Ubuntu sandbox or chart worker failed; no unsafe fallback")
         try:
@@ -250,13 +313,15 @@ def run_chart(*, code, snapshot):
             raise ValueError("Sandbox returned invalid or oversized JSON") from exc
     if not isinstance(result, dict) or "error" in result:
         raise ValueError("Custom analysis failed: " + str(result.get("error", "invalid output") if isinstance(result, dict) else "invalid output")[:80])
+    if progress:
+        progress(90, "Validating custom numeric output")
     plot = validate_output(result.get("result"), count)
     # The input's first column is the only supported x coordinate. Do not allow
     # user code to replace timestamps or silently interpolate missing points.
     plot.update(kind="line2d", x=[row[0] for row in snapshot["rows"]])
     if any(type(v) not in (str, int, float) for v in plot["x"]):
         raise ValueError("First snapshot column must contain numeric or text coordinates")
-    return {"plot": plot, "source_sha256": sha256(code.encode()).hexdigest(),
+    return _save_chart_run({"plot": plot, "source_sha256": sha256(code.encode()).hexdigest(),
             "snapshot_sha256": sha256(payload).hexdigest(),
             "input_rows": count, "provenance": "user_snapshot_custom_python",
-            "warning": "Custom Python output from client-provided snapshot; not source-verified market history, not a causal trading signal."}
+            "warning": "Custom Python output from client-provided snapshot; not source-verified market history, not a causal trading signal."})
