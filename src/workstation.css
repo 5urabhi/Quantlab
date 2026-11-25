@@ -237,3 +237,22 @@
 .ws-shell :is(button,input,select,textarea,a,summary,[tabindex]):focus-visible { outline: 2px solid var(--ql-accent); outline-offset: 3px; }
 .ws-shell :is(input[type=checkbox],input[type=radio],input[type=range]) { accent-color: var(--ql-accent); }
 .ws-shell ::selection { background: var(--ql-accent); color: #151105; }
+
+/* V3 shell controls: keep the existing mobile navigation behavior. */
+.ql-v3 .ql-nav-toggle { margin-bottom: 12px; border: 1px solid var(--ql-border); }
+.ql-v3 .ws-nav-item svg { flex-shrink: 0; }
+.ql-v3 .ql-statusbar { position: sticky; bottom: 0; z-index: 28; min-height: 34px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 5px 18px; background: #101012; border-top: 1px solid var(--ql-border); color: var(--ql-muted); font-size: 11px; }
+.ql-v3 .ql-statusbar button { color: var(--ql-text); background: transparent; border: 0; padding: 4px 6px; font-size: inherit; }
+.ql-v3 .ql-statusbar button:hover { color: var(--ql-accent); }
+.ql-v3 .v2-top-btn.primary { background: var(--ql-accent); color: #151105; border-color: var(--ql-accent); }
+.ql-v3 .v2-top-btn:not(.primary) { background: var(--ql-raised); color: var(--ql-text); border-color: var(--ql-border); }
+.ql-v3 .ql-chart-card:fullscreen { overflow: auto; padding: 24px; background: var(--ql-panel); color: var(--ql-text); }
+.ql-v3 .ql-chart-card:fullscreen .ql-svg-chart { max-height: 70vh; width: 100%; }
+@media(min-width: 1101px) {
+  .ql-v3.ql-nav-compact .ws-sidebar { width: 68px; }
+  .ql-v3.ql-nav-compact .ws-main { margin-left: 68px; width: calc(100% - 68px); }
+  .ql-v3.ql-nav-compact :is(.ws-brand>div,.ws-env>div,.ws-sidefoot>div,.ws-nav-label,.ql-nav-text) { display:none; }
+  .ql-v3.ql-nav-compact :is(.ws-brand,.ws-env,.ws-sidefoot,.ws-nav-item) { justify-content: center; padding-left: 0; padding-right: 0; }
+  .ql-v3.ql-nav-compact .ws-env { margin: 12px; }
+}
+@media(max-width:1100px) { .ql-v3 .ql-nav-toggle { display: none; } }
