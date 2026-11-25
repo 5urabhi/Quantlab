@@ -27,7 +27,7 @@ export default function CustomModelWorkspace({datasets,selectedDataset,initialSc
     try{
       if(source==='manual'){
         const d=JSON.parse(manual) as PythonSnapshot
-        if(!Array.isArray(d.columns)||!Array.isArray(d.rows)||!d.rows.length||d.rows.length>3000)throw Error('Provide a named-column snapshot with 1–3,000 rows.')
+        if(!d||typeof d.title!=='string'||!Array.isArray(d.columns)||!d.columns.length||!d.columns.every(c=>typeof c==='string'&&c.trim())||new Set(d.columns).size!==d.columns.length||!Array.isArray(d.rows)||!d.rows.length||d.rows.length>3000||!d.rows.every(r=>Array.isArray(r)&&r.length===d.columns.length&&r.every(v=>v===null||typeof v==='string'||typeof v==='boolean'||(typeof v==='number'&&Number.isFinite(v)))))throw Error('Provide a named-column snapshot with 1–3,000 rows.')
         setSnapshot({...d,provenance:'User-provided input; not independently source verified'})
       }else{
         const p=new URLSearchParams({file,page:String(page),per_page:'100',query})

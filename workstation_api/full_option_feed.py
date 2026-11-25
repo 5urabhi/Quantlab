@@ -906,6 +906,7 @@ def resume_if_armed() -> None:
 
 
 def disarmed() -> None:
+    shared_index_feed.CAPTURE.disconnect()
     STOP.set()
     _set(state="stopping",connected=False)
 
@@ -913,6 +914,7 @@ def disarmed() -> None:
 def suspend_for_shutdown() -> None:
     global SHUTTING_DOWN
     SHUTTING_DOWN=True
+    shared_index_feed.CAPTURE.disconnect()
     STOP.set()
     _set(state="local_server_stopping",connected=False)
 

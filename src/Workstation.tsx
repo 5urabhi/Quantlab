@@ -475,7 +475,7 @@ function App(){
       <JobsDrawer open={jobsOpen} onClose={()=>setJobsOpen(false)}
         onOpenFull={()=>begin('workspacejobs')}/>
       <GlobalSearchV2 open={searchOpen} onClose={()=>setSearchOpen(false)}
-        onOpen={destination=>begin(destination)}/>
+        onOpen={destination=>begin(destination)} routes={primarySections.flatMap(group=>group.tabs.map(id=>({id,title:titles[id],section:group.label,description:descriptions[id]})))} onOpenRoute={id=>begin(id as Tab)}/>
       <PythonWorkbench open={pythonOpen} onOpen={showPython} onClose={()=>setPythonOpen(false)} onStrategy={()=>begin('strategypython')} onNotebook={()=>{setPythonOpen(false);begin('notebooks')}} contextLabel={titles[tab]}/>
       <main className="ws-content">
         <div className={'ws-titlebar '+(

@@ -1429,6 +1429,20 @@ def banknifty_auto_depth_arm(body: BankNiftyAutoDepthRequest):
         bad(exc)
 
 
+class DhanRenewalConsent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    confirm_renewal: bool = False
+
+
+@app.post("/api/trading-cockpit/auto-depth/renewal-consent")
+def banknifty_renewal_consent(body: DhanRenewalConsent):
+    try:
+        return auto_option_depth.set_token_renewal(body.enabled, confirm_renewal=body.confirm_renewal)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.post("/api/trading-cockpit/auto-depth/disarm")
 def banknifty_auto_depth_disarm():
     try:

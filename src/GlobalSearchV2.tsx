@@ -2,8 +2,9 @@ import {useEffect,useState} from 'react'
 import {BookOpen,Database,FlaskConical,Search,X} from 'lucide-react'
 import './quantlab-v2.css'
 type Result={kind:string;id:string;title:string;location:string}
-export default function GlobalSearchV2({open,onClose,onOpen}:{
+export default function GlobalSearchV2({open,onClose,onOpen,routes=[],onOpenRoute}:{
   open:boolean;onClose:()=>void
+  routes?:{id:string;title:string;section:string;description:string}[];onOpenRoute?:(id:string)=>void
   onOpen:(destination:'mathematics'|'projects'|'data'|'workspace'|'history'|'guide')=>void
 }){
   const [query,setQuery]=useState('')
@@ -35,6 +36,8 @@ export default function GlobalSearchV2({open,onClose,onOpen}:{
     return()=>{window.clearTimeout(timer);controller.abort()}
   },[open,query])
   if(!open)return null
+  const terms=query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const matches=routes.filter(r=>terms.every(t=>(r.title+' '+r.section+' '+r.id+' '+r.description).toLowerCase().includes(t))).slice(0,terms.length?12:8)
   const openResult=(item:Result)=>{
     onClose()
     if(item.location==='model_catalog'){
@@ -68,6 +71,8 @@ export default function GlobalSearchV2({open,onClose,onOpen}:{
       {busy&&<p role="status" className="v2-search-info">Searching saved local research…</p>}
       {error&&<p role="alert" className="v2-search-error">{error}</p>}
       <div className="v2-search-results">
+        {onOpenRoute&&matches.length>0&&<><p className="v2-search-info">Go to page</p>{matches.map(r=><button key={"route:"+r.id} type="button" onClick={()=>{onClose();onOpenRoute(r.id)}}><Search size={18}/><span><strong>{r.title}</strong><small>{r.section} · Page</small></span></button>)}</>}
+        {results.length>0&&<p className="v2-search-info">Saved resources</p>}
         {results.map(item=><button key={item.kind+':'+item.id}
           onClick={()=>openResult(item)}>
           {item.kind==='dataset'?<Database size={18}/>:
@@ -75,7 +80,7 @@ export default function GlobalSearchV2({open,onClose,onOpen}:{
           <span><strong>{item.title}</strong>
             <small>{item.kind.replaceAll('_',' ')} · {item.id}</small></span>
         </button>)}
-        {!busy&&query.trim()&&!results.length&&!error&&
+        {!busy&&query.trim()&&!results.length&&!matches.length&&!error&&
           <p className="v2-search-info">No matching saved resources. Try a model, ticker or project name.</p>}
         {!query.trim()&&<p className="v2-search-info">Searches the actual local research library.
           QuantLab does not fabricate results for missing data.</p>}

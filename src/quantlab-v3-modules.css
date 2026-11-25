@@ -75,3 +75,18 @@
 .ql-indicator-controls summary{cursor:pointer;color:var(--ql-accent,#f5c542)}
 .ql-indicator-controls label{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:12px}
 .ql-indicator-chart{min-width:0}
+
+/* Shared refinement of integrated route layout and input focus. */
+.ws-v2.ql-v3 .ws-content{min-width:0}
+.ws-v2.ql-v3 .ws-titlebar{gap:14px;align-items:flex-start}
+.ws-v2.ql-v3 .ws-titlebar h1{letter-spacing:-.025em;line-height:1.2}
+.ws-v2.ql-v3 .ws-titlebar p{max-width:82ch;line-height:1.55}
+.ws-v2.ql-v3 .ws-context-tabs{gap:8px;min-width:0}
+.ws-v2.ql-v3 .ws-context-primary{min-width:0;overflow-x:auto;scrollbar-width:thin}
+.ws-v2.ql-v3 .ws-context-primary button{white-space:nowrap}
+.ws-v2.ql-v3 :is(.ws-card,.qm-panel,.ql-custom-model,.ql-saved-runner,.ql-catalog-model-card){min-width:0}
+.ws-v2.ql-v3 :is(button,input,select,textarea,summary,a):focus-visible{outline:2px solid var(--ql-accent);outline-offset:2px}
+.ws-v2.ql-v3 .qm-scroll{max-width:100%;overflow:auto}
+.ws-v2.ql-v3 .qm-scroll th{position:sticky;top:0;z-index:1;background:var(--ql-raised)}
+.ws-v2.ql-v3 .qm-scroll td:last-child button{white-space:nowrap}
+@media(max-width:720px){.ws-v2.ql-v3 .ws-titlebar{flex-wrap:wrap}.ws-v2.ql-v3 .ws-context-primary{flex-wrap:nowrap}.ws-v2.ql-v3 .ws-actions{flex-wrap:wrap}}

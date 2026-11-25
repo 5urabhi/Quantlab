@@ -2,7 +2,8 @@ import {lazy,Suspense,useCallback, useEffect, useState} from 'react'
 import {Activity, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft, ChevronRight,
   Database, FileSpreadsheet, HardDrive, History, RefreshCw, Search, ShieldCheck, Wrench} from 'lucide-react'
 import './data-manager.css'
-import {openSnapshotInPython} from './pythonBridge'
+import {openSnapshotInPython,type PythonSnapshot} from './pythonBridge'
+import ContextDrawer from './ContextDrawer'
 const MarketLibraryPanel=lazy(()=>import('./MarketLibraryPanel'))
 const DataAcquisitionPanel=lazy(()=>import('./DataAcquisitionPanel'))
 const ManagedDatabaseBrowser=lazy(()=>import('./ManagedDatabaseBrowser'))
@@ -76,6 +77,8 @@ export default function DataManager({
   const [detail,setDetail]=useState<Detail|null>(null)
   const [file,setFile]=useState('prices.csv')
   const [table,setTable]=useState<Table|null>(null)
+  const [inspection,setInspection]=useState<PythonSnapshot|null>(null)
+  useEffect(()=>setInspection(null),[selected,file,section])
   const [quality,setQuality]=useState<Quality|null>(null)
   const [page,setPage]=useState(1)
   const [query,setQuery]=useState('')
@@ -239,13 +242,14 @@ export default function DataManager({
             <button type="submit">Search</button>
           </form>
         </div>
-        {table&&table.rows.length>0&&<button type="button" className="ws-button secondary" onClick={()=>openSnapshotInPython({title:detail.dataset.label+' · '+file,provenance:'Displayed source-table page '+page+' · original cell text',columns:table.selected_columns,rows:table.rows.map(row=>table.selected_columns.map(key=>row[key]??null))})}>Analyze displayed page in Python</button>}
-        {table?<div className="qm-scroll"><table><thead><tr>{table.selected_columns.map(h=><th key={h}>{h}</th>)}</tr></thead>
-          <tbody>{table.rows.map((r,i)=><tr key={i}>{table.selected_columns.map(k=><td key={k} title={r[k]}>{r[k]}</td>)}</tr>)}</tbody></table>
+        {integrated&&table&&table.rows.length>0&&<button type="button" className="ws-button secondary" onClick={()=>openSnapshotInPython({title:detail.dataset.label+' · '+file,provenance:'Displayed source-table page '+page+' · original cell text',columns:table.selected_columns,rows:table.rows.map(row=>table.selected_columns.map(key=>row[key]??null))})}>Analyze displayed page in Python</button>}
+        {table?<div className="qm-scroll"><table><thead><tr>{table.selected_columns.map(h=><th key={h}>{h}</th>)}<th>Details</th></tr></thead>
+          <tbody>{table.rows.map((r,i)=><tr key={i}>{table.selected_columns.map(k=><td key={k} title={r[k]}>{r[k]}</td>)}<td><button type="button" className="ws-button secondary" aria-label={"Inspect displayed row "+(i+1)} onClick={()=>setInspection({title:detail.dataset.label+" · "+file,provenance:"Dataset "+selected+" · displayed page "+page+", row "+(i+1)+" · original cell text",columns:[...table.selected_columns],rows:[table.selected_columns.map(key=>r[key]??null)]})}>Inspect</button></td></tr>)}</tbody></table>
           {table.rows.length===0&&<p>No matching rows.</p>}</div>:<p>{detail.available_tables.length?'Loading observations…':'No inspectable CSV tables are present.'}</p>}
         {table&&<div className="qm-pager"><span>{table.scan_limit_reached?'Bounded scan':'Source rows scanned'}: {fmt(table.scanned_rows)}</span>
           <div><button disabled={page===1} onClick={()=>setPage(v=>Math.max(1,v-1))}><ChevronLeft size={15}/> Previous</button>
             <span>Page {page}</span><button disabled={!table.has_more} onClick={()=>setPage(v=>v+1)}>Next <ChevronRight size={15}/></button></div></div>}
+        {inspection&&<ContextDrawer title={inspection.title} subtitle={inspection.provenance} onClose={()=>setInspection(null)}><div className="ws-actions">{integrated&&<button type="button" className="ws-button primary" onClick={()=>{openSnapshotInPython(inspection);setInspection(null)}}>Analyze row in Python</button>}<button type="button" className="ws-button secondary" onClick={()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(inspection,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='quantlab-source-row.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}}>Export row JSON</button></div><dl>{inspection.columns.map((column,i)=><div key={column}><dt>{column}</dt><dd>{inspection.rows[0][i]===null?'Not present':String(inspection.rows[0][i])}</dd></div>)}</dl></ContextDrawer>}
         {table?.warning&&<p className="qm-caption">{table.warning}</p>}
         {quality&&<div className="qm-quality"><div className="qm-panel-title"><h3>Quality profile</h3>
           <span className={'qm-badge '+(quality.status==='sample_pass'?'ok':'warn')}>{quality.status.replaceAll('_',' ')}</span></div>

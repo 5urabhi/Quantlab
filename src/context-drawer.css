@@ -1,0 +1,13 @@
+.ql-context-drawer{position:fixed;inset:0 0 0 auto;margin:0;height:100%;max-height:100%;width:min(480px,100vw);max-width:100%;padding:0;border:1px solid #343438;border-radius:0;background:#151518;color:#f1f1f3;box-shadow:-16px 0 60px #0008;overflow:auto;color-scheme:dark}
+.ql-context-drawer::backdrop{background:#0008}
+.ql-context-drawer-body>header{display:flex;align-items:flex-start;justify-content:space-between;padding:20px;gap:16px;border-bottom:1px solid #343438;background:#1c1c20;position:sticky;top:0;z-index:1}
+.ql-context-drawer-body h2{font-size:18px;margin:6px 0;overflow-wrap:anywhere}
+.ql-context-drawer-body small{font-size:10px;letter-spacing:.1em;color:#f5c542}
+.ql-context-drawer-body p{color:#a5a5ad;font-size:12px;overflow-wrap:anywhere}
+.ql-context-drawer-body>header button{background:#25252a;color:#f1f1f3;border:1px solid #343438;border-radius:6px;padding:8px;cursor:pointer}
+.ql-context-drawer-content{padding:20px}
+.ql-context-drawer-content dl{margin:16px 0}
+.ql-context-drawer-content dt{font-size:11px;color:#a5a5ad;margin-top:12px}
+.ql-context-drawer-content dd{font:13px/1.5 ui-monospace,monospace;margin:4px 0;padding-bottom:10px;border-bottom:1px solid #343438;overflow-wrap:anywhere;white-space:pre-wrap}
+.ql-context-drawer-content .ws-actions{display:flex;flex-wrap:wrap;gap:8px}
+.ql-context-drawer-content button:focus-visible,.ql-context-drawer-body>header button:focus-visible{outline:2px solid #f5c542;outline-offset:2px}

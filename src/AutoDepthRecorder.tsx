@@ -182,6 +182,12 @@ export default function AutoDepthRecorder({onOpenSaved}:{
     }catch(e){setError(readableError(e))}
     finally{setBusy(false)}
   }
+  const changeRenewal=async(enabled:boolean)=>{
+    if(busy)return
+    if(enabled&&!window.confirm('Allow automatic renewal of eligible, still-valid Dhan-Web tokens? Dhan may invalidate the old token; other apps may need to reconnect.'))return
+    setBusy(true);setError('');setNotice('')
+    try{const result=await marketPost<Recorder>('/api/trading-cockpit/auto-depth/renewal-consent',{enabled,confirm_renewal:enabled});setState(result);setSettings(result.settings);setNotice(enabled?'Renewal consent saved. The existing background maintenance checks eligibility automatically.':'Renewal consent withdrawn for future requests. Recording was not stopped.');await refresh()}catch(e){setError(readableError(e))}finally{setBusy(false)}
+  }
   const disarm=async()=>{
     if(busy)return
     setBusy(true);setError('');setNotice('')
@@ -255,7 +261,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
           onChange={e=>setSettings(current=>({...current,allow_token_renewal:e.target.checked}))}/>
         Optional: automatically renew my still-valid Dhan-Web access token before it expires.
         Dhan invalidates the old token on renewal; other apps using it may need to reconnect.
-      </label>:null}
+      </label>:<div className="ad-armed-note"><label><input type="checkbox" disabled={busy} checked={Boolean(state?.settings.allow_token_renewal)} onChange={e=>void changeRenewal(e.target.checked)}/> Automatic eligible Dhan-Web token renewal</label><small>Changes apply without stopping recording. Expired or ineligible tokens require reauthorization in Connections.</small></div>}
       {!armed?<label className="ad-consent">
         <input type="checkbox" checked={armedConsent}
           onChange={e=>setArmedConsent(e.target.checked)}/>

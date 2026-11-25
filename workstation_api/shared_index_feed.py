@@ -19,6 +19,7 @@ CAPACITY=1024
 class IndexCapture:
     def __init__(self):
         self.lock=RLock()
+        self.write_lock=RLock()
         self.queue=Queue(maxsize=CAPACITY)
         self.session=None
         self.requested=[]
@@ -44,6 +45,11 @@ class IndexCapture:
             if self.session==session:
                 self.connected=False
                 self.state="disconnected"
+
+    def disconnect(self):
+        with self.lock:
+            self.connected=False
+            self.state="disconnected"
 
     def submit(self,event,received,session):
         with self.lock:
@@ -89,7 +95,8 @@ class IndexCapture:
             except Empty:
                 continue
             try:
-                self.write_one(item)
+                with self.write_lock:
+                    self.write_one(item)
             finally:
                 self.queue.task_done()
 

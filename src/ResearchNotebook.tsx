@@ -15,7 +15,7 @@ type Result={id:string;notebook_id:string;revision:number;profile:string;source_
 type Job={status:string;stage?:string;error?:string;result?:Result}
 const newDraft=():Draft=>({title:'Untitled research notebook',cells:[{kind:'markdown',source:'# Research question\nDocument assumptions, data source and method.'},{kind:'code',source:'import math\nvalues = [math.sqrt(x) for x in range(1, 6)]\nprint(values)\nshow_chart("Example square roots", "Input", "Square root", list(range(1, 6)), [{"name": "sqrt", "y": values}])'}],snapshot:null})
 function draftFromStorage():Draft{
-  try{const attached=sessionStorage.getItem('ql-notebook-attachment');if(attached){sessionStorage.removeItem('ql-notebook-attachment');const d=JSON.parse(attached);return {title:d.title,cells:d.cells,snapshot:d.snapshot}}
+  try{const attached=sessionStorage.getItem('ql-notebook-attachment');if(attached){sessionStorage.removeItem('ql-notebook-attachment');sessionStorage.removeItem('ql-notebook-doc');const d=JSON.parse(attached);return {title:d.title,cells:d.cells,snapshot:d.snapshot}}
     const draft=sessionStorage.getItem('ql-notebook-draft');if(draft)return JSON.parse(draft)
   }catch{/* recoverable local browser state */}
   return newDraft()
@@ -27,7 +27,7 @@ function download(name:string,value:unknown){
 export default function ResearchNotebook(){
   const [draft,setDraft]=useState<Draft>(draftFromStorage)
   const [library,setLibrary]=useState<Meta[]>([])
-  const [doc,setDoc]=useState<Doc|null>(null)
+  const [doc,setDoc]=useState<Doc|null>(()=>{try{const saved=sessionStorage.getItem('ql-notebook-doc');return saved?JSON.parse(saved):null}catch{return null}})
   const [result,setResult]=useState<Result|null>(null)
   const [jobId,setJobId]=useState(()=>{try{return sessionStorage.getItem('ql-notebook-job')||''}catch{return ''}})
   const [status,setStatus]=useState('')
@@ -42,6 +42,7 @@ export default function ResearchNotebook(){
   const refresh=async()=>{try{setLibrary((await marketApi<{notebooks:Meta[]}>('/api/research-notebooks')).notebooks)}catch(e){setError(readableError(e))}}
   useEffect(()=>{void refresh()},[])
   useEffect(()=>{try{sessionStorage.setItem('ql-notebook-draft',JSON.stringify(draft))}catch{/* durable Save still available */}},[draft])
+  useEffect(()=>{try{if(doc)sessionStorage.setItem('ql-notebook-doc',JSON.stringify(doc));else sessionStorage.removeItem('ql-notebook-doc')}catch{/* saved backend revisions remain available */}},[doc])
   const showDoc=(d:Doc)=>{setDoc(d);setDraft({title:d.title,cells:d.cells,snapshot:d.snapshot});setResult(null);setCollapsed([])}
   const load=async(id:string,revision?:number,confirm=true)=>{
     if(confirm&&dirty&&!window.confirm('Open another revision? Unsaved edits will be replaced.'))return

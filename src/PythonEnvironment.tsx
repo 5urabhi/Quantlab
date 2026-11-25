@@ -9,6 +9,8 @@ export default function PythonEnvironment(){
   const [error,setError]=useState('')
   const [job,setJob]=useState('')
   const [probe,setProbe]=useState<Probe|null>(null)
+  const [copied,setCopied]=useState(false)
+  const command='bash run.sh python-packages install'
   const refresh=()=>{setError('');void marketApi<Environment>('/api/python-environment').then(setInfo).catch(e=>setError(readableError(e)))}
   useEffect(refresh,[])
   useEffect(()=>{
@@ -25,7 +27,7 @@ export default function PythonEnvironment(){
     <p>Isolation: {info?.available?'Utilities installed; kernel permission checked by execution':info?'Unavailable':'Checking'}</p>
     <p><strong>Standard library</strong> — default, smaller memory limit. <strong>Scientific</strong> — optional system-distribution libraries, read-only inside sandbox.</p>
     {info&&<div className="ws-table-scroll"><table><thead><tr><th>Python import</th><th>Ubuntu package</th><th>Files</th><th>Isolated import test</th></tr></thead><tbody>{Object.entries(info.scientific_packages||{}).map(([name,p])=><tr key={name}><td>{name}</td><td>{p.distribution}</td><td>{p.files_present?'Present':'Not detected'}</td><td>{probe?.result?.packages[name]?.available?'Pass · '+probe.result.packages[name].version:probe?.result?.packages[name]?.reason||'Not tested'}</td></tr>)}</tbody></table></div>}
-    <details><summary>Install missing libraries on Ubuntu</summary><p>Run this once in your terminal if you need these packages. QuantLab does not execute privileged installation commands or arbitrary pip instructions. Then click Test scientific imports; no QuantLab restart is needed.</p><pre style={{whiteSpace:'pre-wrap'}}>sudo apt install bubblewrap util-linux python3-numpy python3-pandas python3-scipy python3-matplotlib python3-sympy python3-statsmodels python3-sklearn</pre><p>Availability depends on your Ubuntu release and configured package repositories.</p></details>
+    <details><summary>Install missing libraries on Ubuntu</summary><p>From your QuantLab project directory, run this helper. It detects missing approved packages and asks for local approval before installing them. The application does not execute privileged commands. Then test scientific imports; no QuantLab restart is needed.</p><pre style={{whiteSpace:'pre-wrap'}}>{command}</pre><div className="ws-actions"><button type="button" className="ws-button" onClick={()=>{void navigator.clipboard.writeText(command).then(()=>setCopied(true)).catch(()=>setError('Clipboard unavailable; copy the command manually.'))}}>{copied?'Copied':'Copy installer command'}</button><button type="button" className="ws-button" onClick={refresh}>Recheck installed packages</button></div><p>Read-only inventory: <code>bash run.sh python-packages check</code></p><p>Availability depends on your Ubuntu release and configured package repositories.</p></details>
     <p className="ws-caption">System package presence is not a successful import. The sandbox has no broker tokens, order API or network access.</p>
   </section>
 }
