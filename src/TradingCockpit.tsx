@@ -37,9 +37,10 @@ const indiaDate=(offsetDays=0)=>{const d=new Date();d.setUTCDate(d.getUTCDate()+
 
 export type TradingCockpitView=CockpitView
 export default function TradingCockpit({selectedView,focusLive,integrated=false,
-  onNavigateView,onNavigateLiveView}:{
+  onNavigateView,onNavigateLiveView,initialOptionMode}:{
   selectedView?:CockpitView
   focusLive?:'signals'|'options'|'depth'
+  initialOptionMode?:'overview'|'analytics'|'directional'
   integrated?:boolean
   onNavigateView?:(view:CockpitView)=>void
   onNavigateLiveView?:(view:'signals'|'options'|'depth')=>void
@@ -318,7 +319,7 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
       <span className={marketWindow.regularWindow?'regular':'idle'}>
         <span className="tc-status-dot"/>{marketWindow.regularWindow?'Regular NSE index hours':'Outside regular NSE index hours'}</span>
       <span className={liveFeedFresh?'live':'idle'}>
-        <span className="tc-status-dot"/>{liveFeedFresh?'Broker feed LIVE · fresh':liveHeader?.active?'Feed connecting / stale':'Live feed stopped'}</span>
+        <span className="tc-status-dot"/>{liveFeedFresh?'Broker feed LIVE · fresh':liveHeader?.active?'Feed connecting / stale':'Manual index feed stopped'}</span>
       <span className={tokenState==='CONNECTED'?'live':tokenState==='EXPIRING SOON'?'regular':'idle'}>
         <ShieldCheck size={14}/> Dhan: {tokenState==='CONNECTED'?'Verified':tokenState==='EXPIRING SOON'?'Expiring soon':tokenState==='CHECKING'?'Checking':tokenState}
         {tokenRemaining!==null&&tokenRemaining>0?' · '+tokenHours+'h '+tokenMinutes+'m remaining':''}
@@ -348,7 +349,7 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
       {!marketWindow.regularWindow&&!liveFeedFresh&&<div className="tc-market-note"><Clock3 size={17}/>
         <span>The regular NSE index session is outside its trading window. Feed freshness is determined only by actual Dhan packets; holidays and special sessions are not inferred.</span>
         <button type="button" onClick={()=>{selectTab('replay');setReplayView('session')}}>Open recorded market</button></div>}
-      <LiveFeedPanel focusedView={focusLive} hideNavigation={integrated}
+      <LiveFeedPanel focusedView={focusLive} hideNavigation={integrated} initialOptionMode={initialOptionMode}
         onViewChange={onNavigateLiveView}
         onOpenSetup={()=>selectTab('setup')}
         onOpenSaved={()=>{selectTab('replay');setReplayView('recordings')}}

@@ -2,6 +2,7 @@ import {lazy,Suspense,useCallback, useEffect, useState} from 'react'
 import {Activity, AlertTriangle, ArrowRight, CheckCircle2, ChevronLeft, ChevronRight,
   Database, FileSpreadsheet, HardDrive, History, RefreshCw, Search, ShieldCheck, Wrench} from 'lucide-react'
 import './data-manager.css'
+import {openSnapshotInPython} from './pythonBridge'
 const MarketLibraryPanel=lazy(()=>import('./MarketLibraryPanel'))
 const DataAcquisitionPanel=lazy(()=>import('./DataAcquisitionPanel'))
 const ManagedDatabaseBrowser=lazy(()=>import('./ManagedDatabaseBrowser'))
@@ -238,6 +239,7 @@ export default function DataManager({
             <button type="submit">Search</button>
           </form>
         </div>
+        {table&&table.rows.length>0&&<button type="button" className="ws-button secondary" onClick={()=>openSnapshotInPython({title:detail.dataset.label+' · '+file,provenance:'Displayed source-table page '+page+' · original cell text',columns:table.selected_columns,rows:table.rows.map(row=>table.selected_columns.map(key=>row[key]??null))})}>Analyze displayed page in Python</button>}
         {table?<div className="qm-scroll"><table><thead><tr>{table.selected_columns.map(h=><th key={h}>{h}</th>)}</tr></thead>
           <tbody>{table.rows.map((r,i)=><tr key={i}>{table.selected_columns.map(k=><td key={k} title={r[k]}>{r[k]}</td>)}</tr>)}</tbody></table>
           {table.rows.length===0&&<p>No matching rows.</p>}</div>:<p>{detail.available_tables.length?'Loading observations…':'No inspectable CSV tables are present.'}</p>}

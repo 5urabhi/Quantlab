@@ -138,18 +138,20 @@ function Table({rows,cols,selected,onSelect,sortKey,onSort,ascending}:{
     {!rows.length&&<tr><td colSpan={cols.length+1}>No contracts match this view. Change filters or check source evidence.</td></tr>}
     </tbody></table></div>
 }
-type Props={expiry:string;selected:string;onSelect:(id:string)=>void;onSnapshot:(chain:Chain)=>void
+type Props={
+  initialWorkflow?:booleanexpiry:string;selected:string;onSelect:(id:string)=>void;onSnapshot:(chain:Chain)=>void
   capital:number;lots:number;targetPremium:number;onSettings:(capital:number,lots:number,premium:number)=>void
   onDraftJournal:(contract:OptionContract,lots:number)=>void
   onChooseContract:(expiry:string,identity:string)=>void}
-export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSnapshot,capital,lots,targetPremium,onSettings,onDraftJournal,onChooseContract}:Props){
+export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSnapshot,capital,lots,targetPremium,onSettings,onDraftJournal,onChooseContract,initialWorkflow=false}:Props){
   const defaults:Settings={capital,max_lots:lots,direction:'BOTH',move_points:100,horizon_minutes:5,
     iv_change_points:0,rate_pct:6.5,dividend_pct:0,max_spread_bps:250,risk_pct:100,
     target_premium:targetPremium,slippage_bps:10,broker_profile:'zerodha'}
   const [form,setForm]=useState<Settings>(defaults)
   const [applied,setApplied]=useState<Settings>(defaults)
   const [tab,setTab]=useState<Tab>('rank')
-  const [workflowOpen,setWorkflowOpen]=useState(false)
+  const [workflowOpen,setWorkflowOpen]=useState(initialWorkflow)
+  useEffect(()=>setWorkflowOpen(initialWorkflow),[initialWorkflow])
   const [data,setData]=useState<Analysis|null>(null)
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)

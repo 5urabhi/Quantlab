@@ -2,6 +2,7 @@ import {lazy,Suspense,useCallback,useEffect,useMemo,useState} from 'react'
 import {AlertTriangle,ArrowRight,Clock3,Database,RefreshCw,ShieldCheck,TrendingUp} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './option-chain-live.css'
+import {openSnapshotInPython} from './pythonBridge'
 const AdvancedOptionsAnalytics=lazy(()=>import('./AdvancedOptionsAnalytics'))
 
 type Expiries={
@@ -39,14 +40,17 @@ type Props={
   onDraftJournal:(contract:OptionContract,lots:number)=>void
   openConnections:()=>void
   currentIndexDirection:'UP'|'DOWN'|'NO_TRADE'|null
+  initialMode?:'overview'|'analytics'|'directional'
 }
 export default function OptionChainLive({feedActive,depthIdentity,
-  onSelectDepth,onDraftJournal,openConnections,currentIndexDirection}:Props){
-  const [advanced,setAdvanced]=useState(false)
+  onSelectDepth,onDraftJournal,openConnections,currentIndexDirection,initialMode}:Props){
+  const [advanced,setAdvanced]=useState(initialMode==='analytics'||initialMode==='directional')
+  useEffect(()=>{if(initialMode)setAdvanced(initialMode!=='overview')},[initialMode])
   const [dates,setDates]=useState<Expiries|null>(null)
   const [expiry,setExpiry]=useState('')
   const [chain,setChain]=useState<Chain|null>(null)
   const [selected,setSelected]=useState<string>('')
+  const [sort,setSort]=useState<'premium'|'strike'|'spread'|'oi'>('strike')
   const [side,setSide]=useState<'ALL'|'CE'|'PE'>('ALL')
   const [lots,setLots]=useState(3)
   const [targetPremium,setTargetPremium]=useState(300)
@@ -146,9 +150,11 @@ export default function OptionChainLive({feedActive,depthIdentity,
       // Closest to preferred premium first; ties resolved by strike and type.
       const aPrice=a.ltp===null?Number.POSITIVE_INFINITY:Math.abs(a.ltp-targetPremium)
       const bPrice=b.ltp===null?Number.POSITIVE_INFINITY:Math.abs(b.ltp-targetPremium)
-      return aPrice-bPrice||a.strike-b.strike||a.option_type.localeCompare(b.option_type)
+      const spread=(c:OptionContract)=>c.ask!==null&&c.bid!==null?c.ask-c.bid:Infinity
+      const primary=sort==='strike'?a.strike-b.strike:sort==='spread'?spread(a)-spread(b):sort==='oi'?(b.oi??-1)-(a.oi??-1):aPrice-bPrice
+      return primary||a.strike-b.strike||a.option_type.localeCompare(b.option_type)
     })
-  },[chain,expiry,side,nearTargetOnly,targetPremium,premiumTolerance])
+  },[chain,expiry,side,nearTargetOnly,targetPremium,premiumTolerance,sort])
   const picked=chain?.expiry===expiry
     ?chain.contracts.find(c=>c.identity&&c.identity===selected):null
   const valid=Boolean(picked?.contract_master_verified&&picked?.quote_valid&&
@@ -219,7 +225,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
       before relying on contract quantity or lot-based premium calculations.</p>}
     {advanced?<Suspense fallback={<p className="tc-muted">Loading advanced option analytics…</p>}>
       <AdvancedOptionsAnalytics expiry={expiry} selected={selected} onSelect={setSelected}
-        onSnapshot={syncAdvancedSnapshot} capital={capital} lots={lots}
+        initialWorkflow={initialMode==='directional'} onSnapshot={syncAdvancedSnapshot} capital={capital} lots={lots}
         targetPremium={targetPremium} onSettings={syncAdvancedSettings} onDraftJournal={onDraftJournal}
         onChooseContract={(nextExpiry,id)=>{if(nextExpiry!==expiry){setExpiry(nextExpiry);setChain(null)}setSelected(id)}}/>
     </Suspense>:<>
@@ -248,8 +254,10 @@ export default function OptionChainLive({feedActive,depthIdentity,
           onChange={e=>setNearTargetOnly(e.target.checked)}/>
         Only show premiums near target
       </label>
-      <span>{matchingPremiumCount} matching contract(s). Sorted closest to ₹{num(targetPremium)} LTP. Bid/ask, spread and liquidity still matter.</span>
+      <label>Sort contracts<select value={sort} onChange={e=>setSort(e.target.value as typeof sort)}><option value="strike">Strike</option><option value="premium">Closest to preferred premium</option><option value="spread">Smallest quoted spread</option><option value="oi">Highest reported OI</option></select></label>
+      <span>{matchingPremiumCount} matching contract(s). Bid/ask, spread and liquidity still matter.</span>
     </div>
+    <div className="oc-controls-actions"><button type="button" disabled={!filtered.length} onClick={()=>openSnapshotInPython({title:'BANKNIFTY option chain '+expiry,provenance:'Dhan REST snapshot · '+(chain?.received_utc||'unknown receipt'),columns:['Strike (points)','Side','LTP (₹)','Bid (₹)','Ask (₹)','OI (provider units)','Volume (provider units)','IV (%)','Delta','Lot size'],rows:filtered.map(c=>[c.strike,c.option_type,c.ltp,c.bid,c.ask,c.oi,c.volume,c.iv,c.delta,c.lot_size])})}>Analyze visible contracts in Python</button></div>
     <div className="tc-table-scroll oc-table">
       <table><thead><tr><th>Choose</th><th>Strike</th><th>Type</th>
         <th>LTP ₹</th><th>Bid ₹</th><th>Ask ₹</th><th>OI</th><th>Volume</th>

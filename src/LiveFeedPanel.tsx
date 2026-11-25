@@ -4,12 +4,15 @@ import './live-feed.css'
 import OptionChainLive,{type OptionContract} from './OptionChainLive'
 import AutoDepthRecorder from './AutoDepthRecorder'
 import ObservedIndexChartV2 from './ObservedIndexChartV2'
+import ResearchPlot from './ResearchPlots'
+import {openSnapshotInPython} from './pythonBridge'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 
 type DepthLevel={price:number;quantity:number;orders:number}
 type Book={identity:string;received_utc:string;bid:DepthLevel[];ask:DepthLevel[];
   best_bid:number;best_ask:number;spread_bps:number;imbalance:number;bid_levels:number;
   ask_levels:number;full_depth:boolean;age_seconds:number;fresh:boolean;source_clock:string}
+type AutoRecorder={armed:boolean;state:string;connected:boolean;chain_spot?:number;last_chain_utc?:string;contracts?:{identity:string;side:string;strike:number;expiry:string}[];snapshots_saved?:number;last_packet_utc?:string;last_error?:string}
 type Quote={price:number;exchange_utc:string;received_utc:string;age_seconds:number;fresh:boolean;source:string}
 type Feed={active:boolean;session_id?:string;index_identity?:string;depth_identity?:string|null;
   ticker_connection?:string;depth_connection?:string;auto_audit?:boolean;
@@ -36,7 +39,7 @@ const timeIST=(value?:string)=>value?new Date(value).toLocaleTimeString('en-IN',
 const isExactDepth=(value:string)=>/^NSE_(?:EQ|FNO):[0-9]{1,12}$/.test(value)
 
 export default function LiveFeedPanel({
-  onOpenSetup,onDraftJournal,onOpenSaved,focusedView,hideNavigation=false,onViewChange
+  onOpenSetup,onDraftJournal,onOpenSaved,focusedView,hideNavigation=false,onViewChange,initialOptionMode
 }:{
   onOpenSetup?:()=>void
   onOpenSaved?:()=>void
@@ -44,6 +47,7 @@ export default function LiveFeedPanel({
   focusedView?:'signals'|'options'|'depth'
   hideNavigation?:boolean
   onViewChange?:(view:'signals'|'options'|'depth')=>void
+  initialOptionMode?:'overview'|'analytics'|'directional'
 }){
   const [view,setView]=useState<'signals'|'options'|'depth'>(focusedView||'options')
   useEffect(()=>{if(focusedView)setView(focusedView)},[focusedView])
@@ -51,6 +55,10 @@ export default function LiveFeedPanel({
     setView(next);onViewChange?.(next)
   }
   const [feed,setFeed]=useState<Feed|null>(null)
+  const [automatic,setAutomatic]=useState<AutoRecorder|null>(null)
+  const [savedBook,setSavedBook]=useState<Book|null>(null)
+  const [savedBookError,setSavedBookError]=useState('')
+  useEffect(()=>{let active=true;let busy=false;const poll=async()=>{if(busy)return;busy=true;try{const v=await marketApi<AutoRecorder>('/api/trading-cockpit/auto-depth/status');if(active)setAutomatic(v)}catch{if(active)setAutomatic(null)}finally{busy=false}};void poll();const timer=window.setInterval(()=>void poll(),8000);return()=>{active=false;window.clearInterval(timer)}},[])
   const [connectedToLocal,setConnectedToLocal]=useState(false)
   const [index,setIndex]=useState<'INDEX:BANKNIFTY'|'INDEX:NIFTY50'>('INDEX:BANKNIFTY')
   const [contractSearch,setContractSearch]=useState('BANKNIFTY')
@@ -83,6 +91,16 @@ export default function LiveFeedPanel({
     const clock=window.setInterval(()=>setNow(Date.now()),1000)
     return()=>{stream.close();window.clearInterval(clock)}
   },[refresh])
+  useEffect(()=>{
+    if(!automatic?.armed||view!=='depth'||!isExactDepth(depthIdentity)){setSavedBook(null);return}
+    let active=true,running=false;setSavedBook(null);setSavedBookError('')
+    const poll=async()=>{if(running)return;running=true;try{
+      const data=await marketApi<{snapshots:Book[]}>('/api/trading-cockpit/live/depth-history?'+new URLSearchParams({identity:depthIdentity,limit:'1'}))
+      if(active){setSavedBook(data.snapshots.at(-1)||null);setSavedBookError('')}
+    }catch(e){if(active){setSavedBook(null);setSavedBookError(readableError(e))}}finally{running=false}}
+    void poll();const timer=window.setInterval(()=>void poll(),5000)
+    return()=>{active=false;window.clearInterval(timer)}
+  },[automatic?.armed,view,depthIdentity])
   const watchedIndex=feed?.active?(feed.index_identity||index):index
   useEffect(()=>{
     const poll=async()=>{
@@ -136,7 +154,8 @@ export default function LiveFeedPanel({
   }
   const quote=feed?.quotes?.[watchedIndex]
   const optionQuote=feed?.depth_identity?feed.quotes?.[feed.depth_identity]:undefined
-  const liveBook=feed?.latest_book
+  const usingSaved=Boolean(automatic?.armed&&!feed?.active)
+  const liveBook=usingSaved?(savedBook?.identity===depthIdentity?savedBook:null):feed?.latest_book
   const quoteAge=quote?Math.max(0,(now-Date.parse(quote.received_utc))/1000):null
   const livePrice=Boolean(feed?.active&&feed.ticker_connection==='connected'
     &&quoteAge!==null&&quoteAge<=8&&quote?.fresh)
@@ -149,6 +168,7 @@ export default function LiveFeedPanel({
       bid:liveBook.bid[i],ask:liveBook.ask[i],position:i+1,
     })):[],[liveBook])
   const configuredDepth=feed?.active?feed.depth_identity:depthIdentity
+  const autoContracts=automatic?.contracts||[]
   return <section className="tc-panel lf-root" aria-label="Live BANKNIFTY and 20-level market feed">
     <div className="tc-panel-title lf-title"><div><strong><Radio size={17}/>{hideNavigation?
       view==='signals'?'BANKNIFTY index & signal monitor':
@@ -159,12 +179,12 @@ export default function LiveFeedPanel({
       'Live index/contract observations come from genuine Dhan packets. The automatic 190-contract CE/PE recorder is configured separately in Settings; navigation never stops it.':
       'This manual feed is independent from automatic BANKNIFTY CE/PE 20-level recording below. Both use read-only Dhan data; neither places broker orders.'}</p></div>
       <span className={'lf-badge '+(livePrice?'live':feed?.active?'connecting':'offline')}>
-        {livePrice?'LIVE · FRESH':feed?.active?'FEED STARTING / STALE':'NOT STREAMING'}</span>
+        {livePrice?'LIVE INDEX · FRESH':feed?.active?'INDEX FEED STARTING / STALE':automatic?.armed?'AUTOMATIC RECORDER ARMED':'NOT STREAMING'}</span>
     </div>
     <div className="lf-meta"><span>Local UI stream <b>{connectedToLocal?'Connected':'Reconnecting'}</b></span>
       <span>Index ticker <b>{feed?.ticker_connection||'Not started'}</b></span>
       <span>20-level feed <b>{feed?.depth_connection||'Not started'}</b></span>
-      <span>Stored in <b>dhan_shared</b></span></div>
+      <span>Stored in <b>dhan_shared</b></span><span>Automatic recorder <b>{automatic?automatic.armed?automatic.state.replaceAll('_',' '):'Off':'Checking'}</b></span></div>
     {error&&<p role="alert" className="tc-error">{error}</p>}
     {notice&&<p role="status" className="tc-confirm">{notice}</p>}
     {!hideNavigation&&<nav className="lf-view-tabs" role="tablist" aria-label="Live trading views">
@@ -176,13 +196,13 @@ export default function LiveFeedPanel({
         onClick={()=>changeView('depth')}><Database size={16}/> 20-level order book</button>
     </nav>}
     {view==='options'&&!hideNavigation&&<AutoDepthRecorder onOpenSaved={onOpenSaved}/>}
-    {view==='options'&&<OptionChainLive
+    {view==='options'&&<OptionChainLive initialMode={initialOptionMode}
       feedActive={Boolean(feed?.active)} depthIdentity={feed?.active?feed.depth_identity||'':depthIdentity}
       currentIndexDirection={hasSignal?signal?.direction||null:null}
       openConnections={()=>onOpenSetup?.()}
       onSelectDepth={identity=>{
-        setDepthIdentity(identity);setIndex('INDEX:BANKNIFTY');setConfigOpen(true)
-        setNotice('Contract selected. Confirm read-only Dhan 20-level streaming below to start its original order book.')
+        setDepthIdentity(identity);setIndex('INDEX:BANKNIFTY');setConfigOpen(!automatic?.armed)
+        setNotice(automatic?.armed?'Contract selected. Inspect the latest locally saved original book; no extra socket is opened.':'Contract selected. Confirm read-only Dhan 20-level streaming below to start its original order book.')
         if(hideNavigation)changeView('depth')
       }}
       onDraftJournal={(contract,lots)=>onDraftJournal?.(contract,lots)}
@@ -207,17 +227,17 @@ export default function LiveFeedPanel({
         <small>{bookFresh?'Original paired 20-level book':'No fresh NSE depth snapshot'}</small></div>
     </div></>}
 
-    {!feed?.active&&<div className="lf-connect-block">
+    {!feed?.active&&!automatic?.armed&&<div className="lf-connect-block">
       <div><strong>Real-time feed is stopped</strong><p>Index signals and 20-level depth require original broker packets. Historical analysis remains separate and available at any time.</p></div>
-      <button type="button" onClick={()=>setConfigOpen(v=>!v)}>{configOpen?'Close configuration':'Configure live feed'}</button>
+      <button type="button" onClick={()=>setConfigOpen(v=>!v)}>{configOpen?'Close manual controls':'Manual feed controls'}</button>
     </div>}
-    {!feed?.active&&feed&&!feed.client_id_configured&&<div className="lf-connect-warning" role="status">
+    {!feed?.active&&!automatic?.armed&&feed&&!feed.client_id_configured&&<div className="lf-connect-warning" role="status">
       <span>{hideNavigation?
         'Dhan access needs verification. QuantLab can resolve the client ID from the authenticated profile when a valid local token is available.':
         'Add your Dhan client ID and token in Connections before starting a stream.'}</span>
       {onOpenSetup&&<button type="button" onClick={onOpenSetup}>Open Connections</button>}
     </div>}
-    {!feed?.active&&configOpen&&<div className="lf-start-form">
+    {!feed?.active&&!automatic?.armed&&configOpen&&<div className="lf-start-form">
       <label>Analyze index<select aria-label="Live underlying index" value={index}
         onChange={e=>setIndex(e.target.value as typeof index)}>
         <option value="INDEX:BANKNIFTY">BANKNIFTY · spot index</option>
@@ -256,10 +276,13 @@ export default function LiveFeedPanel({
       <button type="button" onClick={()=>void stop()} disabled={busy}><Square size={15}/> Stop streams</button>
       <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Check connection</button>
     </div>}
+    {automatic?.armed&&!feed?.active&&<div className="lf-connect-block"><div><strong>Automatic BANKNIFTY recording is armed</strong><p>Original CE/PE capture runs independently using the reserved Dhan sockets. {automatic.last_chain_utc?'Last recorded chain spot: '+fmt(automatic.chain_spot)+' points · '+timeIST(automatic.last_chain_utc)+' IST. ':''}The manual index ticker is separate and cannot run concurrently; a chain snapshot is not a live directional signal.</p></div>{onOpenSaved&&<button type="button" onClick={onOpenSaved}>View recorded market</button>}</div>}
     {(view==='depth'||(view==='options'&&!hideNavigation))&&
       <div className="lf-depth-summary">
       <div className="tc-panel-title"><strong>20-level market depth · {configuredDepth||'select a stock / option'}</strong>
-        <span>20 bids + 20 asks, original NSE equity/derivative packet pairs</span></div>
+        <span>Original NSE equity/derivative packet pairs · available levels only</span></div>
+      {usingSaved&&<div className="lf-start-form"><label>Automatically captured contract<select aria-label="Automatically captured depth contract" value={depthIdentity} onChange={e=>setDepthIdentity(e.target.value)}><option value="">Select recorded contract</option>{depthIdentity&&!autoContracts.some(c=>c.identity===depthIdentity)&&<option value={depthIdentity}>{depthIdentity} · selected / not currently subscribed</option>}{autoContracts.map(c=><option key={c.identity} value={c.identity}>{c.strike} {c.side} · {c.expiry} · {c.identity}</option>)}</select></label><small>Reads the latest saved original book. No new broker subscription; a saved sample is not a live quote.</small></div>}
+      {savedBookError&&usingSaved&&<p role="alert" className="tc-error">{savedBookError}</p>}
       {optionQuote&&<div className="lf-meta">
         <span>Selected option/stock last observed premium <b>₹{fmt(optionQuote.price)}</b></span>
         <span>Received <b>{timeIST(optionQuote.received_utc)} IST</b></span>
@@ -268,13 +291,14 @@ export default function LiveFeedPanel({
       {liveBook&&<div className="lf-meta"><span>Bid–ask spread <b>{fmt(liveBook.spread_bps)} bps</b></span>
         <span>Order-book imbalance <b>{fmt((liveBook.imbalance+1)*50,1)}% bid-side share</b></span>
         <span>Book update <b>{timeIST(liveBook.received_utc)} IST</b></span>
-        <span>Status <b>{bookFresh?'Fresh':'STALE'}</b></span></div>}
+        <span>Status <b>{usingSaved?'Saved sample · '+Math.max(0,Math.round((now-Date.parse(liveBook.received_utc))/1000))+'s old':bookFresh?'Fresh':'STALE'}</b></span></div>}
       {liveBook?<div className="tc-table-scroll"><table><thead><tr><th>Level</th><th>Bid qty</th><th>Bid orders</th><th>Bid price (₹)</th><th>Ask price (₹)</th><th>Ask orders</th><th>Ask qty</th></tr></thead>
         <tbody>{bookRows.map(row=><tr key={row.position}><td>{row.position}</td><td>{fmt(row.bid?.quantity,0)}</td>
           <td>{fmt(row.bid?.orders,0)}</td><td>{fmt(row.bid?.price)}</td><td>{fmt(row.ask?.price)}</td>
           <td>{fmt(row.ask?.orders,0)}</td><td>{fmt(row.ask?.quantity,0)}</td></tr>)}</tbody></table></div>:
         <p className="tc-missing"><Database size={17}/> No paired 20-level Dhan packets yet.
           You may need full-market-depth entitlement and an active NSE_EQ or NSE_FNO contract.</p>}
+      {liveBook&&<><ResearchPlot plot={{kind:'line2d',title:'Displayed cumulative depth by price',x_label:'Option / stock price (₹ per unit)',y_label:'Cumulative displayed quantity (units)',x:[...liveBook.bid,...liveBook.ask].map(v=>v.price).filter((v,i,all)=>all.indexOf(v)===i).sort((a,b)=>a-b),traces:(()=>{const levels=[...liveBook.bid,...liveBook.ask].map(v=>v.price).filter((v,i,all)=>all.indexOf(v)===i).sort((a,b)=>a-b);return [{name:'Bids at or above price',color:'#70e1ad',y:levels.map(p=>p<=liveBook.best_bid?liveBook.bid.filter(v=>v.price>=p).reduce((sum,v)=>sum+v.quantity,0):null)},{name:'Asks at or below price',color:'#ff8192',y:levels.map(p=>p>=liveBook.best_ask?liveBook.ask.filter(v=>v.price<=p).reduce((sum,v)=>sum+v.quantity,0):null)}]})()}} provenance="original-depth-snapshot"/><button type="button" className="ws-button secondary" onClick={()=>openSnapshotInPython({title:'Original order book '+liveBook.identity,provenance:'Saved or streaming original book · '+liveBook.received_utc,columns:['Level','Bid price (₹)','Bid qty','Ask price (₹)','Ask qty'],rows:bookRows.map(r=>[r.position,r.bid?.price??null,r.bid?.quantity??null,r.ask?.price??null,r.ask?.quantity??null])})}>Analyze depth in Python</button></>}
       <p className="tc-muted">20-level depth is NOT available on IDX_I itself. Depth is sampled for storage at up to one observed pair per second, while the live screen uses the newest observed packet. No historical book is inferred from candles.</p>
     </div>}
     {view==='signals'&&<div className="lf-signal-actions">
