@@ -390,6 +390,8 @@ def _ledger():
                 except sqlite3.OperationalError:
                     if key not in {r[1] for r in db.execute("PRAGMA table_info(option_rank_observations)")}:
                         raise
+        db.execute("CREATE INDEX IF NOT EXISTS option_rank_pair ON option_rank_observations(pair_key,cohort)")
+        db.execute("CREATE INDEX IF NOT EXISTS option_rank_decision ON option_rank_observations(decision_utc)")
         yield db
 
 
