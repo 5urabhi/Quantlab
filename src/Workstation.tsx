@@ -18,6 +18,7 @@ import PythonWorkbench from './PythonWorkbench'
 import PythonMonitors from './PythonMonitors'
 import PythonEnvironment from './PythonEnvironment'
 import ResearchPlot from './ResearchPlots'
+const ResearchNotebook = lazy(() => import('./ResearchNotebook'))
 const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
@@ -59,7 +60,7 @@ type Tab =
   'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|'evidence'|
   'history'|'workspace'|'chartstudio'|'comparisons'|'visual'|'workspacejobs'|
   'projects'|'reports'|'resourcebrowser'|'settings'|'connections'|'recordingsettings'|
-  'storage'|'preferences'|'diagnostics'|'guide'|'journey'|'pythonmonitors'|'pythonenvironment'|'custommodels'|'customscanners'
+  'storage'|'preferences'|'diagnostics'|'guide'|'journey'|'pythonmonitors'|'pythonenvironment'|'custommodels'|'customscanners'|'notebooks'
 type PrimarySection={id:Tab;label:string;icon:typeof Activity;tabs:Tab[];navTabs:Tab[]}
 const primarySections:PrimarySection[]=[
   {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
@@ -79,7 +80,7 @@ const primarySections:PrimarySection[]=[
     tabs:['history','workspace','chartstudio','comparisons','visual','workspacejobs'],
     navTabs:['history','workspace','chartstudio']},
   {id:'projects',label:'Projects',icon:BookOpen,
-    tabs:['projects','reports','resourcebrowser'],navTabs:['projects','reports']},
+    tabs:['projects','notebooks','reports','resourcebrowser'],navTabs:['projects','notebooks','reports']},
   {id:'connections',label:'Settings',icon:Settings2,
     tabs:['connections','recordingsettings','storage','preferences','diagnostics','settings','guide','pythonenvironment'],
     navTabs:['connections','recordingsettings','diagnostics']},
@@ -103,7 +104,7 @@ const titles:Record<Tab,string>={
   history:'All Research Results',workspace:'Compare Runs',
   chartstudio:'Chart Studio',comparisons:'Index Comparison',
   visual:'Historical Charts',workspacejobs:'Research Job History',
-  projects:'My Projects & Notebooks',reports:'Research Reports',
+  projects:'My Projects & Notebooks',notebooks:'Research Notebooks',reports:'Research Reports',
   resourcebrowser:'Saved Resource Library',
   connections:'Connections',recordingsettings:'Automatic Recording',
   storage:'Storage & Data Management',preferences:'Preferences',
@@ -129,6 +130,7 @@ const descriptions:Record<Tab,string>={
   custommodels:'Maintain and execute user-defined snapshot-based quantitative calculations.',
   customscanners:'Rank source-backed option contracts using your saved Python score.',
   pythonenvironment:'Inspect and test optional scientific packages in an isolated environment.',
+  notebooks:'Save versioned Python and Markdown cells, attach input data and run reproducible calculations.',
   mathematics:'Choose stochastic, volatility, options, risk and portfolio mathematical models.',
   models:'Sweep parameters, test walk-forward stability, study shocks and inspect advanced research tools.',
   research:'Construct, backtest and validate factor-based equity indices.',
@@ -473,7 +475,7 @@ function App(){
         onOpenFull={()=>begin('workspacejobs')}/>
       <GlobalSearchV2 open={searchOpen} onClose={()=>setSearchOpen(false)}
         onOpen={destination=>begin(destination)}/>
-      <PythonWorkbench open={pythonOpen} onOpen={showPython} onClose={()=>setPythonOpen(false)} onStrategy={()=>begin('strategypython')} contextLabel={titles[tab]}/>
+      <PythonWorkbench open={pythonOpen} onOpen={showPython} onClose={()=>setPythonOpen(false)} onStrategy={()=>begin('strategypython')} onNotebook={()=>{setPythonOpen(false);begin('notebooks')}} contextLabel={titles[tab]}/>
       <main className="ws-content">
         <div className={'ws-titlebar '+(
           ['mathematics','history','data','dataexplorer','workspace','chartstudio',
@@ -802,6 +804,8 @@ function App(){
           onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
           onOpenModels={()=>begin('models')}/>}
 
+        {tab==='notebooks'&&<ResearchNotebook/>}
+        {tab==='projects'&&<div className="ws-actions"><button type="button" className="ws-button primary" onClick={()=>begin('notebooks')}>Open research notebooks</button></div>}
         {tab==='projects'&&<details className="v2-advanced-links">
           <summary>Advanced project resource library, archive and Trash management</summary>
           <div className="v2-action-row">

@@ -40,7 +40,7 @@ function initialDraft(){
   }catch{/* optional browser recovery */}
   return {name:'My Python analysis',kind:'chart' as Kind,code:EXAMPLE}
 }
-export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextLabel}:{open:boolean;onOpen:()=>void;onClose:()=>void;onStrategy:()=>void;contextLabel:string}){
+export default function PythonWorkbench({open,onOpen,onClose,onStrategy,onNotebook,contextLabel}:{open:boolean;onOpen:()=>void;onClose:()=>void;onStrategy:()=>void;onNotebook?:()=>void;contextLabel:string}){
   const [draft,setDraft]=useState(initialDraft)
   const [scripts,setScripts]=useState<Meta[]>([])
   const [current,setCurrent]=useState<Script|null>(null)
@@ -136,6 +136,14 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
     try{sessionStorage.setItem('ql-v2-python-unsaved-draft',draft.code);localStorage.setItem('ql-python-profile',profile)}catch{setError('Browser draft storage unavailable. Export and paste into the strategy editor.');return}
     onStrategy();window.dispatchEvent(new CustomEvent(STRATEGY_SCRIPT_EVENT,{detail:draft.code}));onClose()
   }
+  const notebook=()=>{
+    if(!onNotebook)return
+    try{
+      const raw=JSON.stringify({title:draft.name,cells:[{kind:'markdown',source:'# '+draft.name+'\\nCopied from My Scripts. Review the input and assumptions.'},{kind:'code',source:draft.code}],snapshot:snapshot?{title:snapshot.title,provenance:snapshot.provenance,columns:snapshot.columns,rows:snapshot.rows}:null})
+      if(new Blob([raw]).size>450000)throw Error('Snapshot is too large for a saved notebook. Select a smaller viewport.')
+      sessionStorage.setItem('ql-notebook-attachment',raw);onNotebook()
+    }catch(e){setError(readableError(e))}
+  }
   const exportCode=()=>{
     const url=URL.createObjectURL(new Blob([draft.code],{type:'text/x-python;charset=utf-8'}))
     const a=document.createElement('a');a.href=url;a.download=(draft.name.replace(/[^a-zA-Z0-9_-]+/g,'-')||'quantlab-script')+'.py';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)
@@ -157,7 +165,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,contextL
         <div className="qpw-actions"><label>Name<input value={draft.name} maxLength={100} onChange={e=>setDraft(d=>({...d,name:e.target.value}))}/></label><label>Category<select value={draft.kind} onChange={e=>setDraft(d=>({...d,kind:e.target.value as Kind}))}>{KINDS.map(k=><option key={k}>{k}</option>)}</select></label>
           <label>Profile<select value={profile} onChange={e=>setProfile(e.target.value as typeof profile)}><option value="stdlib">Standard library</option><option value="scientific">Scientific packages</option></select></label><button type="button" disabled={locked} onClick={()=>setDraft(d=>({...d,code:d.kind==='strategy'?STRATEGY:EXAMPLE}))}>Load example</button></div>
         <PythonCodeEditor value={draft.code} onChange={code=>setDraft(d=>({...d,code}))} label="Reusable Python code"/>
-        <div className="qpw-actions"><button className="primary" type="button" disabled={locked} onClick={()=>void save()}>Save</button><button type="button" disabled={locked} onClick={()=>void save(true)}>Save as new</button><button type="button" onClick={exportCode}>Export .py</button>
+        <div className="qpw-actions"><button className="primary" type="button" disabled={locked} onClick={()=>void save()}>Save</button><button type="button" disabled={locked} onClick={()=>void save(true)}>Save as new</button><button type="button" onClick={exportCode}>Export .py</button>{onNotebook&&<button type="button" disabled={locked} onClick={notebook}>Create notebook</button>}
           {current&&<label>Version<select value={current.revision} disabled={locked} onChange={e=>void load(current.script_id,Number(e.target.value))}>{current.revisions.map(v=><option key={v.revision} value={v.revision}>v{v.revision} · {v.created_utc.slice(0,10)}</option>)}</select></label>}
           {jobId&&<button type="button" onClick={()=>void stopJob()}>Stop job</button>}
           {draft.kind==='strategy'?<button className="primary" type="button" onClick={launchStrategy}>Open in strategy editor</button>:<button className="primary" type="button" onClick={()=>void run()} disabled={!runnable||!snapshot||locked||available===false}>Run snapshot</button>}
