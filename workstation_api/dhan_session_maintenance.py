@@ -91,6 +91,9 @@ def maintain(opener=urlopen) -> dict:
                     "Token changed since verification; next check will use the newer token."}
         try:
             client_id = dhan_option_chain._client_id(token)
+            latest_config = auto_option_depth._config()
+            if not latest_config.get("enabled") or not latest_config.get("allow_token_renewal"):
+                return {"state": "not_authorized", "message": "Renewal consent was withdrawn before the request."}
             request = Request(RENEW_URL, headers={
                 "access-token": token, "dhanClientId": client_id,
                 "Accept": "application/json"}, method="GET")

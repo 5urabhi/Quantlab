@@ -1,0 +1,12 @@
+.ql-python-editor{display:grid;grid-template-columns:48px minmax(0,1fr);min-width:0;height:320px;border:1px solid #414147;border-radius:8px;overflow:hidden;background:#0b0b0d}
+.ql-python-editor .ql-python-gutter,.ql-python-editor .ql-python-highlight,.ql-python-editor .ql-python-code textarea{font:13px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:0;tab-size:4;box-sizing:border-box;margin:0;padding:12px;white-space:pre;text-align:left;word-wrap:normal;overflow-wrap:normal}
+.ql-python-editor .ql-python-gutter{color:#82828d;background:#141416;overflow:hidden;text-align:right;user-select:none;border-right:1px solid #343438}
+.ql-python-code{position:relative;min-width:0;min-height:0;overflow:hidden}
+.ql-python-editor .ql-python-highlight,.ql-python-editor .ql-python-code textarea{position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:0}
+.ql-python-editor .ql-python-highlight{color:#e9e9ee;overflow:hidden;pointer-events:none}
+.ql-python-editor .ql-python-code textarea{background:transparent!important;color:transparent!important;caret-color:#f5c542;resize:none;overflow:auto;outline:none}
+.ql-python-editor .ql-python-code textarea::selection{background:#f5c54244;color:transparent}
+.ql-python-editor:focus-within{border-color:#f5c542}
+.ql-token-keyword{color:#c5a1fa}.ql-token-string{color:#f0cf78}.ql-token-comment{color:#92929e}.ql-token-number{color:#f39d70}.ql-token-builtin{color:#8bbcff}.ql-token-operator{color:#f5c542}
+.qpw-shell .ql-python-editor{height:min(34vh,340px);min-height:180px;margin:8px 0}
+@media(forced-colors:active){.ql-python-editor .ql-python-highlight{display:none}.ql-python-editor .ql-python-code textarea{color:CanvasText!important;background:Canvas!important;caret-color:CanvasText}}

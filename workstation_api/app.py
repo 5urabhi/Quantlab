@@ -55,7 +55,7 @@ JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -838,6 +838,7 @@ class EmaPairRequest(StrategyLabBase):
 
 
 class PythonStrategyRequest(StrategyLabBase):
+    profile: Literal["stdlib", "scientific"] = "stdlib"
     limit: Literal[500, 1500] = 1500
     code: str = Field(min_length=1, max_length=20000)
 
@@ -1251,8 +1252,11 @@ def trading_cockpit_live_signal(identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY5
                     "reason":"No completed observed 1-minute candles yet",
                     "quote_mode":"NO_LIVE_OBSERVATIONS"}
         result=trading_cockpit.snapshot(identity,original["rows"])
-        fresh=(state.get("active") and state.get("ticker_connection")=="connected"
+        manual_fresh=(state.get("active") and state.get("ticker_connection")=="connected"
                and state.get("quotes",{}).get(identity,{}).get("fresh",False))
+        shared_fresh=shared_index_feed.status().get('quotes',{}).get(identity,{}).get('fresh',False)
+        fresh=bool(manual_fresh or shared_fresh)
+        result['ticker_connection_source']='manual' if manual_fresh else 'shared_option_socket' if shared_fresh else 'none'
         recent=(result["quote_mode"]=="RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE")
         result["source_kind"]="locally_aggregated_Dhan_live_LTP"
         result["quote_mode"]="LIVE_OBSERVED" if fresh and recent else "HISTORICAL_OR_STALE"
@@ -1421,6 +1425,20 @@ def banknifty_auto_depth_arm(body: BankNiftyAutoDepthRequest):
         full_option_feed.resume_if_armed()
         return {**armed, "option_chain_capture": auto_option_chain.status(),
                 "full_option_feed": full_option_feed.status()}
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+class DhanRenewalConsent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    confirm_renewal: bool = False
+
+
+@app.post("/api/trading-cockpit/auto-depth/renewal-consent")
+def banknifty_renewal_consent(body: DhanRenewalConsent):
+    try:
+        return auto_option_depth.set_token_renewal(body.enabled, confirm_renewal=body.confirm_renewal)
     except (ValueError, OSError, sqlite3.Error) as exc:
         bad(exc)
 
@@ -4429,3 +4447,261 @@ def reconcile_interrupted_research():
                 break
         except (OSError, ValueError):
             LOG.warning("Read-only Dhan batch recovery inventory unavailable")
+
+
+# Versioned user scripts and isolated snapshot analysis (UI V3).
+from . import user_scripts
+
+
+class ScriptSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    kind: Literal["strategy","indicator","chart","research","model","scanner","risk","transform"]
+    code: str = Field(min_length=1, max_length=20000)
+    script_id: str | None = Field(default=None, max_length=32)
+    expected_revision: int | None = Field(default=None, ge=1, le=100)
+
+
+class ChartPythonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(min_length=1, max_length=20000)
+    snapshot: dict
+    kind: Literal["strategy","indicator","chart","research","model","scanner","risk","transform"] = "chart"
+    profile: Literal["stdlib", "scientific"] = "stdlib"
+    confirm_readonly: bool = False
+
+
+@app.get("/api/user-scripts")
+def user_script_list():
+    return {"scripts": user_scripts.list_scripts(),
+            "sandbox": python_strategy_sandbox.availability()}
+
+
+@app.get("/api/user-scripts/{script_id}")
+def user_script_read(script_id: str, revision: int | None = None):
+    try:
+        return user_scripts.read_script(script_id, revision)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/user-scripts")
+def user_script_save(body: ScriptSaveRequest):
+    try:
+        return user_scripts.save_script(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/user-scripts/chart/run")
+def user_chart_run(body: ChartPythonRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400, "Confirm isolated read-only snapshot research")
+    if not python_strategy_sandbox.availability()["available"]:
+        raise HTTPException(409, "Ubuntu bubblewrap and prlimit are required; no unsafe fallback")
+    try:
+        user_scripts.snapshot_json(body.snapshot)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _spawn("user_snapshot_chart", user_scripts.run_chart,
+                  code=body.code, snapshot=body.snapshot, profile=body.profile, kind=body.kind)
+
+
+@app.get("/api/user-script-runs")
+def user_chart_runs():
+    return {"runs": user_scripts.list_chart_runs()}
+
+
+@app.get("/api/user-script-runs/{run_id}")
+def user_chart_run_read(run_id: str):
+    try:
+        return user_scripts.read_chart_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/python-environment")
+def python_environment():
+    return python_strategy_sandbox.availability()
+
+
+@app.post("/api/python-environment/probe")
+def python_environment_probe():
+    return _spawn("python_scientific_environment_probe", python_strategy_sandbox.probe_scientific)
+
+
+# Script subscriptions are local research only, never broker execution.
+from . import script_monitor
+
+
+class ScriptMonitorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    script_id: str = Field(min_length=32, max_length=32)
+    revision: int = Field(ge=1, le=100)
+    source: Literal["index_minutes","option_chain","chain_spot_receipts"]
+    profile: Literal["stdlib","scientific"] = "stdlib"
+    confirm_readonly: bool = False
+
+
+@app.get("/api/script-monitors")
+def script_monitors():
+    return {"monitors":script_monitor.list_monitors(),"orders_placed":0}
+
+
+@app.post("/api/script-monitors")
+def add_script_monitor(body: ScriptMonitorRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400,"Confirm repeated isolated read-only calculations")
+    try:
+        return script_monitor.register(**body.model_dump(exclude={"confirm_readonly"}))
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+class ScriptMonitorToggle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    confirm_readonly: bool = False
+
+
+@app.post("/api/script-monitors/{monitor_id}")
+def toggle_script_monitor(monitor_id: str, body: ScriptMonitorToggle):
+    if body.enabled and not body.confirm_readonly:
+        raise HTTPException(400,"Confirm read-only execution")
+    try:
+        return script_monitor.set_enabled(monitor_id,body.enabled)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.delete("/api/script-monitors/{monitor_id}")
+def delete_script_monitor(monitor_id: str):
+    try:
+        return script_monitor.remove(monitor_id)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.on_event("startup")
+def start_user_script_monitor():
+    script_monitor.start()
+
+
+@app.on_event("shutdown")
+def stop_user_script_monitor():
+    script_monitor.stop()
+
+
+@app.get("/api/trading-cockpit/recorded-chain-spot")
+def recorded_chain_spot():
+    """The latest saved same-expiry spot receipts; no new broker request."""
+    try:
+        now = datetime.now(timezone.utc)
+        rows = script_monitor._chain_rows(now,150,recent=False,spot_only=True)
+        points = [{"timestamp_utc":stamp,"spot":data["underlying_spot"]}
+                  for stamp,_,data in rows
+                  if isinstance(data.get("underlying_spot"), (int,float))]
+        return {"rows":points,"expiry":rows[-1][2]["expiry"] if rows else None,
+                "source":"Original saved Dhan option-chain REST receipt timestamps, not live index OHLC",
+                "last_utc":points[-1]["timestamp_utc"] if points else None}
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+from . import user_notebooks
+
+
+class NotebookSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1,max_length=100)
+    cells: list[dict] = Field(min_length=1,max_length=30)
+    snapshot: dict | None = None
+    notebook_id: str | None = Field(default=None,max_length=32)
+    expected_revision: int | None = Field(default=None,ge=1)
+
+
+class NotebookRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=1)
+    through: int | None = Field(default=None,ge=0,le=29)
+    profile: Literal["stdlib","scientific"] = "stdlib"
+    confirm_readonly: bool = False
+
+
+@app.get("/api/research-notebooks")
+def research_notebook_list():
+    return {"notebooks":user_notebooks.list_notebooks()}
+
+
+@app.get("/api/research-notebooks/{notebook_id}")
+def research_notebook_read(notebook_id: str,revision: int | None = None):
+    try:
+        return user_notebooks.read_notebook(notebook_id,revision)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.post("/api/research-notebooks")
+def research_notebook_save(body: NotebookSaveRequest):
+    try:
+        return user_notebooks.save_notebook(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.post("/api/research-notebooks/{notebook_id}/run")
+def research_notebook_run(notebook_id: str,body: NotebookRunRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400,"Confirm isolated read-only notebook execution")
+    if not python_strategy_sandbox.availability()["available"]:
+        raise HTTPException(409,"Isolated Python unavailable; no unsafe fallback")
+    try:
+        user_notebooks.read_notebook(notebook_id,body.revision)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+    return _spawn("user_notebook",user_notebooks.run_notebook,notebook_id=notebook_id,revision=body.revision,through=body.through,profile=body.profile)
+
+
+@app.get("/api/research-notebooks/{notebook_id}/runs/{run_id}")
+def research_notebook_result(notebook_id: str,run_id: str):
+    try:
+        return user_notebooks.read_run(notebook_id,run_id)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+class SavedScriptRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=1,le=100)
+    snapshot: dict
+    profile: Literal["stdlib","scientific"] = "stdlib"
+    confirm_readonly: bool = False
+
+
+@app.post("/api/user-scripts/{script_id}/run")
+def user_saved_script_run(script_id: str,body: SavedScriptRunRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400,"Confirm isolated read-only execution")
+    if not python_strategy_sandbox.availability()["available"]:
+        raise HTTPException(409,"Isolated Python unavailable; no unsafe fallback")
+    try:
+        item=user_scripts.read_script(script_id,body.revision)
+        if item["kind"]=="strategy":
+            raise ValueError("Use the strategy backtest")
+        user_scripts.snapshot_json(body.snapshot)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+    return _spawn("user_snapshot_chart",user_scripts.run_saved,script_id=script_id,revision=body.revision,snapshot=body.snapshot,profile=body.profile)
+
+
+@app.get("/api/script-monitor-overlays")
+def script_monitor_chart_overlays(source: Literal["index_minutes","chain_spot_receipts"]):
+    return script_monitor.chart_overlays(source)
+
+
+from . import shared_index_feed
+
+
+@app.get("/api/trading-cockpit/auto-index/status")
+def shared_index_status():
+    return shared_index_feed.status()

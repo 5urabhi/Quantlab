@@ -7,16 +7,23 @@ import {
   ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp
 } from 'lucide-react'
 import './workstation.css'
+import './quantlab-v3-modules.css'
 import {RecorderBadge,JobsDrawer,V2HomeLaunchers,StrategyLibraryV2,ConnectionsLandingV2,SettingsPreferencesV2,DiagnosticsV2,QuickPageNote} from './QuantLabV2Components'
 import ResearchPythonLab from './ResearchPythonLab'
 import AutoDepthRecorder from './AutoDepthRecorder'
 import DataManager from './DataManager'
 import IndexBuilderWorkspace from './IndexBuilderWorkspace'
 import GlobalSearchV2 from './GlobalSearchV2'
+import PythonWorkbench from './PythonWorkbench'
+import PythonMonitors from './PythonMonitors'
+import PythonEnvironment from './PythonEnvironment'
+import ResearchPlot from './ResearchPlots'
+const CustomModelWorkspace = lazy(() => import('./CustomModelWorkspace'))
+const ResearchNotebook = lazy(() => import('./ResearchNotebook'))
+const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
 const LiquiditySpreadsWorkspace = lazy(() => import('./LiquiditySpreadsWorkspace'))
-const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
 const ModelLaboratory = lazy(() => import('./ModelLaboratory'))
 const ResearchGuide = lazy(() => import('./ResearchGuide'))
 const ResearchWorkspace = lazy(() => import('./ResearchWorkspace'))
@@ -48,24 +55,24 @@ type RunConfig = {
 }
 const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momentum:1,low_volatility:0,value:0,quality:0,size:0},top_n:10,weighting:'equal',max_weight:.2,rebalance_every:3,cost_bps:10,execution_lag:1,momentum_formation:12,momentum_skip:1,volatility_lookback:12,validation_start:'',final_test_start:'',sector_cap:null}
 type Tab =
-  'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingspreads'|'tradingreplay'|'tradingjournal'|'tradingpaper'|
+  'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingspreads'|'tradingreplay'|'tradingjournal'|'tradingpaper'|'tradinganalytics'|'tradingdirectional'|
   'strategies'|'strategyema'|'strategypython'|'strategybacktest'|
   'mathematics'|'models'|'research'|'factors'|'construction'|'risk'|'rolling'|'robustness'|'modelgrids'|'indexstudio'|
   'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|'evidence'|
   'history'|'workspace'|'chartstudio'|'comparisons'|'visual'|'workspacejobs'|
   'projects'|'reports'|'resourcebrowser'|'settings'|'connections'|'recordingsettings'|
-  'storage'|'preferences'|'diagnostics'|'guide'|'journey'
+  'storage'|'preferences'|'diagnostics'|'guide'|'journey'|'pythonmonitors'|'pythonenvironment'|'custommodels'|'customscanners'|'notebooks'
 type PrimarySection={id:Tab;label:string;icon:typeof Activity;tabs:Tab[];navTabs:Tab[]}
 const primarySections:PrimarySection[]=[
   {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
   {id:'trading',label:'Trading',icon:Activity,
-    tabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper'],
+    tabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper','tradinganalytics','tradingdirectional','customscanners'],
     navTabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper']},
   {id:'strategies',label:'Strategies',icon:TrendingUp,
-    tabs:['strategies','strategyema','strategypython','strategybacktest'],
+    tabs:['strategies','strategyema','strategypython','strategybacktest','pythonmonitors'],
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
   {id:'mathematics',label:'Models',icon:Sigma,
-    tabs:['mathematics','models','research','factors','construction','risk','rolling','robustness','modelgrids','indexstudio','journey'],
+    tabs:['mathematics','models','research','factors','construction','risk','rolling','robustness','modelgrids','indexstudio','journey','custommodels'],
     navTabs:['mathematics','research','models']},
   {id:'data',label:'Data Center',icon:Database,
     tabs:['data','dhan','dataexplorer','dataquality','datadownloads','nse','evidence'],
@@ -74,18 +81,18 @@ const primarySections:PrimarySection[]=[
     tabs:['history','workspace','chartstudio','comparisons','visual','workspacejobs'],
     navTabs:['history','workspace','chartstudio']},
   {id:'projects',label:'Projects',icon:BookOpen,
-    tabs:['projects','reports','resourcebrowser'],navTabs:['projects','reports']},
+    tabs:['projects','notebooks','reports','resourcebrowser'],navTabs:['projects','notebooks','reports']},
   {id:'connections',label:'Settings',icon:Settings2,
-    tabs:['connections','recordingsettings','storage','preferences','diagnostics','settings','guide'],
+    tabs:['connections','recordingsettings','storage','preferences','diagnostics','settings','guide','pythonenvironment'],
     navTabs:['connections','recordingsettings','diagnostics']},
 ]
 const titles:Record<Tab,string>={
   overview:'Home',trading:'Live Market',tradingchain:'Option Chain',
   tradingdepth:'20-Level Order Book',tradingspreads:'Liquidity & Spreads',
   tradingreplay:'Market Replay',
-  tradingjournal:'Trade Journal',tradingpaper:'Paper Trading',strategies:'Strategy Library',
+  tradingjournal:'Trade Journal',tradingpaper:'Paper Trading',tradinganalytics:'Options Analytics',tradingdirectional:'Directional Trading',strategies:'Strategy Library',
   strategyema:'EMA Explorer',strategypython:'Python Editor',
-  strategybacktest:'BANKNIFTY Backtests',
+  strategybacktest:'BANKNIFTY Backtests',pythonmonitors:'Running Python',custommodels:'Custom Models',customscanners:'Custom Scanners',pythonenvironment:'Python Environment',
   mathematics:'Model Catalog',models:'Advanced Research Tools',
   research:'Index Builder',factors:'Factor Research',
   construction:'Portfolio Construction',risk:'Risk Attribution',
@@ -98,7 +105,7 @@ const titles:Record<Tab,string>={
   history:'All Research Results',workspace:'Compare Runs',
   chartstudio:'Chart Studio',comparisons:'Index Comparison',
   visual:'Historical Charts',workspacejobs:'Research Job History',
-  projects:'My Projects & Notebooks',reports:'Research Reports',
+  projects:'My Projects & Notebooks',notebooks:'Research Notebooks',reports:'Research Reports',
   resourcebrowser:'Saved Resource Library',
   connections:'Connections',recordingsettings:'Automatic Recording',
   storage:'Storage & Data Management',preferences:'Preferences',
@@ -114,10 +121,17 @@ const descriptions:Record<Tab,string>={
   tradingreplay:'Explore recorded BANKNIFTY, option quotes and original market-depth observations.',
   tradingjournal:'Review manually entered fills and prospective signal accuracy separately.',
   tradingpaper:'Manage virtual cash, simulated orders and original-depth historical replays without broker execution.',
+  tradinganalytics:'Compare Greek sensitivities, volatility, liquidity and contract scenarios.',
+  tradingdirectional:'Evaluate directional option research and scenario-driven contract selection without placing orders.',
   strategies:'Choose a strategy, test real index signals, then study historical CE/PE contracts.',
   strategyema:'Test one EMA pair, chosen combinations or all 11,026 valid pairs.',
   strategypython:'Paste, run and save isolated Python research without interrupting Dhan capture.',
   strategybacktest:'Compare directional signal timing and original-contract CE/PE paper P&L.',
+  pythonmonitors:'Run saved Python revisions on incoming recorded observations.',
+  custommodels:'Maintain and execute user-defined snapshot-based quantitative calculations.',
+  customscanners:'Rank source-backed option contracts using your saved Python score.',
+  pythonenvironment:'Inspect and test optional scientific packages in an isolated environment.',
+  notebooks:'Save versioned Python and Markdown cells, attach input data and run reproducible calculations.',
   mathematics:'Choose stochastic, volatility, options, risk and portfolio mathematical models.',
   models:'Sweep parameters, test walk-forward stability, study shocks and inspect advanced research tools.',
   research:'Construct, backtest and validate factor-based equity indices.',
@@ -190,143 +204,25 @@ function Table({rows,max=15}:{rows:Dict[];max?:number}){
   const keys=Object.keys(rows[0]).slice(0,11)
   return <div className="ws-table-scroll"><table><thead><tr>{keys.map(k=><th key={k}>{label(k)}</th>)}</tr></thead><tbody>{rows.slice(0,max).map((row,i)=><tr key={i}>{keys.map(k=><td key={k} title={String(row[k]??'')}>{typeof row[k]==='number'?number(row[k],4):String(row[k]??'—')}</td>)}</tr>)}</tbody></table></div>
 }
-function EquityChart({rows,caption='Strategy vs benchmark',height=300}:{rows:Dict[];caption?:string;height?:number}){
+function EquityChart({rows,caption='Strategy vs benchmark',provenance='historical'}:{rows:Dict[];caption?:string;provenance?:string}){
   type View='wealth'|'excess'|'drawdown'
   const [view,setView]=useState<View>('wealth')
-  const [hover,setHover]=useState<number|null>(null)
   const points=useMemo(()=>{
-    let strategy=1,benchmark=1,strategyHigh=1,benchmarkHigh=1
-    return rows.flatMap(r=>{
-      const sr=Number(r.strategy_net),br=Number(r.benchmark)
-      if(!Number.isFinite(sr)||!Number.isFinite(br)||sr<=-1||br<=-1)return []
-      strategy*=1+sr;benchmark*=1+br
-      strategyHigh=Math.max(strategyHigh,strategy)
-      benchmarkHigh=Math.max(benchmarkHigh,benchmark)
-      return [{
-        date:String(r.date||''),strategy,benchmark,
-        excess:(sr-br)*100,
-        strategyDrawdown:(strategy/strategyHigh-1)*100,
-        benchmarkDrawdown:(benchmark/benchmarkHigh-1)*100,
-      }]
+    let strategy=1,benchmark=1,strategyHigh=1,benchmarkHigh=1,chainValid=true
+    return rows.map(r=>{
+      const sr=r.strategy_net==null||r.strategy_net===''?NaN:Number(r.strategy_net),br=r.benchmark==null||r.benchmark===''?NaN:Number(r.benchmark)
+      if(!Number.isFinite(sr)||!Number.isFinite(br)||sr<=-1||br<=-1)chainValid=false
+      const excess=Number.isFinite(sr)&&Number.isFinite(br)?(sr-br)*100:null
+      if(chainValid){strategy*=1+sr;benchmark*=1+br;strategyHigh=Math.max(strategyHigh,strategy);benchmarkHigh=Math.max(benchmarkHigh,benchmark)}
+      return {date:String(r.date||''),strategy:chainValid?strategy:null,benchmark:chainValid?benchmark:null,excess,strategyDrawdown:chainValid?(strategy/strategyHigh-1)*100:null,benchmarkDrawdown:chainValid?(benchmark/benchmarkHigh-1)*100:null}
     })
   },[rows])
-  if(points.length<2)return <Empty title="Awaiting observed return series">
-    A saved backtest needs at least two valid strategy and benchmark returns.
-    Demo or missing returns are never filled in.
-  </Empty>
-  const read=(p:(typeof points)[number],which:'strategy'|'benchmark')=>
-    view==='wealth'?p[which]:view==='drawdown'?
-      which==='strategy'?p.strategyDrawdown:p.benchmarkDrawdown:p.excess
-  const values=points.flatMap(p=>view==='excess'?[p.excess]:[read(p,'strategy'),read(p,'benchmark')])
-  const low=Math.min(...values,...(view==='wealth'?[]:[0]))
-  const high=Math.max(...values,...(view==='wealth'?[]:[0]))
-  const pad=Math.max(.0001,(high-low)*.08)
-  const floor=low-pad,ceil=high+pad,range=ceil-floor
-  const left=65,right=935,top=29,bottom=238,width=right-left
-  const xAt=(i:number)=>left+(i/(points.length-1))*width
-  const yAt=(value:number)=>bottom-(value-floor)/range*(bottom-top)
-  const path=(key:'strategy'|'benchmark')=>points.map((p,i)=>
-    (i===0?'M':'L')+xAt(i).toFixed(2)+' '+yAt(read(p,key)).toFixed(2)).join(' ')
-  const selected=hover!==null?points[hover]:null
-  const valueLabel=(n:number)=>view==='wealth'?n.toFixed(3)+'×':n.toFixed(2)+'%'
-  const whichLabel=view==='drawdown'?'Drawdown':view==='excess'?'Monthly excess return':'Cumulative wealth'
-  const captionText=view==='wealth'?
-    'Normalized to 1.00× at the first valid month; from saved Python returns.':
-    view==='drawdown'?'Drawdown from the previous observed cumulative peak; negative means underwater.':
-      'Monthly net strategy return minus benchmark return, in percentage points.'
-  return <div className="ws-chart ws-interactive-chart">
-    <div className="ws-chartheader">
-      <span>{caption}</span>
-      <div className="ws-chart-views" role="group" aria-label="Performance graph type">
-        {([['wealth','Growth line'],['excess','Monthly difference'],['drawdown','Drawdown area']] as const)
-          .map(([id,name])=><button type="button" key={id}
-            className={view===id?'active':''} aria-pressed={view===id}
-            onClick={()=>{setView(id);setHover(null)}}>{name}</button>)}
-      </div>
-    </div>
-    <div className="ws-chart-legend">
-      <span>{whichLabel}</span>
-      {view!=='excess'&&<span><i className="ws-dot mint"/> Strategy <i className="ws-dot gold"/> Benchmark</span>}
-      {view==='excess'&&<span>Mint = outperformance · Amber = underperformance</span>}
-    </div>
-    <svg viewBox="0 0 980 280" preserveAspectRatio="none" style={{height}}
-      className="ws-interactive-svg" tabIndex={0} role="img"
-      aria-label={whichLabel+' from saved return observations. Hover for values, or use arrow keys.'}
-      onMouseMove={event=>{
-        const rect=event.currentTarget.getBoundingClientRect()
-        if(!rect.width)return
-        const relative=(event.clientX-rect.left)/rect.width*980
-        setHover(Math.max(0,Math.min(points.length-1,Math.round(
-          (relative-left)/width*(points.length-1)
-        ))))
-      }}
-      onMouseLeave={()=>setHover(null)}
-      onFocus={()=>setHover(points.length-1)}
-      onBlur={()=>setHover(null)}
-      onKeyDown={event=>{
-        if(event.key==='ArrowLeft'||event.key==='ArrowRight'){
-          event.preventDefault()
-          setHover(v=>Math.max(0,Math.min(points.length-1,
-            (v??points.length-1)+(event.key==='ArrowRight'?1:-1))))
-        }
-        if(event.key==='Home'){event.preventDefault();setHover(0)}
-        if(event.key==='End'){event.preventDefault();setHover(points.length-1)}
-      }}>
-      {[0,.25,.5,.75,1].map(t=><g key={t}>
-        <line x1={left} x2={right} y1={top+t*(bottom-top)}
-          y2={top+t*(bottom-top)} stroke="#34485a" strokeDasharray="3 7"/>
-        <text x={left-7} y={top+t*(bottom-top)+4} fill="#9db5c2"
-          fontSize="12" textAnchor="end">{valueLabel(ceil-t*range)}</text>
-      </g>)}
-      {view==='excess'?<>
-        <line x1={left} x2={right} y1={yAt(0)} y2={yAt(0)}
-          stroke="#b3bac6" strokeWidth="1.2"/>
-        {points.map((p,i)=>{
-          const x=xAt(i),zero=yAt(0),value=yAt(p.excess)
-          const barWidth=Math.max(1.6,Math.min(18,width/points.length*.7))
-          return <rect key={i} x={x-barWidth/2}
-            y={Math.min(zero,value)} width={barWidth}
-            height={Math.max(1,Math.abs(zero-value))}
-            fill={p.excess>=0?'#65ddc3':'#ecaf75'}
-            opacity={hover===i?1:.82}/>
-        })}
-      </>:<>
-        {view==='drawdown'&&(['benchmark','strategy'] as const).map((k,i)=>
-          <path key={k} d={path(k)+' L '+right+','+yAt(0)+' L '+left+','+yAt(0)+' Z'}
-            fill={i?'#58dcc4':'#e6b77b'} opacity=".13"/>)}
-        <path d={path('benchmark')} stroke="#e3b675" fill="none" strokeWidth="2.2"
-          vectorEffect="non-scaling-stroke"/>
-        <path d={path('strategy')} stroke="#64dbc2" fill="none" strokeWidth="2.9"
-          vectorEffect="non-scaling-stroke"/>
-      </>}
-      {selected&&hover!==null&&<g className="ws-chart-focus">
-        <line x1={xAt(hover)} x2={xAt(hover)} y1={top} y2={bottom}
-          stroke="#d2ecdf" strokeDasharray="4 4" strokeWidth="1.1"/>
-        {view!=='excess'&&(['strategy','benchmark'] as const).map(k=>
-          <circle key={k} cx={xAt(hover)} cy={yAt(read(selected,k))} r="4.6"
-            stroke="#0b2230" strokeWidth="2" fill={k==='strategy'?'#64dbc2':'#e3b675'}/>)}
-        <rect x={Math.min(xAt(hover)+12,right-202)} y={top+3}
-          width="201" height={view==='excess'?63:87} rx="9" fill="#0c2533"
-          stroke="#73938f" strokeOpacity=".8"/>
-        <text x={Math.min(xAt(hover)+23,right-191)} y={top+21}
-          fontSize="12" fill="#e3f5ed">{selected.date.slice(0,10)}</text>
-        {view==='excess'?<text x={Math.min(xAt(hover)+23,right-191)} y={top+43}
-          fill={selected.excess>=0?'#70efd0':'#ffc48f'} fontSize="12">
-          {'Strategy − Benchmark: '+valueLabel(selected.excess)}
-        </text>:<>
-          <text x={Math.min(xAt(hover)+23,right-191)} y={top+43}
-            fill="#6fe8ce" fontSize="12">Strategy: {valueLabel(read(selected,'strategy'))}</text>
-          <text x={Math.min(xAt(hover)+23,right-191)} y={top+64}
-            fill="#ffc98e" fontSize="12">Benchmark: {valueLabel(read(selected,'benchmark'))}</text>
-        </>}
-      </g>}
-      <text x={left} y="271" fill="#9eb6c8" fontSize="11">{points[0].date.slice(0,10)}</text>
-      <text x={right} y="271" fill="#9eb6c8" textAnchor="end"
-        fontSize="11">{points[points.length-1].date.slice(0,10)}</text>
-    </svg>
-    <p className="ws-caption">{captionText} Hover to inspect dates and exact values.
-      The chart is descriptive, not proof of investability.</p>
-  </div>
+  if(points.length<2)return <Empty title="Awaiting observed return series">A saved backtest needs at least two valid strategy and benchmark returns.</Empty>
+  const label=view==='wealth'?'Cumulative wealth (× initial capital)':view==='drawdown'?'Drawdown (%)':'Net monthly excess return (percentage points)'
+  const traces=view==='excess'?[{name:'Strategy − benchmark',y:points.map(p=>p.excess)}]:[{name:'Strategy',color:'#f5c542',y:points.map(p=>view==='wealth'?p.strategy:p.strategyDrawdown)},{name:'Benchmark',color:'#78a8ff',y:points.map(p=>view==='wealth'?p.benchmark:p.benchmarkDrawdown)}]
+  return <div className="ws-chart ws-interactive-chart"><div className="ws-chart-views" role="group" aria-label="Performance graph type">{([['wealth','Growth line'],['excess','Monthly difference'],['drawdown','Drawdown area']] as const).map(([id,name])=><button type="button" key={id} aria-pressed={view===id} className={view===id?'active':''} onClick={()=>setView(id)}>{name}</button>)}</div>
+    <ResearchPlot plot={{kind:view==='excess'?'bar2d':view==='drawdown'?'area2d':'line2d',title:caption+' · '+label,x_label:'Observation date',y_label:label,x:points.map(p=>p.date),traces,reference_lines:[{value:view==='wealth'?1:0,label:view==='wealth'?'Initial capital = 1×':'Zero'}]}} provenance={provenance} formatY={v=>v.toFixed(view==='wealth'?3:2)}/>
+    <p className="ws-caption">Cumulative wealth starts at 1× before the first observed return. Missing or invalid returns stop the cumulative path rather than silently fill missing data. Historical simulation, not proof of investability.</p></div>
 }
 function BarRows({rows,valueKey='weight',nameKey='name'}:{rows:Dict[];valueKey?:string;nameKey?:string}){
   if(!rows.length)return <Empty title="No exposure data">Select a completed research run to inspect portfolio exposures.</Empty>
@@ -339,7 +235,12 @@ function App(){
   const [jobsOpen,setJobsOpen]=useState(false)
   const [connectionEditing,setConnectionEditing]=useState(false)
   const [searchOpen,setSearchOpen]=useState(false)
+  const [pythonOpen,setPythonOpen]=useState(false)
+  const showPython=useCallback(()=>setPythonOpen(true),[])
   const [menu,setMenu]=useState(false)
+  const [notebookOpenSequence,setNotebookOpenSequence]=useState(0)
+  const [compactNav,setCompactNav]=useState(()=>{try{return localStorage.getItem('ql-v3-compact-nav')==='1'}catch{return false}})
+  useEffect(()=>{try{localStorage.setItem('ql-v3-compact-nav',compactNav?'1':'0')}catch{/* optional preference */}},[compactNav])
   const [health,setHealth]=useState<Health|null>(null)
   const [datasets,setDatasets]=useState<Dataset[]>([])
   const [selectedDataset,setSelectedDataset]=useState('')
@@ -524,20 +425,21 @@ function App(){
   const runPicker=<select aria-label="Select completed experiment" className="ws-select" value={selectedRun} onChange={e=>setSelectedRun(e.target.value)}>{runs.length===0?<option value="">No runs yet</option>:runs.map(r=><option key={r.id} value={r.id}>{r.name} · {r.id}</option>)}</select>
   const withRun=(content:React.ReactNode)=><>{runs.length===0?<Empty title="No research run selected" onAction={()=>begin('research')} action="Run an experiment">All charts are generated from Python research outputs, not hardcoded sample performance.</Empty>:<>{runPicker}{content}</>}</>
   const classification=<Tag tone={detail?.source.dataset_kind==='synthetic'?'warn':'blue'}>{detail?.source.dataset_kind==='synthetic'?'SYNTHETIC DATA — DEMONSTRATION':detail?'USER DATA · NOT INDEPENDENTLY AUDITED':'NO RESEARCH RUN'}</Tag>
-  const chart=detail?<EquityChart rows={detail.returns}/>:null
+  const chart=detail?<EquityChart rows={detail.returns} provenance={detail.source.dataset_kind==='synthetic'?'synthetic':'historical'}/>:null
   const panel=(key: keyof Detail,description:string)=>withRun(<Card title={description}><Table rows={(detail?.[key] as Dict[]|undefined)??[]} max={20}/></Card>)
-  return <div className="ws-shell ws-v2">
+  return <div className={'ws-shell ws-v2 ql-v3 '+(compactNav?'ql-nav-compact':'')}>
     <aside className={'ws-sidebar '+(menu?'open':'')}>
       <div className="ws-brand"><span className="ws-brand-mark"><Activity size={23}/></span><div><strong>QUANT<span>LAB</span></strong><small>RESEARCH WORKSTATION</small></div><button type="button" className="ws-mobile-close" onClick={()=>setMenu(false)}><X size={19}/></button></div>
       <div className="ws-env"><span className={'ws-status-dot '+(health?.ok?'':'offline')}/><div><strong>{health?.ok?'LOCAL ENGINE CONNECTED':'ENGINE DISCONNECTED'}</strong><small>127.0.0.1 · NO BROKER EXECUTION</small></div></div>
       <nav aria-label="Primary QuantLab navigation">
         <div className="ws-nav-group"><span className="ws-nav-label">WORKSPACES</span>
+          <button type="button" className="ql-nav-toggle" onClick={()=>setCompactNav(v=>!v)} aria-label={compactNav?'Expand sidebar':'Collapse sidebar'} aria-expanded={!compactNav}><Menu size={17}/><span className="ql-nav-text">Collapse sidebar</span></button>
           {primarySections.map((section,index)=><button type="button" key={section.id}
             title={'Ctrl+Alt+'+(index+1)+' · '+section.label}
             onClick={()=>begin(section.id)}
             aria-current={section.tabs.includes(tab)?'page':undefined}
             className={'ws-nav-item '+(section.tabs.includes(tab)?'active':'')}>
-            <section.icon size={17} strokeWidth={1.9}/>{section.label}
+            <section.icon size={17} strokeWidth={1.9}/><span className="ql-nav-text">{section.label}</span>
             {section.tabs.includes(tab)&&<span className="ws-nav-select"/>}</button>)}
         </div></nav>
       <div className="ws-sidefoot"><LockKeyhole size={15}/><div><strong>PRIVATE / LOCAL FIRST</strong><small>Credentials never sent to browser</small></div></div>
@@ -558,6 +460,7 @@ function App(){
             aria-label="Search QuantLab" title="Search QuantLab · Ctrl K">
             <Search size={16}/><span>Search</span></button>
           <RecorderBadge onOpen={()=>begin('recordingsettings')}/>
+          <button type="button" className="v2-top-btn" onClick={showPython} title="Open reusable Python workspace"><Sigma size={16}/><span>Python</span></button>
           <button type="button" className="v2-top-btn" onClick={()=>setJobsOpen(true)}
             aria-label="Open Jobs and downloads" title="Jobs and downloads">
             <Clock3 size={16}/><span>Jobs</span></button>
@@ -573,7 +476,8 @@ function App(){
       <JobsDrawer open={jobsOpen} onClose={()=>setJobsOpen(false)}
         onOpenFull={()=>begin('workspacejobs')}/>
       <GlobalSearchV2 open={searchOpen} onClose={()=>setSearchOpen(false)}
-        onOpen={destination=>begin(destination)}/>
+        onOpen={destination=>begin(destination)} routes={primarySections.flatMap(group=>group.tabs.map(id=>({id,title:titles[id],section:group.label,description:descriptions[id]})))} onOpenRoute={id=>begin(id as Tab)}/>
+      <PythonWorkbench open={pythonOpen} onOpen={showPython} onClose={()=>setPythonOpen(false)} onStrategy={()=>begin('strategypython')} onNotebook={()=>{setPythonOpen(false);setNotebookOpenSequence(n=>n+1);begin('notebooks')}} contextLabel={titles[tab]}/>
       <main className="ws-content">
         <div className={'ws-titlebar '+(
           ['mathematics','history','data','dataexplorer','workspace','chartstudio',
@@ -582,9 +486,7 @@ function App(){
           <div><div className="ws-overline">LOCAL QUANTITATIVE RESEARCH WORKSTATION</div>
             <h1>{titles[tab]}</h1><p>{descriptions[tab]}</p></div>
           <div className="ws-title-actions">
-            {(['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper'].includes(tab))&&
-              <button className="ws-button secondary" onClick={()=>begin('recordingsettings')}>
-                <Activity size={15}/> Recorder settings</button>}
+
             {(['strategies','strategyema','strategypython','strategybacktest'].includes(tab))&&
               <button className="ws-button secondary" onClick={()=>begin('data')}>
                 <Database size={15}/> Data coverage</button>}
@@ -681,7 +583,7 @@ function App(){
         <Suspense fallback={<div className="ws-empty" role="status" aria-live="polite">
           <LoaderCircle size={18}/> Loading {titles[tab]}…
         </div>}>
-        {(['trading','tradingchain','tradingdepth','tradingreplay',
+        {(['trading','tradingchain','tradinganalytics','tradingdirectional','tradingdepth','tradingreplay',
             'tradingjournal','strategybacktest'].includes(tab)||
             (tab==='connections'&&connectionEditing))&&
           <TradingCockpit
@@ -690,8 +592,9 @@ function App(){
               tab==='tradingjournal'?'journal':
               tab==='strategybacktest'?'strategy':
               tab==='connections'?'setup':'live'}
+            initialOptionMode={tab==='tradinganalytics'?'analytics':tab==='tradingdirectional'?'directional':tab==='tradingchain'?'overview':undefined}
             focusLive={tab==='trading'?'signals':
-              tab==='tradingchain'?'options':
+              ['tradingchain','tradinganalytics','tradingdirectional'].includes(tab)?'options':
               tab==='tradingdepth'?'depth':undefined}
             onNavigateLiveView={view=>begin(({
               signals:'trading',options:'tradingchain',depth:'tradingdepth'
@@ -903,6 +806,8 @@ function App(){
           onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
           onOpenModels={()=>begin('models')}/>}
 
+        {tab==='notebooks'&&<ResearchNotebook key={notebookOpenSequence}/>}
+        {tab==='projects'&&<div className="ws-actions"><button type="button" className="ws-button primary" onClick={()=>begin('notebooks')}>Open research notebooks</button></div>}
         {tab==='projects'&&<details className="v2-advanced-links">
           <summary>Advanced project resource library, archive and Trash management</summary>
           <div className="v2-action-row">
@@ -949,7 +854,7 @@ function App(){
         {tab==='visual'&&<>{withRun(<Card title="Cumulative strategy / benchmark path" extra={classification}>{chart}</Card>)}{panel('rank_ic','Cross-sectional factor validation')}</>}
         {tab==='mathematics'&&<>
           <ModelLaboratory
-            section="mathematics" datasets={datasets} selectedDataset={selectedDataset}
+            section="mathematics" enableCustomModels datasets={datasets} selectedDataset={selectedDataset}
             onSelectDataset={setSelectedDataset} onOpenGuide={()=>begin('guide')}
             onDataChanged={refresh}
             onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}
@@ -991,6 +896,9 @@ function App(){
         {tab==='storage'&&<DataManager initialSection="database" integrated
           onSelectDataset={setSelectedDataset} onChanged={refresh}
           onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
+        {tab==='pythonenvironment'&&<PythonEnvironment/>}
+        {tab==='custommodels'&&<CustomModelWorkspace datasets={datasets} selectedDataset={selectedDataset}/>}
+        {(['pythonmonitors','custommodels','customscanners'].includes(tab))&&<PythonMonitors key={tab} initialKind={tab==='custommodels'?'model':tab==='customscanners'?'scanner':undefined} onEdit={id=>{showPython();if(id)window.dispatchEvent(new CustomEvent('quantlab:open-saved-script',{detail:id}))}}/>}
         {tab==='preferences'&&<SettingsPreferencesV2/>}
         {tab==='diagnostics'&&<DiagnosticsV2 onRepair={()=>begin('settings')}
           onData={()=>begin('dataquality')}/>}
@@ -998,6 +906,7 @@ function App(){
         </Suspense>
         <footer className="ws-footer"><span>QUANTLAB / RESEARCH WORKSTATION</span><span>LOCAL ENGINE · HISTORICAL CLAIMS REQUIRE EXTERNAL VALIDATION</span><span>© PERSONAL RESEARCH</span></footer>
       </main>
+      <div className="ql-statusbar" aria-label="Workstation status"><button type="button" onClick={()=>begin('diagnostics')}>Engine: {health?.ok?'Online':health?'Offline':'Checking'}</button><button type="button" onClick={()=>begin('connections')}>Dhan: {dhan?.token_configured?'Token configured':'Not confirmed'}</button><span>Read-only research · no orders</span><button type="button" onClick={()=>setJobsOpen(true)}>Jobs &amp; downloads</button></div>
     </div>
   </div>
 }

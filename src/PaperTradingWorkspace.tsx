@@ -1,3 +1,4 @@
+import ResearchPlot from './ResearchPlots'
 import {useEffect,useState} from 'react'
 import {AlertTriangle,RefreshCw,Wallet,Activity} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
@@ -39,15 +40,7 @@ function Broker({value,set}:{value:string;set:(v:string)=>void}){return <label>E
 function Equity({rows}:{rows:Overview['equity_samples']}){
   const good=rows.filter(r=>r.marked_equity!==null)
   if(!good.length)return <p className="ao-muted">No complete equity marks yet. Missing marks remain gaps.</p>
-  const lo=Math.min(...good.map(r=>r.marked_equity!)),hi=Math.max(...good.map(r=>r.marked_equity!))
-  const x=(i:number)=>50+i/Math.max(1,rows.length-1)*700
-  const y=(v:number)=>25+(hi-v)/Math.max(hi-lo,1)*130
-  let drawing=false
-  const path=rows.map((r,i)=>{if(r.marked_equity===null){drawing=false;return ''}const cmd=drawing?'L':'M';drawing=true;return cmd+x(i)+','+y(r.marked_equity)}).join(' ')
-  return <div className="ao-plot"><strong>Observed paper liquidation equity</strong><svg viewBox="0 0 780 190" role="img" aria-label="Paper equity curve with missing-data gaps">
-    <text x="5" y="16">{money(hi)}</text><text x="5" y="178">{money(lo)}</text><path d={path} fill="none" stroke="#75d6c5" strokeWidth="2"/>
-    {rows.map((r,i)=>r.marked_equity===null?null:<circle key={r.minute_utc} cx={x(i)} cy={y(r.marked_equity)} r="2.2" fill="#75d6c5"><title>{time(r.minute_utc)} · {money(r.marked_equity)}</title></circle>)}</svg>
-    <small>{time(rows[0]?.minute_utc)} — {time(rows.at(-1)?.minute_utc)} · {good.length}/{rows.length} complete marks · not realized returns.</small></div>
+  return <div className="ao-plot"><ResearchPlot plot={{kind:'line2d',title:'Observed paper liquidation equity',x_label:'Mark minute (IST)',y_label:'Simulated liquidation equity (₹)',x:rows.map(r=>r.minute_utc),traces:[{name:'Marked paper equity',y:rows.map(r=>r.marked_equity)}],break_before:rows.map((r,i)=>i>0&&Date.parse(r.minute_utc)-Date.parse(rows[i-1].minute_utc)>120000)}} provenance="paper-mark" formatX={v=>time(String(v))} formatY={money}/><small>{good.length}/{rows.length} complete marks · missing marks remain gaps · not realized returns.</small></div>
 }
 function ReplayDetail({result}:{result:Replay}){
   return <section className="ao-panel"><h4>{human(result.strategy)} · {human(result.state)}</h4>

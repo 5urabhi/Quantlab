@@ -4,6 +4,9 @@ import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import type {BrokerProfile} from './SpreadOpportunityScanner'
 import SpreadExecutionDecision,{type ExecutionDecision} from './SpreadExecutionDecision'
 import './multi-leg-spreads.css'
+import ResearchPlot from './ResearchPlots'
+import {openSnapshotInPython,type PythonSnapshot} from './pythonBridge'
+import SavedScriptRunner from './SavedScriptRunner'
 
 type StrategyKey='bull_call_debit'|'bear_put_debit'|'bull_put_credit'|'bear_call_credit'|'iron_condor'|'iron_butterfly'
 type Strategy={key:StrategyKey;label:string;group:string;roles:string[];actions:('BUY'|'SELL')[];sides:('CE'|'PE')[];qualified_candidates:number}
@@ -25,32 +28,18 @@ const n=(v:number|null|undefined,p=0)=>typeof v==='number'&&Number.isFinite(v)?v
 const time=(v:string|null|undefined)=>v?new Date(v).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'—'
 function loadSaved():Saved[]{try{const v:unknown=JSON.parse(localStorage.getItem(STORE)||'[]');return Array.isArray(v)?(v as Saved[]).slice(0,40):[]}catch{return []}}
 function Metric({name,value,detail}:{name:string;value:string;detail:string}){return <div className="ml-metric"><small>{name}</small><strong>{value}</strong><span>{detail}</span></div>}
-function PayoffChart({points}:{points:Point[]}){
-  const [index,setIndex]=useState(30)
+function PayoffChart({points,breakEven=[]}:{points:Point[];breakEven?:number[]}){
+  const [index,setIndex]=useState(()=>Math.floor(points.length/2))
   if(!points.length)return <p>Payoff points unavailable.</p>
-  const lo=points[0].underlying,hi=points[points.length-1].underlying
-  const low=Math.min(0,...points.map(x=>x.net_payoff_inr)),high=Math.max(0,...points.map(x=>x.net_payoff_inr))
-  const xx=(value:number)=>56+(value-lo)/Math.max(1,hi-lo)*700
-  const yy=(value:number)=>20+(high-value)/Math.max(1,high-low)*205
-  const path=points.map((x,i)=>(i===0?'M':'L')+xx(x.underlying).toFixed(2)+' '+yy(x.net_payoff_inr).toFixed(2)).join(' ')
-  const point=points[Math.min(index,points.length-1)]
+  const safeIndex=Math.max(0,Math.min(index,points.length-1)),point=points[safeIndex]
+  const markers=[...breakEven.filter(b=>points.some(p=>p.underlying===b)).map(b=>({x:b,y:0,label:'Break-even',color:'#f5c542'})),{x:point.underlying,y:point.net_payoff_inr,label:'Selected expiry scenario',color:'#78a8ff'}]
   return <div className="ml-chart">
-    <svg viewBox="0 0 810 260" role="img" aria-label="Theoretical expiration payoff curve, excluding exercise and settlement costs">
-      <title>Terminal payoff under hypothetical BANKNIFTY expiry prices</title>
-      <line x1="56" x2="756" y1={yy(0)} y2={yy(0)} stroke="#95abba" strokeDasharray="5 5"/>
-      <path d={path} fill="none" stroke="#64deb6" strokeWidth="3" strokeLinecap="round"/>
-      <line x1={xx(point.underlying)} x2={xx(point.underlying)} y1="20" y2="225" stroke="#f5c17d" strokeDasharray="5 5"/>
-      <circle cx={xx(point.underlying)} cy={yy(point.net_payoff_inr)} r="5" fill="#ffd08a"/>
-      <text x="55" y="251" fill="#b8cdd9" fontSize="12">{n(lo)}</text>
-      <text x="754" y="251" fill="#b8cdd9" fontSize="12" textAnchor="end">{n(hi)}</text>
-      <text x="5" y="22" fill="#b8cdd9" fontSize="12">{n(high)}</text>
-      <text x="5" y="225" fill="#b8cdd9" fontSize="12">{n(low)}</text>
-    </svg>
+    <ResearchPlot plot={{kind:'line2d',title:'Theoretical expiration payoff curve, excluding exercise and settlement costs',x_label:'BANKNIFTY expiry level (points)',y_label:'Terminal net payoff (₹)',x:points.map(p=>p.underlying),traces:[{name:'Theoretical net payoff',y:points.map(p=>p.net_payoff_inr)}],reference_lines:[{value:0,label:'Break-even payoff'}],point_markers:markers}} provenance="theoretical" formatY={money}/>
     <label>Explore hypothetical expiry BANKNIFTY level
-      <input type="range" min="0" max={points.length-1} value={index} onChange={e=>setIndex(Number(e.target.value))}/>
+      <input type="range" min={0} max={points.length-1} step={1} value={safeIndex} onChange={e=>setIndex(Number(e.target.value))} aria-valuetext={n(point.underlying,2)+' points; terminal payoff '+money(point.net_payoff_inr)}/>
     </label>
-    <div className="ml-chart-pnl">BANKNIFTY {n(point.underlying,2)} ·
-      terminal payoff <strong>{money(point.net_payoff_inr)}</strong></div>
+    <div className="ml-chart-pnl" aria-live="polite">BANKNIFTY {n(point.underlying,2)} · terminal payoff <strong>{money(point.net_payoff_inr)}</strong></div>
+    <p>Hypothetical terminal payoffs at the supplied scenario points, not current prices, actual fills or verified broker margin.</p>
   </div>
 }
 export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerProfileChange}:{day:string;expiry:string;brokerProfile:BrokerProfile;onBrokerProfileChange:(v:BrokerProfile)=>void}){
@@ -103,6 +92,7 @@ export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerP
       Number(!!a.paper_research_qualified)||
       Number(!!b.fresh_reference)-Number(!!a.fresh_reference)||(sort==='minimum_loss'||sort==='quote_skew'?val(a)-val(b):val(b)-val(a))||a.candidate_id.localeCompare(b.candidate_id))
   },[data,filter,expiry,freshOnly,qualifiedOnly,sort])
+  const candidateSnapshot=useMemo<PythonSnapshot|null>(()=>candidates.length?{title:'Defined-risk spread candidates · '+day,provenance:'Original saved-book calculations, broker '+brokerProfile+'; research only, margin unverified',columns:['Candidate ID','Strategy','Lots','Maximum profit (₹)','Maximum loss (₹)','Risk capital proxy (₹)','Risk reward proxy','Immediate roundtrip net (₹)','Quote skew (s)','Paper gate qualified','Source legs and receipt times'],rows:candidates.map(c=>[c.candidate_id,c.label,c.lots,c.max_profit_inr,c.max_loss_inr,c.risk_capital_proxy_inr,c.risk_reward_ratio_proxy,c.estimated_same_book_immediate_roundtrip_net_inr,c.quote_skew_seconds,!!c.paper_research_qualified,c.legs.map(l=>l.identity+' '+l.saved_utc).join('; ')])}:null,[candidates,day,brokerProfile])
   const selected=manual||data?.ranked_candidates.find(x=>x.candidate_id===selectedId)||candidates[0]||null
   const spec=data?.strategies.find(x=>x.key===buildStrategy)
   const persist=(items:Saved[])=>{setSaved(items);try{localStorage.setItem(STORE,JSON.stringify(items))}catch{/* storage unavailable */}}
@@ -173,6 +163,8 @@ export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerP
         <label className="ml-check"><input type="checkbox" checked={qualifiedOnly}
           onChange={e=>setQualifiedOnly(e.target.checked)}/>Only paper-study qualified</label>
       </div>
+      <div className="ml-actions"><button type="button" className="ml-btn" disabled={!candidateSnapshot} onClick={()=>candidateSnapshot&&openSnapshotInPython(candidateSnapshot)}>Analyze / score spreads in Python</button></div>
+      <details className="ql-saved-runner-wrap"><summary>Custom saved spread scanner</summary><SavedScriptRunner kind="scanner" snapshot={candidateSnapshot} automatic onInspect={id=>{const candidate=candidates.find(c=>c.candidate_id===id);if(candidate)selectCandidate(candidate)}}/></details>
       <div className="ml-scroll"><table className="ml-table"><thead><tr>
         <th>Rank / strategy</th><th>Legs</th><th>Lots</th><th>Premium entry ±</th><th>Entry costs</th><th>Max terminal gain</th><th>Max terminal loss</th><th>Reward / loss</th><th>Immediate round trip</th><th>Source</th><th>Feasibility</th><th></th>
       </tr></thead><tbody>{candidates.map((x,i)=><tr key={x.candidate_id}>
@@ -223,7 +215,7 @@ export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerP
         <Metric name="Loss budget proxy" value={money(selected.risk_capital_proxy_inr)} detail="Not broker margin"/>
         <Metric name="Cross and immediately exit" value={money(selected.estimated_same_book_immediate_roundtrip_net_inr)} detail="Both legs assumed against one saved book"/>
       </div>
-      {detail==='payoff'&&<><PayoffChart key={selected.candidate_id} points={selected.payoff_points}/><p className="ml-muted">Break-even underlying: {selected.break_even_underlying.length?selected.break_even_underlying.map(v=>n(v,2)).join(' / '):'Unavailable'}. {selected.payoff_model}</p></>}
+      {detail==='payoff'&&<><PayoffChart key={selected.candidate_id} points={selected.payoff_points} breakEven={selected.break_even_underlying}/><p className="ml-muted">Break-even underlying: {selected.break_even_underlying.length?selected.break_even_underlying.map(v=>n(v,2)).join(' / '):'Unavailable'}. {selected.payoff_model}</p></>}
       {detail==='legs'&&<><div className="ml-scroll"><table className="ml-table"><thead><tr><th>Role</th><th>Contract</th><th>Saved bid / ask</th><th>Entry VWAP</th><th>Close VWAP</th><th>Turnover</th><th>Levels</th></tr></thead><tbody>{selected.legs.map(l=><tr key={l.identity}>
         <td>{l.role}<small>{l.action} {l.units} units</small></td>
         <td>{n(l.strike)} {l.option_type}<small>{l.identity} · {time(l.saved_utc)} IST</small></td>

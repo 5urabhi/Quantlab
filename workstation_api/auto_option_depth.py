@@ -860,6 +860,15 @@ def arm(settings: dict, *, confirm_live_data: bool) -> dict:
     return status()
 
 
+def set_token_renewal(enabled: bool, *, confirm_renewal: bool = False) -> dict:
+    """Change only renewal consent; never stop recording or contact Dhan."""
+    if enabled and not confirm_renewal:
+        raise ValueError("Explicit renewal authorization is required; Dhan may invalidate the previous token.")
+    with LOCK:
+        _save_config({**_config(), "allow_token_renewal": bool(enabled)})
+    return status()
+
+
 def disarm() -> dict:
     with LOCK:
         _save_config({**_config(), "enabled": False})

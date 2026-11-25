@@ -51,6 +51,7 @@ jobs:
         run: python tests/browser_smoke_seed.py
 
       - name: Start loopback-only Python API and React/Vite frontend
+        id: local_services
         shell: bash
         run: |
           set -euo pipefail
@@ -73,10 +74,15 @@ jobs:
           tail -n 100 /tmp/quantlab-vite.log
           exit 1
 
+      - name: Capture and audit every V3 route on desktop and mobile
+        run: node tests/browser-route-audit.mjs
+
       - name: Regression-test unchanged source-backed features in Classic compatibility mode
+        if: ${{ !cancelled() && steps.local_services.outcome == 'success' }}
         run: node tests/browser-smoke.mjs
 
       - name: Exercise all eight redesigned QuantLab V2 destinations in Chromium
+        if: ${{ !cancelled() && steps.local_services.outcome == 'success' }}
         run: node tests/browser-smoke-v2.mjs
 
       - name: Validate source-labeled demo recorder

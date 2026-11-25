@@ -1,5 +1,5 @@
-import {useMemo,useState} from 'react'
-import {AlertTriangle,ArrowDownRight,ArrowUpRight,ChartLine,ShieldCheck} from 'lucide-react'
+import ResearchPlot from './ResearchPlots'
+import {AlertTriangle,ArrowDownRight,ArrowUpRight,ShieldCheck} from 'lucide-react'
 import './index-exposure.css'
 
 export type IndexTrade={
@@ -40,70 +40,8 @@ const pts=(n:number)=>new Intl.NumberFormat('en-IN',{
 }).format(n)
 
 function EquityCurve({data}:{data:ScenarioResult['equity_curve']}){
-  const [focus,setFocus]=useState<number|null>(null)
-  const width=860,height=220,left=66,right=18,top=14,bottom=35
-  const plotWidth=width-left-right,plotHeight=height-top-bottom
-  const minimum=Math.min(...data.map(x=>x.equity_inr))
-  const maximum=Math.max(...data.map(x=>x.equity_inr))
-  const pad=Math.max(1,(maximum-minimum)*.13)
-  const low=minimum-pad,high=maximum+pad
-  const loc=(index:number)=>{
-    const x=left+plotWidth*index/Math.max(1,data.length-1)
-    const y=top+plotHeight*(high-data[index].equity_inr)/(high-low)
-    return {x,y}
-  }
-  const shape=useMemo(()=>{
-    if(data.length<2)return ''
-    return data.map((_,i)=>{
-      const {x,y}=loc(i)
-      return (i===0?'M':'L')+x.toFixed(2)+','+y.toFixed(2)
-    }).join(' ')
-  // The line is derived from source-verified scenario trades, never future price estimates.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[data])
-  const current=focus!==null?data[focus]:null
-  const point=focus!==null?loc(focus):null
-  const rows=[0,.5,1]
-  return <div className="tc-index-chart" aria-label="Illustrative investment balance over closed trades">
-    <div className="tc-index-chart-head">
-      <strong><ChartLine size={17}/> Simulated account balance after each completed trade</strong>
-      <small>{current?clock(current.timestamp_utc)+' · '+cash(current.equity_inr):
-        'Move over chart to inspect hypothetical balances'}</small>
-    </div>
-    <svg viewBox={`0 0 ${width} ${height}`} role="img"
-      aria-label="Illustrative index-exposure balance curve; exact values also appear in trade journal">
-      {rows.map((n,i)=>{
-        const y=top+n*plotHeight
-        const val=high-n*(high-low)
-        return <g key={i}>
-          <line x1={left} x2={width-right} y1={y} y2={y} className="tc-index-grid"/>
-          <text x={left-9} y={y+3} textAnchor="end" className="tc-index-axis">{Math.round(val).toLocaleString('en-IN')}</text>
-        </g>
-      })}
-      {data.length>1&&<path d={shape} className="tc-index-curve"/>}
-      {data.length===1&&<line x1={left} x2={width-right}
-        y1={loc(0).y} y2={loc(0).y} className="tc-index-curve"/>}
-      {point&&<g>
-        <line x1={point.x} x2={point.x} y1={top} y2={height-bottom}
-          className="tc-index-guide"/>
-        <circle cx={point.x} cy={point.y} r="5" className="tc-index-dot"/>
-      </g>}
-      <text x={left} y={height-12} className="tc-index-axis">
-        {data.length?clock(data[0].timestamp_utc):'Start'}</text>
-      <text x={width-right} y={height-12} textAnchor="end" className="tc-index-axis">
-        {data.length?clock(data[data.length-1].timestamp_utc):'End'}</text>
-      <rect x={left} y={top} width={plotWidth} height={plotHeight}
-        fill="transparent" onMouseMove={event=>{
-          const bounds=event.currentTarget.getBoundingClientRect()
-          const share=(event.clientX-bounds.left)/bounds.width
-          setFocus(Math.max(0,Math.min(data.length-1,
-            Math.round(share*Math.max(0,data.length-1)))))
-        }} onMouseLeave={()=>setFocus(null)}/>
-    </svg>
-    <p className="tc-muted">This plots account values only at completed simulated exits. It does not display intratrade drawdown or executable account performance.</p>
-  </div>
+  return <div className="tc-index-chart" aria-label="Illustrative investment balance over closed trades"><ResearchPlot plot={{kind:'line2d',title:'Illustrative index-exposure balance curve; exact values also appear in trade journal',x_label:'Completed simulated exit (IST)',y_label:'Hypothetical account balance (₹)',x:data.map(r=>r.timestamp_utc),traces:[{name:'Illustrative index balance',y:data.map(r=>r.equity_inr)}]}} provenance="theoretical" formatX={x=>clock(String(x))} formatY={cash}/><p className="tc-muted">Completed hypothetical exits only. No executable investment performance or intratrade drawdown.</p></div>
 }
-
 export default function IndexExposureScenario({scenario}:{scenario:ScenarioResult}){
   const change=scenario.net_pnl_inr
   const wins=scenario.winning_trades,losses=scenario.losing_trades

@@ -1,6 +1,8 @@
 import {Activity, ArrowRight, BarChart3, CheckCircle2, Clock3, Database,
   Layers, Search, Sigma, SlidersHorizontal} from 'lucide-react'
-import {useMemo, useState} from 'react'
+import {useEffect,useMemo, useState} from 'react'
+import {marketApi,readableError} from './tradingCockpitApi'
+import type {SavedScriptMeta} from './SavedScriptRunner'
 
 export type CatalogEntry={
   id:string;group:string;title:string;mode:'synthetic'|'theoretical'|'historical'|'market';
@@ -10,7 +12,7 @@ type SavedModel={id:string;model_id:string;title:string;mode:string;generated_ut
 type Readiness={id:string;source_ready:boolean}
 type Props={
   models:CatalogEntry[];readiness:Readiness[];recent:SavedModel[];sourceLabel:string;
-  onOpen:(id:string)=>void;onReopen:(id:string)=>void;onOpenResults?:()=>void
+  onOpen:(id:string)=>void;onReopen:(id:string)=>void;onOpenResults?:()=>void;onOpenCustom?:(id?:string)=>void
 }
 
 const FAMILIES=[
@@ -42,7 +44,11 @@ function simpleDescription(model:CatalogEntry):string{
   return words.length>94?words.slice(0,92).trimEnd()+'…':words
 }
 export default function ModelCatalogLanding({models,readiness,recent,sourceLabel,
-  onOpen,onReopen,onOpenResults}:Props){
+  onOpen,onReopen,onOpenResults,onOpenCustom}:Props){
+  const [custom,setCustom]=useState<SavedScriptMeta[]>([])
+  const [customError,setCustomError]=useState('')
+  const reloadCustom=()=>{void marketApi<{scripts:SavedScriptMeta[]}>('/api/user-scripts').then(d=>{setCustom(d.scripts.filter(s=>s.kind==='model'));setCustomError('')}).catch(e=>setCustomError(readableError(e)))}
+  useEffect(()=>{if(onOpenCustom)reloadCustom()},[Boolean(onOpenCustom)])
   const [family,setFamily]=useState('All models')
   const [search,setSearch]=useState('')
   const [filter,setFilter]=useState<'all'|'data'|'math'>('all')
@@ -123,6 +129,10 @@ export default function ModelCatalogLanding({models,readiness,recent,sourceLabel
           Show all models</button>
       </div>}
     </div>
+    {onOpenCustom&&<section className="ql-catalog-recent" aria-label="Registered custom Python models"><div className="ql-saved-runner-head"><div><h3>My Python models</h3><p className="ws-caption">Custom, versioned research models are separate from the built-in validated registry.</p></div><div className="ws-actions"><button type="button" className="ws-button" onClick={reloadCustom}>Refresh custom models</button><button type="button" className="ws-button primary" onClick={()=>onOpenCustom()}>Custom model laboratory</button></div></div>
+      {customError&&<p role="alert">{customError}</p>}
+      <div className="ql-catalog-card-grid">{custom.filter(c=>c.name.toLowerCase().includes(search.toLowerCase())).map(c=><button type="button" key={c.id} className="ql-catalog-model-card" onClick={()=>onOpenCustom(c.id)} aria-label={'Open custom model '+c.name}><span className="ql-catalog-family-name">Python · revision {c.revision}</span><h4>{c.name}</h4><p>Requires user-selected model inputs and isolated execution.</p><footer>Custom / not validated <ArrowRight size={16}/></footer></button>)}</div>
+      {!custom.length&&<p className="ws-caption">Save a script with the model category to register it here.</p>}</section>}
     {recent.length>0&&<section className="ql-catalog-recent">
       <div><Clock3 size={17}/><strong>Continue recent work</strong></div>
       <div className="ql-catalog-recent-items">

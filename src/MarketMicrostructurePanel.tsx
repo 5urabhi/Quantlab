@@ -1,3 +1,4 @@
+import ResearchPlot from './ResearchPlots'
 import {useCallback,useEffect,useState} from 'react'
 import {Activity,AlertTriangle,BarChart3,CheckCircle2,Database,
   FileUp,Play,RefreshCw,Square,ShieldCheck} from 'lucide-react'
@@ -27,28 +28,8 @@ const api=async<T,>(path:string,init?:RequestInit):Promise<T>=>{
   return response.json() as Promise<T>
 }
 const format=(v:number)=>v.toLocaleString('en-IN',{maximumFractionDigits:3})
-function Spark({points,label}:{points:number[];label:string}){
-  const [hover,setHover]=useState<number|null>(null)
-  const low=Math.min(...points),high=Math.max(...points),span=high-low||1
-  const x=(i:number)=>24+i/Math.max(1,points.length-1)*825
-  const y=(n:number)=>180-(n-low)/span*145
-  const path=points.map((n,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(n).toFixed(1)).join(' ')
-  return <div className="qm-columnar-plot"><svg viewBox="0 0 880 214" aria-label={label}
-    role="img" onMouseMove={e=>{
-      const rect=e.currentTarget.getBoundingClientRect()
-      const xx=(e.clientX-rect.left)/rect.width*880
-      setHover(Math.max(0,Math.min(points.length-1,Math.round((xx-24)/825*(points.length-1)))))
-    }} onMouseLeave={()=>setHover(null)}>
-    {[35,108,180].map(n=><line key={n} x1="24" x2="850" y1={n} y2={n}
-      stroke="currentColor" opacity=".15"/>)}
-    <path d={path} fill="none" stroke="#76baf1" strokeWidth="2.5"/>
-    {hover!==null&&points[hover]!==undefined&&
-      <circle cx={x(hover)} cy={y(points[hover])} r="5" fill="#8ce5b9"/>}
-    <text x="24" y="18" fontSize="12" fill="currentColor">{format(high)}</text>
-    <text x="24" y="200" fontSize="12" fill="currentColor">{format(low)}</text>
-  </svg>
-  <div className="qm-chart-tooltip">{hover!==null&&points[hover]!==undefined?
-    label+' · '+format(points[hover]):'Hover over the observed values to inspect them'}</div></div>
+function Spark({points,times,label,yLabel,source}:{points:number[];times:string[];label:string;yLabel:string;source:string}){
+  return <div className="qm-columnar-plot"><ResearchPlot plot={{kind:'line2d',title:label,x_label:'Source observation time (IST)',y_label:yLabel,x:times,traces:[{name:label,y:points}],break_before:times.map((t,i)=>i>0&&Date.parse(t)-Date.parse(times[i-1])>120000)}} provenance={source} formatX={t=>new Date(t).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})} formatY={format}/></div>
 }
 export default function MarketMicrostructurePanel(){
   const [minutes,setMinutes]=useState<MinuteState[]>([])
@@ -178,8 +159,8 @@ export default function MarketMicrostructurePanel(){
         <div><small>Parquet mirror</small><strong>{(minState.parquet_bytes/1024**2).toFixed(1)} MB</strong></div>
       </div>}
       {minuteRows.length>0&&<>
-        <Spark points={minuteRows.map(r=>r.close)}
-          label={'Original close (₹) · '+identity}/>
+        <Spark points={minuteRows.map(r=>r.close)} times={minuteRows.map(r=>r.timestamp_utc)} yLabel={identity.startsWith('INDEX:')?'Index points':'Close (₹)'} source="historical"
+          label={'Original close · '+identity}/>
         <div className="qm-scroll qm-columnar-rows"><table><thead><tr>
           <th>UTC timestamp</th><th>NSE session</th><th>Close (₹)</th><th>Volume</th>
         </tr></thead><tbody>{minuteRows.slice(-30).map(x=><tr key={x.timestamp_utc}>
@@ -273,7 +254,7 @@ export default function MarketMicrostructurePanel(){
           <div><small>Full depth share</small><strong>{(100*depthResult.summary.full_depth_fraction).toFixed(1)}%</strong></div>
         </div>
         {depthResult.metrics.length>0&&<Spark
-          points={depthResult.metrics.map(r=>r.spread_bps)} label="Observed spread (bps)"/>}
+          points={depthResult.metrics.map(r=>r.spread_bps)} times={depthResult.metrics.map(r=>r.timestamp)} yLabel="Bid–ask spread (bps)" source="original-depth-snapshot" label="Observed spread (bps)"/>}
         <p className="qm-caption">{depthResult.warning}</p>
       </>}
       {!depths.length&&<p className="qm-caption">No market-depth history exists on this machine.

@@ -1,3 +1,4 @@
+import ResearchPlot from './ResearchPlots'
 import {useCallback,useEffect,useState} from 'react'
 import {Activity,AlertTriangle,ChevronLeft,ChevronRight,Database,Radio} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
@@ -61,34 +62,9 @@ const time=(v:string|null|undefined)=>v
 const change=(v:number|null|undefined)=>v==null||!Number.isFinite(v)
   ?'—':(v>0?'+':'')+nf(v,1)+'%'
 function PriceTimeline({events}:{events:Row[]}){
-  const points=events.filter(x=>x.kind==='quote'&&x.price!=null&&x.price>0).slice(-120)
-  if(points.length<2)return <p className="ofu-help">
-    Not enough original price observations to draw a historical trajectory.</p>
-  const width=760,height=190,pad=17
-  const values=points.map(x=>x.price as number)
-  const floor=Math.min(...values),ceil=Math.max(...values)
-  const span=Math.max(.01,ceil-floor)
-  const cx=(i:number)=>pad+(width-2*pad)*i/(points.length-1)
-  const cy=(v:number)=>height-pad-(height-2*pad)*(v-floor)/span
-  const line=points.map((p,i)=>String(cx(i))+','+String(cy(p.price as number))).join(' ')
-  return <div className="ofu-chart" aria-label="Saved original Dhan option price observations">
-    <div className="ofu-chart-captions"><span>₹{nf(ceil,2)}</span>
-      <span>Only received saved Quote packets; no interpolated trades.</span>
-      <span>₹{nf(floor,2)}</span></div>
-    <svg viewBox="0 0 760 190" role="img"
-      aria-label={String(points.length)+' received Dhan option quotes, from ₹'+nf(values[0],2)+' to ₹'+nf(values[values.length-1],2)}>
-      <polyline fill="none" stroke="#70e5c7" strokeWidth="2.4"
-        strokeLinejoin="round" strokeLinecap="round" points={line}/>
-      {points.map((p,i)=><circle key={p.received_utc+'-'+String(i)}
-        cx={cx(i)} cy={cy(p.price as number)} r="2.7" fill="#cefdf0">
-        <title>{time(p.received_utc)+' IST · ₹'+nf(p.price,2)+
-          (p.volume!=null?' · Cumulative volume '+nf(p.volume):'')}
-        </title>
-      </circle>)}
-    </svg>
-    <div className="ofu-axis"><span>{time(points[0].received_utc)} IST</span>
-      <span>{time(points[points.length-1].received_utc)} IST</span></div>
-  </div>
+  const points=events.filter(x=>x.kind==='quote'&&typeof x.price==='number'&&Number.isFinite(x.price)&&x.price>0).slice(-120)
+  if(!points.length)return <p className="ofu-help">No original price observations.</p>
+  return <div className="ofu-chart" aria-label="Saved original Dhan option price observations"><ResearchPlot plot={{kind:'line2d',title:'Saved original Dhan option price observations',x_label:'Local quote receipt time (IST)',y_label:'Reported last traded premium (₹ per unit)',x:points.map(p=>p.received_utc),traces:[{name:'Reported LTP',y:points.map(p=>p.price)}],break_before:points.map((p,i)=>i>0&&Date.parse(p.received_utc)-Date.parse(points[i-1].received_utc)>120000)}} provenance="original-option-receipts" formatX={x=>time(String(x))+' IST'} formatY={v=>'₹'+nf(v,2)}/><p className="ofu-help">Saved Quote packets, not interpolated trades. Receipt time differs from exchange trade time.</p></div>
 }
 export default function OptionUniverseMonitor(){
   const [state,setState]=useState<FeedState|null>(null)

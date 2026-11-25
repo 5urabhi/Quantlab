@@ -1,4 +1,5 @@
-import {useCallback, useEffect, useMemo, useState} from 'react'
+import ResearchPlot from './ResearchPlots'
+import {useCallback, useEffect, useState} from 'react'
 import {AlertTriangle, BarChart3, CheckCircle2, Database, RefreshCw, ShieldCheck} from 'lucide-react'
 
 type CacheState={
@@ -34,7 +35,6 @@ export default function ColumnarAnalyticsPanel(){
   const [first,setFirst]=useState('')
   const [last,setLast]=useState('')
   const [data,setData]=useState<Series|null>(null)
-  const [hover,setHover]=useState<number|null>(null)
   const [revision,setRevision]=useState(0)
   const reload=useCallback(async()=>{
     try{const r=await get<CacheState>('/columnar/status');setState(r);setError('')}
@@ -59,7 +59,7 @@ export default function ColumnarAnalyticsPanel(){
     if(last)query.set('end',last)
     setData(null)
     void get<Series>('/columnar/series?'+query.toString()).then(r=>{
-      if(alive){setData(r);setHover(null);setError('')}
+      if(alive){setData(r);setError('')}
     }).catch(e=>{if(alive)setError(e instanceof Error?e.message:String(e))})
     return()=>{alive=false}
   },[state?.ready,identity,limit,first,last,revision])
@@ -88,16 +88,7 @@ export default function ColumnarAnalyticsPanel(){
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(false)}
   }
-  const chart=useMemo(()=>{
-    if(!data||data.rows.length===0)return null
-    const rows=data.rows
-    const values=rows.map(r=>r.close)
-    const low=Math.min(...values),high=Math.max(...values),range=high-low||1
-    const x=(i:number)=>44+(i/Math.max(1,rows.length-1))*820
-    const y=(v:number)=>190-((v-low)/range)*158
-    const d=rows.map((r,i)=>(i?'L':'M')+x(i).toFixed(2)+' '+y(r.close).toFixed(2)).join(' ')
-    return {d,low,high,x,y}
-  },[data])
+
   const waiting=busy||(job!==null&&['queued','running'].includes(job.status))
   return <section className="qm-panel qm-columnar" aria-label="Columnar analytical cache">
     <div className="qm-panel-title"><h3><BarChart3 size={18}/> Fast historical-data analytics</h3>
@@ -144,36 +135,7 @@ export default function ColumnarAnalyticsPanel(){
             {[100,250,500,1000,2500].map(n=><option key={n} value={n}>{n}</option>)}
           </select></label>
       </div>
-      {data&&chart&&<div className="qm-columnar-plot">
-        <div className="qm-panel-title"><h3>Unadjusted close · {identity}</h3>
-          <span>{data.rows.length} observations · {data.has_more?'More rows available':''}</span></div>
-        <svg viewBox="0 0 900 235" role="img" aria-label="Interactive chart of original market closes"
-          onMouseMove={e=>{
-            const rect=e.currentTarget.getBoundingClientRect()
-            if(!rect.width||!data.rows.length)return
-            const x=((e.clientX-rect.left)/rect.width)*900
-            setHover(Math.max(0,Math.min(data.rows.length-1,
-              Math.round((x-44)/820*Math.max(1,data.rows.length-1)))))
-          }} onMouseLeave={()=>setHover(null)}>
-          {[30,110,190].map((y)=><line key={y} x1="44" x2="864" y1={y} y2={y}
-            stroke="currentColor" opacity=".15"/>)}
-          <path d={chart.d} fill="none" stroke="#72b5f5" strokeWidth="2.5"/>
-          {hover!==null&&data.rows[hover]&&<>
-            <line x1={chart.x(hover)} x2={chart.x(hover)} y1="25" y2="200" stroke="#e5edf7" opacity=".55"/>
-            <circle cx={chart.x(hover)} cy={chart.y(data.rows[hover].close)}
-              r="5" fill="#8ae3b0" stroke="#122039" strokeWidth="2"/>
-          </>}
-          <text x="44" y="20" fill="currentColor" fontSize="13">{money(chart.high)}</text>
-          <text x="44" y="210" fill="currentColor" fontSize="13">{money(chart.low)}</text>
-          <text x="44" y="232" fill="currentColor" fontSize="12">{data.rows[0]?.date}</text>
-          <text x="864" y="232" textAnchor="end" fill="currentColor" fontSize="12">
-            {data.rows[data.rows.length-1]?.date}
-          </text>
-        </svg>
-        <div className="qm-chart-tooltip" role="status">{hover!==null&&data.rows[hover]?
-          <strong>{data.rows[hover].date} · {money(data.rows[hover].close)}</strong>:
-          <span>Hover over the line to inspect an observed session</span>}</div>
-      </div>}
+      {data&&data.rows.length>0&&<div className="qm-columnar-plot"><ResearchPlot plot={{kind:'line2d',title:'Interactive chart of original market closes · '+identity,x_label:'Trading date',y_label:identity.startsWith('INDEX:')?'Index level (points)':'Unadjusted close (₹)',x:data.rows.map(r=>r.date),traces:[{name:'Original close',y:data.rows.map(r=>r.close)}]}} provenance="historical" formatY={v=>v.toLocaleString('en-IN',{maximumFractionDigits:2})}/><p className="qm-caption">{data.rows.length} observations · {data.has_more?'More rows available':'Displayed source query complete'}</p></div>}
       {data&&<div className="qm-scroll qm-columnar-rows"><table>
         <thead><tr><th>Trading date</th><th>Unadjusted close (INR)</th><th>Source checksum</th></tr></thead>
         <tbody>{data.rows.slice(-30).map(row=><tr key={row.date}>

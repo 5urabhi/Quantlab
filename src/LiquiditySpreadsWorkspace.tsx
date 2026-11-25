@@ -6,6 +6,7 @@ import SpreadOpportunityScanner,{type BrokerProfile} from './SpreadOpportunitySc
 import MultiLegSpreadStudio from './MultiLegSpreadStudio'
 import OptionFeedStorageHealth from './OptionFeedStorageHealth'
 import './liquidity-spreads.css'
+import ResearchPlot from './ResearchPlots'
 
 type PageTab='live'|'multileg'|'execution'|'history'|'lab'
 type Row={
@@ -140,55 +141,11 @@ function BookView({book,lots}:{book:Book;lots:number}){
 }
 type Series={name:string;books:Book[]}
 function SpreadChart({series}:{series:Series[]}){
-  const combined=series.flatMap(s=>s.books)
-  const [hover,setHover]=useState<{name:string;time:string;spread:number}|null>(null)
-  if(combined.length<2)return <p className="lq-empty">
-    At least two saved original book samples are required for a spread history chart.
-  </p>
-  const width=920,height=270,padL=58,padR=20,padTop=20,padBottom=36
-  const times=combined.map(x=>new Date(x.received_utc).getTime())
-  const first=Math.min(...times),last=Math.max(...times)
-  const spreads=combined.map(x=>x.spread_bps)
-  const min=Math.min(...spreads,0),max=Math.max(...spreads,1)
-  const low=Math.max(0,min-(max-min)*.07),high=max+(max-min)*.09
-  const x=(s:string)=>padL+(new Date(s).getTime()-first)/Math.max(1,last-first)*
-    (width-padL-padR)
-  const y=(v:number)=>padTop+(high-v)/Math.max(.01,high-low)*
-    (height-padTop-padBottom)
-  const colors=['#67e2bd','#e6af70','#82baff']
-  return <div className="lq-chart"><div className="lq-chart-head">
-    <span>Observed bid–ask spread (bps)</span>
-    <span>{hover?hover.name+' · '+localTime(hover.time)+' · '+bps(hover.spread):
-      'Hover an actual saved observation'}</span>
-  </div><svg viewBox="0 0 920 270" role="img"
-    aria-label="Source-received option spread chart with actual observed timestamps">
-    {[0,.25,.5,.75,1].map(i=><g key={i}>
-      <line x1={padL} x2={width-padR} y1={y(low+(high-low)*i)}
-        y2={y(low+(high-low)*i)} stroke="#30556b" strokeDasharray="3 5"/>
-      <text x="6" y={y(low+(high-low)*i)+4} fill="#9bc5d2" fontSize="12">
-        {num(low+(high-low)*i,0)}
-      </text></g>)}
-    {series.map((s,index)=>{
-      const points=s.books.filter(v=>Number.isFinite(v.spread_bps))
-      return <g key={s.name}>
-        {points.length>1&&<polyline fill="none" stroke={colors[index%colors.length]}
-          strokeWidth="2.3" strokeLinejoin="round"
-          points={points.map(p=>x(p.received_utc)+','+y(p.spread_bps)).join(' ')}/>}
-        {points.map((p,j)=><circle key={p.received_utc+String(j)}
-          cx={x(p.received_utc)} cy={y(p.spread_bps)} r="3.5"
-          fill={colors[index%colors.length]} tabIndex={0}
-          onMouseEnter={()=>setHover({name:s.name,time:p.received_utc,spread:p.spread_bps})}
-          onFocus={()=>setHover({name:s.name,time:p.received_utc,spread:p.spread_bps})}>
-          <title>{s.name+' · '+localTime(p.received_utc)+' · '+bps(p.spread_bps)}</title>
-        </circle>)}
-      </g>})}
-    <text x={padL} y="260" fill="#9bc5d2" fontSize="12">
-      {localTime(new Date(first).toISOString())}</text>
-    <text x={width-210} y="260" fill="#9bc5d2" fontSize="12">
-      {localTime(new Date(last).toISOString())}</text>
-  </svg><div className="lq-legend">{series.map((s,i)=><span key={s.name}>
-    <i style={{backgroundColor:colors[i%colors.length]}}/>
-    {s.name} · {num(s.books.length)} saved samples</span>)}</div></div>
+  const combined=series.flatMap(s=>s.books).filter(b=>Number.isFinite(Date.parse(b.received_utc)))
+  if(combined.length<2)return <p className="lq-empty">At least two saved original book samples are required for a spread history chart.</p>
+  const x=Array.from(new Set(combined.map(b=>b.received_utc))).sort((a,b)=>Date.parse(a)-Date.parse(b))
+  const traces=series.map(s=>{const values=new Map(s.books.map(b=>[b.received_utc,b.spread_bps]));return {name:s.name,y:x.map(t=>values.get(t)??null)}})
+  return <div className="lq-chart"><ResearchPlot plot={{kind:'line2d',title:'Source-received option spread chart',x,y_label:'Observed bid–ask spread (bps)',x_label:'Local receipt time (IST)',traces,break_before:x.map((t,i)=>i>0&&Date.parse(t)-Date.parse(x[i-1])>120000)}} provenance="original-depth-snapshot" formatX={t=>localTime(String(t))} formatY={v=>num(v,2)}/><p className="lq-hint">Exact source receipt times only; absent samples remain missing, never interpolated into trades.</p></div>
 }
 export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}:{
   onOpenRecording:()=>void;onOpenReplay:()=>void

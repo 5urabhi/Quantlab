@@ -103,3 +103,16 @@ test('workstation launcher waits for heavy saved-market FastAPI startup without 
   assert.doesNotMatch(launcher,/seq 1 40/)
   assert.match(launcher,/Python API healthy; starting browser UI/)
 })
+
+
+import {alignIndicator} from '../src/indicatorAlignment.mjs'
+test('live indicators require exact source, timestamps, values, expiry and latest receipt',()=>{
+  const rows=[['a',10],['b',20],['c',30]]
+  const item={id:'i',name:'Example',revision:2,last_utc:'c',alignment:{source:'chain_spot_receipts',expiry:'expiry',rows:rows.slice(1)},plot:{x:['b','c'],traces:[{name:'v',y:[1,2]}]}}
+  assert.deepEqual(alignIndicator(item,'chain_spot_receipts','expiry',rows,['a','b','c']),[{name:'Example v2 · v',y:[null,1,2]}])
+  assert.equal(alignIndicator(item,'chain_spot_receipts','other',rows,['b','c']),null)
+  assert.equal(alignIndicator(item,'index_minutes',null,rows,['b','c']),null)
+  assert.equal(alignIndicator(item,'chain_spot_receipts','expiry',[['b',21],['c',30]],['b','c']),null)
+  assert.equal(alignIndicator(item,'chain_spot_receipts','expiry',[...rows,['d',40]],['b','c','d']),null)
+  assert.equal(alignIndicator(item,'chain_spot_receipts','expiry',rows,['unknown']),null)
+})

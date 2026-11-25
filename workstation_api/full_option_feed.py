@@ -25,7 +25,7 @@ import shutil
 import struct
 import time
 
-from . import auto_option_depth as auto, dhan_option_chain, live_market, option_chain_live
+from . import auto_option_depth as auto, dhan_option_chain, live_market, option_chain_live, shared_index_feed
 
 LOCK = RLock()
 STOP = Event()
@@ -225,7 +225,7 @@ def _subscribe_batches(contracts: list[dict]) -> list[dict]:
     return messages
 
 
-def decode_quote_frames(blob: bytes) -> list[dict]:
+def decode_quote_frames(blob: bytes, *, include_index: bool = False) -> list[dict]:
     """Decode official v2 binary Quote(4), OI(5); never guess other bodies.
 
     One WebSocket frame may contain multiple concatenated Dhan packets.
@@ -264,6 +264,10 @@ def decode_quote_frames(blob: bytes) -> list[dict]:
             out.append({"kind": "oi", "security_id": str(secid),
                         "oi": struct.unpack_from("<I", raw, 8)[0],
                         "packet_sha256": sha256(raw).hexdigest()})
+        elif include_index and segment == 0:
+            index_event=shared_index_feed.decode_index_packet(raw,code,segment,secid)
+            if index_event is not None:
+                out.append(index_event)
         # Prev close, market status, index response and disconnect messages
         # are not live option trades and never converted into quote events.
         at += length
@@ -758,6 +762,9 @@ def _run(stop: Event) -> None:
                         daemon=True,name="quantlab-full-option-feed-writer")
         WRITER = writer
         writer.start()
+        index_writer=Thread(target=shared_index_feed.CAPTURE.writer,args=(writer_stop,),daemon=True,name='quantlab-shared-index-writer')
+        index_writer.start()
+        index_enabled=True
         try:
             while not stop.is_set():
                 if not _armed():
@@ -778,6 +785,8 @@ def _run(stop: Event) -> None:
                 if day != current_day:
                     day = current_day
                     _session_rollover()
+                index_subscription_sent=False
+                subscribed_at=0.0
                 try:
                     contracts, excess = _discover()
                     selected = {row["identity"]:row for row in contracts}
@@ -792,14 +801,25 @@ def _run(stop: Event) -> None:
                            + "&clientId="+quote(client,safe="")+"&authType=2")
                     from websockets.sync.client import connect
                     session = "options_"+day.replace("-","")+"_"+str(int(time.time()))
+                    shared_index_requested=[]
+                    index_subscription_sent=False
+                    subscribed_at=0.0
                     with connect(url,open_timeout=12,close_timeout=3,
                                  max_size=MAX_FRAME_BYTES) as socket:
                             for msg in _subscribe_batches(contracts):
                                 socket.send(json.dumps(msg))
                                 if stop.is_set():break
                                 stop.wait(.03)
+                            # Dhan documents mixed ticker / quote subscriptions on one feed.
+                            # Never displace an option or open a sixth connection.
+                            index_message,shared_index_requested=shared_index_feed.subscriptions(len(contracts)) if index_enabled else (None,[])
+                            shared_index_feed.CAPTURE.begin(session,shared_index_requested)
+                            if index_message and not stop.is_set():
+                                index_subscription_sent=True
+                                subscribed_at=time.monotonic()
+                                socket.send(json.dumps(index_message))
                             _set(state="subscribed_awaiting_quotes",connected=True,
-                                 session_id=session)
+                                session_id=session)
                             failures = 0
                             until = time.monotonic()+DISCOVER_SECONDS
                             while not stop.is_set() and _armed() and auto._market_open():
@@ -819,17 +839,30 @@ def _run(stop: Event) -> None:
                                     continue
                                 received = _utc()
                                 try:
-                                    decoded = decode_quote_frames(payload)
+                                    decoded = decode_quote_frames(payload,include_index=True)
                                 except ValueError:
                                     with LOCK:
                                         STATUS["rejected_frames"]+=1
                                     continue
+                                option_count=0
                                 for event in decoded:
-                                    _ingest(event,received,session)
-                                if decoded:
+                                    if event['kind'] in ('index_tick','index_unsupported'):
+                                        shared_index_feed.CAPTURE.submit(event,received,session)
+                                    else:
+                                        _ingest(event,received,session)
+                                        option_count+=1
+                                if option_count:
                                     _set(state="streaming_original_quotes")
+                    shared_index_feed.CAPTURE.end(session)
                     _set(connected=False)
                 except Exception as exc:
+                    if 'session' in locals():
+                        shared_index_feed.CAPTURE.end(session)
+                    # If the provider immediately rejects the mixed subscription,
+                    # retry option-only for the remainder of this worker session.
+                    if locals().get('index_subscription_sent') and time.monotonic()-locals().get('subscribed_at',0)<30:
+                        index_enabled=False
+
                     # Never log WebSocket URLs or token-bearing exception strings.
                     failures+=1
                     _set(state="connection_or_source_error",connected=False,
@@ -838,6 +871,7 @@ def _run(stop: Event) -> None:
                     stop.wait(min(60,3*2**min(failures,4)))
         finally:
             writer_stop.set()
+            index_writer.join(timeout=3)
             writer.join(timeout=15)
             if writer.is_alive():
                 _set(state="storage_flush_incomplete",
@@ -845,6 +879,8 @@ def _run(stop: Event) -> None:
                      storage_last_error="Pending original quote events are not fully flushed",
                      last_error="Pending original price events are still flushing; keep local server running")
     finally:
+        if 'session' in locals():
+            shared_index_feed.CAPTURE.end(session)
         with LOCK:
             flushing = STATUS.get("state") == "storage_flush_incomplete"
         if flushing:
@@ -878,6 +914,7 @@ def resume_if_armed() -> None:
 
 
 def disarmed() -> None:
+    shared_index_feed.CAPTURE.disconnect()
     STOP.set()
     _set(state="stopping",connected=False)
 
@@ -885,6 +922,7 @@ def disarmed() -> None:
 def suspend_for_shutdown() -> None:
     global SHUTTING_DOWN
     SHUTTING_DOWN=True
+    shared_index_feed.CAPTURE.disconnect()
     STOP.set()
     _set(state="local_server_stopping",connected=False)
 
@@ -975,6 +1013,7 @@ def status() -> dict:
             "source": "Dhan v2 original NSE_FNO Quote(4) and OI(5) packets",
             "read_only": True, "shared_library": "dhan_shared",
             "continuous_20_depth_for_all": False,
+            "shared_index_tickers":shared_index_feed.status(),
             "note": "All contracts remain subscribed and recorded. "
                     "Dhan does not guarantee source packet emission for "
                     "silent contracts; each expiry has separate observed "

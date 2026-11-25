@@ -64,6 +64,18 @@ case "${1:-workstation}" in
     shift
     exec nice -n 10 .venv/bin/python -m workstation_api.market_session_archive "$@"
     ;;
+  verify-v3)
+    if [ ! -x .venv/bin/python ]; then
+      printf 'Python environment missing. First run: bash run.sh setup\n' >&2
+      exit 2
+    fi
+    shift
+    exec nice -n 10 .venv/bin/python -m scripts.verify_ui_v3 "$@"
+    ;;
+  python-packages)
+    shift
+    exec bash scripts/research_packages.sh "$@"
+    ;;
   legacy-streamlit)
     exec bash scripts/start.sh research
     ;;
@@ -78,6 +90,9 @@ bash run.sh research         Same as default
 bash run.sh web              Same as default; NOT the old public showcase
 bash run.sh both             Same workstation (API + React)
 bash run.sh setup            Install local Python and Node dependencies
+bash run.sh verify-v3 --scientific  Check isolated execution, scientific imports and local source health without restarting
+bash run.sh python-packages check   Inspect approved scientific packages
+bash run.sh python-packages install Install missing approved packages with local approval; no app restart
 bash run.sh check            Existing research acceptance checks
 bash run.sh evaluate         Existing synthetic evaluation and reports
 bash run.sh verify-saved     Run all 35 models against saved original datasets; reuse saved chain

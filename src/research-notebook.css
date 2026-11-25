@@ -1,0 +1,17 @@
+.ql-notebook{display:grid;grid-template-columns:minmax(180px,240px) minmax(0,1fr);gap:16px;color:var(--ql-text,#f1f1f3)}
+.ql-nb-library,.ql-nb-main{background:var(--ql-panel,#151518);border:1px solid var(--ql-border,#343438);border-radius:9px;padding:16px;min-width:0}
+.ql-nb-library{align-self:start;max-height:75vh;overflow:auto;position:sticky;top:130px}
+.ql-nb-library button{display:block;width:100%;margin-bottom:7px;text-align:left}
+.ql-nb-item{background:#1c1c20;border:1px solid #343438;border-radius:6px;padding:10px;color:#f1f1f3;overflow-wrap:anywhere}
+.ql-nb-item.active{border-color:#f5c542;color:#f5c542;background:#332b17}
+.ql-nb-item small,.ql-nb-header small{display:block;color:#a5a5ad;font-size:11px;margin-top:5px}
+.ql-nb-header,.ql-nb-toolbar,.ql-nb-cell>header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.ql-nb-header label,.ql-nb-toolbar label{display:grid;gap:4px;font-size:12px;color:#b9b9c1}
+.ql-nb-header input,.ql-nb-toolbar select,.ql-nb-main textarea:not(.ql-python-code textarea){background:#0b0b0d;border:1px solid #343438;color:#f1f1f3;border-radius:6px;padding:9px}
+.ql-nb-main textarea:not(.ql-python-code textarea){width:100%;min-height:100px;font:13px/1.6 ui-monospace,monospace;resize:vertical}
+.ql-nb-cell,.ql-nb-input{border:1px solid #343438;border-radius:8px;padding:12px;margin:12px 0;min-width:0}
+.ql-nb-cell .ql-python-editor{height:220px}
+.ql-nb-output{border-top:1px solid #343438;margin-top:12px;padding-top:12px}
+.ql-nb-output pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#e8e8ed;background:#0b0b0d;padding:10px}
+.ql-nb-main details summary{cursor:pointer;color:#f5c542;margin-bottom:8px}
+@media(max-width:850px){.ql-notebook{grid-template-columns:1fr}.ql-nb-library{position:static;max-height:240px}}
