@@ -15,7 +15,7 @@ type CompareRow=OptionContract&{as_of_utc:string;rank:number;score:number;rank_q
   units:number;scenario_lots:number;entry_debit_inr:number;spread_bps:number;
   scenarios:Record<string,{net_pnl_inr:number}|null>}
 type Compare={rows:CompareRow[];ranked_count:number;coverage:{expiry:string;state:string;age_seconds:number|null;
-  received_utc?:string;ranked_count:number}[];truncated:boolean;generated_utc:string;warning:string;
+  received_utc?:string;ranked_count:number}[];truncated:boolean;generated_utc:string;warning:string;settings:WorkflowScenario;
   shortlist_records_saved?:number;shortlist_recording_error?:string}
 type Level={target_net_inr:number;sell_bid:number|null;model_underlying_move_points:number|null}
 type Greeks={delta:number;gamma:number;theta_day:number;vega_iv_point:number;rho_rate_point:number}
@@ -88,7 +88,7 @@ function PositionCard({p,now,onChange}:{p:Position;now:number;onChange:()=>void}
   const [charges,setCharges]=useState('')
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
-  const marked=p.mark&&age(p.mark.received_utc,now)<=(p.mark.source==='original_20_level_bid_walk'?8:30)
+  const marked=p.mark&&p.mark.bid!==null&&p.estimated_net_pnl_inr!==null&&age(p.mark.received_utc,now)<=(p.mark.source==='original_20_level_bid_walk'?8:30)
   const greekFresh=age(p.model_receipt_utc,now)<=30
   const submit=async(url:string,body:unknown)=>{
     setBusy(true);setError('')
@@ -206,13 +206,13 @@ export default function ManualOptionsWorkflow({visible,onOpen,scenario,selected,
   }
   const recentEvent=status?.events.find(e=>age(e.created_utc,now)<=120)
   const compareRows=(compare?.rows||[]).filter(r=>(compareSide==='ALL'||r.option_type===compareSide)&&age(r.as_of_utc,now)<=30)
-  const resultsCurrent=compare&&age(compare.generated_utc,now)<=35&&!error
+  const resultsCurrent=compare&&age(compare.generated_utc,now)<=35&&!error&&Object.entries(scenario).every(([k,v])=>compare.settings?.[k as keyof WorkflowScenario]===v)
   return <>
     <div className="mw-monitor-banner" role="status"><Bell size={15}/><span>
       {status?'Local monitor '+human(status.worker.state)+' · '+status.rules.filter(r=>r.enabled).length+' enabled alerts · shortlist tracking '+(status.tracking_enabled?'on':'off'):'Manual monitor status unavailable'}
       {recentEvent?' · Recent alert: '+recentEvent.strike+' '+recentEvent.side+' at '+stamp(recentEvent.observed_utc):''}
       {statusError?' · '+statusError:''}
-    </span>{!visible&&<button type="button" onClick={onOpen}>Manual trading workflow</button>}</div>
+    </span>{!visible&&<button type="button" onClick={onOpen}>Open monitor</button>}</div>
     {visible&&<section className="ao-panel mw-root" aria-label="Manual options workflow">
       <header className="ao-header"><div><span className="ao-eyebrow">CONTRACT DISCOVERY TO OBSERVED OUTCOMES</span>
         <h3>Manual trading workflow</h3><p>Uses saved original Dhan receipts and the existing manual trade journal. No orders.</p></div>
