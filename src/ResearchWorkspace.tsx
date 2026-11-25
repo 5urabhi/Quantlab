@@ -255,11 +255,11 @@ export default function ResearchWorkspace({datasets,selectedDataset,onSelectData
   return <div className={'rw-root '+(theme==='light'?'rw-theme-light':'')+
       (integrated?' v2-integrated':'')}>
     <div className="rw-top"><div><small>QUANTLAB / RESEARCH DESK</small>
-      <h2>Research Workspace</h2><p>One library for data, experiments, models, figures and reproducible reports.</p>
+      <h2>{integrated?(page==='automation'?'Research experiments':page==='quality'?'Source quality & validation':page==='guided'?'Guided model research':page==='scholar'?'Index research tools':'Saved research tools'):'Research Workspace'}</h2><p>{integrated?'Choose a task below; calculations use the existing local data and result library.':'One library for data, experiments, models, figures and reproducible reports.'}</p>
     </div><div className="rw-top-actions"><button onClick={()=>setSearchOpen(true)}
       aria-label="Search research workspace"><Search size={15}/> Search <kbd>Ctrl K</kbd></button>
-      <button onClick={()=>setTheme(v=>v==='dark'?'light':'dark')}><Settings2 size={15}/>
-        {theme==='dark'?'Light':'Dark'} theme</button>
+      {!integrated&&<button onClick={()=>setTheme(v=>v==='dark'?'light':'dark')}><Settings2 size={15}/>
+        {theme==='dark'?'Light':'Dark'} theme</button>}
       <button onClick={()=>void reload()} aria-label="Refresh workspace"><RefreshCw size={15}/></button>
     </div></div>
     {!integrated&&<div className="rw-navigation" role="tablist" aria-label="Research workspaces">
@@ -1124,10 +1124,9 @@ function AutomationPanel({datasets,selectedDataset,onSelectDataset,models,runs,b
   }
   return <div className="rw-stack">
     <Box title="Reproducible research automation">
-      <div className="rw-segments">{(['sweep','validation','scenario','repro'] as const).map(v=>
-        <button key={v} className={tool===v?'active':''} onClick={()=>setTool(v)}>
-          {v==='sweep'?'Parameter sweeps':v==='validation'?'Walk-forward / holdout':
-            v==='scenario'?'Scenario analysis':'Reproducibility audit'}
+      <div className="ql-automation-choices">{(['sweep','validation','scenario','repro'] as const).map(v=>
+        <button type="button" key={v} className={tool===v?'active':''} aria-pressed={tool===v} onClick={()=>setTool(v)}>
+          <strong>{v==='sweep'?'Parameter sweeps':v==='validation'?'Walk-forward / holdout':v==='scenario'?'Scenario analysis':'Reproducibility audit'}</strong><small>{v==='sweep'?'Vary an assumption and compare results':v==='validation'?'Test later, unseen observations':v==='scenario'?'Apply hypothetical portfolio shocks':'Compare source hashes and saved calculations'}</small>
         </button>)}</div>
       <p className="rw-help">Research jobs run inside the local Python process using saved market data. They never place orders or submit broker requests.</p>
     </Box>
