@@ -1,0 +1,70 @@
+.ao-root{display:grid;gap:14px;min-width:0;color:#e5f2fa}
+.ao-root *{box-sizing:border-box}
+.ao-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.ao-header>div:first-child{flex:1;min-width:200px}
+.ao-header h3{font-size:20px;margin:5px 0;color:#eefaff}
+.ao-header h4,.ao-panel h4{font-size:15px;margin:3px 0 7px;color:#eaf9ff}
+.ao-header p,.ao-panel p,.ao-muted{font-size:11px;line-height:1.65;color:#aec7d7;margin:0}
+.ao-eyebrow{font-size:9px;font-weight:800;color:#95c4d8;letter-spacing:.75px;text-transform:uppercase}
+.ao-root button,.ao-mode button{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid #40677c;background:#1b4053;color:#dff4ff;border-radius:7px;padding:8px 12px;font-size:11px;font-weight:700;cursor:pointer}
+.ao-root button:hover:not(:disabled),.ao-mode button:hover:not(:disabled){background:#24556b;border-color:#6ca0b2}
+.ao-root button:focus-visible,.ao-root input:focus-visible,.ao-root select:focus-visible,.ao-mode button:focus-visible{outline:2px solid #89dbd2;outline-offset:2px}
+.ao-root button:disabled{opacity:.45;cursor:not-allowed}
+.ao-root label{display:grid;gap:5px;min-width:0;font-size:10px;font-weight:700;color:#bfd5e1}
+.ao-root input:not([type=checkbox]),.ao-root select{width:100%;min-height:34px;padding:7px 8px;border:1px solid #3e657b;background:#112b3b;color:#e7f4ff;border-radius:6px;font-size:12px}
+.ao-settings,.ao-input-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:end}
+.ao-settings{border:1px solid #345769;background:#163043;border-radius:9px;padding:12px}
+.ao-settings>.ao-assumptions,.ao-settings>.ao-amber{grid-column:1/-1}
+.ao-root button.ao-primary{background:#20675f;border-color:#65b2a1;color:#e5fff7;min-height:36px}
+.ao-assumptions{background:#102939;border:1px solid #37596b;padding:10px;border-radius:7px;color:#d8e9f0}
+.ao-assumptions summary{font-size:11px;font-weight:700;cursor:pointer;display:list-item}
+.ao-assumptions[open] summary{margin-bottom:10px}
+.ao-assumptions p{margin:6px 0;font-size:11px;color:#b8d0dd;line-height:1.65}
+.ao-assumptions p svg{vertical-align:middle}
+.ao-source,.ao-warning{border:1px solid #8a7150;background:#443729;color:#f3d7aa;border-radius:8px;display:flex;align-items:flex-start;gap:8px;padding:10px 12px;font-size:11px;line-height:1.6}
+.ao-source svg,.ao-warning svg{flex-shrink:0}
+.ao-source.ao-fresh{background:#153c39;border-color:#417b72;color:#b1e6d6}
+.ao-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.ao-summary{grid-template-columns:repeat(6,minmax(0,1fr))}
+.ao-metric{min-width:0;display:grid;gap:5px;align-content:start;border:1px solid #34576c;background:#102b3d;padding:11px;border-radius:7px}
+.ao-metric>span{color:#a6c9d8;font-size:10px}
+.ao-metric>strong{color:#f1faff;font-size:15px;line-height:1.25;overflow-wrap:anywhere}
+.ao-metric>small{font-size:9px;color:#95b6c7;line-height:1.5}
+.ao-tabs,.ao-mode{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid #375a6a;padding-bottom:9px}
+.ao-tabs button,.ao-mode button{background:#152b39;border-color:#34576c;color:#bad7e5;min-height:34px}
+.ao-tabs button[aria-selected=true],.ao-mode button[aria-pressed=true]{background:#1f594f;border-color:#65b7a6;color:#dcfff4}
+.ao-panel{min-width:0;background:#122b3c;border:1px solid #35576a;padding:13px;border-radius:9px;display:grid;gap:10px}
+.ao-picks{grid-template-columns:repeat(4,minmax(0,1fr))}
+.ao-root button.ao-pick{text-align:left;display:grid;justify-items:start;gap:7px;background:#173746;border-color:#4a786f;padding:12px;min-width:0}
+.ao-pick>strong{font-size:18px;color:#f0fcff}
+.ao-pick small,.ao-pick>div span{font-size:10px;line-height:1.5;overflow-wrap:anywhere}
+.ao-pick>div{display:grid;gap:3px}
+.ao-positive{color:#89e3bb!important}
+.ao-negative{color:#ffb0a4!important}
+.ao-amber{color:#f5cf94}
+.ao-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.ao-plot{background:#0d2635;border:1px solid #37596c;border-radius:8px;padding:10px;min-width:0}
+.ao-plot strong{color:#dfedf4;font-size:12px}
+.ao-plot svg{display:block;width:100%;height:auto;margin:6px 0}
+.ao-plot text{fill:#aac9d8;font-size:10px}
+.ao-plot small{display:block;color:#99bccb;font-size:10px;line-height:1.45}
+.ao-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:10px;color:#bfd5df;margin:3px 0 7px}
+.ao-legend span{display:flex;align-items:center;gap:5px}.ao-legend i{width:8px;height:8px;border-radius:50%}
+.ao-actions{display:flex;gap:6px;flex-wrap:wrap}
+.ao-filters{display:flex;align-items:end;gap:10px;flex-wrap:wrap}
+.ao-filters>label{min-width:130px}
+.ao-filters>small{font-size:10px;color:#a9c7d6;align-self:center}
+.ao-filters>.ao-check{display:flex;align-items:center;gap:7px;min-height:34px}
+.ao-table-wrap{max-width:100%;overflow:auto;border:1px solid #395e71;border-radius:8px;max-height:560px}
+.ao-table{border-collapse:collapse;width:100%;min-width:max-content;font-size:11px}
+.ao-table th{position:sticky;top:0;z-index:1;background:#19394d;color:#bfe0ec;text-align:left;padding:6px 9px}
+.ao-table td{border-top:1px solid #294a5b;padding:8px 9px;color:#d5eaf4;white-space:nowrap}
+.ao-table tr:hover,.ao-table tr.ao-selected{background:#20473f}
+.ao-table th button{background:transparent;border:0;padding:4px 0;font-size:10px;justify-content:flex-start}
+.ao-table td button{font-size:10px;padding:5px 8px}
+.ao-reason{display:block;color:#eac298;font-size:9px;white-space:normal;max-width:180px;line-height:1.5;margin-top:4px}
+.ao-pagination{display:flex;align-items:center;justify-content:center;gap:12px;color:#bad4e1;font-size:11px}
+.ao-history{display:grid;gap:8px}.ao-history>label{max-width:240px}
+@media(max-width:1400px){.ao-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.ao-picks{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:950px){.ao-settings,.ao-input-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ao-charts{grid-template-columns:1fr}}
+@media(max-width:560px){.ao-summary,.ao-picks,.ao-settings,.ao-input-grid{grid-template-columns:1fr 1fr}.ao-panel{padding:10px}.ao-metric>strong{font-size:13px}.ao-picks{grid-template-columns:1fr}}

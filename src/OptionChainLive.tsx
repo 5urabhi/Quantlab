@@ -1,7 +1,8 @@
-import {useCallback,useEffect,useMemo,useState} from 'react'
+import {lazy,Suspense,useCallback,useEffect,useMemo,useState} from 'react'
 import {AlertTriangle,ArrowRight,Clock3,Database,RefreshCw,ShieldCheck,TrendingUp} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './option-chain-live.css'
+const AdvancedOptionsAnalytics=lazy(()=>import('./AdvancedOptionsAnalytics'))
 
 type Expiries={
   underlying:string;expiries:string[];nearest_expiry:string;
@@ -17,7 +18,7 @@ export type OptionContract={
   quote_valid:boolean;one_lot_ask_inr:number|null
   one_lot_bid_inr:number|null;spread_inr_per_lot:number|null
 }
-type Chain={
+export type Chain={
   underlying:string;underlying_spot:number;expiry:string;received_utc:string
   source:string;source_clock:string;not_live_stream:boolean
   market_master_fresh:boolean;master_message:string;master_age_hours:number|null
@@ -41,6 +42,7 @@ type Props={
 }
 export default function OptionChainLive({feedActive,depthIdentity,
   onSelectDepth,onDraftJournal,openConnections,currentIndexDirection}:Props){
+  const [advanced,setAdvanced]=useState(false)
   const [dates,setDates]=useState<Expiries|null>(null)
   const [expiry,setExpiry]=useState('')
   const [chain,setChain]=useState<Chain|null>(null)
@@ -83,13 +85,20 @@ export default function OptionChainLive({feedActive,depthIdentity,
     finally{setBusy(false)}
   },[expiry])
   useEffect(()=>{
-    if(!expiry)return
+    if(!expiry||advanced)return
     void getChain()
     const poll=window.setInterval(()=>{
       if(document.visibilityState==='visible')void getChain()
     },20_000)
     return()=>window.clearInterval(poll)
-  },[expiry,getChain])
+  },[expiry,getChain,advanced])
+  const syncAdvancedSnapshot=useCallback((snapshot:Chain)=>{
+    setChain(snapshot)
+    setSelected(previous=>snapshot.contracts.some(c=>c.identity===previous&&c.contract_master_verified)?previous:'')
+  },[])
+  const syncAdvancedSettings=useCallback((nextCapital:number,nextLots:number,nextPremium:number)=>{
+    setCapital(nextCapital);setLots(nextLots);setTargetPremium(nextPremium)
+  },[])
   const refreshMaster=async()=>{
     if(masterJobId)return
     setMasterNotice('')
@@ -163,6 +172,10 @@ export default function OptionChainLive({feedActive,depthIdentity,
       <p>Current Dhan option snapshots, real contract IDs and exchange lot sizes.
         Subscribe separately to one selected NSE_FNO contract for live 20-level depth.</p>
     </div><span className="oc-source"><ShieldCheck size={15}/> Read-only · no orders</span></header>
+    <div className="ao-mode" role="group" aria-label="Option chain workspace mode">
+      <button type="button" aria-pressed={!advanced} onClick={()=>setAdvanced(false)}>Overview</button>
+      <button type="button" aria-pressed={advanced} onClick={()=>setAdvanced(true)}>Advanced Analytics</button>
+    </div>
     <div className="oc-controls">
       <label>Expiry from Dhan
         <select aria-label="Dhan BANKNIFTY expiry" value={expiry}
@@ -174,8 +187,8 @@ export default function OptionChainLive({feedActive,depthIdentity,
       <div className="oc-controls-actions">
         <button type="button" onClick={()=>void getExpiries()} disabled={expiryBusy}>
           <Database size={15}/>{expiryBusy?'Checking expiries…':'Refresh expiry list'}</button>
-        <button type="button" onClick={()=>void getChain()} disabled={!expiry||busy}>
-          <RefreshCw size={15}/>{busy?'Refreshing…':'Refresh option chain'}</button>
+        {!advanced&&<button type="button" onClick={()=>void getChain()} disabled={!expiry||busy}>
+          <RefreshCw size={15}/>{busy?'Refreshing…':'Refresh option chain'}</button>}
         <button type="button" onClick={()=>void refreshMaster()} disabled={Boolean(masterJobId)}>
           <Database size={15}/>{masterJobId?'Updating master…':'Update contract lot sizes'}</button>
       </div>
@@ -204,6 +217,11 @@ export default function OptionChainLive({feedActive,depthIdentity,
       <AlertTriangle size={16}/>
       {chain.master_message} Refresh the official Dhan instrument master from Data Library
       before relying on contract quantity or lot-based premium calculations.</p>}
+    {advanced?<Suspense fallback={<p className="tc-muted">Loading advanced option analytics…</p>}>
+      <AdvancedOptionsAnalytics expiry={expiry} selected={selected} onSelect={setSelected}
+        onSnapshot={syncAdvancedSnapshot} capital={capital} lots={lots}
+        targetPremium={targetPremium} onSettings={syncAdvancedSettings} onDraftJournal={onDraftJournal}/>
+    </Suspense>:<>
     <div className="oc-filter">
       <strong>Listed strikes near the observed spot</strong>
       <div role="group" aria-label="Option-chain contract type">
@@ -296,5 +314,6 @@ export default function OptionChainLive({feedActive,depthIdentity,
         is an immediate crossing-cost illustration, not an executed fill. Confirm the actual
         price and quantity with your broker. Selecting a contract does not send an order.</p>
     </div>
+    </>}
   </section>
 }

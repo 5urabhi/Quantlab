@@ -82,6 +82,90 @@ try{
    await sub('Option Chain')
    await page.getByRole('region',{name:'BANKNIFTY option chain and lot calculator'}).waitFor()
    await shot('02-trading-option-chain')
+   // Original-shape *synthetic* fixtures for the new advanced workspace.
+   const fixtureExpiry='2026-12-29'
+   const optionIdentity='NSE_FNO:62539'
+   const modelGreeks={price:179.5,delta:.48,gamma:.0008,theta_day:-12,
+     vega_iv_point:5.6,rho_rate_point:1.1}
+   const optionFixture={identity:optionIdentity,symbol:'FIXTURE BANKNIFTY CE',
+     strike:63000,expiry:fixtureExpiry,option_type:'CE',lot_size:30,
+     contract_master_verified:true,bid:179,ask:180,ltp:179.5,
+     top_bid_quantity:300,top_ask_quantity:300,oi:3000,volume:6000,iv:18,
+     delta:.48,theta:-12,gamma:.0008,vega:5.6,quote_valid:true,
+     one_lot_ask_inr:5400,one_lot_bid_inr:5370,spread_inr_per_lot:30}
+   const advancedChain=()=>({underlying:'BANKNIFTY',underlying_spot:63000,
+     expiry:fixtureExpiry,received_utc:new Date().toISOString(),
+     source:'synthetic_browser_fixture',source_clock:'local_received_utc_not_exchange_quote_time',
+     not_live_stream:true,market_master_fresh:true,master_message:'',
+     master_age_hours:1,contracts:[optionFixture],quote_count:1,read_only:true,
+     warning:'Synthetic fixture',cache_hit:false})
+   await page.route('**/api/trading-cockpit/options/expiries',route=>route.fulfill({
+     json:{underlying:'BANKNIFTY',expiries:[fixtureExpiry],nearest_expiry:fixtureExpiry,
+       received_utc:new Date().toISOString(),source:'synthetic_browser_fixture'}
+   }))
+   await page.route('**/api/trading-cockpit/options/chain?*',route=>route.fulfill({json:advancedChain()}))
+   await page.route('**/api/trading-cockpit/options/analytics?*',route=>{
+     const q=new URL(route.request().url()).searchParams
+     const assumptions=Object.fromEntries([...q.entries()].filter(([k])=>!['expiry','selected'].includes(k))
+       .map(([k,v])=>[k,['direction','broker_profile'].includes(k)?v:Number(v)]))
+     const chain=advancedChain()
+     const scenarios=Object.fromEntries([
+       ['favorable',100,225,3800],['flat',0,178,-220],['adverse',-100,136,-4100],
+       ['iv_crush',100,210,2500],['iv_expansion',100,240,5100],
+       ['double_favorable',200,280,8800],['double_adverse',-200,101,-7300]
+     ].map(([k,move,premium,pnl])=>[k,{move_points:move,iv_change_points:0,minutes:5,
+       model_mid:premium+.5,assumed_exit_bid:premium,charges_inr:65,net_pnl_inr:pnl}]))
+     const row={...optionFixture,mid:179.5,intrinsic:0,extrinsic:179.5,moneyness:'ATM vicinity',
+       spread_bps:55.7,iv_mid_pct:18,iv_bid_pct:17.9,iv_ask_pct:18.1,model_greeks:modelGreeks,
+       iv_change_pct_points:null,oi_change:null,volume_change:null,trade_activity:null,
+       trade_activity_state:'missing_trade_evidence',top_level_lots:10,affordable_lots:3,
+       scenario_lots:3,units:90,entry_debit_inr:16230,max_premium_loss_inr:16230,
+       break_even_exit_premium:180.8,roundtrip_fees:{total_estimated:65,
+         buy_leg:{cash_debit:16230,fees_total:30},sell_leg:{fees_total:35},
+         brokerage:40,stt_sell:10,gst:8,exchange_indicative:5,stamp_buy:1,sebi:1},
+       same_quote_roundtrip_net_inr:-155,scenarios,score:71,rank:1,
+       rank_quality:'indicative_snapshot_only',reasons:[],depth:null,depth_state:'no_recent_original_book',
+       unsigned_gamma_oi_proxy:10000}
+     return route.fulfill({json:{chain,rows:[row],ranked_count:1,confirmed_depth_count:0,
+       recent_trade_count:0,as_of_utc:chain.received_utc,generated_utc:chain.received_utc,
+       snapshot_age_seconds:0,recent_receipt:true,assumed_expiry_utc:fixtureExpiry+'T10:00:00Z',
+       years_to_expiry:.1,assumptions,
+       volatility:{atm_provider_iv_pct:18,realized_intraday_pct:null,realized_returns:0,
+         realized_last_utc:null,expected_move_points_model:100,iv_rank:null,iv_percentile:null,
+         iv_prior_sessions:0,iv_min_prior_sessions:20,iv_history:[],term_structure:[],india_vix:null},
+       oi:{call_oi:3000,put_oi:null,known_counts:{CE:1,PE:0},contract_counts:{CE:1,PE:0},
+         complete:false,pcr:null,max_pain_strike:null,previous_snapshot_utc:null,dealer_gamma_exposure:null},
+       selected_history_identity:q.get('selected')||null,selected_history:[],historical_error:null,
+       warnings:['Synthetic browser fixture, no trades or profits.'],orders_enabled:false}})
+   })
+   const chainRegion=page.getByRole('region',{name:'BANKNIFTY option chain and lot calculator'})
+   await chainRegion.getByRole('button',{name:'Refresh expiry list',exact:true}).click()
+   await chainRegion.getByLabel('Dhan BANKNIFTY expiry').locator('option',{hasText:fixtureExpiry}).waitFor({state:'attached'})
+   await chainRegion.getByRole('button',{name:'Advanced Analytics',exact:true}).click()
+   const advanced=page.getByRole('region',{name:'Advanced Options Analytics'})
+   await advanced.getByRole('heading',{name:'Best fit for the selected scenario'}).waitFor()
+   await advanced.locator('.ao-pick').first().waitFor()
+   await advanced.getByText('Indicative · activity unverified',{exact:false}).first().waitFor()
+   await advanced.getByRole('tab',{name:'Greeks',exact:true}).click()
+   await advanced.getByRole('heading',{name:'Independent model sensitivities'}).waitFor()
+   await advanced.getByText('Gamma across strikes',{exact:true}).waitFor()
+   await advanced.getByRole('tab',{name:'Volatility',exact:true}).click()
+   await advanced.getByText('Same-expiry IV percentile',{exact:true}).waitFor()
+   await advanced.getByRole('tab',{name:'OI & Volume',exact:true}).click()
+   await advanced.getByText('Put / call OI ratio',{exact:true}).waitFor()
+   await advanced.getByRole('tab',{name:'Liquidity',exact:true}).click()
+   await advanced.getByRole('heading',{name:'Quote and original-depth evidence'}).waitFor()
+   await advanced.getByRole('button',{name:'Trade calculator',exact:true}).click()
+   await advanced.getByRole('heading',{name:/Net P&L scenarios/}).waitFor()
+   await advanced.getByText('Adverse move',{exact:true}).waitFor()
+   await advanced.getByRole('button',{name:'Watch',exact:true}).click()
+   await advanced.getByRole('tab',{name:/Watchlist \(1\)/}).click()
+   await advanced.getByText('1 of 1 returned contracts',{exact:true}).waitFor()
+   await shot('02-trading-advanced-options')
+   await chainRegion.getByRole('button',{name:'Overview',exact:true}).click()
+   await page.unroute('**/api/trading-cockpit/options/analytics?*')
+   await page.unroute('**/api/trading-cockpit/options/chain?*')
+   await page.unroute('**/api/trading-cockpit/options/expiries')
    await sub('20-Level Order Book')
    await page.getByText('20-level market depth',{exact:false}).first().waitFor()
    await shot('02-trading-depth')

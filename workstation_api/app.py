@@ -937,6 +937,32 @@ def trading_cockpit_option_chain(expiry: str, force_refresh: bool = False):
         bad(exc)
 
 
+@app.get("/api/trading-cockpit/options/analytics")
+def trading_cockpit_advanced_options(
+    expiry: str, capital: float = 50000, max_lots: int = 3,
+    direction: Literal["BOTH","UP","DOWN"] = "BOTH",
+    move_points: float = 100, horizon_minutes: int = 5,
+    iv_change_points: float = 0, rate_pct: float = 6.5,
+    dividend_pct: float = 0, max_spread_bps: float = 250,
+    risk_pct: float = 100, target_premium: float = 300,
+    slippage_bps: float = 10, selected: str = "",
+    broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"] = "zerodha",
+):
+    """Read-only option analytics on one original Dhan chain receipt."""
+    from . import advanced_options
+    try:
+        return advanced_options.current(
+            expiry, capital=capital, max_lots=max_lots, direction=direction,
+            move_points=move_points, horizon_minutes=horizon_minutes,
+            iv_change_points=iv_change_points, rate_pct=rate_pct,
+            dividend_pct=dividend_pct, max_spread_bps=max_spread_bps,
+            risk_pct=risk_pct, target_premium=target_premium,
+            slippage_bps=slippage_bps, broker_profile=broker_profile,
+            selected=selected)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/live/contracts")
 def trading_cockpit_live_contracts(query: str = "BANKNIFTY", limit: int = 30):
     try:

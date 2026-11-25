@@ -60,3 +60,9 @@
 .oc-preferences label.oc-preference-checkbox{display:flex;align-items:center;gap:7px}
 .oc-preferences input[type=checkbox]{width:16px;height:16px;accent-color:#76e6bc}
 .oc-preferences>span{font-size:11px;color:#9fc9d3}
+
+/* The mode selector is visible before the advanced lazy bundle loads. */
+.ao-mode{display:flex;gap:7px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid #35576c}
+.ao-mode button{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:8px 13px;border:1px solid #40677c;border-radius:7px;background:#152b39;color:#bedbea;font-weight:700;font-size:11px;cursor:pointer}
+.ao-mode button[aria-pressed=true]{background:#1f594f;border-color:#65b7a6;color:#dcfff4}
+.ao-mode button:focus-visible{outline:2px solid #89dbd2;outline-offset:2px}
