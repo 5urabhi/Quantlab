@@ -12,7 +12,7 @@ from contextlib import closing
 from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 from math import erfc, exp, isfinite, log, pi, sqrt
-from statistics import mean, stdev
+from statistics import stdev
 import json
 import sqlite3
 
@@ -402,6 +402,12 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
             a,b=number(c.get(field)),number(prior.get(field))
             return a-b if a is not None and b is not None else None
         volume_delta=change("volume")
+        price_delta=change("ltp")
+        oi_delta=change("oi")
+        price_oi_state=None
+        if price_delta is not None and oi_delta is not None:
+            price_oi_state=("Price "+("up" if price_delta>0 else "down" if price_delta<0 else "flat")
+                         +" / OI "+("up" if oi_delta>0 else "down" if oi_delta<0 else "flat"))
         trade=h["recent_trades"].get(identity)
         size=c.get("lot_size")
         verified=bool(identity and c.get("contract_master_verified") and
@@ -426,6 +432,7 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
         if years<=horizon_minutes*60/YEAR_SECONDS: reasons.append("Horizon reaches assumed expiry close")
         scenarios={};cost=roundtrip=break_even=None
         score=None
+        score_components=None
         units=lots*size if verified and valid and lots>0 else 0
         if units:
             cost=_entry_cost(ask,size,lots,broker_profile)
@@ -450,10 +457,26 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
                 reward=fav["net_pnl_inr"]/cost
                 loss=max(0.,-adverse["net_pnl_inr"])/cost
                 decay=max(0.,-flat["net_pnl_inr"])/cost
-                ratio=reward/(.05+loss+decay)
-                premium_fit=1/(1+abs(mid-target_premium)/target_premium)
-                score=round(50*min(1.,ratio/2)+20*(1-min(1.,spread_bps/max_spread_bps))
-                            +15*premium_fit+15*min(1.,reward/.15),2)
+                crush=scenarios.get("iv_crush")
+                # Penalize a 2pp volatility-contraction shock on the favorable
+                # move, not merely the optimistic directional scenario.
+                iv_drag=max(0.,fav["net_pnl_inr"]-crush["net_pnl_inr"])/cost if crush else None
+                if iv_drag is None:
+                    reasons.append("IV contraction stress is outside model bounds")
+                else:
+                    ratio=reward/(.05+loss+decay+iv_drag)
+                    premium_fit=1/(1+abs(mid-target_premium)/target_premium)
+                    score_components={
+                        "reward_risk":round(50*min(1.,ratio/2),4),
+                        "spread":round(20*(1-min(1.,spread_bps/max_spread_bps)),4),
+                        "premium_fit":round(15*premium_fit,4),
+                        "favorable_return":round(15*min(1.,reward/.15),4),
+                        "favorable_return_pct":round(reward*100,4),
+                        "adverse_loss_pct":round(loss*100,4),
+                        "flat_loss_pct":round(decay*100,4),
+                        "iv_contraction_drag_pct":round(iv_drag*100,4)}
+                    score=round(sum(score_components[k] for k in (
+                        "reward_risk","spread","premium_fit","favorable_return")),2)
         gex=(model["gamma"]*positive(c.get("oi"))*spot*spot*.01
              if model and positive(c.get("oi")) is not None else None)
         # OI units are provider-reported; no dealer-long/short sign inferred.
@@ -464,13 +487,14 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
             "iv_bid_pct":iv_bid*100 if iv_bid else None,"iv_ask_pct":iv_ask*100 if iv_ask else None,
             "model_greeks":model,"iv_change_pct_points":change("iv"),"oi_change":change("oi"),
             "volume_change":volume_delta if volume_delta is not None and volume_delta>=0 else None,
+            "premium_change":price_delta,"price_oi_state":price_oi_state,
             "trade_activity":trade,"trade_activity_state":"recent_trade_evidence" if recent_trade else
               ("insufficient_recent_trades" if trade else "missing_trade_evidence"),
             "top_level_lots":top_lots,"affordable_lots":affordable,"scenario_lots":max(0,lots),
             "units":units,"entry_debit_inr":cost,"max_premium_loss_inr":cost,
             "break_even_exit_premium":break_even,"roundtrip_fees":roundtrip,
             "same_quote_roundtrip_net_inr":fees._money((bid-ask)*units-roundtrip["total_estimated"]) if roundtrip else None,
-            "scenarios":scenarios,"score":score,"reasons":reasons,
+            "scenarios":scenarios,"score":score,"score_components":score_components,"reasons":reasons,
             "depth":None,"depth_state":"not_checked",
             "unsigned_gamma_oi_proxy":gex})
     _depth_for_shortlist(rows,captured,now,selected)
@@ -538,6 +562,7 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
         "historical_error":h["historical_error"],"read_only":True,
         "profit_probability":None,"expected_profit_inr":None,"orders_enabled":False,
         "warnings":[
+          "Fit score components: reward/risk up to 50, spread up to 20, preferred premium proximity up to 15, favorable return up to 15. Reward/risk denominator includes adverse/flat losses and favorable-move IV contraction drag. It is a heuristic, not predicted return.",
           "Rank is a conditional long-option comparison, NOT a buy signal, forecast or win probability. UP means a user-assumed rise, DOWN a user-assumed fall; BOTH compares each side under its own favorable move.",
           "Chain receipt time is local, not exchange quote time. Original 20-level books and trade timestamps are checked separately; even recent depth is not an order fill. Only up to 60 leading candidates and selected ID receive indexed depth checks. Highest evidence tier requires fresh book prices agreeing with the chain within max(₹0.05, 0.1% of mid), sufficient top size and narrow spread.",
           "Expiry at 15:30 IST, 365.25-day year, assumed rate/dividend and constant IV shock. Special sessions and exchange holidays are not certified.",
