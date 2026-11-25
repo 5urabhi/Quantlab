@@ -247,10 +247,18 @@ def rule_replay(*,day,call_identity,put_identity,rule="EMA_CROSSOVER",fast=9,slo
     trades=[]
     available_after=datetime.min.replace(tzinfo=timezone.utc)
     unresolved=False
+    flip_pending=None
     close=datetime.combine(date.fromisoformat(day),time(15,30),paper.IST).astimezone(timezone.utc)
-    for i,(decision,direction) in enumerate(entries):
-        if decision<=available_after or len(trades)>=50:
-            continue
+    for i,(signal_time,direction) in enumerate(entries):
+        if len(trades)>=50:
+            break
+        decision=signal_time
+        if signal_time<=available_after:
+            if hold_rule!="FLIP" or flip_pending!=signal_time:
+                continue
+            decision=available_after+timedelta(microseconds=1)
+            if i+1<len(entries) and entries[i+1][0]<=decision:
+                continue  # An intervening signal supersedes the pending flip.
         exit_at=None
         if hold_rule=="FLIP":
             exit_at=next((stamp for stamp,other in entries[i+1:] if other!=direction),None)
@@ -263,6 +271,7 @@ def rule_replay(*,day,call_identity,put_identity,rule="EMA_CROSSOVER",fast=9,slo
                     latency_ms=latency_ms,window_seconds=window_seconds,participation_pct=participation_pct,
                     slippage_bps=slippage_bps,broker_profile=broker_profile,now=now,exit_decision=exit_at)
         item["signal"]=direction
+        item["signal_decision_utc"]=paper._iso(signal_time)
         trades.append(item)
         if item["entries"] and item["entries"][0]["option_type"]!=("CE" if direction=="UP" else "PE"):
             raise ValueError("Selected historical identity does not match the signal option side")
@@ -270,6 +279,7 @@ def rule_replay(*,day,call_identity,put_identity,rule="EMA_CROSSOVER",fast=9,slo
             cash=fees._money(cash+item["net_pnl_inr"])
             item["cash_after_completed_trade"]=cash
             available_after=ao.timestamp(item["exit_received_utc"])
+            flip_pending=exit_at if hold_rule=="FLIP" else None
             if cash<1000:
                 break
         elif item["entry_complete"] or item["state"] in ("entry_partial_or_insufficient_depth","future_entry_window_not_complete"):
@@ -287,5 +297,6 @@ def rule_replay(*,day,call_identity,put_identity,rule="EMA_CROSSOVER",fast=9,slo
        "negative":sum(t["net_pnl_inr"]<0 for t in completed),
        "broker_orders_enabled":False,
        "warning":"Fixed preselected historical identities, completed observed index bars, no overlapping positions. "
+         "Flip re-entry waits for the prior close and rejects superseded signals. "
          "Censored trades stop reuse of possibly committed capital. At most 50 attempts. "
          "This is conditional observed-depth replay, not an out-of-sample profitability certificate."}
