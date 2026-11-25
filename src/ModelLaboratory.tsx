@@ -4,6 +4,7 @@ import {Activity, ArrowRight, BarChart3, BookOpen, CheckCircle2, CircleAlert, Da
 import ResearchPlot, {type ResearchPlotData} from './ResearchPlots'
 import ModelCatalogLanding, {catalogFamily} from './ModelCatalogLanding'
 import ModelResultBrief from './ModelResultBrief'
+import CustomModelWorkspace from './CustomModelWorkspace'
 import {formatMetric} from './metricDisplay'
 import './model-lab.css'
 
@@ -94,7 +95,7 @@ type Props={
   onOpenResults?:(runId?:string)=>void;
   onOpenData?:()=>void;
   preferredModelId?:string;
-  onRunSaved?:(runId:string)=>void
+  onRunSaved?:(runId:string)=>void;enableCustomModels?:boolean
 }
 type ResultView='configure'|'figures'|'numbers'|'method'
 const SECTIONS=['Stochastic Processes','Volatility & Econometrics','Derivatives & Options',
@@ -160,8 +161,9 @@ function exportResult(modelId:string,result:LabResult,format:'json'|'csv'){
   URL.revokeObjectURL(url)
 }
 export default function ModelLaboratory({section,datasets,selectedDataset,onSelectDataset,
-  onOpenGuide,onDataChanged,onOpenWorkspace,onOpenResults,onOpenData,preferredModelId,onRunSaved}:Props){
-  const [catalogScreen,setCatalogScreen]=useState<'catalog'|'detail'>('catalog')
+  onOpenGuide,onDataChanged,onOpenWorkspace,onOpenResults,onOpenData,preferredModelId,onRunSaved,enableCustomModels=false}:Props){
+  const [catalogScreen,setCatalogScreen]=useState<'catalog'|'detail'|'custom'>('catalog')
+  const [customScript,setCustomScript]=useState('')
   const [aboutOpen,setAboutOpen]=useState(false)
   const [inputsOpen,setInputsOpen]=useState(false)
   const [showExtraParams,setShowExtraParams]=useState(false)
@@ -802,10 +804,11 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
     return()=>window.removeEventListener('keydown',closeOnEscape)
   },[aboutOpen])
 
+  if(catalogScreen==='custom')return <CustomModelWorkspace datasets={datasets} selectedDataset={selectedDataset} initialScriptId={customScript} onBack={()=>setCatalogScreen('catalog')}/>
   if(catalogScreen==='catalog')return <ModelCatalogLanding
     models={catalog} readiness={matrix?.models||[]} recent={savedRuns}
     sourceLabel={matrix?.dataset_label||datasets.find(d=>d.id===selectedDataset)?.label||''}
-    onOpen={changeModel}
+    onOpen={changeModel} onOpenCustom={enableCustomModels?id=>{setCustomScript(id||'');setCatalogScreen('custom')}:undefined}
     onReopen={id=>{
       const saved=savedRuns.find(run=>run.id===id)
       if(saved&&onOpenResults)onOpenResults(saved.id)

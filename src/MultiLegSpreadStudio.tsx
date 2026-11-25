@@ -5,7 +5,8 @@ import type {BrokerProfile} from './SpreadOpportunityScanner'
 import SpreadExecutionDecision,{type ExecutionDecision} from './SpreadExecutionDecision'
 import './multi-leg-spreads.css'
 import ResearchPlot from './ResearchPlots'
-import {openSnapshotInPython} from './pythonBridge'
+import {openSnapshotInPython,type PythonSnapshot} from './pythonBridge'
+import SavedScriptRunner from './SavedScriptRunner'
 
 type StrategyKey='bull_call_debit'|'bear_put_debit'|'bull_put_credit'|'bear_call_credit'|'iron_condor'|'iron_butterfly'
 type Strategy={key:StrategyKey;label:string;group:string;roles:string[];actions:('BUY'|'SELL')[];sides:('CE'|'PE')[];qualified_candidates:number}
@@ -81,6 +82,7 @@ export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerP
       Number(!!a.paper_research_qualified)||
       Number(!!b.fresh_reference)-Number(!!a.fresh_reference)||(sort==='minimum_loss'||sort==='quote_skew'?val(a)-val(b):val(b)-val(a))||a.candidate_id.localeCompare(b.candidate_id))
   },[data,filter,expiry,freshOnly,qualifiedOnly,sort])
+  const candidateSnapshot=useMemo<PythonSnapshot|null>(()=>candidates.length?{title:'Defined-risk spread candidates · '+day,provenance:'Original saved-book calculations, broker '+brokerProfile+'; research only, margin unverified',columns:['Candidate ID','Strategy','Lots','Maximum profit (₹)','Maximum loss (₹)','Risk capital proxy (₹)','Risk reward proxy','Immediate roundtrip net (₹)','Quote skew (s)','Paper gate qualified','Source legs and receipt times'],rows:candidates.map(c=>[c.candidate_id,c.label,c.lots,c.max_profit_inr,c.max_loss_inr,c.risk_capital_proxy_inr,c.risk_reward_ratio_proxy,c.estimated_same_book_immediate_roundtrip_net_inr,c.quote_skew_seconds,!!c.paper_research_qualified,c.legs.map(l=>l.identity+' '+l.saved_utc).join('; ')])}:null,[candidates,day,brokerProfile])
   const selected=manual||data?.ranked_candidates.find(x=>x.candidate_id===selectedId)||candidates[0]||null
   const spec=data?.strategies.find(x=>x.key===buildStrategy)
   const persist=(items:Saved[])=>{setSaved(items);try{localStorage.setItem(STORE,JSON.stringify(items))}catch{/* storage unavailable */}}
@@ -151,7 +153,8 @@ export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerP
         <label className="ml-check"><input type="checkbox" checked={qualifiedOnly}
           onChange={e=>setQualifiedOnly(e.target.checked)}/>Only paper-study qualified</label>
       </div>
-      <div className="ml-actions"><button type="button" className="ml-btn" disabled={!candidates.length} onClick={()=>openSnapshotInPython({title:'Defined-risk spread candidates · '+day,provenance:'Saved original book candidate calculations; research only, margin unverified',columns:['Candidate ID','Strategy','Lots','Maximum profit (₹)','Maximum loss (₹)','Risk capital proxy (₹)','Risk reward proxy','Immediate roundtrip net (₹)','Quote skew (s)','Paper gate qualified'],rows:candidates.map(c=>[c.candidate_id,c.label,c.lots,c.max_profit_inr,c.max_loss_inr,c.risk_capital_proxy_inr,c.risk_reward_ratio_proxy,c.estimated_same_book_immediate_roundtrip_net_inr,c.quote_skew_seconds,!!c.paper_research_qualified])})}>Analyze / score spreads in Python</button></div>
+      <div className="ml-actions"><button type="button" className="ml-btn" disabled={!candidateSnapshot} onClick={()=>candidateSnapshot&&openSnapshotInPython(candidateSnapshot)}>Analyze / score spreads in Python</button></div>
+      <details className="ql-saved-runner-wrap"><summary>Custom saved spread scanner</summary><SavedScriptRunner kind="scanner" snapshot={candidateSnapshot} automatic onInspect={id=>{const candidate=candidates.find(c=>c.candidate_id===id);if(candidate)selectCandidate(candidate)}}/></details>
       <div className="ml-scroll"><table className="ml-table"><thead><tr>
         <th>Rank / strategy</th><th>Legs</th><th>Lots</th><th>Premium entry ±</th><th>Entry costs</th><th>Max terminal gain</th><th>Max terminal loss</th><th>Reward / loss</th><th>Immediate round trip</th><th>Source</th><th>Feasibility</th><th></th>
       </tr></thead><tbody>{candidates.map((x,i)=><tr key={x.candidate_id}>

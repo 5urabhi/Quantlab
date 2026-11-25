@@ -4651,3 +4651,27 @@ def research_notebook_result(notebook_id: str,run_id: str):
         return user_notebooks.read_run(notebook_id,run_id)
     except ValueError as exc:
         raise HTTPException(400,str(exc)) from exc
+
+
+class SavedScriptRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=1,le=100)
+    snapshot: dict
+    profile: Literal["stdlib","scientific"] = "stdlib"
+    confirm_readonly: bool = False
+
+
+@app.post("/api/user-scripts/{script_id}/run")
+def user_saved_script_run(script_id: str,body: SavedScriptRunRequest):
+    if not body.confirm_readonly:
+        raise HTTPException(400,"Confirm isolated read-only execution")
+    if not python_strategy_sandbox.availability()["available"]:
+        raise HTTPException(409,"Isolated Python unavailable; no unsafe fallback")
+    try:
+        item=user_scripts.read_script(script_id,body.revision)
+        if item["kind"]=="strategy":
+            raise ValueError("Use the strategy backtest")
+        user_scripts.snapshot_json(body.snapshot)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+    return _spawn("user_snapshot_chart",user_scripts.run_saved,script_id=script_id,revision=body.revision,snapshot=body.snapshot,profile=body.profile)

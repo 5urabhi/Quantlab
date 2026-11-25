@@ -62,3 +62,11 @@
 .ws-v2.ql-v3 .oc-details-drawer .oc-lot-inputs>div{flex:1 1 42%}
 .ws-v2.ql-v3 .oc-details-drawer .oc-preview-actions{flex-wrap:wrap}
 @media(max-width:700px){.ws-v2.ql-v3 .oc-details-drawer{top:0;width:min(100vw,460px)}}
+
+.ql-saved-runner,.ql-custom-model{min-width:0;background:var(--ql-panel,#151518);border:1px solid var(--ql-border,#343438);border-radius:9px;padding:16px;margin:12px 0}
+.ql-saved-runner-head{display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap}
+.ql-saved-runner-head h2,.ql-saved-runner-head h3{margin:0 0 6px}
+.ql-custom-model textarea{width:100%;min-height:180px;background:#0b0b0d;color:#f1f1f3;border:1px solid #343438;border-radius:6px;padding:10px;font:13px/1.5 ui-monospace,monospace}
+.ql-saved-runner-wrap>summary{cursor:pointer;color:#f5c542;margin:12px 0}
+.ql-saved-runner .ws-table-scroll{max-height:420px;overflow:auto}
+.ql-saved-runner .ql-monitor-form input:not([type=checkbox]){padding:9px;border:1px solid var(--ql-border);border-radius:6px;background:var(--ql-bg);color:var(--ql-text)}

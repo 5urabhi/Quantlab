@@ -367,3 +367,13 @@ def run_chart(*, code, snapshot, profile="stdlib", kind="chart", persist=True, p
     if kind == "scanner":
         output.update(rank_snapshot(plot, snapshot))
     return _save_chart_run(output) if persist else output
+
+
+def run_saved(*,script_id,revision,snapshot,profile="stdlib",progress=None):
+    """Run immutable library code, not mutable source submitted by a caller."""
+    item=read_script(script_id,revision)
+    if item["kind"] not in KINDS-{"strategy"}:
+        raise ValueError("Use the causal strategy backtest for strategy scripts")
+    result=run_chart(code=item["code"],snapshot=snapshot,profile=profile,kind=item["kind"],persist=False,progress=progress)
+    result.update(script_id=script_id,script_revision=revision,script_name=item["name"],script_kind=item["kind"])
+    return _save_chart_run(result)

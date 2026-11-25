@@ -141,3 +141,17 @@ class UserScriptTests(unittest.TestCase):
         self.assertTrue(monitor._fresh("2026-11-25T04:29:00+00:00",now,60,150))
         self.assertFalse(monitor._fresh("2026-11-25T04:30:00+00:00",now,60,150))
         self.assertFalse(monitor._fresh("2026-11-24T04:29:00+00:00",now,60,150))
+
+
+class RegisteredScriptTests(unittest.TestCase):
+    def test_run_pins_saved_source_not_client_code(self):
+        with TemporaryDirectory() as directory, patch.object(scripts,"_db_path",lambda:Path(directory)/"scripts.sqlite3"):
+            one=scripts.save_script(name="Model",kind="model",code="x = 1")
+            scripts.save_script(name="Model",kind="model",code="x = 2",script_id=one["script_id"],expected_revision=1)
+            snap={"title":"Input","columns":["x"],"rows":[[1]]}
+            with patch.object(scripts,"run_chart",return_value={"plot":{"title":"Pinned"},"input_rows":1}) as run:
+                result=scripts.run_saved(script_id=one["script_id"],revision=1,snapshot=snap)
+            self.assertEqual(run.call_args.kwargs["code"],"x = 1")
+            self.assertFalse(run.call_args.kwargs["persist"])
+            self.assertEqual(result["script_revision"],1)
+            self.assertEqual(scripts.read_chart_run(result["run_id"])["script_id"],one["script_id"])

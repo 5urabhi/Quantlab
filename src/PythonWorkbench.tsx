@@ -102,7 +102,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,onNotebo
       setCurrent(item);setDraft({name:item.name,kind:item.kind,code:item.code});setNotice('Loaded revision '+item.revision+'. Saving an older revision requires Save as new.')
     }catch(e){setError(readableError(e))}finally{setBusy(false)}
   }
-  useEffect(()=>{const handler=(e:Event)=>{const id=(e as CustomEvent<string>).detail;if(typeof id==='string')void load(id)};window.addEventListener('quantlab:open-saved-script',handler);return()=>window.removeEventListener('quantlab:open-saved-script',handler)},[])
+  useEffect(()=>{const handler=(e:Event)=>{const id=(e as CustomEvent<string>).detail;if(typeof id==='string'){onOpen();void load(id)}};window.addEventListener('quantlab:open-saved-script',handler);return()=>window.removeEventListener('quantlab:open-saved-script',handler)},[])
   const save=async(asNew=false)=>{
     setBusy(true);setError('');setNotice('')
     try{const item=await marketPost<Script>('/api/user-scripts',{...draft,...(current&&!asNew?{script_id:current.script_id,expected_revision:current.revision}:{})})

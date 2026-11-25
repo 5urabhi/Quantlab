@@ -18,6 +18,7 @@ import PythonWorkbench from './PythonWorkbench'
 import PythonMonitors from './PythonMonitors'
 import PythonEnvironment from './PythonEnvironment'
 import ResearchPlot from './ResearchPlots'
+const CustomModelWorkspace = lazy(() => import('./CustomModelWorkspace'))
 const ResearchNotebook = lazy(() => import('./ResearchNotebook'))
 const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
@@ -852,7 +853,7 @@ function App(){
         {tab==='visual'&&<>{withRun(<Card title="Cumulative strategy / benchmark path" extra={classification}>{chart}</Card>)}{panel('rank_ic','Cross-sectional factor validation')}</>}
         {tab==='mathematics'&&<>
           <ModelLaboratory
-            section="mathematics" datasets={datasets} selectedDataset={selectedDataset}
+            section="mathematics" enableCustomModels datasets={datasets} selectedDataset={selectedDataset}
             onSelectDataset={setSelectedDataset} onOpenGuide={()=>begin('guide')}
             onDataChanged={refresh}
             onOpenWorkspace={()=>begin('workspace')} onOpenData={()=>begin('data')}
@@ -895,6 +896,7 @@ function App(){
           onSelectDataset={setSelectedDataset} onChanged={refresh}
           onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
         {tab==='pythonenvironment'&&<PythonEnvironment/>}
+        {tab==='custommodels'&&<CustomModelWorkspace datasets={datasets} selectedDataset={selectedDataset}/>}
         {(['pythonmonitors','custommodels','customscanners'].includes(tab))&&<PythonMonitors key={tab} initialKind={tab==='custommodels'?'model':tab==='customscanners'?'scanner':undefined} onEdit={id=>{showPython();if(id)window.dispatchEvent(new CustomEvent('quantlab:open-saved-script',{detail:id}))}}/>}
         {tab==='preferences'&&<SettingsPreferencesV2/>}
         {tab==='diagnostics'&&<DiagnosticsV2 onRepair={()=>begin('settings')}

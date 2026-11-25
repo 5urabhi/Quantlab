@@ -57,12 +57,12 @@ export default function ResearchNotebook(){
       try{const j=await marketApi<Job>('/api/jobs/'+jobId);if(!active)return
         setStatus(j.stage||j.status)
         if(['complete','error','cancelled','interrupted'].includes(j.status)){
-          setJobId('');try{sessionStorage.removeItem('ql-notebook-job')}catch{/* optional */}
           if(j.status==='complete'&&j.result){
             const d=await marketApi<Doc>('/api/research-notebooks/'+j.result.notebook_id+'?revision='+j.result.revision)
             if(!active)return
             showDoc(d);setResult(j.result);setStatus(j.result.complete?'Notebook run saved.':'Run saved; stopped at first failing cell.');void refresh()
           }else setError(j.error||'Notebook execution '+j.status+'. Open a saved revision to recover completed runs.')
+          setJobId('');try{sessionStorage.removeItem('ql-notebook-job')}catch{/* optional */}
         }
       }catch(e){if(active)setError(readableError(e))}finally{reading=false}
     }
