@@ -129,8 +129,9 @@ def _atm_iv(snapshot):
 
 @lru_cache(maxsize=24)
 def _daily_history(path, expiry, day, bucket):
-    """One last saved snapshot per UTC date during the regular IST session.
-    Bounded to 60 observed days; cache the older receipts for five minutes.
+    """One last saved chain snapshot per observed UTC date.
+    Dhan's usual IST session lies within that UTC date. Bounded to 60
+    observed dates; cache the older receipts for five minutes.
     """
     if not shared_market_data.database_path().is_file():
         return []
@@ -157,14 +158,14 @@ def _daily_history(path, expiry, day, bucket):
         return []
 
 
-def _history(chain, now):
+def _history(chain, now, selected=""):
     captured = timestamp(chain["received_utc"])
     day = captured.astimezone(IST).date().isoformat()
     start = datetime.combine(date.fromisoformat(day),time.min,IST).astimezone(timezone.utc).isoformat()
     stamp = chain["received_utc"]
     result = {"previous":{}, "previous_utc":None, "term":[], "realized":None,
               "realized_returns":0,"realized_last_utc":None,"recent_trades":{},
-              "historical_error":None}
+              "historical_error":None,"selected_history":[]}
     try:
         with closing(_read_database()) as db:
             try:
@@ -176,6 +177,20 @@ def _history(chain, now):
                     result["previous_utc"] = prior[0]
                     result["previous"] = {c["identity"]:c for c in _read_json(prior[1]).get("contracts",[])
                                           if c.get("identity")}
+                if selected:
+                    points=db.execute("""SELECT captured_utc,normalized_json
+                       FROM option_chain_observations WHERE underlying='BANKNIFTY'
+                       AND expiry=? AND captured_utc>=? AND captured_utc<?
+                       ORDER BY captured_utc DESC LIMIT 40""",
+                       (chain["expiry"],start,stamp)).fetchall()
+                    for t,raw in reversed(points):
+                        snapshot=_read_json(raw)
+                        row=next((c for c in snapshot.get("contracts",[])
+                                  if c.get("identity")==selected),None)
+                        if row:
+                            result["selected_history"].append({"captured_utc":t,
+                               "spot":snapshot.get("underlying_spot"),
+                               **{key:row.get(key) for key in ("ltp","iv","delta","gamma","theta","vega","oi","volume")}})
                 # One latest receipt per expiry on the same IST date, with each own timestamp.
                 term = db.execute("""SELECT o.expiry,o.captured_utc,o.normalized_json
                    FROM option_chain_observations o JOIN (
@@ -343,6 +358,8 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
             max_spread_bps=250., risk_pct=100., target_premium=300.,
             slippage_bps=10., broker_profile="zerodha", selected="", now=None):
     """One snapshot, descriptive market analytics and assumption-dependent ranking."""
+    if selected and not fees.ID.fullmatch(selected):
+        raise ValueError("Select an exact verified NSE_FNO identity")
     if direction not in ("BOTH","UP","DOWN") or broker_profile not in fees.BROKER_PROFILES:
         raise ValueError("Invalid direction or broker profile")
     checks=((capital,1000,1e8),(max_lots,1,50),(move_points,1,10000),
@@ -364,7 +381,7 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
     age=(now-captured).total_seconds()
     local=now.astimezone(IST)
     recent=0<=age<=MAX_RECEIPT_AGE and local.weekday()<5 and time(9,15)<=local.time()<time(15,30)
-    h=_history(chain,now)
+    h=_history(chain,now,selected)
     rows=[]
     for c in chain["contracts"]:
         k=positive(c.get("strike"));side=c.get("option_type")
@@ -409,11 +426,12 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
         if years<=horizon_minutes*60/YEAR_SECONDS: reasons.append("Horizon reaches assumed expiry close")
         scenarios={};cost=roundtrip=break_even=None
         score=None
-        if model and lots>0 and years>horizon_minutes*60/YEAR_SECONDS:
-            units=lots*size
+        units=lots*size if verified and valid and lots>0 else 0
+        if units:
             cost=_entry_cost(ask,size,lots,broker_profile)
             roundtrip=fees.fee_schedule(ask*units,bid*units,broker_profile=broker_profile)
             break_even=_break_even(ask,units,broker_profile)
+        if model and units and years>horizon_minutes*60/YEAR_SECONDS:
             move=move_points if side=="CE" else -move_points
             for label,m,iv in (("favorable",move,iv_change_points),("flat",0,iv_change_points),
                   ("adverse",-move,iv_change_points),("iv_crush",move,iv_change_points-2),
@@ -436,8 +454,6 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
                 premium_fit=1/(1+abs(mid-target_premium)/target_premium)
                 score=round(50*min(1.,ratio/2)+20*(1-min(1.,spread_bps/max_spread_bps))
                             +15*premium_fit+15*min(1.,reward/.15),2)
-        else:
-            units=0
         gex=(model["gamma"]*positive(c.get("oi"))*spot*spot*.01
              if model and positive(c.get("oi")) is not None else None)
         # OI units are provider-reported; no dealer-long/short sign inferred.
@@ -461,7 +477,11 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
     def quality(r):
         if r["depth_state"]=="recent_original_book" and r["trade_activity_state"]=="recent_trade_evidence":
             d=r["depth"]
-            if min(d["top_bid_quantity"],d["top_ask_quantity"])>=r["units"] and d["spread_bps"]<=max_spread_bps:
+            # Receipt-time proximity alone does not establish matching prices.
+            tolerance=max(.05,r["mid"]*.001)
+            if (abs(d["bid"]-r["bid"])<=tolerance and abs(d["ask"]-r["ask"])<=tolerance
+                    and min(d["top_bid_quantity"],d["top_ask_quantity"])>=r["units"]
+                    and d["spread_bps"]<=max_spread_bps):
                 return 0
         return 1 if r["trade_activity_state"]=="recent_trade_evidence" else 2
     ranked=[r for r in rows if r["score"] is not None]
@@ -491,7 +511,7 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
         max_pain=min(losses)[1]
     current=h["atm_iv_pct"]
     expected_move=(spot*current/100*sqrt(horizon_minutes*60/YEAR_SECONDS)
-                   if current is not None else None)
+                   if current is not None and years>=horizon_minutes*60/YEAR_SECONDS else None)
     return {"chain":chain,"rows":rows,"ranked_identities":[r["identity"] for r in ranked],
         "ranked_count":len(ranked),"confirmed_depth_count":sum(quality(r)==0 for r in ranked),
         "recent_trade_count":sum(quality(r)<=1 for r in ranked),
@@ -513,11 +533,13 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
           "put_oi":totals["PE"] if known["PE"] else None,"known_counts":known,"contract_counts":counts,
           "complete":complete,"pcr":pcr,"max_pain_strike":max_pain,
           "previous_snapshot_utc":h["previous_utc"],"dealer_gamma_exposure":None},
+        "selected_history_identity":selected or None,
+        "selected_history":h["selected_history"],
         "historical_error":h["historical_error"],"read_only":True,
         "profit_probability":None,"expected_profit_inr":None,"orders_enabled":False,
         "warnings":[
           "Rank is a conditional long-option comparison, NOT a buy signal, forecast or win probability. UP means a user-assumed rise, DOWN a user-assumed fall; BOTH compares each side under its own favorable move.",
-          "Chain receipt time is local, not exchange quote time. Original 20-level books and trade timestamps are checked separately; even recent depth is not an order fill. Only up to 60 leading candidates and selected ID receive indexed depth checks.",
+          "Chain receipt time is local, not exchange quote time. Original 20-level books and trade timestamps are checked separately; even recent depth is not an order fill. Only up to 60 leading candidates and selected ID receive indexed depth checks. Highest evidence tier requires fresh book prices agreeing with the chain within max(₹0.05, 0.1% of mid), sufficient top size and narrow spread.",
           "Expiry at 15:30 IST, 365.25-day year, assumed rate/dividend and constant IV shock. Special sessions and exchange holidays are not certified.",
           "Scenario exit = theoretical midpoint less current half-spread and slippage. Future spreads, fills and IV are unknown. Fees are indicative existing Zerodha/Dhan schedule; settlement/exercise and other levies excluded.",
           "IV history uses same-expiry nearest paired strike provider IV, not a constant-tenor index. Realized vol uses at least 30 contiguous observed BANKNIFTY one-minute log returns, annualized sqrt(252 x 375); gaps not bridged.",
