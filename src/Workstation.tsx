@@ -60,7 +60,7 @@ const primarySections:PrimarySection[]=[
   {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
   {id:'trading',label:'Trading',icon:Activity,
     tabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper'],
-    navTabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal']},
+    navTabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper']},
   {id:'strategies',label:'Strategies',icon:TrendingUp,
     tabs:['strategies','strategyema','strategypython','strategybacktest'],
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
