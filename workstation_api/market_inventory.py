@@ -343,3 +343,59 @@ def inventory(source="all",query="",page=1,per_page=50,refresh=False):
     return {**{k:v for k,v in result.items() if k!="rows"},"items":selected[offset:offset+per_page],
             "total":len(selected),"page":page,"has_more":offset+per_page<len(selected),
             "cache_age_seconds":round(time.monotonic()-CACHE_TIME,1)}
+
+
+# Fixed, small scalar record previews. No credentials, original JSON payloads
+# or raw file paths. Full depth and chain payloads remain in Trading / Replay.
+RECORD_COLUMNS = {
+    "daily_closes": ("session_date","identity","close","source_sha256"),
+    "live_ticks": ("exchange_utc","received_utc","identity","price","packet_sha256"),
+    "live_minute_bars": ("minute_utc","identity","open","high","low","close","tick_count","last_received_utc"),
+    "option_quote": ("received_utc","exchange_trade_utc","identity","price","volume","last_trade_quantity","packet_sha256"),
+    "option_oi": ("received_utc","identity","open_interest","packet_sha256"),
+    "option_chain": ("captured_utc","underlying","expiry","snapshot_sha256"),
+    "live_depth_books": ("received_utc","identity","packet_pair_sha256"),
+    "depth_features": ("received_utc","identity","book_pair_sha256"),
+    "sector_history": ("effective_date","identity","sector","source_sha256"),
+}
+
+
+def records(source, identity, qualifier="", before="", limit=50):
+    if source not in RECORD_COLUMNS or not 1<=limit<=100 or not 0<len(identity)<=160 or len(qualifier)>180 or len(before)>40:
+        raise ValueError("Invalid record preview selection")
+    table,identity_col,stamp,condition,extra=SQL[source]
+    path=shared_market_data.database_path()
+    if not _safe_file(path):
+        raise ValueError("Canonical source not present")
+    where=[identity_col+"=?"]
+    args=[identity]
+    if condition:
+        where.append(condition.removeprefix("WHERE "))
+    if extra:
+        if not qualifier:
+            raise ValueError("Choose the exact saved expiry")
+        where.append(extra+"=?");args.append(qualifier)
+    if before:
+        _stamp(before)
+        where.append(stamp+"<?");args.append(before)
+    try:
+        with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True,timeout=0.5)) as db:
+            db.execute("PRAGMA query_only=ON")
+            db.execute("PRAGMA trusted_schema=OFF")
+            deadline=time.monotonic()+1.5
+            db.set_progress_handler(lambda:int(time.monotonic()>deadline),5000)
+            existing={r[1] for r in db.execute("PRAGMA table_info("+table+")")}
+            columns=[name for name in RECORD_COLUMNS[source] if name in existing]
+            if stamp not in columns or identity_col not in columns:
+                raise ValueError("Saved record schema unavailable")
+            found=db.execute("SELECT "+",".join(columns)+" FROM "+table+" WHERE "+
+                " AND ".join(where)+" ORDER BY "+stamp+" DESC LIMIT ?",(*args,limit+1)).fetchall()
+            output=found[:limit]
+    except sqlite3.Error as exc:
+        raise ValueError("Record preview exceeded its bounded read budget or source is unavailable") from exc
+    # Timestamp cursor is deliberately strict. Multiple same-time packets can
+    # share a receipt time; this is a preview, not a lossless event export.
+    return {"source":source,"identity":identity,"qualifier":qualifier,"columns":columns,
+            "rows":[list(r) for r in output],"has_more":len(found)>limit,
+            "before":output[-1][columns.index(stamp)] if output and len(found)>limit else None,
+            "note":"Newest matching stored rows (scalar preview). Equal-time packets at a page boundary may be omitted. Not a complete source export."}

@@ -4717,3 +4717,12 @@ def unified_market_inventory(source: str = "all", query: str = "", page: int = 1
         return market_inventory.inventory(source, query, page, per_page, refresh)
     except ValueError as exc:
         raise HTTPException(400,str(exc)) from exc
+
+
+@app.get("/api/data-manager/inventory/records")
+def unified_market_inventory_records(source: str, identity: str, qualifier: str = "",
+                                     before: str = "", limit: int = 50):
+    try:
+        return market_inventory.records(source, identity, qualifier, before, limit)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
