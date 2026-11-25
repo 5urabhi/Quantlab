@@ -260,7 +260,7 @@ with open("/work/result.json","w",encoding="utf-8") as f:
 '''
 
 
-def run_chart(*, code, snapshot, progress=None):
+def run_chart(*, code, snapshot, profile="stdlib", persist=True, progress=None):
     """Only copied snapshots enter the same fail-closed sandbox as strategies."""
     if not isinstance(code, str) or not 1 <= len(code) <= python_strategy_sandbox.MAX_SOURCE_CHARS:
         raise ValueError("Paste 1-20,000 characters of Python")
@@ -273,7 +273,8 @@ def run_chart(*, code, snapshot, progress=None):
             path = work / name
             path.write_bytes(value)
             path.chmod(0o600)
-        command = python_strategy_sandbox._command(work)
+        command = (python_strategy_sandbox._command(work) if profile == 'stdlib'
+                   else python_strategy_sandbox._command(work, profile))
         if progress:
             progress(10, "Starting isolated snapshot analysis")
         process = None
@@ -321,7 +322,8 @@ def run_chart(*, code, snapshot, progress=None):
     plot.update(kind="line2d", x=[row[0] for row in snapshot["rows"]])
     if any(type(v) not in (str, int, float) for v in plot["x"]):
         raise ValueError("First snapshot column must contain numeric or text coordinates")
-    return _save_chart_run({"plot": plot, "source_sha256": sha256(code.encode()).hexdigest(),
+    output = {"plot": plot, "profile": profile, "source_sha256": sha256(code.encode()).hexdigest(),
             "snapshot_sha256": sha256(payload).hexdigest(),
             "input_rows": count, "provenance": "user_snapshot_custom_python",
-            "warning": "Custom Python output from client-provided snapshot; not source-verified market history, not a causal trading signal."})
+            "warning": "Custom Python output from client-provided snapshot; not source-verified market history, not a causal trading signal."}
+    return _save_chart_run(output) if persist else output

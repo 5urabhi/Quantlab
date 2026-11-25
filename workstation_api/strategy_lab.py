@@ -579,12 +579,13 @@ def run_pair_process(*, fast: int, slow: int, limit: int = 1500,
 
 def run_custom(*, code: str, limit: int = 1500,
                starting_capital: float = 50000, cost_bps: float = 5,
-               source_mode: str = "historical", progress=None) -> dict:
+               source_mode: str = "historical", profile: str = "stdlib", progress=None) -> dict:
     from . import python_strategy_sandbox
     rows, evidence = load_index(limit, source_mode)
     if progress:
         progress(12, "Snapshotting original BANKNIFTY candles for isolated Python")
-    signals, sandbox = python_strategy_sandbox.run_python(code, rows)
+    signals, sandbox = (python_strategy_sandbox.run_python(code, rows) if profile == 'stdlib'
+                        else python_strategy_sandbox.run_python(code, rows, profile))
     if progress:
         progress(85, "Scoring causal index-directional fills and plotting")
     selected = backtest_index(rows, signals,

@@ -54,3 +54,18 @@ def test_saved_custom_runs_reopen(tmp_path, monkeypatch):
                                       "snapshot_sha256":"example"})
     assert scripts.read_chart_run(result["run_id"]) == result
     assert scripts.list_chart_runs()[0]["title"] == "Local chart"
+
+
+def test_scientific_profile_uses_only_fixed_readonly_system_packages(monkeypatch):
+    from pathlib import Path
+    from workstation_api import python_strategy_sandbox as sandbox
+    monkeypatch.setattr(sandbox, "availability", lambda: {"available":True})
+    monkeypatch.setattr(sandbox.shutil, "which", lambda name: "/usr/bin/" + name)
+    cmd = sandbox._command(Path("/tmp/test_snapshot"), "scientific")
+    assert "--unshare-all" in cmd and "--clearenv" in cmd
+    assert "/usr/lib/python3/dist-packages" in cmd[-1]
+    assert "-S" in cmd and "--as=1073741824" in cmd
+    assert cmd.count("--bind") == 1
+    assert not any("DHAN_ACCESS_TOKEN" in arg for arg in cmd)
+    with pytest.raises(ValueError, match="profile"):
+        sandbox._command(Path("/tmp/test_snapshot"), "/home/user/custom_venv")

@@ -838,6 +838,7 @@ class EmaPairRequest(StrategyLabBase):
 
 
 class PythonStrategyRequest(StrategyLabBase):
+    profile: Literal["stdlib", "scientific"] = "stdlib"
     limit: Literal[500, 1500] = 1500
     code: str = Field(min_length=1, max_length=20000)
 
@@ -4448,6 +4449,7 @@ class ChartPythonRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str = Field(min_length=1, max_length=20000)
     snapshot: dict
+    profile: Literal["stdlib", "scientific"] = "stdlib"
     confirm_readonly: bool = False
 
 
@@ -4484,7 +4486,7 @@ def user_chart_run(body: ChartPythonRequest):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return _spawn("user_snapshot_chart", user_scripts.run_chart,
-                  code=body.code, snapshot=body.snapshot)
+                  code=body.code, snapshot=body.snapshot, profile=body.profile)
 
 
 @app.get("/api/user-script-runs")
@@ -4498,3 +4500,13 @@ def user_chart_run_read(run_id: str):
         return user_scripts.read_chart_run(run_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/python-environment")
+def python_environment():
+    return python_strategy_sandbox.availability()
+
+
+@app.post("/api/python-environment/probe")
+def python_environment_probe():
+    return _spawn("python_scientific_environment_probe", python_strategy_sandbox.probe_scientific)

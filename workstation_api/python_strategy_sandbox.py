@@ -5,7 +5,8 @@ Ubuntu bubblewrap namespaces + prlimit are mandatory; execution fails closed
 when isolation cannot be established. No root project/data directory or Dhan
 tokens are mounted into the child, only a copied verified candle JSON input.
 
-Only Python standard-library modules are available. The public callback is:
+The default profile is standard-library only. The optional scientific profile
+exposes distribution-managed Python packages read-only inside the sandbox. The public callback is:
     def signal(history): return "UP" | "DOWN" | "HOLD"
 It receives ONLY the current session's original candles up through the
 completed bar, independently on each candle. No future bars are passed.
@@ -19,11 +20,15 @@ import os
 import shutil
 import subprocess
 import tempfile
+import stat
 
 MAX_SOURCE_CHARS = 20000
 MAX_SANDBOX_BARS = 1500
 MAX_OUTPUT_BYTES = 2_000_000
 WALL_TIMEOUT = 25
+PROFILES = ('stdlib', 'scientific')
+SYSTEM_PACKAGES = '/usr/lib/python3/dist-packages'
+SCIENTIFIC_PACKAGES = {'numpy':'python3-numpy','pandas':'python3-pandas','scipy':'python3-scipy','matplotlib':'python3-matplotlib','sympy':'python3-sympy','statsmodels':'python3-statsmodels','sklearn':'python3-sklearn'}
 
 RUNNER = r'''
 import contextlib, io, json, os, sys
@@ -74,6 +79,9 @@ def availability() -> dict:
     return {
         "available": ok, "engine": "bubblewrap_user_namespace_network_isolated",
         "python_packages": "standard_library_only",
+        "profiles": list(PROFILES),
+        "scientific_packages": {name: {"distribution": package, "files_present": (Path(SYSTEM_PACKAGES) / name).is_dir()} for name, package in SCIENTIFIC_PACKAGES.items()},
+        "scientific_note": "Presence is not an import test; select scientific and run the isolated probe. No host package installation from user scripts.",
         "sandbox_network": False, "broker_token_in_sandbox": False,
         "requires": ([] if ok else
                      ["Ubuntu bubblewrap (bwrap), prlimit, /usr/bin/python3"]),
@@ -83,18 +91,20 @@ def availability() -> dict:
     }
 
 
-def _command(directory: Path) -> list[str]:
+def _command(directory: Path, profile: str = "stdlib") -> list[str]:
     """Fail closed when Linux user-namespace sandbox or CPU cap unavailable."""
+    if profile not in PROFILES:
+        raise ValueError("Unknown isolated Python profile")
     env = availability()
     if not env["available"]:
         raise ValueError(
             "Isolated Python runner unavailable: install bubblewrap and "
             "util-linux prlimit on Ubuntu. No unsafe in-process fallback.")
     cmd = [
-        shutil.which("prlimit"), "--as=536870912", "--cpu=12",
+        shutil.which("prlimit"), "--as=" + ("1073741824" if profile == "scientific" else "536870912"), "--cpu=12",
         "--fsize=8388608", "--nofile=64", "--",
         shutil.which("bwrap"), "--die-with-parent", "--new-session",
-        "--unshare-all",
+        "--unshare-all", "--clearenv",
     ]
     for path in ("/usr", "/lib", "/lib64"):
         if Path(path).exists():
@@ -104,12 +114,20 @@ def _command(directory: Path) -> list[str]:
         "--bind", str(directory), "/work", "--chdir", "/work",
         "--setenv", "PATH", "/usr/bin:/bin",
         "--setenv", "HOME", "/tmp", "--setenv", "PYTHONPATH", "",
-        "--", "/usr/bin/python3", "-I", "-S", "/work/runner.py"
+        "--setenv", "OMP_NUM_THREADS", "1", "--setenv", "OPENBLAS_NUM_THREADS", "1",
+        "--setenv", "MKL_NUM_THREADS", "1", "--setenv", "NUMEXPR_NUM_THREADS", "1",
+        "--setenv", "MPLBACKEND", "Agg", "--setenv", "MPLCONFIGDIR", "/tmp/mpl",
+        "--", "/usr/bin/python3", "-I", "-S"
     ])
+    if profile == "scientific":
+        # Do not run site.py, .pth hooks, a host venv, or arbitrary mount paths.
+        cmd.extend(["-c", "import sys,runpy;sys.path.append('/usr/lib/python3/dist-packages');runpy.run_path('/work/runner.py',run_name='__main__')"])
+    else:
+        cmd.append("/work/runner.py")
     return cmd
 
 
-def run_python(code: str, rows: list[dict]) -> tuple[list[str], dict]:
+def run_python(code: str, rows: list[dict], profile: str = "stdlib") -> tuple[list[str], dict]:
     if not isinstance(code, str) or not 1 <= len(code) <= MAX_SOURCE_CHARS:
         raise ValueError("Paste 1-20,000 characters of Python strategy code")
     if not 1 <= len(rows) <= MAX_SANDBOX_BARS:
@@ -126,7 +144,7 @@ def run_python(code: str, rows: list[dict]) -> tuple[list[str], dict]:
             encoding="utf-8")
         for file in work.iterdir():
             file.chmod(0o600)
-        command = _command(work)
+        command = _command(work) if profile == 'stdlib' else _command(work, profile)
         try:
             process = subprocess.run(
                 command, cwd=work, env={"PATH": "/usr/bin:/bin",
@@ -148,10 +166,13 @@ def run_python(code: str, rows: list[dict]) -> tuple[list[str], dict]:
                 "Ubuntu blocked the isolated Python process or the runner "
                 "failed. Verify bubblewrap user-namespace permission. "
                 "The main API and Dhan recorder are unchanged.")
-        if result_file.is_symlink() or result_file.stat().st_size > MAX_OUTPUT_BYTES:
-            raise ValueError("Sandbox result file exceeded safe limits")
         try:
-            result = json.loads(result_file.read_text(encoding="utf-8"))
+            fd = os.open(result_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_OUTPUT_BYTES:
+                    raise ValueError("Sandbox result exceeded safe limits")
+                result = json.loads(stream.read(MAX_OUTPUT_BYTES + 1))
         except (OSError, ValueError, UnicodeError) as exc:
             raise ValueError("Sandbox returned invalid JSON") from exc
     if isinstance(result, dict) and result.get("error"):
@@ -164,9 +185,38 @@ def run_python(code: str, rows: list[dict]) -> tuple[list[str], dict]:
     if any(value not in ("UP", "DOWN", "HOLD") for value in decisions):
         raise ValueError("Python signals must be UP, DOWN or HOLD")
     return decisions, {
-        "engine": "isolated_python_stdlib",
+        "engine": "isolated_python_" + profile,
+        "profile": profile,
         "source_sha256": sha256(code.encode("utf-8")).hexdigest(),
         "input_candles": len(rows),
         "network_allowed": False, "broker_access_allowed": False,
         "orders_placed": 0,
     }
+
+
+def probe_scientific() -> dict:
+    """Import the fixed distribution package list only inside the sandbox."""
+    code = """import json,importlib
+packages = {}
+for name in ["numpy","pandas","scipy","matplotlib","sympy","statsmodels","sklearn"]:
+    try:
+        module = importlib.import_module(name)
+        packages[name] = {"available":True,"version":str(getattr(module,"__version__","unknown"))[:80]}
+    except Exception as exc:
+        packages[name] = {"available":False,"reason":type(exc).__name__}
+with open("/work/result.json","w") as f:
+    json.dump(packages,f)
+"""
+    with tempfile.TemporaryDirectory(prefix="quantlab_package_probe_") as directory:
+        work = Path(directory)
+        (work / "runner.py").write_text(code, encoding="utf-8")
+        try:
+            child = subprocess.run(_command(work, "scientific"), cwd=work,
+                env={"PATH":"/usr/bin:/bin","HOME":"/tmp"}, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=WALL_TIMEOUT, start_new_session=True)
+            if child.returncode:
+                raise ValueError("Scientific sandbox probe failed; check kernel permissions and memory limit")
+            result = json.loads((work / "result.json").read_text(encoding="utf-8"))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValueError("Scientific sandbox probe unavailable") from exc
+    return {"packages":result,"profile":"scientific","orders_placed":0}
