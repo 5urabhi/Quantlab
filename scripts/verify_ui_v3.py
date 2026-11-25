@@ -8,7 +8,6 @@ source is reported distinctly from a passed software check.
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -123,11 +122,19 @@ def verify_local_market():
         if report.get("orders_placed")!=0 or report.get("external_api_requests")!=0:
             checks.append(check("market_source_audit","fail","Local source audit unexpectedly reported external actions."))
         else:
+            expected={"banknifty_history","contract_master","live_depth","stored_depth"}
+            found={}
             for item in report.get("checks",[]):
-                if item.get("id") in {"banknifty_history","contract_master","live_depth","stored_depth"}:
-                    state=item.get("status",item.get("state","not_verified"))
-                    checks.append(check(item["id"],"pass" if state=="pass" else "waiting" if state=="waiting" else "blocked",
-                                        str(item.get("detail","Inspect local source acceptance."))[:400]))
+                if item.get("code") in expected:
+                    found[item["code"]]=item
+            for code in sorted(expected):
+                item=found.get(code)
+                if item is None:
+                    checks.append(check(code,"blocked","Expected source check is missing from local API response."))
+                    continue
+                state=item.get("status","not_verified")
+                checks.append(check(code,"pass" if state=="pass" else "waiting" if state=="waiting" else "blocked",
+                                    str(item.get("detail","Inspect local source acceptance."))[:400]))
         options=read_local("/api/trading-cockpit/option-feed/status")
         market=bool(options.get("market_regular_hours"))
         observed=int(options.get("observed_contracts") or 0)
