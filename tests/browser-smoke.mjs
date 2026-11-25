@@ -346,6 +346,7 @@ try {
     }))
     const optionPanel=page.getByRole('region',{name:'BANKNIFTY option chain and lot calculator'})
     await optionPanel.getByRole('button',{name:'Refresh expiry list'}).click()
+    await optionPanel.getByLabel('Option chain layout').selectOption('list')
     await optionPanel.getByRole('radio',{name:'Select 63000 CE'}).check()
     await optionPanel.getByRole('spinbutton',{name:'BANKNIFTY option lots'}).fill('2')
     await optionPanel.getByText('₹18,000.00',{exact:true}).waitFor()

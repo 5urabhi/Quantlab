@@ -52,7 +52,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
   const [chain,setChain]=useState<Chain|null>(null)
   const [selected,setSelected]=useState<string>('')
   const [sort,setSort]=useState<'premium'|'strike'|'spread'|'oi'>('strike')
-  const [layout,setLayout]=useState<'paired'|'list'>('paired')
+  const [layout,setLayout]=useState<'paired'|'list'>(()=>initialMode===undefined?'list':'paired')
   const [strikeRange,setStrikeRange]=useState<10|20|50|0>(20)
   const [detailsOpen,setDetailsOpen]=useState(false)
   const [showGreeks,setShowGreeks]=useState(true)
@@ -281,6 +281,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
       <label>Strike window<select aria-label="Option chain strike range" value={strikeRange} onChange={e=>setStrikeRange(Number(e.target.value) as typeof strikeRange)}><option value={10}>ATM ±10</option><option value={20}>ATM ±20</option><option value={50}>ATM ±50</option><option value={0}>All returned strikes</option></select></label>
       <label>Layout<select aria-label="Option chain layout" value={layout} onChange={e=>setLayout(e.target.value as typeof layout)}><option value="paired">Calls / Puts</option><option value="list">Contract list</option></select></label>
       <label>Sort contracts<select value={sort} onChange={e=>setSort(e.target.value as typeof sort)}><option value="strike">Strike</option><option value="premium">Closest to preferred premium</option><option value="spread">Smallest quoted spread</option><option value="oi">Highest reported OI</option></select></label>
+      {picked&&layout==='list'&&<button type="button" onClick={()=>setDetailsOpen(true)}>Inspect selected contract</button>}
       <span>{filtered.length} visible contracts · {matchingPremiumCount} matching the preferred premium across selected side(s). Bid/ask, spread and liquidity still matter.</span>
     </div>
     <div className="oc-controls-actions"><button type="button" disabled={!filtered.length} onClick={()=>openSnapshotInPython({title:'BANKNIFTY option chain '+expiry,provenance:'Dhan REST snapshot · '+(chain?.received_utc||'unknown receipt'),columns:['Contract ID','Strike (points)','Side','LTP (₹)','Bid (₹)','Ask (₹)','OI (provider units)','Volume (provider units)','IV (%)','Delta','Lot size'],rows:filtered.map(c=>[c.identity||c.symbol,c.strike,c.option_type,c.ltp,c.bid,c.ask,c.oi,c.volume,c.iv,c.delta,c.lot_size])})}>Analyze visible contracts in Python</button></div>
@@ -312,7 +313,7 @@ export default function OptionChainLive({feedActive,depthIdentity,
           {busy?'Loading original Dhan option chain…':nearTargetOnly?'No contracts in the preferred premium range. Widen the range or turn off the filter.':'No verified original strikes for the selected expiry. Refresh the chain, token or instrument master.'}
         </td></tr>}</tbody></table>
     </div>}
-    <aside className={'oc-preview '+(detailsOpen&&picked?'oc-details-drawer':'')} aria-label="Selected option contract details" hidden={!detailsOpen||!picked}>
+    <aside className={'oc-preview '+(detailsOpen&&picked&&initialMode!==undefined?'oc-details-drawer':'')} aria-label="Selected option contract details" hidden={!detailsOpen||!picked}>
       <div className="oc-drawer-head"><strong>Contract details</strong><button type="button" onClick={()=>setDetailsOpen(false)} aria-label="Close contract details">Close</button></div>
       <div className="oc-preview-title">
         <div><span className="tc-page-kicker">SELECT A REAL CONTRACT</span>

@@ -158,6 +158,7 @@ try{
    const chainRegion=page.getByRole('region',{name:'BANKNIFTY option chain and lot calculator'})
    await chainRegion.getByRole('button',{name:'Refresh expiry list',exact:true}).click()
    await chainRegion.getByLabel('Dhan BANKNIFTY expiry').locator('option',{hasText:fixtureExpiry}).waitFor({state:'attached'})
+   await chainRegion.getByLabel('Option chain layout').selectOption('paired')
    const paired=chainRegion.getByRole('table',{name:'Calls and puts by strike'})
    await paired.getByRole('button',{name:'Select 63000 CE',exact:true}).click()
    const drawer=chainRegion.getByRole('complementary',{name:'Selected option contract details'})
