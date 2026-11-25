@@ -8,6 +8,7 @@ export type ResearchPlotData={
   traces?:ResearchTrace[];x_label?:string;y_label?:string;
   z_label?:string;z?:number[][];band?:{lower:number[];upper:number[]};
   band_label?:string;break_before?:boolean[];
+  reference_lines?:{value:number;label:string;color?:string}[];point_markers?:{x:string|number;y:number;label:string;color:string}[];
   candles?:({open:number;high:number;low:number;close:number}|null)[];
   labels?:string[];row_labels?:string[];scale?:string;values?:number[][];threshold?:number;
   annotations?:{x:string|number;label:string}[];
@@ -31,6 +32,7 @@ function yBounds(plot:ResearchPlotData){
   const ys=(plot.traces||[]).flatMap(t=>t.y).filter(finite)
   if(plot.kind==='scatter2d'&&plot.y)ys.push(...plot.y.filter(finite))
   if(plot.band){ys.push(...plot.band.lower.filter(finite),...plot.band.upper.filter(finite))}
+  for(const ref of plot.reference_lines||[])if(finite(ref.value))ys.push(ref.value)
   if(plot.candles)for(const c of plot.candles){if(c)ys.push(c.low,c.high)}
   if(plot.kind==='bar2d'||plot.kind==='histogram2d')ys.push(0)
   if(!ys.length)return [0,1] as const
@@ -39,7 +41,7 @@ function yBounds(plot:ResearchPlotData){
   const pad=(hi-lo)*.07
   return [lo-pad,hi+pad] as const
 }
-function Canvas2D({plot,syncHover=true,formatX,formatY}:{plot:ResearchPlotData;syncHover?:boolean;formatX:(x:string|number)=>string;formatY:(y:number)=>string}){
+function Canvas2D({plot,syncHover=true,formatX,formatY,syncGroup}:{plot:ResearchPlotData;syncHover?:boolean;formatX:(x:string|number)=>string;formatY:(y:number)=>string;syncGroup?:string}){
   const x=plot.x||[]
   const [activeIndex,setActiveIndex]=useState<number|null>(null)
   const [pinned,setPinned]=useState(false)
@@ -47,7 +49,9 @@ function Canvas2D({plot,syncHover=true,formatX,formatY}:{plot:ResearchPlotData;s
   useEffect(()=>{
     if(!syncHover)return
     const handler=(event:Event)=>{
-      const target=(event as CustomEvent<{x:string|null}>).detail?.x
+      const detail=(event as CustomEvent<{x:string|null;group?:string}>).detail
+      if(detail?.group!==syncGroup)return
+      const target=detail?.x
       if(pinned)return
       if(target===null){setActiveIndex(null);return}
       if(typeof target==='string'){
@@ -57,11 +61,11 @@ function Canvas2D({plot,syncHover=true,formatX,formatY}:{plot:ResearchPlotData;s
     }
     window.addEventListener('quantlab:chart-cursor',handler)
     return()=>window.removeEventListener('quantlab:chart-cursor',handler)
-  },[syncHover,pinned,plot.x])
+  },[syncHover,pinned,plot.x,syncGroup])
   const emitCursor=(index:number|null)=>{
     if(!syncHover)return
     window.dispatchEvent(new CustomEvent('quantlab:chart-cursor',{
-      detail:{x:index===null?null:(exactDateKey(x[index])||String(x[index]))}}))
+      detail:{x:index===null?null:(exactDateKey(x[index])||String(x[index])),group:syncGroup}}))
   }
   const width=GRID_RIGHT-GRID_LEFT,height=GRID_BOTTOM-GRID_TOP
   const [lo,hi]=useMemo(()=>yBounds(plot),[plot])
@@ -120,6 +124,7 @@ function Canvas2D({plot,syncHover=true,formatX,formatY}:{plot:ResearchPlotData;s
           stroke="#304353" strokeDasharray="3 7" opacity=".8"/>
         <text x="60" y={GRID_TOP+t*height+4} fill="#c0c0c8" fontSize="11" textAnchor="end">{formatY(hi-t*(hi-lo))}</text>
       </g>)}
+      {(plot.reference_lines||[]).filter(r=>finite(r.value)).map((r,i)=><g key={'ref-'+i}><line x1={GRID_LEFT} x2={GRID_RIGHT} y1={yp(r.value)} y2={yp(r.value)} stroke={r.color||'#a5a5ad'} strokeDasharray="5 5"/><text x={GRID_RIGHT-5} y={yp(r.value)-4} textAnchor="end" fontSize="10" fill={r.color||'#d0d0d7'}>{r.label}</text></g>)}
       {(plot.regions||[]).slice(0,3).map((region,i)=>{
         const start=x.findIndex(v=>String(v)===String(region.start))
         const end=x.findIndex(v=>String(v)===String(region.end))
@@ -163,6 +168,7 @@ function Canvas2D({plot,syncHover=true,formatX,formatY}:{plot:ResearchPlotData;s
         </rect>
       })):
       traces.map((trace,t)=><g key={trace.name}>
+        {plot.kind==='area2d'&&trace.y.every(finite)&&<path d={path(trace.y)+' L'+xcoord(x.length-1)+','+yp(Math.max(lo,Math.min(hi,0)))+' L'+xcoord(0)+','+yp(Math.max(lo,Math.min(hi,0)))+' Z'} fill={trace.color||COLORS[t%COLORS.length]} opacity=".14"/>}
         <path d={path(trace.y)} fill="none" stroke={trace.color||COLORS[t%COLORS.length]}
           strokeWidth="2.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke"/>
         {trace.y.length<=24&&trace.y.map((v,i)=>finite(v)?<circle key={i}
@@ -170,6 +176,7 @@ function Canvas2D({plot,syncHover=true,formatX,formatY}:{plot:ResearchPlotData;s
           <title>{trace.name+' · '+String(x[i])+' · '+fmt(v)}</title>
         </circle>:null)}
       </g>)}
+      {(plot.point_markers||[]).map((m,i)=>{const at=x.findIndex(v=>v===m.x);return at>=0&&finite(m.y)?<circle key={'marker-'+i} cx={xcoord(at)} cy={yp(m.y)} r="4" fill={m.color} stroke="#101012" strokeWidth="1.3"><title>{m.label+' · '+formatX(m.x)+' · '+formatY(m.y)}</title></circle>:null})}
       {plot.threshold!==undefined&&finite(plot.threshold)&&numerical&&maxX>minX&&
          plot.threshold>=minX&&plot.threshold<=maxX&&<>
         <line x1={GRID_LEFT+(plot.threshold-minX)/(maxX-minX)*width}
@@ -238,7 +245,7 @@ function Heatmap({plot}:{plot:ResearchPlotData}){
   const values=plot.values||[]
   const rowLabels=plot.row_labels||labels
   const cols=labels.length,rows=rowLabels.length
-  if(!cols||!rows||cols>25||rows>25||values.length!==rows||
+  if(!cols||!rows||cols>41||rows>41||values.length!==rows||
     values.some(row=>row.length!==cols||row.some(v=>!finite(v))))
     return <p className="ql-muted">No valid bounded heatmap matrix to render.</p>
   const cell=Math.max(18,Math.min(48,Math.floor(590/Math.max(cols,rows))))
@@ -272,8 +279,9 @@ function Surface3D({plot}:{plot:ResearchPlotData}){
   const [elevation,setElevation]=useState(26)
   const [zoom,setZoom]=useState(1)
   const drag=useRef<{x:number;y:number;az:number;el:number}|null>(null)
+  const [mode,setMode]=useState<'surface'|'heatmap'>('surface')
   const xs=(plot.x||[]).map(Number),ys=(plot.y||[]).map(Number),zs=plot.z||[]
-  const good=xs.length>=2&&ys.length>=2&&xs.length<=41&&ys.length<=41&&zs.length===ys.length&&zs.every(r=>r.length===xs.length)
+  const good=xs.length>=2&&ys.length>=2&&xs.length<=41&&ys.length<=41&&xs.every(finite)&&ys.every(finite)&&zs.length===ys.length&&zs.every(r=>r.length===xs.length&&r.every(finite))
   const mesh=useMemo(()=>{
     if(!good)return {polys:[] as {key:string;points:string;depth:number;color:string;value:number}[],axes:[] as Point3[]}
     const vals=zs.flat(),zmin=Math.min(...vals),zmax=Math.max(...vals),zr=Math.max(1e-9,zmax-zmin)
@@ -301,14 +309,15 @@ function Surface3D({plot}:{plot:ResearchPlotData}){
   },[azimuth,elevation,zoom,xs.length,ys.length,JSON.stringify(zs),good])
   if(!good)return <p className="ql-muted">No valid numerical surface was returned.</p>
   const axes=mesh.axes
+  const heatmap:ResearchPlotData={kind:'heatmap2d',title:plot.title+' (top view)',labels:xs.map(fmt),row_labels:ys.map(fmt),values:zs,scale:'sequential'}
   return <div className="ql-surface">
     <div className="ql-graph-controls">
-      <span>Drag to rotate · 3D mathematical surface</span>
+      <span>{mode==='surface'?'Drag to rotate · 3D mathematical surface':'Top-down numerical view'}</span><button type="button" aria-pressed={mode==='surface'} onClick={()=>setMode('surface')}>3D surface</button><button type="button" aria-pressed={mode==='heatmap'} onClick={()=>setMode('heatmap')}>2D heatmap</button>
       <button type="button" onClick={()=>setZoom(v=>clamp(v-.15,.55,1.45))}>−</button>
       <button type="button" onClick={()=>setZoom(v=>clamp(v+.15,.55,1.45))}>+</button>
       <button type="button" onClick={()=>{setAzimuth(-42);setElevation(26);setZoom(1)}}>Reset</button>
     </div>
-    <svg viewBox="0 0 880 460" role="img" tabIndex={0}
+    {mode==='heatmap'?<Heatmap plot={heatmap}/>:<svg viewBox="0 0 880 460" role="img" tabIndex={0}
       aria-label={'Interactive 3D surface: '+plot.title+'. Use arrow keys to rotate'}
       onKeyDown={e=>{
         if(e.key==='ArrowLeft'||e.key==='ArrowRight'){setAzimuth(v=>v+(e.key==='ArrowRight'?8:-8));e.preventDefault()}
@@ -325,7 +334,7 @@ function Surface3D({plot}:{plot:ResearchPlotData}){
         x2={axes[j].x} y2={axes[j].y} stroke="#c3def0" strokeOpacity=".65" strokeWidth="1.6"/>)}
       {axes.slice(1).map((p,i)=><text key={i} x={p.x} y={p.y+(i===2?-9:20)}
         fontSize="12" textAnchor="middle" fill="#c6e7ee">{[plot.x_label,plot.y_label,plot.z_label][i]}</text>)}
-    </svg>
+    </svg>}
     <div className="ql-plot-foot"><span>X: {fmt(xs[0])} → {fmt(xs[xs.length-1])}</span>
       <span>Y: {fmt(ys[0])} → {fmt(ys[ys.length-1])}</span>
       <span>Z: {fmt(Math.min(...zs.flat()))} → {fmt(Math.max(...zs.flat()))}</span></div>
@@ -369,7 +378,7 @@ function downloadFile(name:string,contents:string,mime:string){
 function safeName(name:string){
   return name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,70)||'plot'
 }
-export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowApply=true}:{plot:ResearchPlotData;provenance?:string;formatX?:(x:string|number)=>string;formatY?:(y:number)=>string;allowApply?:boolean}){
+export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowApply=true,syncGroup}:{plot:ResearchPlotData;provenance?:string;formatX?:(x:string|number)=>string;formatY?:(y:number)=>string;allowApply?:boolean;syncGroup?:string}){
   const displayX=formatX||((x:string|number)=>typeof x==='number'?fmt(x):String(x))
   const targetId=useId()
   const [attached,setAttached]=useState<PythonApplied|null>(null)
@@ -384,6 +393,8 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
   const zoomable=n>=8&&plot.kind!=='surface3d'&&plot.kind!=='heatmap2d'
   const dateKeys=useMemo(()=>(plot.x||[]).map(exactDateKey),[plot.x])
   const syncable=zoomable&&dateKeys.length===n&&dateKeys.every(v=>v!==null)
+  const viewKey='ql-chart-view-v3:'+JSON.stringify([plot.title,plot.x_label,plot.y_label,provenance])
+  const [viewNotice,setViewNotice]=useState('')
   const left=view?.start??0,right=view?.end??n
   useEffect(()=>{setView(null)},[plot.title,n])
   useEffect(()=>{
@@ -409,6 +420,8 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
     const beginning=Math.max(0,Math.min(n-size,start))
     broadcast(size===n?null:{start:beginning,end:beginning+size})
   }
+  const saveView=()=>{try{localStorage.setItem(viewKey,JSON.stringify({hidden,span:right-left,fromEnd:n-right}));setViewNotice('Chart view saved in this browser.')}catch{setViewNotice('Browser storage unavailable.')}}
+  const restoreView=()=>{try{const v=JSON.parse(localStorage.getItem(viewKey)||'null');if(!v){setViewNotice('No saved view for this chart.');return}const names=(plot.traces||[]).map(t=>t.name);if(Array.isArray(v.hidden)){const h=v.hidden.filter((x:unknown)=>typeof x==='string'&&names.includes(x));setHidden(h.length>=names.length?[]:h)}if(zoomable&&Number.isFinite(v.span)&&Number.isFinite(v.fromEnd))clampView(Math.max(0,n-Math.max(0,Math.trunc(v.fromEnd))-Math.trunc(v.span)),Math.trunc(v.span));setViewNotice('Saved relative viewport and series visibility restored.')}catch{setViewNotice('Saved chart view could not be restored.')}}
   const zoomIn=()=>clampView(right-Math.max(5,Math.ceil((right-left)/1.6)),
     Math.max(5,Math.ceil((right-left)/1.6)))
   const zoomOut=()=>clampView(right-Math.min(n,Math.ceil((right-left)*1.6)),
@@ -484,8 +497,9 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
     <div className="ql-chart-title-row"><h4>{plot.title}</h4>
       <div className="ql-chart-export">
         <button type="button" onClick={()=>void expand()}>Full screen / exit</button>
-        {zoomable||(!['surface3d','heatmap2d'].includes(plot.kind)&&!!plot.x?.length)?<button type="button" onClick={()=>{
+        {table.rows.length>0&&table.rows.length<=3000?<button type="button" onClick={async()=>{
           const input=dataTable(visible)
+          if(document.fullscreenElement){try{await document.exitFullscreen()}catch{setExpandError('Exit full screen before opening Python.');return}}
           openSnapshotInPython({targetId:allowApply?targetId:undefined,title:plot.title,provenance:(provenance||'computed chart')+' · visible viewport snapshot',columns:input.columns,rows:input.rows})
         }} title="Attach visible observations to isolated Python workspace">Python analysis</button>:null}
         <button type="button" onClick={exportPython} title="Download a Python script with the full plotted dataset for offline analysis">Python snapshot</button>
@@ -494,6 +508,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
       </div>
     </div>
     {expandError&&<p role="alert">{expandError}</p>}
+    <div className="ql-chart-export"><button type="button" onClick={saveView}>Save chart view</button><button type="button" onClick={restoreView}>Restore chart view</button>{viewNotice&&<small role="status">{viewNotice}</small>}</div>
     <p className="ql-muted">X: {plot.x_label||'Not specified by model'} · Y: {plot.y_label||'Not specified by model'}{plot.z_label?' · Z: '+plot.z_label:''}</p>
     {zoomable&&<div className="ql-chart-viewport" role="group"
       aria-label={'Chart zoom and synchronized pointer for '+plot.title}>
@@ -508,7 +523,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
       <button type="button" onClick={()=>broadcast(null)} disabled={!view}
         aria-label={'Reset zoom '+plot.title}>Reset</button>
       <label><input type="checkbox" checked={syncHover} onChange={e=>setSyncHover(e.target.checked)}/>
-        Link crosshair by shared dates</label>
+        Link crosshair by exact observations</label>
       {syncable&&<label><input type="checkbox" checked={syncViewport}
         onChange={e=>setSyncViewport(e.target.checked)}/>
         Link zoom/pan on exact dates</label>}
@@ -517,7 +532,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
     {!!plot.traces?.length&&plot.kind!=='surface3d'&&plot.kind!=='heatmap2d'&&<div className="ql-series-controls" aria-label="Visible chart series">{plot.traces.map((t,i)=><button type="button" key={t.name} aria-pressed={!hidden.includes(t.name)} disabled={!hidden.includes(t.name)&&plot.traces!.length-hidden.length<=1} onClick={()=>setHidden(h=>h.includes(t.name)?h.filter(x=>x!==t.name):[...h,t.name])}><i style={{background:t.color||COLORS[i%COLORS.length]}}/>{t.name}</button>)}</div>}
     {plot.kind==='surface3d'?<Surface3D plot={plot}/>:
      plot.kind==='heatmap2d'?<Heatmap plot={plot}/>:
-     <Canvas2D plot={shown} syncHover={syncHover&&syncable} formatX={displayX} formatY={formatY}/>}
+     <Canvas2D plot={shown} syncHover={syncHover&&(syncable||!!syncGroup)} formatX={displayX} formatY={formatY} syncGroup={syncGroup}/>}
     {attached&&<div className="ql-inspection"><span>{attachedMatches?'Custom result '+attached.runId+' · '+attached.mode:'Custom result is no longer aligned to the displayed observations. Recompute from current snapshot.'}</span><button type="button" onClick={()=>setAttached(null)}>Remove custom result</button></div>}
     {attachedMatches&&attached?.mode==='companion'&&<ResearchPlot plot={attached.plot} provenance="custom-python-snapshot" allowApply={false}/>}
     {attachedMatches&&attached?.mode==='overlay'&&<details><summary>Custom overlay data and export</summary><ResearchPlot plot={attached.plot} provenance="custom-python-snapshot" allowApply={false}/></details>}

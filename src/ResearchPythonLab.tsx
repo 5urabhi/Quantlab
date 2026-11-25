@@ -3,6 +3,7 @@ import {Activity,Code2,Database,Download,Play,Save,ShieldCheck,SlidersHorizontal
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import {STRATEGY_SCRIPT_EVENT,openScriptInPython} from './pythonBridge'
 import PythonCodeEditor from './PythonCodeEditor'
+import ResearchPlot,{type ResearchPlotData} from './ResearchPlots'
 import './research-python-lab.css'
 
 type SourceMode='historical'|'recorded_live'
@@ -113,122 +114,25 @@ const metrics=(row:Stat)=>[
 ]
 type ChartKey='price'|'momentum_roc5_pct'|'ema_spread_bps'|'rsi14'|'account'
 type ChartSource={time:string;[key:string]:number|string|null|undefined}
-function MiniLine({data,kind,label,hover,setHover}:{
-  data:ChartSource[];kind:ChartKey;label:string;hover:number|null
-  setHover:(value:number|null)=>void
-}){
-  const plotW=900,plotH=206,left=48,right=14,top=19,bottom=35
-  const displayed=useMemo(()=>{
-    const candidates=data.map((row,i)=>({i,value:row[kind]}))
-      .filter(x=>typeof x.value==='number'&&Number.isFinite(x.value))
-    if(!candidates.length)return null
-    const ys=candidates.map(x=>x.value as number)
-    if(kind==='price')for(const bar of data){
-      for(const key of ['fast_ema','slow_ema']){
-        const value=bar[key]
-        if(typeof value==='number'&&Number.isFinite(value))ys.push(value)
-      }
-    }
-    const min=Math.min(...ys),max=Math.max(...ys)
-    const spread=max-min||Math.max(1,Math.abs(max)*.002)
-    const lo=min-spread*.11,hi=max+spread*.11
-    const point=(i:number,value:number)=>({
-      x:left+(plotW-left-right)*i/Math.max(1,data.length-1),
-      y:top+(plotH-top-bottom)*(hi-value)/(hi-lo),
-    })
-    let path=''
-    let started=false
-    for(let i=0;i<data.length;i++){
-      const value=data[i][kind]
-      if(typeof value!=='number'||!Number.isFinite(value)){started=false;continue}
-      const pt=point(i,value)
-      path+=(started?' L':' M')+pt.x.toFixed(1)+' '+pt.y.toFixed(1)
-      started=true
-    }
-    const overlay=(name:'fast_ema'|'slow_ema')=>{
-      let d='',begun=false
-      for(let i=0;i<data.length;i++){
-        const value=data[i][name]
-        if(typeof value!=='number'||!Number.isFinite(value)){begun=false;continue}
-        const pt=point(i,value)
-        d+=(begun?' L':' M')+pt.x.toFixed(1)+' '+pt.y.toFixed(1)
-        begun=true
-      }
-      return d
-    }
-    return {min,max,lo,hi,path,point,
-      fastOverlay:kind==='price'?overlay('fast_ema'):'',
-      slowOverlay:kind==='price'?overlay('slow_ema'):''}
-  },[data,kind])
-  if(!displayed)return <div className="rpl-graph-empty">No original {label.toLowerCase()} observations in this window.</div>
-  const active=hover!==null&&hover>=0&&hover<data.length?hover:null
-  const focus=active===null?null:data[active]
-  const focusValue=focus?.[kind]
-  const focusPoint=active!==null&&typeof focusValue==='number'
-    ?displayed.point(active,focusValue):null
-  const byType=(kind==='momentum_roc5_pct'||kind==='ema_spread_bps')?'zero':kind==='rsi14'?'rsi':null
-  const baseline=displayed.lo<0&&displayed.hi>0?displayed.point(0,0).y:null
-  return <div className="rpl-chart-card">
-    <div className="rpl-chart-label"><strong>{label}</strong><span>
-      {focus?ist(focus.time)+' · ':''}
-      {focusValue!==null&&focusValue!==undefined&&typeof focusValue==='number'
-        ?dec(focusValue,3):'Hover to inspect'}
-    </span></div>
-    <svg viewBox={'0 0 '+plotW+' '+plotH} role="img" aria-label={label+' interactive historical graph'}>
-      <title>{label} from original BANKNIFTY candles</title>
-      {[0,.5,1].map((share,i)=>{const y=top+(plotH-top-bottom)*share
-        return <g key={i}><line x1={left} x2={plotW-right} y1={y} y2={y}
-          className="rpl-grid"/><text x={left-7} y={y+4} textAnchor="end"
-          className="rpl-axis">{dec(displayed.hi-share*(displayed.hi-displayed.lo),1)}</text></g>})}
-      {byType==='zero'&&baseline!==null&&
-        <line x1={left} x2={plotW-right} y1={baseline} y2={baseline}
-          className="rpl-zero"/>}
-      {byType==='rsi'&&[30,70].filter(n=>n>=displayed.lo&&n<=displayed.hi)
-        .map(n=><line key={n} x1={left} x2={plotW-right}
-          y1={displayed.point(0,n).y} y2={displayed.point(0,n).y}
-          className="rpl-threshold"/>)}
-      <path d={displayed.path} className={'rpl-line rpl-'+kind}/>
-      {kind==='price'&&<>
-        <path d={displayed.fastOverlay} className="rpl-line rpl-ema-fast"/>
-        <path d={displayed.slowOverlay} className="rpl-line rpl-ema-slow"/>
-      </>}
-      {kind==='price'&&data.map((bar,i)=>bar.signal==='UP'||bar.signal==='DOWN'
-        ?<circle key={i} cx={displayed.point(i,bar.price as number).x}
-          cy={displayed.point(i,bar.price as number).y} r={3.8}
-          className={bar.signal==='UP'?'rpl-buy':'rpl-sell'}><title>
-          {bar.signal+' crossover at '+ist(bar.time)}</title></circle>:null)}
-      {focusPoint&&<g><line x1={focusPoint.x} x2={focusPoint.x}
-        y1={top} y2={plotH-bottom} className="rpl-cursor"/>
-        <circle cx={focusPoint.x} cy={focusPoint.y} r={4} className="rpl-hover-dot"/></g>}
-      <text x={left} y={plotH-8} className="rpl-axis">{ist(data[0].time)}</text>
-      <text x={plotW-right} y={plotH-8} textAnchor="end" className="rpl-axis">
-        {ist(data[data.length-1].time)}</text>
-      <rect x={left} y={top} width={plotW-left-right} height={plotH-top-bottom}
-        fill="transparent" onMouseMove={e=>{
-          const box=e.currentTarget.getBoundingClientRect()
-          const share=(e.clientX-box.left)/Math.max(1,box.width)
-          setHover(Math.max(0,Math.min(data.length-1,Math.round(share*(data.length-1)))))
-        }} onMouseLeave={()=>setHover(null)}/>
-    </svg>
-  </div>
+function MiniLine({data,kind,label}:{data:ChartSource[];kind:ChartKey;label:string}){
+  const number=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)?v:null
+  const units:Record<ChartKey,string>={price:'Index level (points)',momentum_roc5_pct:'5-minute return (%)',ema_spread_bps:'EMA difference (bps)',rsi14:'RSI (0–100)',account:'Paper index equity (₹)'}
+  const values=data.map(r=>number(r[kind]))
+  if(!values.some(v=>v!==null))return <p className="rpl-graph-empty">No {label.toLowerCase()} observations in this window.</p>
+  const plot:ResearchPlotData={kind:'line2d',title:label,x:data.map(r=>r.time),x_label:'Bar start time (IST)',y_label:units[kind],
+    traces:[{name:kind==='price'?'Index close':label,y:values,color:'#f5c542'}],
+    break_before:kind==='account'?undefined:data.map((r,i)=>i>0&&Date.parse(r.time)-Date.parse(data[i-1].time)!==60000),
+    reference_lines:kind==='rsi14'?[{value:30,label:'Oversold 30'},{value:70,label:'Overbought 70'}]:kind==='momentum_roc5_pct'||kind==='ema_spread_bps'?[{value:0,label:'Zero'}]:undefined}
+  if(kind==='price'){
+    plot.traces!.push({name:'Fast EMA',color:'#ff8192',y:data.map(r=>number(r.fast_ema))},{name:'Slow EMA',color:'#70e1ad',y:data.map(r=>number(r.slow_ema))})
+    plot.point_markers=data.filter(r=>r.signal==='UP'||r.signal==='DOWN').flatMap(r=>typeof r.price==='number'?[{x:r.time,y:r.price,label:String(r.signal)+' crossover (signal, not a fill)',color:r.signal==='UP'?'#70e1ad':'#ff8192'}]:[])
+  }
+  return <ResearchPlot plot={plot} provenance="historical" syncGroup="strategy-lab" formatX={x=>ist(String(x))} formatY={v=>dec(v,3)}/>
 }
-function PriceChart({data,hover,setHover}:{
-  data:Overlay[];hover:number|null;setHover:(n:number|null)=>void
-}){
-  const bars=data as unknown as ChartSource[]
-  return <div className="rpl-price-chart">
-    <MiniLine data={bars} kind="price" label="BANKNIFTY index price · ▲ CE / ▼ PE crossover markers"
-      hover={hover} setHover={setHover}/>
-    <div className="rpl-price-overlay"><span className="rpl-key-red">Red = fast EMA</span>
-      <span className="rpl-key-green">Green = slow EMA</span>
-      Selected fast EMA: {hover!==null&&data[hover]
-      ?dec(data[hover].fast_ema,2):'hover chart'} · Slow EMA: {hover!==null&&data[hover]
-        ?dec(data[hover].slow_ema,2):'hover chart'}
-      {hover!==null&&data[hover]?.signal!=='HOLD'&&
-        <strong> · {data[hover]?.signal} crossover</strong>}
-    </div>
-  </div>
+function PriceChart({data}:{data:Overlay[]}){
+  return <div className="rpl-price-chart"><MiniLine data={data as unknown as ChartSource[]} kind="price" label="BANKNIFTY index price · CE / PE crossover markers"/><p className="rpl-note">Red = fast EMA · green = slow EMA. Crossover markers are research signals, not executed options fills.</p></div>
 }
+
 export default function ResearchPythonLab({displayMode,integrated=false}:{
   displayMode?:Tab;integrated?:boolean
 }={}){
@@ -269,7 +173,6 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
   const [savedRuns,setSavedRuns]=useState<SavedRun[]>([])
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
-  const [hover,setHover]=useState<number|null>(null)
   const [zoom,setZoom]=useState(100)
   const [busy,setBusy]=useState(false)
   const editor=useRef<HTMLTextAreaElement>(null)
@@ -413,7 +316,7 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
         '/api/trading-cockpit/research-lab/runs/'+encodeURIComponent(id))
       setResult(next)
       if(next.kind==='ema_sweep')setSweep(next)
-      setHover(null);setZoom(100)
+      setZoom(100)
       setNotice('Loaded saved research result '+id+'.')
     }catch(e){setError(readableError(e))}
     finally{setBusy(false)}
@@ -617,7 +520,7 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
       {result.overlays.length>0&&<>
         <div className="rpl-graph-controls">
           <label>Graph time window <select aria-label="Research graph zoom" value={zoom}
-            onChange={e=>{setZoom(Number(e.target.value));setHover(null)}}>
+            onChange={e=>{setZoom(Number(e.target.value))}}>
             <option value={100}>All bars</option>
             <option value={50}>Latest half</option>
             <option value={25}>Latest quarter</option>
@@ -626,16 +529,16 @@ export default function ResearchPythonLab({displayMode,integrated=false}:{
           <span>Hover for synchronized time, prices, and signals. Chart display
             may be decimated; every bar is used for P&L.</span>
         </div>
-        <PriceChart data={chart} hover={hover} setHover={setHover}/>
+        <PriceChart data={chart}/>
         <div className="rpl-graph-grid">
           <MiniLine data={drawing} kind="momentum_roc5_pct" label="Momentum · 5-minute rate of change (%)"
-            hover={hover} setHover={setHover}/>
+           />
           <MiniLine data={drawing} kind="ema_spread_bps" label="EMA spread · fast minus slow (bps)"
-            hover={hover} setHover={setHover}/>
+           />
           <MiniLine data={drawing} kind="rsi14" label="RSI 14 · overbought 70 / oversold 30"
-            hover={hover} setHover={setHover}/>
+           />
           <MiniLine data={drawing} kind="account" label="Paper account equity (₹) · index proxy"
-            hover={hover} setHover={setHover}/>
+           />
         </div>
       </>}
       <p className="rpl-note">EMA spread is the distance between moving averages.

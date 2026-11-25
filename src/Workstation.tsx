@@ -17,6 +17,7 @@ import GlobalSearchV2 from './GlobalSearchV2'
 import PythonWorkbench from './PythonWorkbench'
 import PythonMonitors from './PythonMonitors'
 import PythonEnvironment from './PythonEnvironment'
+import ResearchPlot from './ResearchPlots'
 const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
 const MarketDataWorkspace = lazy(() => import('./MarketDataWorkspace'))
 const TradingCockpit = lazy(() => import('./TradingCockpit'))
@@ -200,143 +201,25 @@ function Table({rows,max=15}:{rows:Dict[];max?:number}){
   const keys=Object.keys(rows[0]).slice(0,11)
   return <div className="ws-table-scroll"><table><thead><tr>{keys.map(k=><th key={k}>{label(k)}</th>)}</tr></thead><tbody>{rows.slice(0,max).map((row,i)=><tr key={i}>{keys.map(k=><td key={k} title={String(row[k]??'')}>{typeof row[k]==='number'?number(row[k],4):String(row[k]??'—')}</td>)}</tr>)}</tbody></table></div>
 }
-function EquityChart({rows,caption='Strategy vs benchmark',height=300}:{rows:Dict[];caption?:string;height?:number}){
+function EquityChart({rows,caption='Strategy vs benchmark'}:{rows:Dict[];caption?:string}){
   type View='wealth'|'excess'|'drawdown'
   const [view,setView]=useState<View>('wealth')
-  const [hover,setHover]=useState<number|null>(null)
   const points=useMemo(()=>{
-    let strategy=1,benchmark=1,strategyHigh=1,benchmarkHigh=1
-    return rows.flatMap(r=>{
-      const sr=Number(r.strategy_net),br=Number(r.benchmark)
-      if(!Number.isFinite(sr)||!Number.isFinite(br)||sr<=-1||br<=-1)return []
-      strategy*=1+sr;benchmark*=1+br
-      strategyHigh=Math.max(strategyHigh,strategy)
-      benchmarkHigh=Math.max(benchmarkHigh,benchmark)
-      return [{
-        date:String(r.date||''),strategy,benchmark,
-        excess:(sr-br)*100,
-        strategyDrawdown:(strategy/strategyHigh-1)*100,
-        benchmarkDrawdown:(benchmark/benchmarkHigh-1)*100,
-      }]
+    let strategy=1,benchmark=1,strategyHigh=1,benchmarkHigh=1,chainValid=true
+    return rows.map(r=>{
+      const sr=r.strategy_net==null||r.strategy_net===''?NaN:Number(r.strategy_net),br=r.benchmark==null||r.benchmark===''?NaN:Number(r.benchmark)
+      if(!Number.isFinite(sr)||!Number.isFinite(br)||sr<=-1||br<=-1)chainValid=false
+      const excess=Number.isFinite(sr)&&Number.isFinite(br)?(sr-br)*100:null
+      if(chainValid){strategy*=1+sr;benchmark*=1+br;strategyHigh=Math.max(strategyHigh,strategy);benchmarkHigh=Math.max(benchmarkHigh,benchmark)}
+      return {date:String(r.date||''),strategy:chainValid?strategy:null,benchmark:chainValid?benchmark:null,excess,strategyDrawdown:chainValid?(strategy/strategyHigh-1)*100:null,benchmarkDrawdown:chainValid?(benchmark/benchmarkHigh-1)*100:null}
     })
   },[rows])
-  if(points.length<2)return <Empty title="Awaiting observed return series">
-    A saved backtest needs at least two valid strategy and benchmark returns.
-    Demo or missing returns are never filled in.
-  </Empty>
-  const read=(p:(typeof points)[number],which:'strategy'|'benchmark')=>
-    view==='wealth'?p[which]:view==='drawdown'?
-      which==='strategy'?p.strategyDrawdown:p.benchmarkDrawdown:p.excess
-  const values=points.flatMap(p=>view==='excess'?[p.excess]:[read(p,'strategy'),read(p,'benchmark')])
-  const low=Math.min(...values,...(view==='wealth'?[]:[0]))
-  const high=Math.max(...values,...(view==='wealth'?[]:[0]))
-  const pad=Math.max(.0001,(high-low)*.08)
-  const floor=low-pad,ceil=high+pad,range=ceil-floor
-  const left=65,right=935,top=29,bottom=238,width=right-left
-  const xAt=(i:number)=>left+(i/(points.length-1))*width
-  const yAt=(value:number)=>bottom-(value-floor)/range*(bottom-top)
-  const path=(key:'strategy'|'benchmark')=>points.map((p,i)=>
-    (i===0?'M':'L')+xAt(i).toFixed(2)+' '+yAt(read(p,key)).toFixed(2)).join(' ')
-  const selected=hover!==null?points[hover]:null
-  const valueLabel=(n:number)=>view==='wealth'?n.toFixed(3)+'×':n.toFixed(2)+'%'
-  const whichLabel=view==='drawdown'?'Drawdown':view==='excess'?'Monthly excess return':'Cumulative wealth'
-  const captionText=view==='wealth'?
-    'Normalized to 1.00× at the first valid month; from saved Python returns.':
-    view==='drawdown'?'Drawdown from the previous observed cumulative peak; negative means underwater.':
-      'Monthly net strategy return minus benchmark return, in percentage points.'
-  return <div className="ws-chart ws-interactive-chart">
-    <div className="ws-chartheader">
-      <span>{caption}</span>
-      <div className="ws-chart-views" role="group" aria-label="Performance graph type">
-        {([['wealth','Growth line'],['excess','Monthly difference'],['drawdown','Drawdown area']] as const)
-          .map(([id,name])=><button type="button" key={id}
-            className={view===id?'active':''} aria-pressed={view===id}
-            onClick={()=>{setView(id);setHover(null)}}>{name}</button>)}
-      </div>
-    </div>
-    <div className="ws-chart-legend">
-      <span>{whichLabel}</span>
-      {view!=='excess'&&<span><i className="ws-dot mint"/> Strategy <i className="ws-dot gold"/> Benchmark</span>}
-      {view==='excess'&&<span>Mint = outperformance · Amber = underperformance</span>}
-    </div>
-    <svg viewBox="0 0 980 280" preserveAspectRatio="none" style={{height}}
-      className="ws-interactive-svg" tabIndex={0} role="img"
-      aria-label={whichLabel+' from saved return observations. Hover for values, or use arrow keys.'}
-      onMouseMove={event=>{
-        const rect=event.currentTarget.getBoundingClientRect()
-        if(!rect.width)return
-        const relative=(event.clientX-rect.left)/rect.width*980
-        setHover(Math.max(0,Math.min(points.length-1,Math.round(
-          (relative-left)/width*(points.length-1)
-        ))))
-      }}
-      onMouseLeave={()=>setHover(null)}
-      onFocus={()=>setHover(points.length-1)}
-      onBlur={()=>setHover(null)}
-      onKeyDown={event=>{
-        if(event.key==='ArrowLeft'||event.key==='ArrowRight'){
-          event.preventDefault()
-          setHover(v=>Math.max(0,Math.min(points.length-1,
-            (v??points.length-1)+(event.key==='ArrowRight'?1:-1))))
-        }
-        if(event.key==='Home'){event.preventDefault();setHover(0)}
-        if(event.key==='End'){event.preventDefault();setHover(points.length-1)}
-      }}>
-      {[0,.25,.5,.75,1].map(t=><g key={t}>
-        <line x1={left} x2={right} y1={top+t*(bottom-top)}
-          y2={top+t*(bottom-top)} stroke="#34485a" strokeDasharray="3 7"/>
-        <text x={left-7} y={top+t*(bottom-top)+4} fill="#9db5c2"
-          fontSize="12" textAnchor="end">{valueLabel(ceil-t*range)}</text>
-      </g>)}
-      {view==='excess'?<>
-        <line x1={left} x2={right} y1={yAt(0)} y2={yAt(0)}
-          stroke="#b3bac6" strokeWidth="1.2"/>
-        {points.map((p,i)=>{
-          const x=xAt(i),zero=yAt(0),value=yAt(p.excess)
-          const barWidth=Math.max(1.6,Math.min(18,width/points.length*.7))
-          return <rect key={i} x={x-barWidth/2}
-            y={Math.min(zero,value)} width={barWidth}
-            height={Math.max(1,Math.abs(zero-value))}
-            fill={p.excess>=0?'#65ddc3':'#ecaf75'}
-            opacity={hover===i?1:.82}/>
-        })}
-      </>:<>
-        {view==='drawdown'&&(['benchmark','strategy'] as const).map((k,i)=>
-          <path key={k} d={path(k)+' L '+right+','+yAt(0)+' L '+left+','+yAt(0)+' Z'}
-            fill={i?'#58dcc4':'#e6b77b'} opacity=".13"/>)}
-        <path d={path('benchmark')} stroke="#e3b675" fill="none" strokeWidth="2.2"
-          vectorEffect="non-scaling-stroke"/>
-        <path d={path('strategy')} stroke="#64dbc2" fill="none" strokeWidth="2.9"
-          vectorEffect="non-scaling-stroke"/>
-      </>}
-      {selected&&hover!==null&&<g className="ws-chart-focus">
-        <line x1={xAt(hover)} x2={xAt(hover)} y1={top} y2={bottom}
-          stroke="#d2ecdf" strokeDasharray="4 4" strokeWidth="1.1"/>
-        {view!=='excess'&&(['strategy','benchmark'] as const).map(k=>
-          <circle key={k} cx={xAt(hover)} cy={yAt(read(selected,k))} r="4.6"
-            stroke="#0b2230" strokeWidth="2" fill={k==='strategy'?'#64dbc2':'#e3b675'}/>)}
-        <rect x={Math.min(xAt(hover)+12,right-202)} y={top+3}
-          width="201" height={view==='excess'?63:87} rx="9" fill="#0c2533"
-          stroke="#73938f" strokeOpacity=".8"/>
-        <text x={Math.min(xAt(hover)+23,right-191)} y={top+21}
-          fontSize="12" fill="#e3f5ed">{selected.date.slice(0,10)}</text>
-        {view==='excess'?<text x={Math.min(xAt(hover)+23,right-191)} y={top+43}
-          fill={selected.excess>=0?'#70efd0':'#ffc48f'} fontSize="12">
-          {'Strategy − Benchmark: '+valueLabel(selected.excess)}
-        </text>:<>
-          <text x={Math.min(xAt(hover)+23,right-191)} y={top+43}
-            fill="#6fe8ce" fontSize="12">Strategy: {valueLabel(read(selected,'strategy'))}</text>
-          <text x={Math.min(xAt(hover)+23,right-191)} y={top+64}
-            fill="#ffc98e" fontSize="12">Benchmark: {valueLabel(read(selected,'benchmark'))}</text>
-        </>}
-      </g>}
-      <text x={left} y="271" fill="#9eb6c8" fontSize="11">{points[0].date.slice(0,10)}</text>
-      <text x={right} y="271" fill="#9eb6c8" textAnchor="end"
-        fontSize="11">{points[points.length-1].date.slice(0,10)}</text>
-    </svg>
-    <p className="ws-caption">{captionText} Hover to inspect dates and exact values.
-      The chart is descriptive, not proof of investability.</p>
-  </div>
+  if(points.length<2)return <Empty title="Awaiting observed return series">A saved backtest needs at least two valid strategy and benchmark returns.</Empty>
+  const label=view==='wealth'?'Cumulative wealth (× initial capital)':view==='drawdown'?'Drawdown (%)':'Net monthly excess return (percentage points)'
+  const traces=view==='excess'?[{name:'Strategy − benchmark',y:points.map(p=>p.excess)}]:[{name:'Strategy',color:'#f5c542',y:points.map(p=>view==='wealth'?p.strategy:p.strategyDrawdown)},{name:'Benchmark',color:'#78a8ff',y:points.map(p=>view==='wealth'?p.benchmark:p.benchmarkDrawdown)}]
+  return <div className="ws-chart ws-interactive-chart"><div className="ws-chart-views" role="group" aria-label="Performance graph type">{([['wealth','Growth line'],['excess','Monthly difference'],['drawdown','Drawdown area']] as const).map(([id,name])=><button type="button" key={id} aria-pressed={view===id} className={view===id?'active':''} onClick={()=>setView(id)}>{name}</button>)}</div>
+    <ResearchPlot plot={{kind:view==='excess'?'bar2d':view==='drawdown'?'area2d':'line2d',title:caption+' · '+label,x_label:'Observation date',y_label:label,x:points.map(p=>p.date),traces,reference_lines:[{value:view==='wealth'?1:0,label:view==='wealth'?'Initial capital = 1×':'Zero'}]}} provenance="historical" formatY={v=>v.toFixed(view==='wealth'?3:2)}/>
+    <p className="ws-caption">Cumulative wealth starts at 1× before the first observed return. Missing or invalid returns stop the cumulative path rather than silently fill missing data. Historical simulation, not proof of investability.</p></div>
 }
 function BarRows({rows,valueKey='weight',nameKey='name'}:{rows:Dict[];valueKey?:string;nameKey?:string}){
   if(!rows.length)return <Empty title="No exposure data">Select a completed research run to inspect portfolio exposures.</Empty>
