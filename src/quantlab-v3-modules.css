@@ -90,3 +90,27 @@
 .ws-v2.ql-v3 .qm-scroll th{position:sticky;top:0;z-index:1;background:var(--ql-raised)}
 .ws-v2.ql-v3 .qm-scroll td:last-child button{white-space:nowrap}
 @media(max-width:720px){.ws-v2.ql-v3 .ws-titlebar{flex-wrap:wrap}.ws-v2.ql-v3 .ws-context-primary{flex-wrap:nowrap}.ws-v2.ql-v3 .ws-actions{flex-wrap:wrap}}
+
+/* Visual QA: neutralize remaining inherited decorative blue/teal panels.
+   Keep market-side, severity, source-health and plotted series colors semantic. */
+.ws-v2.ql-v3 :is(.v2-launch-card,.v2-health-list>div,.v2-empty-compact,.v2-jobs-drawer,.v2-search-dialog,.v2-observed-chart,.lq-metric,.lq-panel,.lq-book,.lq-chart,.lq-fees,.lq-risk-panel,.lq-transaction-ledger,.lq-compare>div,.lq-fees>div,.lq-transaction-grid>div,.oc-lot-inputs>div,.lf-meta>span,.lf-signal-actions){
+ background:var(--ql-panel);border-color:var(--ql-border);color:var(--ql-text);box-shadow:none
+}
+.ws-v2.ql-v3 .v2-launch-card{min-height:190px;border-radius:9px;padding:20px}
+.ws-v2.ql-v3 .v2-launch-card:hover{background:var(--ql-raised);border-color:#8d7132;transform:none}
+.ws-v2.ql-v3 .v2-launch-icon{background:var(--ql-accent-soft);color:var(--ql-accent);border:1px solid #6f5c32;border-radius:8px}
+.ws-v2.ql-v3 .v2-launch-caption,.ws-v2.ql-v3 .v2-search-dialog header,.ws-v2.ql-v3 .v2-search-results button>svg,.ws-v2.ql-v3 .v2-strategy-source-details summary{color:var(--ql-accent)}
+.ws-v2.ql-v3 :is(.v2-launch-card p,.v2-launch-caption i,.v2-chart-source,.v2-observed-head p,.v2-observed-head label,.v2-search-info,.v2-search-results button small,.v2-search-dialog footer){color:var(--ql-muted)}
+.ws-v2.ql-v3 :is(.v2-chart-empty,.lq-empty,.oc-filter>div){background:var(--ql-raised);border-color:var(--ql-border);color:var(--ql-muted)}
+.ws-v2.ql-v3 :is(.v2-search-dialog header,.v2-search-dialog footer,.v2-jobs-drawer header){border-color:var(--ql-border)}
+.ws-v2.ql-v3 :is(.v2-search-dialog header button,.v2-jobs-drawer header button,.v2-observed-head select,.v2-settings-grid select,.lf-connect-block button,.lf-signal-actions button,.lf-signal-actions select){background:var(--ql-raised);border-color:var(--ql-border);color:var(--ql-text)}
+.ws-v2.ql-v3 .v2-search-results button:hover{background:var(--ql-accent-soft);border-color:#8d7132}
+.ws-v2.ql-v3 .v2-recorder:not(.fresh):not(.armed){background:var(--ql-raised);border-color:var(--ql-border)}
+.ws-v2.ql-v3 .lq-table th{background:var(--ql-raised);color:var(--ql-text);border-color:var(--ql-border)}
+.ws-v2.ql-v3 :is(.lq-table,.oc-table) tbody tr:hover{background:var(--ql-raised)}
+.ws-v2.ql-v3 .oc-table tbody tr.oc-near-atm{background:#26241e}
+.ws-v2.ql-v3 .lq-table tbody tr.selected{background:var(--ql-accent-soft)}
+.ws-v2.ql-v3 .v2-health-list>div[data-status=attention]{border-color:#925b51}
+.ws-v2.ql-v3 .v2-health-list>div[data-status=waiting]{border-color:#8d7132}
+.ws-v2.ql-v3 .v2-health-list>div[data-status=healthy]{border-color:#416e59}
+@media(max-width:640px){.ws-v2.ql-v3 .v2-launch-card{min-height:0;padding:16px}}

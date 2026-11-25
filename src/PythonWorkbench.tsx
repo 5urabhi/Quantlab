@@ -34,6 +34,11 @@ def signal(history):
     return "UP" if history[-1]["close"] > history[-10]["close"] else "DOWN"
 `
 const DRAFT='ql-v3-python-draft'
+const SCRIPT_IDENTITY='ql-v3-python-identity'
+function initialIdentity():Script|null{
+  try{const item=JSON.parse(sessionStorage.getItem(SCRIPT_IDENTITY)||'null');if(item&&typeof item.script_id==='string'&&Number.isInteger(item.revision)&&Array.isArray(item.revisions))return item as Script}catch{/* optional recovery */}
+  return null
+}
 function initialDraft(){
   try{const saved=JSON.parse(sessionStorage.getItem(DRAFT)||'null')
     if(saved&&typeof saved.code==='string'&&typeof saved.name==='string'&&KINDS.includes(saved.kind))return saved as {code:string;name:string;kind:Kind}
@@ -43,7 +48,8 @@ function initialDraft(){
 export default function PythonWorkbench({open,onOpen,onClose,onStrategy,onNotebook,contextLabel}:{open:boolean;onOpen:()=>void;onClose:()=>void;onStrategy:()=>void;onNotebook?:()=>void;contextLabel:string}){
   const [draft,setDraft]=useState(initialDraft)
   const [scripts,setScripts]=useState<Meta[]>([])
-  const [current,setCurrent]=useState<Script|null>(null)
+  const [current,setCurrent]=useState<Script|null>(initialIdentity)
+  useEffect(()=>{try{if(current)sessionStorage.setItem(SCRIPT_IDENTITY,JSON.stringify(current));else sessionStorage.removeItem(SCRIPT_IDENTITY)}catch{/* optional recovery */}},[current])
   const [profile,setProfile]=useState<'stdlib'|'scientific'>(()=>{try{return localStorage.getItem('ql-python-profile')==='scientific'?'scientific':'stdlib'}catch{return 'stdlib'}})
   useEffect(()=>{try{localStorage.setItem('ql-python-profile',profile)}catch{/* optional */}},[profile])
   const [snapshot,setSnapshot]=useState<PythonSnapshot|null>(null)
@@ -64,7 +70,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,onNotebo
     const handler=(e:Event)=>{
       setSnapshot((e as CustomEvent<PythonSnapshot>).detail);setError('');setNotice('Snapshot attached. It is fixed until you attach another.');setView('input');onOpen()
     }
-    const scriptHandler=(e:Event)=>{const item=(e as CustomEvent<{name:string;code:string;kind:Kind}>).detail;setCurrent(null);setDraft(item);setNotice('Strategy attached. Save to keep a backend revision.');onOpen()}
+    const scriptHandler=(e:Event)=>{const item=(e as CustomEvent<{name:string;code:string;kind:Kind}>).detail;setCurrent(null);setDraft(item);setNotice('Python script attached. Save to keep a backend revision.');onOpen()}
     window.addEventListener(PYTHON_SNAPSHOT_EVENT,handler)
     window.addEventListener(PYTHON_SCRIPT_EVENT,scriptHandler)
     return()=>{window.removeEventListener(PYTHON_SNAPSHOT_EVENT,handler);window.removeEventListener(PYTHON_SCRIPT_EVENT,scriptHandler)}
@@ -139,7 +145,9 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,onNotebo
   const notebook=()=>{
     if(!onNotebook)return
     try{
-      const raw=JSON.stringify({title:draft.name,cells:[{kind:'markdown',source:'# '+draft.name+'\\nCopied from My Scripts. Review the input and assumptions.'},{kind:'code',source:draft.code}],snapshot:snapshot?{title:snapshot.title,provenance:snapshot.provenance,columns:snapshot.columns,rows:snapshot.rows}:null})
+      const cells=[{kind:'markdown',source:'# '+draft.name+'\nCopied from My Scripts. Review the input and assumptions.'},{kind:'code',source:draft.code}]
+      if(snapshot&&draft.kind!=='strategy')cells.push({kind:'code',source:'result = analyze(data)\nshow_chart(result["title"], result["x_label"], result["y_label"], [row[0] for row in data["rows"]], result["traces"])'})
+      const raw=JSON.stringify({title:draft.name,cells,snapshot:snapshot?{title:snapshot.title,provenance:snapshot.provenance,columns:snapshot.columns,rows:snapshot.rows}:null})
       if(new Blob([raw]).size>450000)throw Error('Snapshot is too large for a saved notebook. Select a smaller viewport.')
       sessionStorage.setItem('ql-notebook-attachment',raw);onNotebook()
     }catch(e){setError(readableError(e))}
@@ -164,7 +172,7 @@ export default function PythonWorkbench({open,onOpen,onClose,onStrategy,onNotebo
       <div className="qpw-editor">
         <div className="qpw-actions"><label>Name<input value={draft.name} maxLength={100} onChange={e=>setDraft(d=>({...d,name:e.target.value}))}/></label><label>Category<select value={draft.kind} onChange={e=>setDraft(d=>({...d,kind:e.target.value as Kind}))}>{KINDS.map(k=><option key={k}>{k}</option>)}</select></label>
           <label>Profile<select value={profile} onChange={e=>setProfile(e.target.value as typeof profile)}><option value="stdlib">Standard library</option><option value="scientific">Scientific packages</option></select></label><button type="button" disabled={locked} onClick={()=>setDraft(d=>({...d,code:d.kind==='strategy'?STRATEGY:EXAMPLE}))}>Load example</button></div>
-        <PythonCodeEditor value={draft.code} onChange={code=>setDraft(d=>({...d,code}))} label="Reusable Python code"/>
+        <PythonCodeEditor value={draft.code} onChange={code=>setDraft(d=>({...d,code}))} label="Reusable Python code" disabled={locked} onRun={runnable&&snapshot&&!locked&&available!==false?()=>void run():undefined}/>
         <div className="qpw-actions"><button className="primary" type="button" disabled={locked} onClick={()=>void save()}>Save</button><button type="button" disabled={locked} onClick={()=>void save(true)}>Save as new</button><button type="button" onClick={exportCode}>Export .py</button>{onNotebook&&<button type="button" disabled={locked} onClick={notebook}>Create notebook</button>}
           {current&&<label>Version<select value={current.revision} disabled={locked} onChange={e=>void load(current.script_id,Number(e.target.value))}>{current.revisions.map(v=><option key={v.revision} value={v.revision}>v{v.revision} · {v.created_utc.slice(0,10)}</option>)}</select></label>}
           {jobId&&<button type="button" onClick={()=>void stopJob()}>Stop job</button>}

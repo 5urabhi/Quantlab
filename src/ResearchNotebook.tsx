@@ -95,7 +95,7 @@ export default function ResearchNotebook(){
   const attach=()=>{
     setError('')
     try{const snapshot=JSON.parse(input) as PythonSnapshot
-      if(!Array.isArray(snapshot.columns)||!Array.isArray(snapshot.rows)||!snapshot.rows.length||snapshot.rows.length>3000||new Blob([JSON.stringify(snapshot)]).size>450000)throw Error('Use named columns and 1–3,000 rows, under 450 KB.')
+      if(!snapshot||typeof snapshot.title!=='string'||typeof snapshot.provenance!=='string'||!Array.isArray(snapshot.columns)||!snapshot.columns.length||!snapshot.columns.every(c=>typeof c==='string'&&c.trim())||new Set(snapshot.columns).size!==snapshot.columns.length||!Array.isArray(snapshot.rows)||!snapshot.rows.length||snapshot.rows.length>3000||!snapshot.rows.every(r=>Array.isArray(r)&&r.length===snapshot.columns.length&&r.every(v=>v===null||typeof v==='string'||typeof v==='boolean'||(typeof v==='number'&&Number.isFinite(v))))||new Blob([JSON.stringify(snapshot)]).size>450000)throw Error('Use named columns and 1–3,000 rows, under 450 KB.')
       setDraft(d=>({...d,snapshot}));setResult(null);setInputOpen(false)
     }catch(e){setError(readableError(e))}
   }
@@ -110,7 +110,29 @@ export default function ResearchNotebook(){
       for(const p of r?.charts||[])outputs.push({output_type:'display_data',data:{'application/json':p,'text/plain':p.title},metadata:{}})
       return {cell_type:'code',metadata:{},source:c.source,execution_count:null,outputs}
     })
-    download((draft.title.replace(/[^a-zA-Z0-9_-]+/g,'-')||'notebook')+'.ipynb',{nbformat:4,nbformat_minor:4,metadata:{kernelspec:{display_name:'Python 3',language:'python',name:'python3'},quantlab:{snapshot:draft.snapshot,revision:doc?.revision,source_sha256:current?.source_sha256,notes:'QuantLab supplies data and show_chart in its isolated runner; outside QuantLab reproduce these helpers and read metadata.quantlab.snapshot.'}},cells})
+    // Include a portable setup cell so exported code can run in an ordinary
+    // Jupyter kernel without an installed QuantLab backend.
+    const setup=[
+      '# QuantLab exported notebook: copied snapshot, not a live market feed.',
+      'import json',
+      'data = json.loads('+JSON.stringify(JSON.stringify(draft.snapshot))+')',
+      '',
+      'def show_chart(title, x_label, y_label, x, traces):',
+      '    try:',
+      '        import matplotlib.pyplot as plt',
+      '    except ImportError:',
+      '        print({"title": title, "x_label": x_label, "y_label": y_label, "x": list(x), "traces": traces})',
+      '        return',
+      '    fig, ax = plt.subplots(figsize=(10, 4))',
+      '    for trace in traces:',
+      '        ax.plot(list(x), [float("nan") if v is None else v for v in trace["y"]], label=trace["name"])',
+      '    ax.set(title=title, xlabel=x_label, ylabel=y_label)',
+      '    ax.legend()',
+      '    fig.autofmt_xdate()',
+      '    fig.tight_layout()',
+      '    plt.show()',
+    ].join('\n')
+    download((draft.title.replace(/[^a-zA-Z0-9_-]+/g,'-')||'notebook')+'.ipynb',{nbformat:4,nbformat_minor:4,metadata:{kernelspec:{display_name:'Python 3',language:'python',name:'python3'},quantlab:{snapshot:draft.snapshot,revision:doc?.revision,source_sha256:current?.source_sha256,notes:'Exported setup cell reproduces the copied input and chart helper. Jupyter runs outside QuantLab isolation; review code before running.'}},cells:[{cell_type:'code',metadata:{tags:['quantlab-setup']},source:setup,execution_count:null,outputs:[]},...cells]})
   }
   return <section className="ql-notebook" aria-label="Research notebook editor">
     <aside className="ql-nb-library"><h3>My notebooks</h3><button type="button" className="ws-button primary" disabled={locked} onClick={()=>{if(dirty&&!window.confirm('Start a new notebook? Unsaved edits will be replaced.'))return;setDoc(null);setDraft(newDraft());setResult(null);setCollapsed([])}}>New notebook</button><button type="button" className="ws-button" onClick={()=>void refresh()}>Refresh library</button>{library.map(n=><button type="button" key={n.id} className={'ql-nb-item '+(doc?.id===n.id?'active':'')} disabled={locked} onClick={()=>void load(n.id)}>{n.title}<small>v{n.revision}</small></button>)}</aside>
@@ -124,7 +146,7 @@ export default function ResearchNotebook(){
         <textarea aria-label="Notebook input JSON" value={input} disabled={locked} maxLength={450000} placeholder='{"title":"Parameters","provenance":"User input","columns":["x","value"],"rows":[[1,2],[2,3]]}' onChange={e=>setInput(e.target.value)}/><button type="button" className="ws-button" disabled={locked||!input.trim()} onClick={attach}>Attach JSON</button>
       </details>
       {draft.cells.map((cell,i)=>{const out=!dirty&&result?.outputs.find(o=>o.index===i);return <article key={i} className="ql-nb-cell"><header><strong>{i+1} · {cell.kind==='code'?'Python':'Markdown notes'}</strong><div className="ws-actions">{cell.kind==='code'&&<button type="button" className="ws-button primary" disabled={locked} onClick={()=>void run(i)}>Run through cell {i+1}</button>}<button type="button" className="ws-button" aria-label={'Move cell '+(i+1)+' up'} disabled={locked||i===0} onClick={()=>move(i,-1)}>↑</button><button type="button" className="ws-button" aria-label={'Move cell '+(i+1)+' down'} disabled={locked||i===draft.cells.length-1} onClick={()=>move(i,1)}>↓</button><button type="button" className="ws-button" onClick={()=>setCollapsed(v=>v.includes(i)?v.filter(n=>n!==i):[...v,i])}>{collapsed.includes(i)?'Expand':'Collapse'}</button><button type="button" className="ws-button" disabled={locked||draft.cells.length===1} onClick={()=>{if(window.confirm('Remove this cell from the draft? Saved revisions are retained.'))changeCells(draft.cells.filter((_,k)=>k!==i))}}>Remove</button></div></header>
-        {!collapsed.includes(i)&&(cell.kind==='code'?<PythonCodeEditor label={'Python cell '+(i+1)} value={cell.source} onChange={v=>{if(!locked)edit(i,v)}}/>:<textarea aria-label={'Markdown cell '+(i+1)} value={cell.source} disabled={locked} maxLength={20000} onChange={e=>edit(i,e.target.value)}/>)}
+        {!collapsed.includes(i)&&(cell.kind==='code'?<PythonCodeEditor label={'Python cell '+(i+1)} value={cell.source} disabled={locked} onChange={v=>{if(!locked)edit(i,v)}} onRun={locked?undefined:()=>void run(i)}/>:<textarea aria-label={'Markdown cell '+(i+1)} value={cell.source} disabled={locked} maxLength={20000} onChange={e=>edit(i,e.target.value)}/>)}
         {out&&<div className="ql-nb-output"><strong>Cell output</strong>{out.text&&<pre>{out.text}</pre>}{out.error&&<p role="alert">{out.error}</p>}{out.charts.map((plot,k)=><ResearchPlot key={k} plot={plot} provenance="custom-python-snapshot" allowApply={false}/>)}</div>}
       </article>})}
       <div className="ws-actions"><button type="button" className="ws-button" disabled={locked||draft.cells.length>=30} onClick={()=>changeCells([...draft.cells,{kind:'code',source:''}])}>Add Python cell</button><button type="button" className="ws-button" disabled={locked||draft.cells.length>=30} onClick={()=>changeCells([...draft.cells,{kind:'markdown',source:''}])}>Add Markdown cell</button></div>

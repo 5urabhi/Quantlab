@@ -489,7 +489,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
   }
   const exportPython=()=>{
     // Explicit download only: never execute arbitrary chart code in the browser.
-    const payload=JSON.stringify({title:plot.title,provenance:provenance??null,columns:table.columns,rows:table.rows})
+    const payload=JSON.stringify({title:plot.title,kind:plot.kind,provenance:provenance??null,axes:{x:plot.x_label??null,y:plot.y_label??null,z:plot.z_label??null},units:plot.units??null,columns:table.columns,rows:table.rows})
     const code='# QuantLab research snapshot; source and units are preserved.\nimport json\n\ndata = json.loads('+JSON.stringify(payload)+')\ncolumns = data["columns"]\nrows = data["rows"]\n\n# Add your own analysis below. Missing observations are None.\nprint(data["title"], columns, len(rows))\n'
     downloadFile('quantlab-'+safeName(plot.title)+'.py',code,'text/x-python;charset=utf-8')
   }

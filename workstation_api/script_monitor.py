@@ -214,7 +214,10 @@ def source_snapshot(source, now=None):
                 "provenance":"Recorded Dhan index LTP aggregates; no authenticated volume",
                 "columns":["Time (UTC)","Open (points)","High (points)","Low (points)","Close (points)"],
                 "rows":[[b["timestamp_utc"],b["open"],b["high"],b["low"],b["close"]] for b in bars]}
-        return stamp,stamp,snap,bars
+        # A delayed original tick can update the latest completed bar without
+        # changing its timestamp. Recompute on changed source values, not only time.
+        digest=sha256(library.snapshot_json(snap)).hexdigest()
+        return stamp+":"+digest,stamp,snap,bars
     if source not in SOURCES:
         raise ValueError("Unknown source")
     receipts = _chain_rows(now, 150 if source=="chain_spot_receipts" else 1,

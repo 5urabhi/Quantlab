@@ -238,6 +238,7 @@ function App(){
   const [pythonOpen,setPythonOpen]=useState(false)
   const showPython=useCallback(()=>setPythonOpen(true),[])
   const [menu,setMenu]=useState(false)
+  const [notebookOpenSequence,setNotebookOpenSequence]=useState(0)
   const [compactNav,setCompactNav]=useState(()=>{try{return localStorage.getItem('ql-v3-compact-nav')==='1'}catch{return false}})
   useEffect(()=>{try{localStorage.setItem('ql-v3-compact-nav',compactNav?'1':'0')}catch{/* optional preference */}},[compactNav])
   const [health,setHealth]=useState<Health|null>(null)
@@ -476,7 +477,7 @@ function App(){
         onOpenFull={()=>begin('workspacejobs')}/>
       <GlobalSearchV2 open={searchOpen} onClose={()=>setSearchOpen(false)}
         onOpen={destination=>begin(destination)} routes={primarySections.flatMap(group=>group.tabs.map(id=>({id,title:titles[id],section:group.label,description:descriptions[id]})))} onOpenRoute={id=>begin(id as Tab)}/>
-      <PythonWorkbench open={pythonOpen} onOpen={showPython} onClose={()=>setPythonOpen(false)} onStrategy={()=>begin('strategypython')} onNotebook={()=>{setPythonOpen(false);begin('notebooks')}} contextLabel={titles[tab]}/>
+      <PythonWorkbench open={pythonOpen} onOpen={showPython} onClose={()=>setPythonOpen(false)} onStrategy={()=>begin('strategypython')} onNotebook={()=>{setPythonOpen(false);setNotebookOpenSequence(n=>n+1);begin('notebooks')}} contextLabel={titles[tab]}/>
       <main className="ws-content">
         <div className={'ws-titlebar '+(
           ['mathematics','history','data','dataexplorer','workspace','chartstudio',
@@ -805,7 +806,7 @@ function App(){
           onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
           onOpenModels={()=>begin('models')}/>}
 
-        {tab==='notebooks'&&<ResearchNotebook/>}
+        {tab==='notebooks'&&<ResearchNotebook key={notebookOpenSequence}/>}
         {tab==='projects'&&<div className="ws-actions"><button type="button" className="ws-button primary" onClick={()=>begin('notebooks')}>Open research notebooks</button></div>}
         {tab==='projects'&&<details className="v2-advanced-links">
           <summary>Advanced project resource library, archive and Trash management</summary>

@@ -18,8 +18,8 @@ function tokenize(code:string):Token[]{
   if(end<code.length)output.push({text:code.slice(end),kind:'plain'})
   return output
 }
-type Props={value:string;onChange:(value:string)=>void;label:string;onRun?:()=>void;maxLength?:number}
-const PythonCodeEditor=forwardRef<HTMLTextAreaElement,Props>(function PythonCodeEditor({value,onChange,label,onRun,maxLength=20000},ref){
+type Props={value:string;onChange:(value:string)=>void;label:string;onRun?:()=>void;maxLength?:number;disabled?:boolean}
+const PythonCodeEditor=forwardRef<HTMLTextAreaElement,Props>(function PythonCodeEditor({value,onChange,label,onRun,maxLength=20000,disabled=false},ref){
   const highlight=useRef<HTMLPreElement>(null),numbers=useRef<HTMLPreElement>(null)
   const tokens=useMemo(()=>tokenize(value),[value])
   const scroll=(event:UIEvent<HTMLTextAreaElement>)=>{
@@ -39,7 +39,7 @@ const PythonCodeEditor=forwardRef<HTMLTextAreaElement,Props>(function PythonCode
     <pre className="ql-python-gutter" ref={numbers} aria-hidden="true">{value.split('\n').map((_,i)=>i+1).join('\n')+'\n'}</pre>
     <div className="ql-python-code">
       <pre className="ql-python-highlight" ref={highlight} aria-hidden="true">{tokens.map((token,i)=><span key={i} className={'ql-token-'+token.kind}>{token.text}</span>)}{'\n'}</pre>
-      <textarea ref={ref} aria-label={label} value={value} onChange={e=>onChange(e.target.value)} maxLength={maxLength} spellCheck={false} autoComplete="off" autoCapitalize="off" wrap="off" onScroll={scroll} onKeyDown={key}/>
+      <textarea ref={ref} aria-label={label} disabled={disabled} value={value} onChange={e=>onChange(e.target.value)} maxLength={maxLength} spellCheck={false} autoComplete="off" autoCapitalize="off" wrap="off" onScroll={scroll} onKeyDown={key}/>
     </div>
   </div>
 })

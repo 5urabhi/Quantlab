@@ -27,3 +27,9 @@ This is a local-first research application. The new graphite/amber visual system
 - Navigation searches every configured route; Data Explorer has a source-record drawer with immutable row export and contextual Python action.
 - Eligible token renewal consent can be changed while recording. Privileged package installation uses an explicit interactive local allowlist helper (`bash run.sh python-packages install`), not arbitrary backend package commands.
 - Acceptance requires final-head CI, screenshot review of all routes, actual Ubuntu isolated imports and authenticated Dhan market-hours packet checks. These have not yet been certified on the final revision.
+
+## Visual and workflow closeout
+- Neutralized inherited decorative blue/teal launcher, search, empty-chart, liquidity and data-panel backgrounds after reviewing Chromium screenshots. Semantic status colors remain distinct.
+- Notebook export includes a portable setup cell with the exact copied snapshot and chart helper; exported Jupyter code is outside QuantLab's sandbox and should be reviewed before running.
+- Python editor retains saved script identity across browser reload, disables code changes during execution, and supports Ctrl/Cmd+Enter where execution is available. Chart exports include axis and unit metadata.
+- The existing Python regression suite passed 864 tests on e625b33. The prior Chromium failure was an ambiguous button locator; the updated suite uses an exact locator and verifies saved notebook revisions, registered models, contextual record inspection and all route screenshots. The final head still requires fresh acceptance.
