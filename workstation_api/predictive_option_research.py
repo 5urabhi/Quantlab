@@ -59,6 +59,9 @@ def _load_options(rows,wings,progress=None,*,needed_stamps=None,evidence=None,ev
         raise ValueError("Unsafe original option receipt directory")
     left=min(date.fromisoformat(r["session"]) for r in rows)
     right=max(date.fromisoformat(r["session"]) for r in rows)
+    if requested_days:
+        left=min(left,date.fromisoformat(requested_days[0]))
+        right=max(right,date.fromisoformat(requested_days[-1]))
     keys=[sync._key(exp._request_body(left,left+timedelta(days=1),"MONTH",0,offset,side))
           for side in ("CALL","PUT") for offset in exp._offsets(wings)]
     paths=[]
