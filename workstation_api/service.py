@@ -38,7 +38,7 @@ ALLOWED_FILES = set(REQUIRED + OPTIONAL)
 ARTIFACTS = {
     "monthly_results.csv", "post_rebalance_weights.csv", "pre_trade_weights.csv",
     "factor_scores.csv", "factor_rank_ic.csv", "portfolio_factor_exposures.csv",
-    "concentration.csv", "rolling_metrics.csv", "cost_sensitivity.csv",
+    "concentration.csv", "rolling_metrics.csv", "cost_sensitivity.csv", "sector_exposure.csv",
     "robustness_grid.csv", "methodology_summary.csv", "methodology_returns.csv",
     "data_quality.json", "dataset_audit.json", "research_manifest.json",
     "research_report.html", "research_paper_draft.pdf", "liquidity_capacity.csv",
@@ -458,6 +458,8 @@ def run_details(run_id: str) -> dict:
         "liquidity_capacity": _records(path / "liquidity_capacity.csv", 150),
         "robustness": _records(path / "robustness_grid.csv", 200),
         "methodologies": _records(path / "methodology_summary.csv", 100),
+        "methodology_returns": _records(path / "methodology_returns.csv", 400),
+        "sector_exposure": _records(path / "sector_exposure.csv", 400),
         "audit": _json(path / "dataset_audit.json"),
         "data_quality": _json(path / "data_quality.json"),
         "artifacts": sorted(f.name for f in path.iterdir() if f.is_file() and f.name in ARTIFACTS),
