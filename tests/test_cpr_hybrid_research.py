@@ -41,6 +41,10 @@ class CprHybridTests(TestCase):
         self.assertEqual(r._signals(DAY,index(105),PREV,prev,frame=5,hold=60,max_signals=3),
                          ([],"prior_complete_session_unavailable"))
 
+    def test_missing_weekday_does_not_reuse_stale_cpr(self):
+        self.assertEqual(r._signals(DAY,index(105),"2026-10-02",index(100),frame=5,hold=60,max_signals=3),
+                         ([],"prior_complete_session_unavailable"))
+
     def test_signals_use_completed_bars_and_prior_session(self):
         prev=index(100); current=index(105)
         rows,status=r._signals(DAY,current,PREV,prev,frame=5,hold=60,max_signals=3)
