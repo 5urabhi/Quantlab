@@ -5419,12 +5419,14 @@ def constituent_derivative_analysis(horizon:int=5,as_of:str=""):
         raise HTTPException(400,"Stored derivative analysis unavailable; inspect source and selected time") from exc
 
 
-from . import constituent_alpha
+from . import constituent_alpha, context_alpha, market_context
 
 
 class ConstituentAlphaRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
     horizon: Literal[5,10,30,60]=30
+    scope: Literal["none","options","global","participants","combined"]="none"
+    mode: Literal["receipt","archive"]="receipt"
 
 
 @app.get("/api/trading-cockpit/constituents/alpha/readiness")
@@ -5437,7 +5439,9 @@ def constituent_alpha_readiness(horizon:int=30):
 
 @app.post("/api/trading-cockpit/constituents/alpha/research")
 def start_constituent_alpha(body:ConstituentAlphaRequest):
-    return _spawn("constituent_alpha_research",constituent_alpha.run,**body.model_dump())
+    if body.scope=="none":
+        return _spawn("constituent_alpha_research",constituent_alpha.run,horizon=body.horizon)
+    return _spawn("constituent_alpha_research",context_alpha.run,**body.model_dump())
 
 
 @app.get("/api/trading-cockpit/constituents/alpha/results/{run_id}")
@@ -5456,6 +5460,58 @@ def download_constituent_alpha_audit(run_id:str):
     except (ValueError,FileNotFoundError) as exc:
         raise HTTPException(404,str(exc)) from exc
     return FileResponse(path,filename="quantlab_constituent_alpha_"+run_id+"_audit.csv",media_type="text/csv")
+
+
+class MarketContextImportRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    csv_text: str=Field(min_length=1,max_length=5000000)
+    source: str=Field(min_length=3,max_length=300)
+    mode: Literal["receipt","archive"]="receipt"
+    confirm_reviewed: bool=False
+
+
+class ParticipantContextImportRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    csv_text: str=Field(min_length=1,max_length=64000)
+    report_day: str=Field(min_length=10,max_length=10)
+    available_utc: str=Field(min_length=20,max_length=40)
+    report_type: Literal["oi","volume"]="oi"
+    mode: Literal["receipt","archive"]="receipt"
+    confirm_reviewed: bool=False
+
+
+@app.get("/api/trading-cockpit/constituents/alpha/context")
+def constituent_market_context(mode:Literal["receipt","archive"]="receipt",as_of:str=""):
+    try:
+        now=market_context._now()
+        cutoff=market_context._stamp(as_of) if as_of else now
+        if cutoff>now:
+            raise ValueError("Context cutoff cannot be in the future")
+        return market_context.snapshot(mode=mode,now=cutoff)
+    except (ValueError,TypeError,OverflowError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+    except (OSError,sqlite3.Error) as exc:
+        raise HTTPException(503,"Shared market evidence temporarily unavailable") from exc
+
+
+@app.post("/api/trading-cockpit/constituents/alpha/context/import")
+def import_constituent_market_context(body:MarketContextImportRequest):
+    try:
+        return market_context.ingest(**body.model_dump())
+    except (ValueError,TypeError,OverflowError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+    except (OSError,sqlite3.Error) as exc:
+        raise HTTPException(503,"Shared market evidence temporarily unavailable") from exc
+
+
+@app.post("/api/trading-cockpit/constituents/alpha/context/participants")
+def import_constituent_participant_context(body:ParticipantContextImportRequest):
+    try:
+        return market_context.ingest_participant(**body.model_dump())
+    except (ValueError,TypeError,OverflowError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+    except (OSError,sqlite3.Error) as exc:
+        raise HTTPException(503,"Shared market evidence temporarily unavailable") from exc
 
 
 from . import constituent_calibration
