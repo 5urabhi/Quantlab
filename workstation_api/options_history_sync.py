@@ -112,7 +112,7 @@ def _saved_windows(start,stop,wings):
     return coverage,reused,rejected
 
 
-def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
+def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,request_limit=None,should_stop=None):
     today=today or exp._ist_today()
     start,stop,eligible=_scope(start_date,end_date,wings,today)
     if not LOCK.acquire(blocking=False):
@@ -139,6 +139,8 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
             profile=dhan_auth.check_profile()
             if not profile.get("ok"):
                 raise ValueError("Verify Dhan historical-data access in Connections before downloading")
+        if request_limit is not None and (type(request_limit) is not int or not 1<=request_limit<=MAX_REQUESTS):
+            raise ValueError("Invalid bounded automatic request limit")
         downloaded=0
         exact_reused=0
         empty=0
@@ -149,6 +151,9 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
         completed=0
         stopped_early=False
         for body in requests:
+            if (request_limit is not None and attempted>=request_limit) or (should_stop is not None and should_stop()):
+                stopped_early=True
+                break
             if progress:
                 progress(min(95,5+90*attempted/max(1,len(requests))),
                          f"Option history {attempted}/{len(requests)}; {body['fromDate']}..{body['toDate']} {body['drvOptionType']} {body['strike']}")
@@ -187,7 +192,7 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
             empty+=not bool(rows)
             usable+=sum(start_date<=r["session_ist"]<=end_date for r in rows)
         if progress:
-            progress(100,"Saved original receipts; some request windows remain" if rejected_requests else "Saved original receipts; inspect observed coverage")
+            progress(100,"Saved original receipts; some request windows remain" if rejected_requests or attempted<len(requests) else "Saved original receipts; inspect observed coverage")
         return {**preview(start_date,end_date,wings,today),
                 "existing_verified_receipts":reused,"unreadable_receipts_encountered":rejected,
                 "planned_missing_requests":len(requests),"new_receipts":downloaded,
@@ -195,7 +200,7 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
                 "unattempted_requests":len(requests)-attempted,"stopped_early":stopped_early,
                 "exact_cache_reuses":exact_reused,"empty_processed_receipts":empty,
                 "usable_rows_in_processed_receipts":usable,
-                "state":"partial_requests" if rejected_requests else "request_windows_checked","continuous_coverage_certified":False,
+                "state":"partial_requests" if rejected_requests or attempted<len(requests) else "request_windows_checked","continuous_coverage_certified":False,
                 "note":"Counts describe processed receipts, not deduplicated contracts. Both inclusive dates are retained during the regular session. Verified windows are reused; rejected or unattempted windows remain eligible on resume. No original historical depth has been downloaded."}
     finally:
         LOCK.release()
