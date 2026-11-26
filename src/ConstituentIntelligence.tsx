@@ -1,6 +1,7 @@
 import {useEffect,useMemo,useState} from 'react'
 import ResearchPlot from './ResearchPlots'
 import ConstituentProspective from './ConstituentProspective'
+import ConstituentAlphaResearch from './ConstituentAlphaResearch'
 import ArchivedWeights from './ArchivedWeights'
 import ConstituentDerivatives from './ConstituentDerivatives'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
@@ -21,7 +22,7 @@ function Metric({name,value,detail,tone}:{name:string;value:string;detail:string
  return <div className="bci-stat"><span>{name}</span><strong className={tone}>{value}</strong><small>{detail}</small></div>
 }
 export default function ConstituentIntelligence({onOpenRecording,onOpenSources,onOpenData,onOpenOptions}:{onOpenRecording:()=>void;onOpenSources:()=>void;onOpenData:()=>void;onOpenOptions:()=>void}){
- const [section,setSection]=useState<'movement'|'derivatives'|'research'|'setup'>('movement')
+ const [section,setSection]=useState<'movement'|'derivatives'|'research'|'alpha'|'setup'>('movement')
  const [graph,setGraph]=useState<'returns'|'contribution'|'volume'>('returns')
  const [membershipBusy,setMembershipBusy]=useState(false)
  const [membershipMessage,setMembershipMessage]=useState('')
@@ -94,7 +95,7 @@ export default function ConstituentIntelligence({onOpenRecording,onOpenSources,o
  const weight=report?.weight_snapshot
  return <section className="bci-shell" aria-label="BANKNIFTY constituent intelligence">
   <header className="bci-head"><div><small>BANKNIFTY · UNDERLYING CONSTITUENT INTELLIGENCE</small><h2>Which banks are moving the index?</h2><p>Separate observed stock pressure from the option contract decision. Aligned constituent returns, traded-volume changes and estimated weighted contributions are descriptive evidence, not a probability of the next market move.</p></div><button className="ws-button" type="button" onClick={onOpenOptions}>Open Greeks &amp; option scenarios</button></header>
-  <nav className="bci-tabs" aria-label="Directional trading sections">{([["movement","Bank movement"],["derivatives","Stock derivatives"],["research","Signal research"],["setup","Data setup"]] as const).map(([key,label])=><button type="button" className="ws-button" key={key} aria-pressed={section===key} onClick={()=>setSection(key)}>{label}</button>)}</nav>
+  <nav className="bci-tabs" aria-label="Directional trading sections">{([["movement","Bank movement"],["derivatives","Stock derivatives"],["research","Signal research"],["alpha","Alpha research"],["setup","Data setup"]] as const).map(([key,label])=><button type="button" className="ws-button" key={key} aria-pressed={section===key} onClick={()=>setSection(key)}>{label}</button>)}</nav>
   {section==="movement"&&<div className="bci-ready-strip"><span><b>Bank quotes:</b> {capture?.connected?"Subscribed":capture?.enabled?"Enabled · waiting for shared feed":"Disabled"}</span><span><b>Membership:</b> {report?.expected_members?report.expected_members+" members":"Missing"}</span><span><b>Weights:</b> {weight?weight.snapshot_date:"Not loaded"}</span>{report?.expected_members===0&&<button className="ws-button primary" disabled={membershipBusy} onClick={()=>void prepare()}>{membershipBusy?"Loading official list…":"Load today’s official bank list"}</button>}<button className="ws-button" onClick={()=>setSection("setup")}>Manage sources &amp; recording</button>{membershipMessage&&<small role="status">{membershipMessage}</small>}</div>}
   {section==="setup"&&<div className="bci-panel">
    <header><div><h3>Constituent feed &amp; evidence</h3><p>Uses spare slots on the same Dhan full-option feed, not a sixth connection. All option and index subscriptions retain priority. Enablement takes effect at a natural feed connection; it never forces a restart. Disable stops accepting constituent packets immediately.</p></div><button type="button" className="ws-button primary" disabled={!capture||captureBusy} onClick={()=>void toggle()}>{captureBusy?'Saving…':capture?.enabled?'Disable constituent recording':'Enable constituent recording'}</button></header>
@@ -137,6 +138,7 @@ export default function ConstituentIntelligence({onOpenRecording,onOpenSources,o
    </>:<p className="bci-note">{busy?'Reading saved constituent observations…':mode==='history'?'Choose an exact historical IST timestamp and inspect it.':'No analysis response available.'}</p>}
   </div>}
   {section==="research"&&<ConstituentProspective/>}
+  {section==="alpha"&&<ConstituentAlphaResearch onOpenSetup={()=>setSection("setup")} onOpenLedger={()=>setSection("research")}/>}
   {section==="derivatives"&&<ConstituentDerivatives/>}
   {section==="setup"&&<><ArchivedWeights onSaved={()=>setRevision(n=>n+1)}/>
   <details className="bci-panel"><summary>Import dated BANKNIFTY weights from a reviewed source</summary>
