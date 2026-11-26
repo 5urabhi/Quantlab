@@ -5186,6 +5186,7 @@ class MarketMaintenanceRequest(BaseModel):
     index: bool=True
     constituents: bool=True
     options: bool=True
+    bank_panel: bool=False
     index_days: int=Field(default=365,ge=30,le=365,strict=True)
     constituent_days: int=Field(default=240,ge=30,le=240,strict=True)
     option_days: int=Field(default=365,ge=30,le=365,strict=True)
