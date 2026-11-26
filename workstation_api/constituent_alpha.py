@@ -444,6 +444,9 @@ def _compare(train,cal,test,progress=None):
            "regime_momentum":[1 if r["regime"]=="trend_up" else -1 if r["regime"]=="trend_down" else 0 for r in test]}
     for rule in ("ema_rsi","pressure","volume_pressure"):
         calls[rule]=[_rule(r[rule]) for r in test]
+    for rule in ("opening_breakout","trend_pullback","range_reversion"):
+        if all(rule in r for r in test):
+            calls[rule]=[_rule(r[rule]) for r in test]
     for i,model in enumerate(MODELS):
         if progress:
             progress(65+5*i,"Training frozen "+model)
