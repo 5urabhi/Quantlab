@@ -13,7 +13,7 @@ import json
 from . import historical_alpha as h, predictive_option_research as p
 from . import alpha_retraining, liquidity_spreads as fees
 
-VERSION = "cpr_ml_offline_q_v8"
+VERSION = "cpr_ml_offline_q_v9"
 SQUAREOFF_MINUTE = 365  # 15:20 IST, minutes from 09:15
 LAST_SESSION_MINUTE = 374  # last regular minute open, 15:29 IST
 ENTRY_MODES = ("crossover", "daily_scan", "regime_scan")
@@ -300,6 +300,11 @@ def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
         vector=_derivative_vector(signal,table,strike)
         if vector is not None:
             ep["context_vectors"]={**ep.get("context_vectors",{}),"derivatives":vector}
+    if signal.get("utility_research"):
+        from .cpr_direct_utility import execution_features
+        vector=execution_features(__import__(__name__,fromlist=["_observed"]),signal,table,strike)
+        if vector is not None:
+            ep["context_vectors"]={**ep.get("context_vectors",{}),"execution":vector}
     first=m+2
     entry=_observed(table,day,first,side,strike)
     if entry is None:
@@ -595,7 +600,7 @@ def _fit_ml(train,validation):
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline
-    from sklearn.preprocessing import StandardScaler
+    from .stable_scaler import StableWeightedScaler
     import numpy as np
     tr=_training_rows(train);va=_training_rows(validation)
     counts=Counter(_label(r) for _,r in tr)
@@ -615,14 +620,14 @@ def _fit_ml(train,validation):
     X=[e["features"] for e,_ in tr];y=[_label(r) for _,r in tr]
     V=[e["features"] for e,_ in va]
     truth=np.asarray([[float(_label(r)==c) for c in CLASSES] for _,r in va])
-    models={"logistic":make_pipeline(StandardScaler(),LogisticRegression(max_iter=500,random_state=42)),
+    models={"logistic":make_pipeline(StableWeightedScaler(),LogisticRegression(max_iter=500,random_state=42)),
             "random_forest":RandomForestClassifier(n_estimators=100,max_depth=4,min_samples_leaf=5,
                                                   random_state=42,n_jobs=1)}
     fitted={}
     weights=np.asarray(_anchor_weights(tr));vweights=np.asarray(_anchor_weights(va))
     for name,model in models.items():
         if name=="logistic":
-            model.fit(X,y,standardscaler__sample_weight=weights,logisticregression__sample_weight=weights)
+            model.fit(X,y,stableweightedscaler__sample_weight=weights,logisticregression__sample_weight=weights)
         else:
             model.fit(X,y,sample_weight=weights)
         prob=model.predict_proba(V)
@@ -660,12 +665,13 @@ def _ml_accept(model,means,ep):
     return float(pr["target"])>=getattr(model,"target_threshold",.50) and ev>0
 
 
-def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None,dates=None,max_attempts=MAX_DAILY_ATTEMPTS,context_filter=None,context_scope=None):
+def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None,dates=None,max_attempts=MAX_DAILY_ATTEMPTS,context_filter=None,context_scope=None,strict_execution=False):
     balance=capital; peak=capital;dd=0.;gross_losses=0.;day=None;halted=False
     daily=defaultdict(lambda:{"conditional_net_inr":0.,"scored":0,"unresolved":0})
     counts=Counter();journal=[];net=0.;charges=0.;winners=0;targets=0
     exit_reasons=Counter();worst_mark=None;open_dd=None
     exit_delays=[];late_squareoffs=0
+    stress_net=0.;stress_failures=0;execution_halts=0
     daily_coverage={d:{"opportunities":0,"affordable_observed_entries":0,"entry_attempts":0,
                         "entered_positions":0,"scored_trades":0,"states":{}} for d in (dates or [])}
     active_until=None;attempts=0
@@ -728,16 +734,25 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             gross_losses+=max(0.,-value);peak=max(peak,balance);dd=max(dd,peak-balance)
             winners+=int(value>0);targets+=int(result["target_realized"])
             daily[day]["conditional_net_inr"]+=value;daily[day]["scored"]+=1
+            if strict_execution:
+                from .cpr_direct_utility import MAX_DELAY
+                bad=result.get("exit_delay_minutes",0)>MAX_DELAY or result.get("exit_after_squareoff",False)
+                stress_net+=min(value,-ep["planned_funding"]) if bad else value
+                if bad:
+                    stress_failures+=1;execution_halts+=1;halted=True
         elif state=="entry_limit_exceeded":
             active_until=ep.get("entry_utc",ep["decision_utc"])
         elif state in ("missing_entry","exit_censored"):
             halted=True
             daily[day]["unresolved"]+=1
+            if strict_execution:
+                stress_net-=ep["planned_funding"];stress_failures+=1;execution_halts+=1
         journal.append({"method":method,"session":day,"decision_utc":ep["decision_utc"],
                         "side":ep["side"],"entry_type":ep.get("entry_type"),"strike":ep.get("strike"),
                         "minimum_funding_inr":ep.get("minimum_funding_inr"),
                         "observed_side_quotes":ep.get("observed_side_quotes"),
                         "qualified_contracts":ep.get("qualified_contracts"),
+                        "regime":ep.get("regime"),"utility_forecast":ep.get("utility_forecast"),
                         "ranked_expected_return":ep.get("ranked_expected_return"),
                         "ranked_target_probability":ep.get("ranked_target_probability"),
                         "ranked_candidate_count":ep.get("ranked_candidate_count"),
@@ -767,7 +782,9 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             "unverified_exits":counts["exit_censored"],
             "recovered_delayed_exits":sum(v>0 for v in exit_delays),
             "max_exit_delay_minutes":max(exit_delays,default=None),
-            "exits_after_1520":late_squareoffs,"full_account_pnl_certified":False},journal
+            "exits_after_1520":late_squareoffs,"full_account_pnl_certified":False,
+            **({"stress_utility_inr":round(stress_net,2),"stress_failed_attempts":stress_failures,
+                "execution_quality_halts":execution_halts,"strict_execution":True} if strict_execution else {})},journal
 
 
 def _funding_diagnostic(episodes,budget,capital):
@@ -788,7 +805,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
         context_mode="off",context_batch="auto",rank_entries=False,
         pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,
-        sessions=60,dense_training=False,sequence_research=False,derivative_research=False,dynamic_q=False,progress=None):
+        sessions=60,dense_training=False,sequence_research=False,derivative_research=False,dynamic_q=False,
+        regime_research=False,utility_research=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
@@ -799,6 +817,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         raise ValueError("Select 60, 90 or 120 observed sessions")
     if dense_training and entry_mode not in ("daily_scan","regime_scan"):
         raise ValueError("Dense training requires daily_scan or regime_scan")
+    if utility_research:
+        regime_research=True
     ntrain,nval,ntest=SESSION_SPLITS[sessions]
     if context_mode not in ("off","receipt","archive"):
         raise ValueError("Unsupported context availability mode")
@@ -875,6 +895,19 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             s.setdefault("context_vectors",{})["sequence"]=desc["short"]+desc["sequence"]
         if derivative_research:
             s["derivative_research"]=True
+    regime_cache={}
+    if regime_research:
+        from . import cpr_regime_research as regimes
+        for s in all_signals:
+            key=(s["session"],s["minute"])
+            if key not in regime_cache:
+                regime_cache[key]=regimes.describe(index,key[0],key[1],[d for d in ordered if d<key[0]][-20:])
+            desc=regime_cache[key]
+            if desc is not None:
+                s.setdefault("context_vectors",{})["regime"]=desc["regime_features"]
+                s["regime"]=desc["regime"];s["volatility_state"]=desc["vol_state"]
+            if utility_research:
+                s["utility_research"]=True
     dynamic_report={};dynamic_states={}
     if dynamic_q:
         from . import cpr_dynamic_context as dynamic
@@ -889,7 +922,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     # Read each relevant session through 15:29, for pending exit retries.
     earliest={}
     for s in all_signals:
-        d=s["session"];earliest[d]=min(earliest.get(d,375),max(0,s["minute"]-(24 if derivative_research else 0)))
+        d=s["session"];earliest[d]=min(earliest.get(d,375),max(0,s["minute"]-(24 if derivative_research else 9 if utility_research else 0)))
     needed={_stamp(d,m) for d,first in earliest.items()
             for m in range(first,LAST_SESSION_MINUTE+1)}
     table,meta=p._load_options(all_signals,wings,progress,needed_stamps=needed)
@@ -909,6 +942,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "requested_sessions":sessions,"split_sizes":SESSION_SPLITS[sessions],
              "dense_training":dense_training,"learning_day_balance":dense_training,
              "sequence_research":sequence_research,"derivative_research":derivative_research,"dynamic_q":dynamic_q,
+             "regime_research":regime_research,"utility_research":utility_research,
              "derivative_feature_names":DERIVATIVE_NAMES if derivative_research else (),
              "dense_train_interval_minutes":DENSE_TRAIN_INTERVAL if dense_training else None,
              "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,
@@ -935,7 +969,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "index_source_failures":failures,"option_coverage":{k:v for k,v in meta.items() if k!="source_hashes"},
              "context_coverage":{k:v for k,v in context_audit.items() if k!="anchors"},
              "ranked_entry_research":{},"candle_patterns":pattern_report,"debit_spread_research":{},
-             "dynamic_context":dynamic_report,
+             "dynamic_context":dynamic_report,"utility_research":{},
+             "regime_anchor_counts":dict(Counter(s.get("regime","unavailable") for s in signals)),
              "methods":{},"state":"descriptive_only_insufficient_sessions","broker_orders_enabled":False,
              "live_model_promoted":False,"warning":WARNING,
              "learning_warning":"Overlapping candidate paths are not independent. Dense mode balances sessions; previously inspected dates remain exploratory."}
@@ -969,7 +1004,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
                 journal.extend({**row,"method":"dynamic_panel_global_q"} for row in rows)
             else:
                 report["methods"]["dynamic_panel_global_q"]={"state":"insufficient_training_support"}
-        if rank_entries or context_mode!="off" or pattern_research or sequence_research or derivative_research:
+        if rank_entries or context_mode!="off" or pattern_research or sequence_research or derivative_research or regime_research:
             from . import cpr_ranked_entries as ranked
             ranked_results,ranked_rows=ranked.assess(
                 __import__(__name__,fromlist=["run"]),signals=signals,table=table,index=index,
@@ -977,9 +1012,19 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
                 hold=hold,lot_size=lot_size,bps=bps,capital=capital,risk_budget=risk_budget,
                 context_audit=context_audit,q=q,pattern_research=pattern_research,
                 fixed_panel=fixed_panel,context_q=context_q,sequence_research=sequence_research,
-                derivative_research=derivative_research,progress=progress)
+                derivative_research=derivative_research,regime_research=regime_research,progress=progress)
             report["ranked_entry_research"]=ranked_results
             journal.extend(ranked_rows)
+        if utility_research:
+            from . import cpr_direct_utility as utility, cpr_ranked_entries as ranked
+            if progress:progress(88,"Comparing direct expected returns and strict execution stress")
+            module=__import__(__name__,fromlist=["run"])
+            pools=[ranked._candidate_paths(module,[s for s in signals if s["session"] in set(ds)],table,index,
+                        hold=hold,lot_size=lot_size,bps=bps,risk_budget=risk_budget) for ds in splits[1:]]
+            result,rows=utility.assess(module,train=broad_train,val=broad_val,pools=pools,
+                     nearest=(val,test),dates=splits[1:],capital=capital,budget=risk_budget)
+            report["utility_research"]=result
+            journal.extend(rows)
         if debit_spreads:
             from . import cpr_debit_spreads as spreads
             spread_results,spread_rows=spreads.assess(__import__(__name__,fromlist=["run"]),
