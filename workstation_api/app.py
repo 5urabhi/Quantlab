@@ -1785,7 +1785,7 @@ class SpreadSpeedRequest(BaseModel):
     compare_delays: bool=False
     max_skew_seconds: float=Field(default=2,ge=0,le=30,allow_inf_nan=False)
     participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
-    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
 
 
@@ -1830,7 +1830,7 @@ class SpreadReadinessRequest(BaseModel):
     capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
     max_skew_seconds: float=Field(default=2,ge=0,le=30,allow_inf_nan=False)
     participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
-    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
 
 
@@ -1849,7 +1849,7 @@ class AutomaticSpreadReadinessRequest(BaseModel):
     capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
     lots: int=Field(default=3,ge=1,le=10,strict=True)
     participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
-    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
     expiry: str=Field(default="",max_length=10)
     side: Literal["ALL","CE","PE"]="ALL"
