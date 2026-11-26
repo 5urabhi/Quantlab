@@ -15,11 +15,13 @@ from . import auto_option_depth as recorder, advanced_options as ao
 from . import depth_replay as replay, paper_execution as paper, trading_cockpit as trend
 from . import dynamic_exit_policy as policy, replay_storage
 
-VERSION = "prospective_ema_rsi_atr_bsm_v2"
+VERSION = "prospective_ema_rsi_atr_bsm_v3"
 MAX_BOOK_AGE = 8
 MAX_CHAIN_AGE = 60
 MAX_SKEW = 2
 MAX_CONTRACTS = 200
+MAX_CHAIN_IDENTITIES = 4000
+IDENTITY_QUERY_CHUNK = 200
 MAX_PER_SIDE = 12
 MIN_RECEIPTS = 3
 PARTICIPATION = 25.
@@ -70,6 +72,39 @@ def _activity(db, identity, now, lot_size):
         return None,"insufficient_recent_trade_activity"
     return {"receipts_120s":receipts[0],"distinct_books_120s":receipts[1],
             "distinct_trade_times_120s":trades[0],"volume_range_120s":trades[1]},None
+
+
+def historical_universe(db, contracts, spot, now):
+    """Intersect the as-of chain with fresh saved depth BEFORE the 200-ID cap.
+
+    The recorder prioritizes premium/liquidity as well as strike distance, so
+    taking the 200 nearest strikes first can exclude the recorded contracts.
+    Use indexed identity/time lookups; never read later receipts.
+    """
+    identities={}
+    for c in contracts:
+        identity=c.get("identity")
+        strike=ao.positive(c.get("strike"))
+        if isinstance(identity,str) and replay.fees.ID.fullmatch(identity) and strike is not None:
+            identities.setdefault(identity,abs(strike-spot))
+    ordered=sorted(identities,key=lambda i:(identities[i],i))
+    scanned=ordered[:MAX_CHAIN_IDENTITIES]
+    fresh=set()
+    lower=paper._iso(now-timedelta(seconds=MAX_BOOK_AGE))
+    upper=paper._iso(now)
+    for start in range(0,len(scanned),IDENTITY_QUERY_CHUNK):
+        chunk=scanned[start:start+IDENTITY_QUERY_CHUNK]
+        rows=replay_storage.fetchall(db,"SELECT DISTINCT identity FROM live_depth_books WHERE identity IN ("+
+            ",".join("?" for _ in chunk)+") AND received_utc>=? AND received_utc<=?",(*chunk,lower,upper))
+        fresh.update(row[0] for row in rows)
+    chosen=set(i for i in scanned if i in fresh)
+    chosen=set(sorted(chosen,key=lambda i:(identities[i],i))[:MAX_CONTRACTS])
+    return [c for c in contracts if c.get("identity") in chosen],{
+        "chain_identities":len(ordered),"chain_identities_scanned":len(scanned),
+        "fresh_depth_identities":len(fresh),"selected_identities":len(chosen),
+        "chain_scan_truncated":len(ordered)>len(scanned),
+        "fresh_depth_selection_truncated":len(fresh)>len(chosen),
+        "universe_scope":"contemporaneous_chain_intersect_fresh_recorded_depth"}
 
 
 def _source(now, config, *, historical=False, signal_override=None):
@@ -141,12 +176,11 @@ def _source(now, config, *, historical=False, signal_override=None):
             counts=Counter(c.get("identity") for c in chain.get("contracts",[]))
             contracts=chain.get("contracts",[])
             if historical:
-                # Only original books received by now qualify. Limit the
-                # universe using contemporaneous strike distance, not P&L.
-                contracts=sorted(contracts,key=lambda c:(abs((ao.number(c.get("strike")) or 0.)-spot),str(c.get("identity"))))[:MAX_CONTRACTS]
-                subscribed={c["identity"]:c for c in contracts if replay.fees.ID.fullmatch(c.get("identity") or "")}
-                report["subscribed_contracts"]=len(subscribed)
-                report["universe_scope"]="nearest_200_contemporaneous_chain_contracts"
+                contracts,universe=historical_universe(db,contracts,spot,now)
+                subscribed={c["identity"]:c for c in contracts}
+                report.update(universe,subscribed_contracts=len(subscribed))
+                if not subscribed:
+                    return report,[],"no_fresh_recorded_chain_depth"
             for c in contracts:
                 identity=c.get("identity")
                 if identity not in subscribed or identity in seen:
@@ -177,7 +211,7 @@ def _source(now, config, *, historical=False, signal_override=None):
                 output.append({**book,"sigma":sigma,"years":years,"greeks":greeks,
                                "oi":c["oi"],"volume":c["volume"],"activity":activity})
             report.update(rejections=dict(rejected),valid_contracts=len(output))
-            return report,output,None
+            return report,output,None if output else "no_evidence_qualified_contracts"
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc) or "unable to open database file" in str(exc):
             return report,[],"saved_market_source_unavailable"
@@ -218,7 +252,7 @@ def _candidate(strategy,books,config,report,rejections):
         try:
             replay.studio._validate_structure(strategy,books)
         except ValueError:
-            return None
+            rejections["invalid_vertical_structure"]+=1;return None
     stamps=[b["stamp"] for b in books]
     if (max(stamps)-min(stamps)).total_seconds()>MAX_SKEW:
         rejections["unsynchronized_legs"]+=1;return None
@@ -239,7 +273,11 @@ def _candidate(strategy,books,config,report,rejections):
         # Conservative sizing: include immediate modeled close fees in loss
         # ceiling; this does not certify real maximum loss or broker margin.
         risk=replay.fees._money(max(risk,max_loss+sum(x["fees"] for x in exit_)))
-        if risk<=0 or risk>cap:
+        if risk<=0:
+            rejections["invalid_modeled_risk"]+=1;continue
+        if risk>config["capital"]:
+            rejections["capital_ceiling"]+=1;continue
+        if risk>cap:
             rejections["risk_or_budget_ceiling"]+=1;continue
         outcomes={}
         for name,move,iv in (("favorable",direction*report["scenario_move_points"],0.),
@@ -254,7 +292,8 @@ def _candidate(strategy,books,config,report,rejections):
             rejections["invalid_model_scenario"]+=1;continue
         favorable=min(outcomes[k] for k in ("favorable","favorable_iv_down","favorable_iv_up"))
         if favorable<config["target_net"]:
-            rejections["stress_target_not_met"]+=1;continue
+            reason="iv_stress_target_not_met" if outcomes["favorable"]>=config["target_net"] else "unstressed_target_not_met"
+            rejections[reason]+=1;continue
         immediate=replay.fees._money(cash+sum(x["cashflow"] for x in exit_))
         # Rank by conservative favorable net relative to modeled adverse/flat
         # losses and crossing friction. This is not an expected-return model.
@@ -290,9 +329,12 @@ def from_source(report,books,reason,config,lane_caps=None):
     side="CE" if direction=="UP" else "PE"
     candidates=[]; rejects=Counter()
     for book in books if caps.get("directional",0)>0 else []:
-        if book["option_type"]==side and .15<=abs(book["greeks"]["delta"])<=.85:
-            c=_candidate("LONG_OPTION",[book],{**config,"max_loss":caps["directional"]},report,rejects)
-            if c:candidates.append(c)
+        if book["option_type"]!=side:
+            rejects["opposite_option_side"]+=1;continue
+        if not .15<=abs(book["greeks"]["delta"])<=.85:
+            rejects["directional_delta_band"]+=1;continue
+        c=_candidate("LONG_OPTION",[book],{**config,"max_loss":caps["directional"]},report,rejects)
+        if c:candidates.append(c)
     _finish(output["directional"],candidates,rejects)
     if caps.get("directional",0)<=0:
         output["directional"]["reason"]="session_loss_budget_exhausted"
@@ -304,10 +346,12 @@ def from_source(report,books,reason,config,lane_caps=None):
     for strategy,option_side,ascending in pairs if caps.get("spread",0)>0 else []:
         pool=sorted([b for b in books if b["option_type"]==option_side],
             key=lambda b:(b["spread_bps"],-b["activity"]["receipts_120s"],abs(b["strike"]-report["spot"]),b["identity"]))[:MAX_PER_SIDE]
+        if len(pool)<2:
+            rejects["insufficient_same_side_pool"]+=1
         for first in pool:
             for second in pool:
                 if first["lot_size"]!=second["lot_size"] or first["expiry"]!=second["expiry"]:
-                    continue
+                    rejects["incompatible_vertical_terms"]+=1;continue
                 if not (first["strike"]<second["strike"] if ascending else first["strike"]>second["strike"]):
                     continue
                 c=_candidate(strategy,[first,second],{**config,"max_loss":caps["spread"]},report,rejects)

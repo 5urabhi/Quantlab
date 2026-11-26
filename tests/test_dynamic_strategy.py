@@ -127,6 +127,11 @@ class HistoricalPolicyTests(TestCase):
             result=research.run(day="2026-11-26",now=NOW,hold_seconds=60,include_spreads=False)
             self.assertEqual(result["journal_count"],0)
             self.assertTrue(all(r["conditional_net_inr"] is None for r in result["policies"]))
+            self.assertEqual(result["entry_diagnostics"]["scans_with_qualified_contracts"],0)
+            with research.result_path(result["run_id"],diagnostics=True).open() as f:
+                rows=list(csv.DictReader(f))
+            self.assertEqual(len(rows),1)
+            self.assertEqual(rows[0]["record_type"],"run_summary")
 
     def test_historical_selection_ignores_future_chain(self):
         import json
@@ -146,3 +151,50 @@ class HistoricalPolicyTests(TestCase):
                 _,books,reason=select._source(NOW,engine.DEFAULTS,historical=True,signal_override=signal)
             self.assertEqual(reason,"missing_fresh_chain")
             self.assertEqual(books,[])
+
+
+    def test_historical_universe_intersects_depth_before_strike_cap(self):
+        # More than 200 nearer chain contracts have no recorded depth. The
+        # distant observed contract must be eligible; the future-only one
+        # must not be used for historical selection.
+        contracts=[{"identity":"NSE_FNO:"+str(i),"strike":63000.+i} for i in range(1,204)]
+        with sqlite3.connect(":memory:") as db:
+            db.execute("CREATE TABLE live_depth_books(identity TEXT,received_utc TEXT,PRIMARY KEY(identity,received_utc))")
+            db.executemany("INSERT INTO live_depth_books VALUES(?,?)",[
+                ("NSE_FNO:202",paper._iso(NOW-timedelta(seconds=1))),
+                ("NSE_FNO:203",paper._iso(NOW+timedelta(seconds=1))),
+                ("NSE_FNO:201",paper._iso(NOW-timedelta(seconds=60)))])
+            chosen,meta=select.historical_universe(db,contracts,63000.,NOW)
+        self.assertEqual([c["identity"] for c in chosen],["NSE_FNO:202"])
+        self.assertEqual(meta["chain_identities"],203)
+        self.assertEqual(meta["fresh_depth_identities"],1)
+        self.assertFalse(meta["chain_scan_truncated"])
+
+    def test_no_candidate_rejections_exported_without_duplicate_policy_counts(self):
+        import json
+        def signals(day,anchors,end,*,snapshot_sink):
+            directions={}
+            for i,t in enumerate(anchors):
+                if t==NOW:
+                    snapshot_sink[i]={"direction":"UP"}
+                    directions[i]="UP"
+            return directions,{"state":"available","valid":1,"up":1,"down":0,"neutral":0,"ticks":100}
+        report={"direction":"UP","valid_contracts":0,
+                "rejections":{"missing_fresh_original_book":20}}
+        with TemporaryDirectory() as tmp, \
+             patch.object(research,"_root",return_value=Path(tmp)), \
+             patch.object(research.batch,"signal_cohorts",side_effect=signals), \
+             patch.object(select,"_source",return_value=(report,[],"no_evidence_qualified_contracts")), \
+             patch.object(research.replay.ao,"_read_database",side_effect=lambda:sqlite3.connect(":memory:")):
+            result=research.run(day="2026-11-26",now=NOW+timedelta(seconds=5),
+                                hold_seconds=60,include_spreads=True)
+            self.assertEqual(result["journal_count"],0)
+            d=result["entry_diagnostics"]
+            self.assertEqual(d["source_rejections"],{"missing_fresh_original_book":20})
+            self.assertEqual(d["lanes"]["directional"]["evaluations"],1)
+            self.assertEqual(d["lanes"]["spread"]["evaluations"],1)
+            self.assertEqual(d["lanes"]["spread"]["outcomes"],{"no_evidence_qualified_contracts":1})
+            with research.result_path(result["run_id"],diagnostics=True).open() as f:
+                rows=list(csv.DictReader(f))
+            self.assertEqual(len(rows),4)
+            self.assertEqual(json.loads(rows[1]["rejections"]),{"missing_fresh_original_book":20})

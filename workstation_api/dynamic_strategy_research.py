@@ -18,7 +18,7 @@ from . import auto_paper_engine as engine, auto_paper_selection as select
 from . import dynamic_exit_policy as policy, spread_batch_core as batch
 from . import depth_replay as replay, paper_execution as paper, service
 
-VERSION="chronological_dynamic_strategy_v1"
+VERSION="chronological_dynamic_strategy_v2"
 
 
 def _variants(cfg):
@@ -33,11 +33,11 @@ def _root():
     return root
 
 
-def result_path(run_id):
+def result_path(run_id, *, diagnostics=False):
     import re
     if not re.fullmatch(r"[a-f0-9]{32}",run_id):
         raise ValueError("Invalid strategy result identifier")
-    path=_root()/("run-"+run_id+".csv")
+    path=_root()/("run-"+run_id+("-diagnostics" if diagnostics else "")+".csv")
     if not path.is_file() or path.is_symlink():
         raise FileNotFoundError("Strategy journal not found")
     return path
@@ -135,7 +135,12 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
                "halted":False,"rows":[],"no_trade":Counter(),"last_attempt_minute":None}
               for name,variant in _variants(cfg) for lane in (engine.LANES if include_spreads else ("directional",))]
     entry_sources=Counter()
-    scan_count=0
+    source_rejections=Counter()
+    lane_diagnostics={lane:{"evaluations":0,"with_candidate":0,"outcomes":Counter(),"rejections":Counter()}
+                      for lane in (engine.LANES if include_spreads else ("directional",))}
+    diagnostics=[]
+    scan_count=qualified_scans=max_qualified=0
+    total_qualified=0
     if snapshots:
         with closing(replay.ao._read_database()) as db:
             for i,tick in enumerate(anchors):
@@ -186,7 +191,17 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
                 selection_cfg={**cfg,"hold_seconds":300}
                 report,books,reason=select._source(tick,selection_cfg,historical=True,signal_override=signal)
                 scan_count+=1
-                entry_sources[reason or "source_eligible"]+=1
+                source_reason=reason or "source_eligible"
+                entry_sources[source_reason]+=1
+                qualified=int(report.get("valid_contracts",len(books)))
+                qualified_scans+=int(qualified>0)
+                total_qualified+=qualified
+                max_qualified=max(max_qualified,qualified)
+                source_rejections.update(report.get("rejections",{}))
+                diagnostics.append({"record_type":"source_scan","decision_utc":paper._iso(tick),
+                    "lane":"","risk_budget_inr":None,"outcome":source_reason,
+                    "valid_contracts":qualified,"rejections":report.get("rejections",{}),
+                    "evidence":{k:v for k,v in report.items() if k!="rejections"}})
                 picks={}
                 for a in eligible:
                     cap=_budget(a,cfg)
@@ -197,6 +212,17 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
                     if key not in picks:
                         _,lanes=select.from_source(report,books,reason,selection_cfg,{a["lane"]:cap})
                         picks[key]=lanes[a["lane"]]
+                        pick=picks[key]
+                        d=lane_diagnostics[a["lane"]]
+                        d["evaluations"]+=1
+                        d["with_candidate"]+=int(pick["action"]=="PAPER_ENTRY")
+                        d["outcomes"][pick.get("reason",pick["action"])]+=1
+                        d["rejections"].update(pick.get("rejections",{}))
+                        diagnostics.append({"record_type":"lane_evaluation","decision_utc":paper._iso(tick),
+                            "lane":a["lane"],"risk_budget_inr":cap,"outcome":pick.get("reason",pick["action"]),
+                            "valid_contracts":qualified,"rejections":pick.get("rejections",{}),
+                            "evidence":{"eligible_candidates":pick.get("eligible_candidates",0),
+                                        "selected":pick.get("selected")}})
                     pick=picks[key]
                     if pick["action"]!="PAPER_ENTRY":
                         a["no_trade"][pick["reason"]]+=1
@@ -229,6 +255,33 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
         temp.replace(final)
     finally:
         temp.unlink(missing_ok=True)
+    diagnostic_summary={"scans_with_qualified_contracts":qualified_scans,
+        "max_qualified_contracts_per_scan":max_qualified,"total_qualified_contract_observations":total_qualified,
+        "source_rejections":dict(source_rejections),
+        "lanes":{lane:{**d,"outcomes":dict(d["outcomes"]),"rejections":dict(d["rejections"])}
+                 for lane,d in lane_diagnostics.items()}}
+    # Keep trade journal semantics intact. The separate diagnostic CSV always
+    # contains a run summary, even when no source scans or trades occurred.
+    diagnostic_file=final.with_name("run-"+run_id+"-diagnostics.csv")
+    diagnostic_temp=diagnostic_file.with_suffix(".tmp")
+    diagnostic_fields=["record_type","decision_utc","lane","risk_budget_inr","outcome",
+                       "valid_contracts","rejections","evidence"]
+    summary_row={"record_type":"run_summary","decision_utc":paper._iso(end),
+        "lane":"","risk_budget_inr":cfg["max_loss"],"outcome":"complete",
+        "valid_contracts":max_qualified,"rejections":dict(source_rejections),
+        "evidence":{"config":cfg,"signal_evidence":source_stats,"candidate_scans":scan_count,
+                    "source_reasons":dict(entry_sources),"journal_count":len(journal),
+                    "diagnostics":diagnostic_summary}}
+    try:
+        with diagnostic_temp.open("x",newline="",encoding="utf-8") as f:
+            writer=csv.DictWriter(f,fieldnames=diagnostic_fields)
+            writer.writeheader()
+            for item in [summary_row]+diagnostics:
+                writer.writerow({**item,"rejections":json.dumps(item["rejections"],sort_keys=True,allow_nan=False),
+                    "evidence":json.dumps(item["evidence"],sort_keys=True,allow_nan=False)})
+        diagnostic_temp.replace(diagnostic_file)
+    finally:
+        diagnostic_temp.unlink(missing_ok=True)
     # Return compact per-policy metrics plus the recent trade outcomes.
     # All original execution evidence for each attempt is in the CSV.
     recent=[{k:v for k,v in row.items() if k not in ("contract_legs","entries","exits","missing")} for row in journal[-80:]]
@@ -237,9 +290,10 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
     return {"version":VERSION,"run_id":run_id,"day_ist":day,"cutoff_utc":paper._iso(end),
         "complete_session":complete,"config":cfg,"observation_ticks":len(anchors),
         "signal_evidence":source_stats,"candidate_scans":scan_count,"source_reasons":dict(entry_sources),
+        "entry_diagnostics":diagnostic_summary,"diagnostic_rows":len(diagnostics)+1,
         "policies":summaries,"recent":recent,"journal_count":len(journal),"broker_orders_enabled":False,
         "warning":"Chronological in-sample conditional paper replay. Each policy/lane has an independent virtual budget, not shared real cash. "
         "Five-second observation checks and fresh completed-minute signals are sampled, not exchange ticks or actual broker latency. "
-        "Historical selection uses up to 200 nearest contracts from contemporaneous verified chain receipts, not today's watchlist. "
+        "Historical selection intersects contemporaneous chain IDs with fresh saved original depth before the 200-ID cap (up to 4000 chain IDs scanned), not today's watchlist. "
         "Missing source/entry/exit evidence is not zero profit; no actual fills, margin, reliable stop execution or profitability are verified. "
         "Selection horizon is five minutes for every policy; holding caps and exits differ. No parameter is automatically promoted to live trading."}
