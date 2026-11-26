@@ -120,3 +120,38 @@ class SequenceBarrierTests(TestCase):
         self.assertEqual(cx._panel_detail({**signal,"side":"PUT"},panel,intervals,days[:-1]),x)
         del panel["HDFCBANK"][day][20]
         self.assertIsNone(cx._panel_detail(signal,panel,intervals,days[:-1]))
+
+
+    def test_derivatives_use_only_same_strike_completed_bars(self):
+        day="2026-10-06";strike=60000
+        table={}
+        for m in range(30):
+            table[r._stamp(day,m)]={("CALL",strike):{"session_ist":day,"expiry_flag":"MONTH","expiry_code":1,
+                "open":100.,"close":100.,"volume":200. if m>=20 else 100.,
+                "oi":1000.+m*10,"iv":20.+m*.1}}
+        signal={"session":day,"minute":24,"side":"CALL"}
+        result=r._derivative_vector(signal,table,strike)
+        self.assertEqual(len(result),len(r.DERIVATIVE_NAMES))
+        self.assertAlmostEqual(result[r.DERIVATIVE_NAMES.index("relative_volume")],2.)
+        self.assertAlmostEqual(result[r.DERIVATIVE_NAMES.index("iv_5m_change_raw")],.5)
+        table[r._stamp(day,25)][("CALL",strike)]["oi"]=1e12
+        self.assertEqual(r._derivative_vector(signal,table,strike),result)
+        for stamp in table:
+            table[stamp][("CALL",strike)]["oi"]=None
+            table[stamp][("CALL",strike)]["iv"]=None
+        del table[r._stamp(day,10)]
+        self.assertIsNone(r._derivative_vector(signal,table,strike))
+
+    def test_original_option_normalizer_retains_aligned_optional_observations(self):
+        from workstation_api import expired_options_backtest as exp
+        from datetime import datetime
+        day=date(2026,10,6)
+        stamp=datetime.fromisoformat(r._stamp(day.isoformat(),24)).timestamp()
+        body=exp._request_body(day,day+timedelta(days=1),"MONTH",0,"ATM","CALL")
+        segment={"timestamp":[stamp],"open":[100.],"high":[102.],"low":[98.],"close":[101.],
+                 "strike":[60000],"volume":[1000],"oi":[2000],"iv":[23.]}
+        rows=exp._normalize({"data":{"ce":segment}},body)
+        self.assertEqual(rows[0]["oi"],2000.)
+        self.assertEqual(rows[0]["iv"],23.)
+        segment["iv"]=["bad"]
+        self.assertIsNone(exp._normalize({"data":{"ce":segment}},body)[0]["iv"])
