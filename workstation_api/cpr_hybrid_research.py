@@ -244,6 +244,39 @@ def _next_open_exit(table,day,side,strike,earliest,entry,units,bps):
     return None
 
 
+DERIVATIVE_NAMES=("log_volume","log_oi","oi_missing","oi_5m_change_fraction","oi_change_missing",
+                  "iv_raw","iv_missing","iv_5m_change_raw","iv_change_missing","relative_volume","volume_baseline_missing")
+
+
+def _derivative_vector(signal,table,strike):
+    day,m,side=signal["session"],signal["minute"],signal["side"]
+    now=_observed(table,day,m,side,strike)
+    if now is None:
+        return None
+    old=_observed(table,day,m-5,side,strike) if m>=5 else None
+    def value(row,key):
+        v=row.get(key) if row else None
+        return float(v) if type(v) in (int,float) and isfinite(v) and v>=0 else None
+    oi,iv=value(now,"oi"),value(now,"iv")
+    oldoi,oldiv=value(old,"oi"),value(old,"iv")
+    oichg=(oi/oldoi-1) if oi is not None and oldoi is not None and oldoi>0 else None
+    ivchg=iv-oldiv if iv is not None and oldiv is not None else None
+    rel=None
+    if m>=24:
+        rows=[_observed(table,day,k,side,strike) for k in range(m-24,m+1)]
+        if all(row is not None for row in rows):
+            ref=sum(row["volume"] for row in rows[:20])/20
+            if ref>0:
+                rel=min(20.,sum(row["volume"] for row in rows[20:])/5/ref)
+    if oi is None and iv is None and rel is None:
+        return None
+    from math import log1p
+    vector=[log1p(now["volume"]),log1p(oi) if oi is not None else 0.,float(oi is None),
+            oichg if oichg is not None else 0.,float(oichg is None),iv if iv is not None else 0.,float(iv is None),
+            ivchg if ivchg is not None else 0.,float(ivchg is None),rel if rel is not None else 0.,float(rel is None)]
+    return vector if all(isfinite(v) for v in vector) else None
+
+
 def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
              candidate=None,learning=False):
     day,m,side,spot=(signal[k] for k in ("session","minute","side","spot"))
@@ -263,6 +296,10 @@ def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
         "features":signal["features"]+[(strike/spot-1)*10000,signal_premium/spot*10000,
                                       planned/FEATURE_FUNDING_SCALE],
         "state":"missing_entry","path":[]}
+    if signal.get("derivative_research"):
+        vector=_derivative_vector(signal,table,strike)
+        if vector is not None:
+            ep["context_vectors"]={**ep.get("context_vectors",{}),"derivatives":vector}
     first=m+2
     entry=_observed(table,day,first,side,strike)
     if entry is None:
@@ -692,7 +729,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
         context_mode="off",context_batch="auto",rank_entries=False,
         pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,
-        sessions=60,dense_training=False,progress=None):
+        sessions=60,dense_training=False,sequence_research=False,derivative_research=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
@@ -759,7 +796,24 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     val_signals=[s for s in signals if s["session"] in splits[1]]
     all_signals=signals+train_signals
     from . import cpr_context_features as cx
-    context_audit=cx.attach(all_signals,mode=context_mode,batch_id=context_batch,fixed_panel=fixed_panel)
+    sequence_cache={}
+    if sequence_research:
+        from . import candle_barrier_research as barrier
+        for s in all_signals:
+            key=(s["session"],s["minute"])
+            if key not in sequence_cache:
+                sequence_cache[key]=barrier.sequence_features(index[key[0]],key[1])
+            desc=sequence_cache[key]
+            if desc is not None:
+                s["index_return_5m_bps"]=desc["index_return_5m_bps"]
+    context_audit=cx.attach(all_signals,mode=context_mode,batch_id=context_batch,fixed_panel=fixed_panel,
+                            panel_detail=sequence_research and fixed_panel)
+    for s in all_signals:
+        desc=sequence_cache.get((s["session"],s["minute"]))
+        if desc is not None:
+            s.setdefault("context_vectors",{})["sequence"]=desc["short"]+desc["sequence"]
+        if derivative_research:
+            s["derivative_research"]=True
     pattern_report={}
     if pattern_research:
         from . import candle_pattern_research as patterns
@@ -767,7 +821,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     # Read each relevant session through 15:29, for pending exit retries.
     earliest={}
     for s in all_signals:
-        d=s["session"];earliest[d]=min(earliest.get(d,375),s["minute"])
+        d=s["session"];earliest[d]=min(earliest.get(d,375),max(0,s["minute"]-(24 if derivative_research else 0)))
     needed={_stamp(d,m) for d,first in earliest.items()
             for m in range(first,LAST_SESSION_MINUTE+1)}
     table,meta=p._load_options(all_signals,wings,progress,needed_stamps=needed)
@@ -786,6 +840,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,
              "requested_sessions":sessions,"split_sizes":SESSION_SPLITS[sessions],
              "dense_training":dense_training,"learning_day_balance":dense_training,
+             "sequence_research":sequence_research,"derivative_research":derivative_research,
+             "derivative_feature_names":DERIVATIVE_NAMES if derivative_research else (),
              "dense_train_interval_minutes":DENSE_TRAIN_INTERVAL if dense_training else None,
              "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,
              "pattern_research":pattern_research,"fixed_panel":fixed_panel,"context_q":context_q,"debit_spreads":debit_spreads,"full_premium_and_fee_budget_inr":risk_budget,
@@ -833,14 +889,15 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             metrics,rows=_evaluate(test,method=method,capital=capital,risk_budget=risk_budget,
                                    model=model,means=means,q=wide_q if method=="offline_q_emergency_stop" else q,dates=splits[2])
             report["methods"][method]=metrics;journal.extend(rows)
-        if rank_entries or context_mode!="off" or pattern_research:
+        if rank_entries or context_mode!="off" or pattern_research or sequence_research or derivative_research:
             from . import cpr_ranked_entries as ranked
             ranked_results,ranked_rows=ranked.assess(
                 __import__(__name__,fromlist=["run"]),signals=signals,table=table,index=index,
                 train=broad_train,val=broad_val,test=test,dates=(splits[1],splits[2]),
                 hold=hold,lot_size=lot_size,bps=bps,capital=capital,risk_budget=risk_budget,
                 context_audit=context_audit,q=q,pattern_research=pattern_research,
-                fixed_panel=fixed_panel,context_q=context_q,progress=progress)
+                fixed_panel=fixed_panel,context_q=context_q,sequence_research=sequence_research,
+                derivative_research=derivative_research,progress=progress)
             report["ranked_entry_research"]=ranked_results
             journal.extend(ranked_rows)
         if debit_spreads:
