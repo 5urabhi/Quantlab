@@ -1,5 +1,6 @@
 import {useEffect,useState} from 'react'
 import MarketContextPanel from './MarketContextPanel'
+import ParticipantInbox from './ParticipantInbox'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 
 type Mapping={factor:string;symbol:string;exchange:string}
@@ -25,6 +26,7 @@ export default function GlobalMarketWorkspace({onOpenAlpha,onOpenEvents}:{onOpen
  return <section className="bci-panel" aria-label="Global markets and positioning"><header><div><small>CROSS-MARKET · RECEIPT-TIMED EVIDENCE</small><h3>Global markets & positioning</h3><p>International factors, FX, yields, domestic strength, options and participant reports. Research and collection remain independent of execution.</p></div><div className="bci-actions"><button className="ws-button" onClick={onOpenEvents}>Economic Events →</button><button className="ws-button primary" onClick={onOpenAlpha}>Alpha Research →</button></div></header>
  <div className="bci-grid"><div className="bci-stat"><span>FRED credential</span><strong>{status?.fred_key_configured?'Configured':status?'Not configured':'—'}</strong><small>Daily macro / equity data</small></div><div className="bci-stat"><span>Twelve Data credential</span><strong>{status?.twelve_key_configured?'Configured':status?'Not configured':'—'}</strong><small>Reviewed symbol mappings only</small></div><div className="bci-stat"><span>Automatic collection</span><strong>{status?.sync_running?'Synchronizing':status?.config.enabled?'Enabled':'Disabled'}</strong><small>{status?.last_sync_utc||'No sync receipt yet'}</small></div></div>
  <MarketContextPanel mode={mode} onMode={setMode}/>
+ <ParticipantInbox/>
  <details className="bci-note"><summary><strong>Configure automatic source collection</strong></summary><p>Set FRED_API_KEY and TWELVE_DATA_API_KEY in the existing local .env file, then restart QuantLab when recording can safely stop. No key is exposed in this page. FRED uses fixed series IDs; Twelve Data requires exact provider symbol and exchange and suitable permissions. Current data is saved with its actual local receipt, never backdated.</p>
  {status?.configuration_error&&<p role="alert">{status.configuration_error}</p>}
  {config&&<><div className="bci-actions"><label><input type="checkbox" checked={config.enabled} disabled={busy} onChange={e=>patch({enabled:e.target.checked})}/> Collect automatically while QuantLab runs</label><label><input type="checkbox" checked={config.fred} disabled={busy} onChange={e=>patch({fred:e.target.checked})}/> FRED daily factors and release calendar</label><label><input type="checkbox" checked={config.news} disabled={busy} onChange={e=>patch({news:e.target.checked})}/> Official RBI and Federal Reserve announcements</label></div>
