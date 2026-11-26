@@ -5,12 +5,13 @@ import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import SpreadOpportunityScanner,{type BrokerProfile} from './SpreadOpportunityScanner'
 import MultiLegSpreadStudio from './MultiLegSpreadStudio'
 import SpreadSpeedStudy from './SpreadSpeedStudy'
+import BatchSpeedResearch from './BatchSpeedResearch'
 import AutomaticPaperPanel from './AutomaticPaperPanel'
 import OptionFeedStorageHealth from './OptionFeedStorageHealth'
 import './liquidity-spreads.css'
 import ResearchPlot from './ResearchPlots'
 
-type PageTab='live'|'automatic'|'multileg'|'speed'|'execution'|'history'|'lab'
+type PageTab='live'|'automatic'|'multileg'|'speed'|'batch'|'execution'|'history'|'lab'
 type Row={
   identity:string;expiry:string;strike:number;option_type:'CE'|'PE'
   lot_size:number;coverage_role:string;best_bid:number|null
@@ -109,6 +110,7 @@ const tabs:{id:PageTab;name:string;caption:string;icon:typeof Activity}[]=[
   {id:'automatic',name:'Automatic Paper Decisions',caption:'Auto-select contracts, sizes & outcomes',icon:TrendingUp},
   {id:'multileg',name:'Multi-Leg Option Spreads',caption:'Auto discover, build, payoff',icon:Layers3},
   {id:'speed',name:'Speed & Viability',caption:'1s–5m saved-depth replay',icon:Activity},
+  {id:'batch',name:'Batch Research',caption:'All eligible contracts, lots & verticals',icon:BarChart3},
   {id:'execution',name:'Execution Simulator',caption:'Depth-weighted cost estimates',icon:SlidersHorizontal},
   {id:'history',name:'Historical Spread Analysis',caption:'Original saved book timeline',icon:BarChart3},
   {id:'lab',name:'Spread Strategy Lab',caption:'Unexecuted research bounds',icon:TrendingUp},
@@ -437,8 +439,9 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
       </div>
       {speedManual&&<label>Exact recorded option <select aria-label="Speed study contract" value={speedSelected} onChange={e=>setSelected(e.target.value)}><option value="">Choose source contract</option>{filtered.map(r=><option value={r.identity} key={r.identity}>{num(r.strike)} {r.option_type} · {r.expiry} · {r.identity}</option>)}</select></label>}
       <SpreadSpeedStudy key={day+brokerProfile} day={day} identities={speedManual&&speedSelected?[speedSelected]:[]} strategy="LONG_OPTION" initialLots={lots} brokerProfile={brokerProfile} automatic={!speedManual} expiryFilter={expiry} sideFilter={side} searchFilter={search}/>
-      <p className="lq-hint">For continuous automatic paper entries and exits, open Automatic Paper Decisions. To test a specific basket, open Multi-Leg Option Spreads → Analyze → Speed &amp; Viability.</p>
+      <p className="lq-hint">Compare all eligible contracts and quantities under <button type="button" className="ws-button" onClick={()=>setTab('batch')}>Batch Research</button>. For continuous paper entries, open Automatic Paper Decisions. To test a specific basket, use Multi-Leg Option Spreads → Analyze.</p>
     </section>}
+    {tab==='batch'&&<section role="tabpanel" aria-label="Batch Research"><BatchSpeedResearch day={day} expiry={expiry} side={side} search={search} brokerProfile={brokerProfile}/></section>}
     {tab==='execution'&&<section className="lq-section" role="tabpanel"
       aria-label="Execution Simulator">
       <div className="lq-section-title"><div><strong>Execution cost workbench</strong>
