@@ -4827,3 +4827,42 @@ def index_execution_stress(run_id:str,body:ExecutionStressRequest):
         return execution_stress.calculate(run_id,**body.model_dump())
     except (ValueError,FileNotFoundError,KeyError,TypeError,OverflowError) as exc:
         raise HTTPException(400,"Saved monthly evidence or execution assumptions are invalid: "+job_safety.scrub(exc)[:300]) from exc
+
+
+# Explicit opt-in prospective, local-only research. The UI does not drive the
+# worker clock or submit arbitrary past observations.
+from . import constituent_prospective
+import sqlite3
+
+class ConstituentProspectiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    confirm_local_research: bool = False
+
+@app.on_event("startup")
+def resume_constituent_prospective():
+    constituent_prospective.resume()
+
+@app.on_event("shutdown")
+def stop_constituent_prospective():
+    constituent_prospective.shutdown()
+
+@app.get("/api/trading-cockpit/constituents/prospective/status")
+def constituent_prospective_status():
+    return constituent_prospective.status()
+
+@app.post("/api/trading-cockpit/constituents/prospective/configure")
+def configure_constituent_prospective(body: ConstituentProspectiveRequest):
+    if body.enabled and not body.confirm_local_research:
+        raise HTTPException(400,"Confirm prospective local-only research recording")
+    try:
+        return constituent_prospective.configure(body.enabled)
+    except (OSError,ValueError) as exc:
+        raise HTTPException(400,"Prospective recording configuration unavailable") from exc
+
+@app.get("/api/trading-cockpit/constituents/prospective/report")
+def constituent_prospective_report(horizon:int=5,limit:int=12000):
+    try:
+        return constituent_prospective.report(horizon,limit)
+    except (OSError,ValueError,sqlite3.Error) as exc:
+        raise HTTPException(400,"Prospective report unavailable; check local store and selected horizon") from exc
