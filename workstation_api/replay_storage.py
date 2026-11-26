@@ -37,3 +37,15 @@ def fetchone(db,sql,args=()):
 
 def fetchall(db,sql,args=()):
     return _read(db,sql,args,"fetchall")
+
+
+def journal_mode():
+    from contextlib import closing
+    from . import advanced_options as ao
+    try:
+        with closing(ao._read_database()) as db:
+            return str(fetchone(db,"PRAGMA journal_mode")[0]).lower()
+    except sqlite3.OperationalError as exc:
+        if "unable to open database file" in str(exc):
+            return "unavailable"
+        raise
