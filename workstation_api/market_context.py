@@ -63,10 +63,12 @@ for category in ("FII","DII","CLIENT","PRO"):
 GLOBAL_GROUPS=("global_equity","asia","macro")
 FEATURE_NAMES=tuple(v for key in FACTORS for v in
                     (key.lower()+"_value",key.lower()+"_change",key.lower()+"_age_hours",key.lower()+"_missing"))
+DOMESTIC_NAMES=("nifty50_30m_bps","bank_minus_nifty50_30m_bps","nifty50_missing")
 OPTION_NAMES=("oi_imbalance","volume_imbalance","oi_change_put_minus_call",
               "volume_increment_imbalance","atm_iv_pct","otm_put_minus_call_iv",
               "call_oi_concentration","put_oi_concentration","days_to_expiry",
-              "paired_strikes","oi_change_missing","volume_increment_missing","iv_skew_missing")
+              "paired_strikes","oi_change_missing","volume_increment_missing","iv_skew_missing",
+              "same_atm_iv_change_pct_points","atm_iv_change_missing")
 HEADER=("factor","event_utc","available_utc","value")
 
 
@@ -442,12 +444,16 @@ def option_features(current,prior=None):
             ci=iv(pairs[min(above,key=lambda k:abs(k-1.01*spot))]["CE"])
             if pi is not None and ci is not None:
                 skew=pi-ci
-        oi_change=volume_change=None;matched=0
+        oi_change=volume_change=atm_change=None;matched=0
         if prior is not None and prior[0]["expiry"]==chain["expiry"]:
             old=_pairs(prior[0],spot)
             common=[k for k,v in pairs.items() if k in old and all(v[s]["identity"]==old[k][s]["identity"] and
                         v[s]["lot_size"]==old[k][s]["lot_size"] for s in ("CE","PE"))]
             matched=len(common)
+            if atm in common:
+                old_iv=[iv(old[atm][side]) for side in ("CE","PE")]
+                if all(v is not None for v in old_iv):
+                    atm_change=(sum(atm_values)-sum(old_iv))/2
             if matched>=5 and matched>=.8*len(pairs):
                 previous_oi=sum(old[k][s]["oi"] for k in common for s in ("CE","PE"))
                 if previous_oi>0:
@@ -465,7 +471,8 @@ def option_features(current,prior=None):
         vector=[oi,vol,oi_change if oi_change is not None else 0.,volume_change if volume_change is not None else 0.,
                 sum(atm_values)/2,skew if skew is not None else 0.,pairs[ce_strike]["CE"]["oi"]/co,
                 pairs[pe_strike]["PE"]["oi"]/po,float(dte),float(len(pairs)),
-                float(oi_change is None),float(volume_change is None),float(skew is None)]
+                float(oi_change is None),float(volume_change is None),float(skew is None),
+                atm_change if atm_change is not None else 0.,float(atm_change is None)]
         if not all(math.isfinite(v) for v in vector):
             return None
         return vector,{"expiry":chain["expiry"],"received_utc":chain["received_utc"],"sha256":digest,
@@ -487,10 +494,41 @@ def options_at(db,cutoff):
     return option_features(current,prior)
 
 
+def _nifty_tick(db,cutoff):
+    lower=cutoff-timedelta(seconds=30)
+    rows=replay_storage.fetchall(db,"""SELECT price,exchange_utc,received_utc,packet_sha256 FROM live_ticks
+       WHERE identity='INDEX:NIFTY50' AND exchange_utc>=? AND exchange_utc<=?
+       AND received_utc>=? AND received_utc<=?
+       ORDER BY exchange_utc DESC,received_utc DESC,packet_sha256 DESC LIMIT 20""",
+       (_iso(lower),_iso(cutoff),_iso(lower),_iso(cutoff)))
+    for price,event,receipt,digest in rows:
+        try:
+            et,rt=_stamp(event),_stamp(receipt)
+            if not lower<=et<=cutoff or not lower<=rt<=cutoff or not -2<=(rt-et).total_seconds()<=15:
+                continue
+            if not p._valid_hash(digest) or _finite(price)<=0:
+                continue
+            return {"price":price,"exchange_utc":event,"received_utc":receipt,"sha256":digest}
+        except (ValueError,TypeError,OverflowError):
+            continue
+    return None
+
+
+def domestic_at(db,cutoff,bank_return_bps=None):
+    if not _exists(db,"live_ticks") or p._session(cutoff).date()!=p._session(cutoff-timedelta(minutes=30)).date():
+        return [0.,0.,1.],None
+    c,a=_nifty_tick(db,cutoff),_nifty_tick(db,cutoff-timedelta(minutes=30))
+    if c is None or a is None:
+        return [0.,0.,1.],None
+    ret=10000*(c["price"]/a["price"]-1)
+    relative=bank_return_bps-ret if bank_return_bps is not None else None
+    return [ret,relative if relative is not None else 0.,0.],{"return_30m_bps":ret,"bank_minus_nifty_bps":relative,"current":c,"anchor":a}
+
+
 def snapshot(*,mode="receipt",now=None):
     now=now or _now()
     result={"version":VERSION,"as_of_utc":_iso(now),"mode":mode,"catalog":catalog(),
-            "factors":{},"global_group_coverage":False,"options":None,"imported_rows":0,"ambiguous_factors":[],
+            "factors":{},"global_group_coverage":False,"options":None,"domestic":None,"imported_rows":0,"ambiguous_factors":[],
             "warning":"External inputs are reviewed imports, not independently verified live feeds. Chain OI/volume are aggregate two-sided exposures, not signed retail flow or net dealer gamma. Participant categories cover aggregate index derivatives, not BANKNIFTY-only positions."}
     if not shared_market_data.database_path().is_file():
         return result
@@ -498,6 +536,7 @@ def snapshot(*,mode="receipt",now=None):
         timelines,meta=load_timelines(db,now-timedelta(hours=1),now,mode)
         _,details,ok=factor_at(timelines,now)
         opt=options_at(db,now)
-    result.update(factors=details,global_group_coverage=ok,options=opt[1] if opt else None,
+        _,domestic=domestic_at(db,now)
+    result.update(factors=details,global_group_coverage=ok,options=opt[1] if opt else None,domestic=domestic,
                   imported_rows=meta["rows"],ambiguous_factors=meta["ambiguous_factors"])
     return result
