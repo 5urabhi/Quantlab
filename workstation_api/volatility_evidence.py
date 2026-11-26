@@ -146,11 +146,9 @@ def iv_run(*,from_date,to_date,horizon=15,progress=None):
 
 def _index_only(batch_id):
     raw,left,right,_,_=h._batch(batch_id)
-    candidates=[(path,meta) for path,_,meta in cockpit_sources._candidates("INDEX:BANKNIFTY") if path.parent.name==batch_id]
-    if len(candidates)!=1:
-        raise ValueError("Original BANKNIFTY spot candles from the selected batch are required")
-    path,meta=candidates[0]
-    return h._read_file(path,meta["sha256"],left,right,[h.MAX_TOTAL],meta["row_count"]),meta["sha256"]
+    index,digests,failures=h.shared_index_sources(left,right,[h.MAX_TOTAL])
+    # Preserve every input receipt hash in a stable aggregate fingerprint.
+    return index,sha256(json.dumps(digests,sort_keys=True,separators=(",",":")).encode()).hexdigest()
 
 
 def _returns(index):
