@@ -11,15 +11,17 @@ from hashlib import sha256
 import json
 import numpy as np
 
-from . import constituent_alpha as a, market_context as m
+from . import constituent_alpha as a, market_context as m, context_events as events
 
-SCOPES=("options","global","participants","combined")
+SCOPES=("options","global","participants","events","combined","all")
 GROUPS={"options":("options",),"global":("global",),"participants":("participants",),
-        "combined":("options","global","participants")}
-VERSION="constituent_context_alpha_v1"
+        "events":("events",),"combined":("options","global","participants"),
+        "all":("options","global","participants","events")}
+VERSION="constituent_context_alpha_v2"
 POLICY={"version":VERSION,"base_policy":a.POLICY_HASH,"context_version":m.VERSION,
         "groups":GROUPS,"option_features":m.OPTION_NAMES,"external_features":m.FEATURE_NAMES,
         "domestic_features":m.DOMESTIC_NAMES,"required_global_groups":m.GLOBAL_GROUPS,
+        "event_version":events.VERSION,"event_features":events.FEATURE_NAMES,
         "participant_gate":"all four categories x three OI net position series with prior observation",
         "scope_matching":"base reserved windows are never replaced; drop missing required context; identical samples for every model",
         "fit":"fixed logistic and histogram boosting configurations from base study; calibration only on calibration sessions"}
@@ -68,6 +70,13 @@ def _attach(db,rows,timelines,scope):
                     counts["participants_available"]+=1
                 else:
                     counts["missing_participants_context"]+=1
+        if "events" in required:
+            item=events.features_at(db,cutoff)
+            if item and item[1]["full_source_coverage"]:
+                vectors["events"],evidence["events"]=item
+                counts["events_available"]+=1
+            else:
+                counts["missing_events_context"]+=1
         if all(g in vectors for g in required):
             matched.append({**r,"context":vectors,"context_evidence":evidence})
             counts["context_matched"]+=1
@@ -80,8 +89,8 @@ def _spec(scope):
     for group in GROUPS[scope]:
         variants["constituent_"+group+"_logistic"]=("constituent_logistic",(group,))
     variants["constituent_"+scope+"_boosting"]=("constituent_boosting",GROUPS[scope])
-    if scope=="combined":
-        variants["constituent_combined_logistic"]=("constituent_logistic",GROUPS[scope])
+    if len(GROUPS[scope])>1:
+        variants["constituent_"+scope+"_logistic"]=("constituent_logistic",GROUPS[scope])
     return variants
 
 def _view(rows,groups):
@@ -174,7 +183,7 @@ def run(*,horizon=30,scope="combined",mode="receipt",progress=None,now=None):
         start=datetime.fromisoformat(dates[0]+"T00:00:00+00:00")
         stop=datetime.fromisoformat(dates[-1]+"T23:59:59+00:00")
         with closing(a._read()) as db:
-            timelines,meta=m.load_timelines(db,start,stop,mode) if scope!="options" else ({},meta)
+            timelines,meta=m.load_timelines(db,start,stop,mode) if any(g in GROUPS[scope] for g in ("global","participants")) else ({},meta)
             for i,day in enumerate(dates):
                 if progress:
                     progress(2+55*i/len(dates),"Auditing context at original decision cutoffs: "+day)
@@ -190,6 +199,7 @@ def run(*,horizon=30,scope="combined",mode="receipt",progress=None,now=None):
         broker_orders_enabled=False,live_model_promoted=False,
         warning="Context research on the same frozen, matched windows. Receipt mode requires actual import time; archive mode trusts reviewed availability timestamps, not independent prospective evidence. "
         "Participant reports are aggregate index derivatives, not BANKNIFTY-specific retail orders. Option OI is two-sided, not dealer gamma or trade direction. "
+        "Official event counts and release dates use actual local receipts, not inferred sentiment or surprise values, including in archive mode. "
         "The fixed 5 bps index cost proxy is hypothetical. No model is promoted to live trading. Descriptive holdout gates are not significance or profit guarantees.")
     if len(dates)<a.REQUIRED:
         status["state"]="awaiting_recorded_sessions"
