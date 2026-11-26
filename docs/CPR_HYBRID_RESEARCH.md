@@ -780,3 +780,20 @@ unmapped records remain explicitly unmapped. These are not actual
 order latency, fill prices, continuous per-contract books or execution
 certification. No orders are transmitted. New live mapping/duration
 fields begin on the next normal workstation start and market session.
+
+
+### Productive maintenance cadence
+
+The opted-in background maintenance worker schedules another bounded pass
+two minutes after a successful partial pass if new option receipts were
+saved with requests remaining, unattempted eligible bank-session repairs
+remain, or index windows were downloaded with uncovered windows remaining.
+The existing per-pass caps (112 option requests and two equity repair
+dates per instrument), serialized queue, provider pacing, seven-day
+per-date repair cooldown, storage guard and Indian market priority window
+remain unchanged. Provider errors, unreadable receipts, blocked sources or
+no immediately actionable work retain the ordinary four-hour backoff;
+checked scopes retain the 24-hour interval. Legacy productive checkpoints
+resume promptly without requiring a manual check. The maintenance card
+and status API expose the retry reason. A gap may remain despite a
+successful original-source request; no prices or membership are inferred.
