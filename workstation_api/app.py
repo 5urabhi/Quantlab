@@ -1060,6 +1060,33 @@ def zerodha_cost_estimate(body: ZerodhaCostEstimateRequest):
         bad(exc)
 
 
+class ZerodhaVirtualNoteRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    tradingsymbol: str = Field(min_length=12,max_length=45)
+    quantity: int = Field(ge=1,le=100000,strict=True)
+    buy_premium: float = Field(ge=.05,le=20000,allow_inf_nan=False)
+    sell_premium: float = Field(ge=.05,le=20000,allow_inf_nan=False)
+    product: Literal["MIS","NRML"]="MIS"
+
+
+@app.post("/api/trading-cockpit/options/zerodha/virtual-note")
+def zerodha_virtual_note(body: ZerodhaVirtualNoteRequest):
+    from . import zerodha_execution_costs
+    try:
+        return zerodha_execution_costs.virtual_note(**body.model_dump())
+    except (ValueError,OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/options/zerodha/net-positions")
+def zerodha_net_positions():
+    from . import zerodha_execution_costs
+    try:
+        return zerodha_execution_costs.positions()
+    except (ValueError,OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/options/positions")
 def option_position_marks(target_pct: float = 5, stop_pct: float = 2.5,
         horizon_minutes: int = 5, iv_change_points: float = 0,

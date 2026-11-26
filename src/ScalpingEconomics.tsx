@@ -1,5 +1,6 @@
 import {useEffect,useState} from 'react'
 import {marketPost,readableError} from './tradingCockpitApi'
+import ZerodhaVirtualNote from './ZerodhaVirtualNote'
 import './market-intelligence-dashboard.css'
 
 const fmt=(v:number,d=2)=>v.toLocaleString('en-IN',{maximumFractionDigits:d})
@@ -44,6 +45,7 @@ export default function ScalpingEconomics(){
   {a.trades>max&&<p className="tc-warning">Requested count exceeds {max} non-overlapping time-only round trips; no trade quota is recommended.</p>}
   {ex&&ex.net_winner<=0&&<p className="tc-warning">Even the assumed gross winning trade does not clear its costs.</p>}
   </>:!error?<p className="mi-muted">{valid?'Calculating current tariff…':'Enter valid premiums, quantity and cost assumptions.'}</p>:null}
+  <ZerodhaVirtualNote buy={a.buy} sell={a.sell} quantity={a.quantity} enabled={valid&&a.buyOrders===1&&a.sellOrders===1&&profile==="zerodha"}/>
   <p className="mi-muted">Use actual buy-ask and sell-bid fill prices where possible. Set extra spread/slippage to zero if already included. API subscriptions, exceptional square-off/dealer fees, expiry exercise, interest and account-specific costs are excluded. No guaranteed profitable trade.</p>
  </section>
 }

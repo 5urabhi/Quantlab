@@ -161,24 +161,31 @@ def configured() -> bool:
 
 def _request(path: str, *, method: str = "GET",
              form: dict[str, str] | None = None, timeout: int = 25,
-             need_auth: bool = True) -> bytes:
+             need_auth: bool = True, json_body: list | None = None) -> bytes:
     global _LAST_CALL
     if not path.startswith("/") or "//" in path or len(path) > 600:
         raise ValueError("Invalid fixed-host Kite endpoint")
     if method not in ("GET", "POST"):
         raise ValueError("Kite fallback is read-only; unsupported HTTP method")
-    if method == "POST" and path != "/session/token":
-        raise ValueError("Kite data provider is read-only; only login token exchange may POST")
+    if method == "POST" and path not in ("/session/token","/charges/orders"):
+        raise ValueError("Kite read-only provider: only login and virtual charge calculation may POST")
+    if path == "/charges/orders":
+        if method != "POST" or form is not None or not need_auth or not isinstance(json_body,list) or not 1 <= len(json_body) <= 50:
+            raise ValueError("Invalid read-only virtual charge calculation")
+    elif json_body is not None:
+        raise ValueError("JSON requests are permitted only for virtual charge calculation")
     key = _api_key()
     token = _access_token()
     if not KEY.fullmatch(key) or (need_auth and not TOKEN.fullmatch(token)):
         raise ValueError("Connect your Kite app and log in from QuantLab")
-    data = urlencode(form).encode("ascii") if form else None
+    data = json.dumps(json_body,allow_nan=False).encode("utf-8") if json_body is not None else urlencode(form).encode("ascii") if form else None
     headers = {"X-Kite-Version": "3", "Accept": "application/json",
                "User-Agent": "QuantLabLocalReadOnly/1.0"}
     if need_auth:
         headers["Authorization"] = "token " + key + ":" + token
-    if form:
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
+    elif form:
         headers["Content-Type"] = "application/x-www-form-urlencoded"
     opener = build_opener(_NoRedirect)
     url = KITE + path

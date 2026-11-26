@@ -1,5 +1,6 @@
 import {useEffect,useState} from 'react'
 import ResearchPlot from './ResearchPlots'
+import ZerodhaPositions from './ZerodhaPositions'
 import {marketApi,readableError} from './tradingCockpitApi'
 import './market-intelligence-dashboard.css'
 
@@ -33,6 +34,7 @@ export default function PositionsRisk({onOpenJournal,onOpenChain,compact=false}:
  </section>
  return <section className="mi-risk" aria-label="Options positions and portfolio risk">
   <header className="mi-card mi-heading"><div><span className="mi-kicker">READ-ONLY · LONG OPTIONS</span><h3>Positions &amp; risk</h3><p className="mi-muted">Reuses your manual trade journal and original quote/depth evidence. This is not a connected Zerodha account balance.</p></div><div className="mi-risk-actions"><button className="ws-button" onClick={onOpenChain}>Find contract</button><button className="ws-button" onClick={onOpenJournal}>Manage manual fills</button></div></header>
+  <ZerodhaPositions/>
   {error&&<p className="tc-error" role="alert">{error} · previous marks withheld.</p>}
   {!data&&!error&&<p role="status">Reading open journal positions and saved original bids…</p>}
   {safe&&<>
