@@ -155,6 +155,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
   onOpenRecording:()=>void;onOpenReplay:()=>void
 }){
   const [tab,setTab]=useState<PageTab>('live')
+  const [speedManual,setSpeedManual]=useState(false)
   const [overview,setOverview]=useState<Overview|null>(null)
   const [error,setError]=useState('')
   const [loading,setLoading]=useState(true)
@@ -219,12 +220,14 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
       .catch(()=>{if(!cancelled)setCompareList(null)})
     return()=>{cancelled=true}
   },[compare,day])
-  const filtered=useMemo(()=>overview?.rows.filter(r=>
+  const sortedRows=useMemo(()=>(overview?.rows||[]).slice().sort((a,b)=>a.strike-b.strike||a.option_type.localeCompare(b.option_type)||a.expiry.localeCompare(b.expiry)||a.identity.localeCompare(b.identity)),[overview])
+  const filtered=useMemo(()=>sortedRows.filter(r=>
     (!expiry||r.expiry===expiry)&&
     (side==='ALL'||r.option_type===side)&&
     (!search||[r.identity,r.expiry,String(r.strike),r.option_type].join(' ')
       .toLowerCase().includes(search.toLowerCase()))
-  )||[],[overview,expiry,side,search])
+  ),[sortedRows,expiry,side,search])
+  const speedSelected=filtered.some(r=>r.identity===selected)?selected:''
   const activeBooks=bookList?.books||[]
   const current=bookIndex<0?activeBooks[activeBooks.length-1]:activeBooks[bookIndex]
   const selectedRow=overview?.rows.find(r=>r.identity===selected)
@@ -425,7 +428,17 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
       <MultiLegSpreadStudio day={day} expiry={expiry}
         brokerProfile={brokerProfile} onBrokerProfileChange={changeBroker}/>
     </div>}
-    {tab==='speed'&&<section className="lq-section" role="tabpanel" aria-label="Spread Speed and Viability"><label>Exact recorded option <select aria-label="Speed study contract" value={selected} onChange={e=>setSelected(e.target.value)}><option value="">Choose source contract</option>{(overview?.rows||[]).map(r=><option value={r.identity} key={r.identity}>{r.strike} {r.option_type} · {r.expiry} · {r.identity}</option>)}</select></label><SpreadSpeedStudy key={day+selected+brokerProfile} day={day} identities={selected?[selected]:[]} strategy="LONG_OPTION" initialLots={lots} brokerProfile={brokerProfile}/><p className="lq-hint">To test a basket, choose a candidate in Multi-Leg Option Spreads → Analyze → Speed &amp; Viability.</p></section>}
+    {tab==='speed'&&<section className="lq-section" role="tabpanel" aria-label="Spread Speed and Viability">
+      <div className="lq-section-title"><div><strong>Contract selection</strong><small>Automatic chooses a recorded research contract and whole lots within your budget. Manual selection is optional.</small></div>
+        <div className="lq-actions" role="group" aria-label="Speed study selection mode">
+          <button type="button" aria-pressed={!speedManual} onClick={()=>setSpeedManual(false)}>Automatic</button>
+          <button type="button" aria-pressed={speedManual} onClick={()=>setSpeedManual(true)}>Manual</button>
+        </div>
+      </div>
+      {speedManual&&<label>Exact recorded option <select aria-label="Speed study contract" value={speedSelected} onChange={e=>setSelected(e.target.value)}><option value="">Choose source contract</option>{filtered.map(r=><option value={r.identity} key={r.identity}>{num(r.strike)} {r.option_type} · {r.expiry} · {r.identity}</option>)}</select></label>}
+      <SpreadSpeedStudy key={day+brokerProfile} day={day} identities={speedManual&&speedSelected?[speedSelected]:[]} strategy="LONG_OPTION" initialLots={lots} brokerProfile={brokerProfile} automatic={!speedManual} expiryFilter={expiry} sideFilter={side} searchFilter={search}/>
+      <p className="lq-hint">For continuous automatic paper entries and exits, open Automatic Paper Decisions. To test a specific basket, open Multi-Leg Option Spreads → Analyze → Speed &amp; Viability.</p>
+    </section>}
     {tab==='execution'&&<section className="lq-section" role="tabpanel"
       aria-label="Execution Simulator">
       <div className="lq-section-title"><div><strong>Execution cost workbench</strong>
@@ -437,7 +450,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
           onChange={e=>setSelected(e.target.value)}>
           {selected&&!overview?.rows.some(r=>r.identity===selected)&&
             <option value={selected}>Saved depth {selected}</option>}
-          {overview?.rows.map(r=><option key={r.identity} value={r.identity}>
+          {sortedRows.map(r=><option key={r.identity} value={r.identity}>
             {r.option_type} {num(r.strike)} · {r.expiry} · {r.identity}
           </option>)}</select></label>
         <label>Lots (1–10)<input type="number" min="1" max="10" value={lots}
@@ -632,7 +645,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
       <div className="lq-fieldrow"><label>Overlay saved spread from another CE/PE
         <select value={compare} onChange={e=>setCompare(e.target.value)}>
           <option value="">No comparison</option>
-          {overview?.rows.filter(r=>r.identity!==selected).map(r=>
+          {sortedRows.filter(r=>r.identity!==selected).map(r=>
             <option key={r.identity} value={r.identity}>
               {r.option_type} {num(r.strike)} · {r.expiry}
             </option>)}
