@@ -13,6 +13,7 @@ type Candidate={
   identity:string;side:'CE'|'PE';strike:number;expiry:string
   wing?:'above'|'below'|'atm';atm_strike?:number;coverage_role?:'core'|'opportunity'|'active'|'rotating'
   lot_size:number;ltp:number;chain_received_utc:string;volume:number
+  scalp_fast_depth?:boolean
 }
 type Latest={
   side:'CE'|'PE';received_utc:string;age_seconds:number;fresh:boolean
@@ -56,7 +57,7 @@ type Recorder={
   source_strike_min?:number|null;source_strike_max?:number|null
   subscribed_strike_min?:number|null;subscribed_strike_max?:number|null
   rotating_contracts?:number;opportunity_depth_contracts?:number
-  activity_depth_contracts?:number
+  activity_depth_contracts?:number;scalp_fast_contracts?:number
   depth_counter_audit?:{
     consistent:boolean;accepted_large_messages:number
     validated_pairs_in_large_messages:number
@@ -250,8 +251,7 @@ export default function AutoDepthRecorder({onOpenSaved}:{
           <option value={60}>60 seconds per contract</option>
         </select>
       </label>
-      <small>The six closest subscribed contracts may be saved every 3 seconds.
-        Others use the broad interval. Recheck original Dhan spot every
+      <small>Up to six affordable CE and six PE contracts are sampled at most once per second (₹17,000 research budget; preference near ₹180; configured lots). Other priority contracts use 3 seconds; the rest use the broad interval. Actual receipt coverage depends on source activity and storage. Recheck original Dhan spot every
         20 seconds; distant contracts rotate every 90 seconds. If the market
         moves outside prior coverage, no missing book is invented.</small>
     </div>
@@ -298,9 +298,11 @@ export default function AutoDepthRecorder({onOpenSaved}:{
       <span><strong>{n(state?.received_pairs)}</strong> genuine source book pairs</span>
       <span><strong>{n(state?.snapshots_saved)}</strong> sampled books saved</span>
       <span><strong>{n(state?.contracts_with_recent_packets)}/200</strong> recent paired option IDs (10s)</span>
+      <span><strong>{state?.scalp_fast_contracts??0}/12</strong> one-second sampling IDs</span>
       <span><strong>{n(state?.activity_depth_contracts)}</strong> activity-prioritized depth IDs</span>
       <span><strong>{n(state?.rotating_contracts)}</strong> discovery/rotation IDs</span>
     </div>
+    {!!state?.contracts.some(c=>c.scalp_fast_depth)&&<details className="ad-diagnostics"><summary>One-second research contracts · {state.contracts.filter(c=>c.scalp_fast_depth).length}</summary><p>Target cadence only; no missing seconds are synthesized. Run the Spread Speed study for actual coverage.</p><div className="ad-summary">{state.contracts.filter(c=>c.scalp_fast_depth).map(c=><span key={c.identity}><strong>{c.strike} {c.side}</strong> {inr(c.ltp)} · {c.identity} · saved age {n(state.latest[c.identity]?.age_seconds,1)}s</span>)}</div></details>}
     {state?.depth_counter_audit&&!state.depth_counter_audit.consistent&&
       <p className="ad-warning" role="alert">
         <AlertTriangle size={15}/> Depth counter inconsistency detected.

@@ -58,6 +58,23 @@ class WideDepthContractsTests(TestCase):
         self.assertTrue(all(x["strike"] != 63000 for x in selected))
         self.assertEqual(len({x["security_id"] for x in selected}), 200)
 
+    def test_one_second_sampling_is_bounded_and_does_not_change_subscriptions(self):
+        chain=chain_fixture()
+        for row in chain["contracts"]:
+            row.update(bid=179.,ask=181.,ltp=180.,volume=100)
+        selected=wide.select_full_chain_rotation(chain,auto.DEFAULTS)
+        ids=[x["identity"] for x in selected]
+        wide._assign_scalp_sampling(selected,auto.DEFAULTS)
+        self.assertEqual([x["identity"] for x in selected],ids)
+        for side in ("CE","PE"):
+            self.assertEqual(sum(x["scalp_fast_depth"] and x["side"]==side for x in selected),6)
+        self.assertEqual(sum(wide._sample_interval(x,30)==1 for x in selected),12)
+        self.assertTrue(all(wide._sample_interval(x,30) in (1,3,30) for x in selected))
+        for row in selected:
+            row["ask"]=500.
+        wide._assign_scalp_sampling(selected,auto.DEFAULTS)
+        self.assertFalse(any(x["scalp_fast_depth"] for x in selected))
+
     def test_verified_only_missing_side_never_substituted(self):
         source = chain_fixture(above=46, below=33)
         # Remove a CE from one distant below-ATM strike.

@@ -53,14 +53,20 @@ def _execute(row,action,units,participation_pct,slippage_bps,profile,fee_floor_p
        "received_utc":row["received_utc"],"book_pair_sha256":row["digest"],
        "requested_units":units,"displayed_fill_units":result["units"],
        "vwap":result["vwap"],"turnover":result["turnover"],"fees":cost,
+       "original_best_bid":row["bid"],"original_best_ask":row["ask"],
        "cashflow":fees._money((1 if action=="SELL" else -1)*result["turnover"]-cost)}
 
 
 def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes=5,
            latency_ms=1000,window_seconds=60,max_skew_seconds=2.,
            participation_pct=25.,slippage_bps=5.,broker_profile="zerodha",
-           now=None,exit_decision=None,fee_floor_per_side=0.):
+           now=None,exit_decision=None,fee_floor_per_side=0.,hold_seconds=None,first_book=None):
     now=now or paper._now()
+    lookup=first_book or _first
+    if hold_seconds is not None:
+        paper._check(hold_seconds,1,86400,"holding seconds")
+        if exit_decision is not None:
+            raise ValueError("Choose a fixed hold or an explicit exit decision, not both")
     if strategy not in STRATEGIES or broker_profile not in fees.BROKER_PROFILES:
         raise ValueError("Unsupported replay strategy or brokerage profile")
     actions=("BUY",) if strategy=="LONG_OPTION" else studio.STRATEGIES[strategy]["actions"]
@@ -97,7 +103,7 @@ def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes
         return result
     entry=[]
     for identity in identities:
-        row,error=_first(identity,ready,end,now)
+        row,error=lookup(identity,ready,end,now)
         if error:
             result["missing"].append({"identity":identity,"stage":"entry","reason":error})
         else:
@@ -135,7 +141,7 @@ def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes
         result["state"]="insufficient_hypothetical_risk_budget"
         return result
     result["entry_complete"]=True
-    due=exit_decision if exit_decision is not None else max(stamps)+timedelta(minutes=hold_minutes)
+    due=exit_decision if exit_decision is not None else max(stamps)+timedelta(seconds=hold_seconds if hold_seconds is not None else 60*hold_minutes)
     exit_ready=due+timedelta(microseconds=max(1,round(latency_ms*1000)))
     exit_end=min(exit_ready+timedelta(seconds=window_seconds),close-timedelta(microseconds=1))
     result["exit_decision_utc"]=paper._iso(due)
@@ -149,7 +155,7 @@ def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes
         return result
     exit_rows=[]
     for prior in entry:
-        row,error=_first(prior["identity"],exit_ready,exit_end,now)
+        row,error=lookup(prior["identity"],exit_ready,exit_end,now)
         if not error and (row["expiry"],row["strike"],row["option_type"],row["lot_size"])!=(
             prior["expiry"],prior["strike"],prior["option_type"],prior["lot_size"]):
             error="exit_contract_terms_changed"

@@ -100,8 +100,8 @@ export default function SpreadOpportunityScanner({
   brokerProfile:BrokerProfile;onBrokerProfileChange:(v:BrokerProfile)=>void
   onInspect:(identity:string,lots:number,profile:BrokerProfile)=>void
 }){
-  const [budget,setBudget]=useState(50000)
-  const [maxLots,setMaxLots]=useState(10)
+  const [budget,setBudget]=useState(17000)
+  const [maxLots,setMaxLots]=useState(3)
   const [orders,setOrders]=useState(1)
   const [stress,setStress]=useState(25)
   const [exitSlippage,setExitSlippage]=useState(10)

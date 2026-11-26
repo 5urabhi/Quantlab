@@ -1,5 +1,6 @@
 import {useEffect,useState} from 'react'
 import ResearchPlot from './ResearchPlots'
+import BankHeatmap from './BankHeatmap'
 import ScalpingEconomics from './ScalpingEconomics'
 import ScalpingValidation from './ScalpingValidation'
 import YearScalpingResearch from './YearScalpingResearch'
@@ -23,11 +24,12 @@ function Card({label,value,detail}:{label:string;value:string;detail?:string}){
 function Table({headers,rows}:{headers:string[];rows:(string|number)[][]}){
   return <div className="tc-table-scroll"><table><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((r,i)=><tr key={i}>{r.map((v,j)=><td key={j}>{v}</td>)}</tr>)}</tbody></table></div>
 }
-export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',compact=false,coverageOnly=false}:{identity?:string;compact?:boolean;coverageOnly?:boolean}){
+export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',compact=false,coverageOnly=false,showBankHeatmap=false}:{identity?:string;compact?:boolean;coverageOnly?:boolean;showBankHeatmap?:boolean}){
   const [data,setData]=useState<Report|null>(null)
   const [error,setError]=useState('')
   const [refresh,setRefresh]=useState(0)
   const [saving,setSaving]=useState(false)
+  const [view,setView]=useState<'today'|'history'|'scalping'>('today')
   useEffect(()=>{
     let alive=true,loading=false
     setData(null);setError('')
@@ -74,18 +76,19 @@ export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',co
   </section>
   return <section className="tc-panel mpi" aria-label="Market pattern intelligence">
     <div className="mpi-head"><div><span className="tc-page-kicker">MARKET INTELLIGENCE · ROLLING 365 DAYS</span><h3>{identity.replace('INDEX:','')} movement &amp; scalping context</h3><p>Observed index behaviour, not a CE/PE trade recommendation. Refreshes every 30 seconds from the shared library.</p></div><button type="button" onClick={()=>setRefresh(x=>x+1)}>Refresh</button></div>
+    <nav className="mpi-view-tabs" aria-label="Market intelligence sections">{([["today","Today & bank breadth"],["history","Historical statistics"],["scalping","Scalping research"]] as const).map(([key,label])=><button type="button" className="ws-button" aria-pressed={view===key} key={key} onClick={()=>setView(key)}>{label}</button>)}<a className="ws-button" href="#/tradingspreads">Liquidity &amp; Spreads →</a></nav>
     {error&&<p role="alert" className="tc-error">{error}{data?' · displayed report may be stale.':''}</p>}
     {!data&&!error&&<p role="status">Checking source-verified historical minutes and current observed session…</p>}
     {data&&b&&<>
-      <div className="mpi-coverage">
+      <details className="mpi-coverage"><summary>{b.sessions} complete sessions · history sync {data.sync.enabled?"on":"off"} · coverage &amp; setup</summary>
         <strong>{b.sessions} complete sessions · {b.first||'No complete history'} {b.last?'to '+b.last:''}</strong>
         <span>Requested since {data.requested_start} · {data.coverage.verified_receipts} verified receipts · {data.coverage.excluded_partial_sessions} partial sessions excluded · {data.coverage.rejected_receipts} rejected · {data.coverage.omitted_receipts} omitted · {data.coverage.overlap_revisions} overlap revisions</span>
         <span>Calculated {ftime(data.generated_utc)} IST. Complete-session count is not a guarantee of exchange-calendar coverage.</span>
         {data.coverage.live_read_error&&<span role="status">Live minute read unavailable: {data.coverage.live_read_error}</span>}
         <div className="mpi-sync"><span>Bank Nifty daily original history sync: <b>{data.sync.enabled?data.sync.state:'Off'}</b> · {data.sync.message}</span><button type="button" disabled={saving} onClick={()=>void toggleSync()}>{data.sync.enabled?'Disable sync':'Enable read-only history sync'}</button></div>
         <small>One-time opt-in: fetch missing date windows using your existing Dhan token, then check closed sessions automatically while QuantLab is running. No new socket or trade access; BANKNIFTY only.</small>
-      </div>
-      <h4>Today · {data.date_ist} IST</h4>
+      </details>
+      {view==="today"&&<><h4>Today · {data.date_ist} IST</h4>
       {c?<><p className="mpi-source">{c.state==='recent_completed_bar'?'Recent completed minute':'Saved / stale observations'} · through {ftime(c.as_of_ist)} IST · {c.bars} observed bars ({c.historical_bars} original, {c.live_observed_bars} tick-derived) · {c.missing_prefix_bars} missing minutes before last observation. Partial range is a lower bound.</p>
         <div className="mpi-grid">
           <Card label="Open / latest" value={fmt(c.open)+' / '+fmt(c.close)} detail={'Net from open: '+fmt(c.net)+' pts'}/>
@@ -101,13 +104,15 @@ export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',co
       </>:<p className="tc-warning">No original completed minute observed for today's regular session. Historical data remains separate; no live movement inferred.</p>}
       <h4>Sideways market research</h4>
       <div className="mpi-grid"><Card label="30m regime (observed)" value={c?.regime?.state.replaceAll('_',' ')||'Unavailable'} detail={c?.state==='recent_completed_bar'?'Recent completed minute':'Saved / stale or unavailable'}/><Card label="Close-range boundaries" value={fmt(c?.regime?.low)+' / '+fmt(c?.regime?.high)} detail="Prior 30 close changes; not guaranteed support/resistance"/><Card label="Directional efficiency" value={fmt(c?.regime?.efficiency,3)} detail="≤0.30 range-bound; ≥0.65 trend; heuristic"/><Card label="Close range width" value={pct(c?.regime?.range_pct)} detail="Below 0.10% classified as compressed"/></div>
-      <ScalpingEconomics/>
+      {showBankHeatmap&&<BankHeatmap/>}</>}
+      {view==="scalping"&&<><ScalpingEconomics/>
       {identity==='INDEX:BANKNIFTY'&&<><YearScalpingResearch/><details className="mpi-detail"><summary>Original-depth matched replay (separate execution evidence)</summary><ScalpingValidation/></details></>}
       <details className="mpi-detail"><summary>Range-gated mean reversion · chronological research</summary>
         {b.range_reversion?.state==='descriptive'?<><p className="tc-muted">Development {b.range_reversion.development_sessions} sessions · evaluation {b.range_reversion.evaluation_sessions} from {b.range_reversion.evaluation_from}. Fixed prior range, 20% edge band, inward movement; next-minute open entry and nonoverlapping index proxy holds. No fees, premium or fill inference.</p><Table headers={['Sample','Hold min','Sessions','Triggers','Triggers/day','Positive index proxy','Mean signed pts','Median MFE','Median MAE']} rows={b.range_reversion.rows.map(r=>[r.cohort,r.hold_minutes,r.sessions,r.signals,fmt(r.mean_signals_per_session),pct(r.positive_pct),fmt(r.mean_signed_points),fmt(r.median_mfe),fmt(r.median_mae)])}/></>:<p className="tc-muted">Insufficient complete sessions for chronological evaluation.</p>}
         <p><a className="mi-link" href="#/tradingpaper">Test actual saved CE/PE depth using Range-gated reversal in Rule-Based Replay →</a></p>
       </details>
-      <h4>Historical range and volatility</h4>
+      </>}
+      {view==="history"&&<><h4>Historical range and volatility</h4>
       {b.sessions===0?<p className="tc-warning">No complete regular-session original minute data in this window. Enable history sync or use the existing data centre. No statistics have been fabricated.</p>:<>
         <div className="mpi-grid">
           <Card label="Daily average / median range" value={fmt(b.range.mean)+' / '+fmt(b.range.median)+' pts'}/>
@@ -142,7 +147,8 @@ export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',co
         </details>
         <details className="mpi-detail"><summary>Historical sessions · exact observed OHLC</summary><Table headers={['Session','Open','High','Low','Close','Range','Up','Down','Net']} rows={[...b.daily].reverse().map(s=>[s.date,fmt(s.open),fmt(s.high),fmt(s.low),fmt(s.close),fmt(s.range),fmt(s.up),fmt(s.down),fmt(s.net)])}/></details>
       </>}
-      <p className="tc-muted">{data.warning}</p>
+      </>}
+      <details className="mpi-detail"><summary>Source methodology &amp; limitations</summary><p className="tc-muted">{data.warning}</p></details>
     </>}
   </section>
 }
