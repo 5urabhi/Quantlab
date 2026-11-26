@@ -163,6 +163,8 @@ def run(*, days=None, sessions=1, horizon=15, model_ids=None, iv_days=60,
         emit(name+" ...")
         try:
             result=fn()
+            # A malformed/nonfinite stage result is an error, not a successful report.
+            json.dumps(result,allow_nan=False)
             report["stages"][name]={"state":"completed","result":result}
         except (ValueError,OSError,RuntimeError,sqlite3.Error,TypeError,KeyError,OverflowError) as exc:
             # Do not serialize arbitrary exception strings that could include
@@ -183,15 +185,7 @@ def run(*, days=None, sessions=1, horizon=15, model_ids=None, iv_days=60,
             broker_profile="zerodha",include_spreads=True,compare_entry_profiles=False,now=now))
     if not days:
         report["stages"]["reversal_replay"]={"state":"not_run","reason":"no_selected_completed_dates"}
-    status=stage("prospective_readiness",lambda:constituent_alpha.readiness(horizon,now=now))
-    if status and status["recorded_sessions"]==status["required_sessions"]:
-        stage("forecast_depth_replay",lambda:forecast_depth_research.run(
-            horizon=horizon,capital=capital,max_loss=max_loss,max_lots=max_lots,include_credit=False))
-    else:
-        report["stages"]["forecast_depth_replay"]={"state":"not_run","reason":"insufficient_or_unavailable_recorded_sessions"}
     today=now.astimezone(IST).date()
-    stage("chronological_iv_assessment",lambda:volatility_evidence.iv_run(
-        from_date=(today-timedelta(days=iv_days)).isoformat(),to_date=today.isoformat(),horizon=horizon))
     if not model_ids:
         registry=stage("frozen_candidate_inventory",alpha_model_registry.list_candidates)
         eligible=[m["model_id"] for m in (registry or []) if m["source"]=="prospective"
@@ -200,7 +194,16 @@ def run(*, days=None, sessions=1, horizon=15, model_ids=None, iv_days=60,
         model_ids=eligible[:MAX_MONITORS]
         report["eligible_candidates_in_bounded_registry"]=len(eligible)
         report["unmonitored_candidates_in_bounded_registry"]=max(0,len(eligible)-MAX_MONITORS)
+    status=stage("prospective_readiness",lambda:constituent_alpha.readiness(horizon,now=now))
+    if status and status["recorded_sessions"]==status["required_sessions"]:
+        stage("forecast_depth_replay",lambda:forecast_depth_research.run(
+            horizon=horizon,capital=capital,max_loss=max_loss,max_lots=max_lots,include_credit=False))
+    else:
+        report["stages"]["forecast_depth_replay"]={"state":"not_run","reason":"insufficient_or_unavailable_recorded_sessions"}
+    stage("chronological_iv_assessment",lambda:volatility_evidence.iv_run(
+        from_date=(today-timedelta(days=iv_days)).isoformat(),to_date=today.isoformat(),horizon=horizon))
     report["monitored_model_ids"]=model_ids
+    report["monitoring_note"]="Later-session scoring uses frozen coefficients. It is not necessarily a genuinely prospective deployment test; newly created candidates from this run are not automatically monitored."
     for ident in model_ids:
         stage("frozen_monitor_"+ident,lambda ident=ident:alpha_model_registry.monitor(model_id=ident,now=now))
     if not model_ids:
@@ -234,8 +237,9 @@ def main():
     except (ValueError,OSError) as exc:
         print("Validation could not start: "+type(exc).__name__)
         return 2
-    print("Verdict:",report["state"])
+    print("Report status:",report["state"])
     print("Report:",path.resolve())
+    print("Assessment saved does not imply empirical acceptance; inspect each stage result and coverage.")
     print("Actual broker margin, latency, P&L and independently validated RL: NOT CERTIFIED")
     return 0 if report["state"]=="assessment_saved" else 2
 
