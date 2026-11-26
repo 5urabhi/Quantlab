@@ -24,8 +24,7 @@ BANK_NAMES=("breadth_5m","mean_5m","dispersion_5m","mean_15m","signed_relative_v
 GLOBAL_NAMES=tuple(v for k in FACTORS for v in (k+"_level",k+"_change",k+"_age",k+"_missing"))
 
 
-def _auto_batch(start,stop):
-    # Choose only from manifest date coverage, never model outcomes.
+def _batch_candidates(start,stop):
     items=[]
     for b in h.batches():
         try:
@@ -35,29 +34,45 @@ def _auto_batch(start,stop):
                 items.append((overlap,int(b["status"]=="complete"),b["id"]))
         except (TypeError,ValueError,KeyError):
             continue
-    return max(items)[2] if items else None
+    return [x[2] for x in sorted(items,reverse=True)]
 
 
 def _load_banks(start,stop,batch_id):
-    meta={"batch_id":None,"source_hashes":{},"failures":{},"membership_sha256":None}
-    if batch_id=="auto":
-        batch_id=_auto_batch(start,stop)
-    if not batch_id:
+    meta={"batch_id":None,"source_hashes":{},"failures":{},"membership_sha256":None,
+          "rejected_batches":{}}
+    candidates=_batch_candidates(start,stop) if batch_id=="auto" else [batch_id]
+    if not candidates:
         meta["state"]="no_dated_membership_batch"
         return {},[],None,None,meta
-    meta["batch_id"]=batch_id
-    try:
-        raw,left,right,intervals,resolved=h._batch(batch_id)
-    except (ValueError,KeyError,TypeError,OSError) as exc:
+    # First valid candidate in date-overlap order; never select on model outcomes.
+    for candidate in candidates:
+        try:
+            raw,left,right,intervals,resolved=h._batch(candidate,
+                study_start=start-timedelta(days=35),study_stop=stop)
+            through=date.fromisoformat(raw["historical_index"]["covered_through"])
+            right=min(right,through+timedelta(days=1))
+            if max(left,start)>=min(right,stop):
+                raise ValueError("Pinned membership does not cover requested signals")
+        except (ValueError,KeyError,TypeError,OSError,OverflowError) as exc:
+            # Only local validation errors; never expose raw provider responses.
+            known=("Select a BANKNIFTY","Invalid bounded historical","No overlap",
+                   "Pinned historical membership","Study slice has missing",
+                   "Historical universe outside","Ambiguous historical security",
+                   "Pinned membership does not cover")
+            detail=str(exc) if isinstance(exc,ValueError) and str(exc).startswith(known) else type(exc).__name__
+            meta["rejected_batches"][candidate]=detail
+            continue
+        meta["batch_id"]=candidate
+        break
+    else:
         meta["state"]="invalid_dated_membership_batch"
-        meta["failures"]["batch"]=type(exc).__name__
+        meta["failures"]["batch"]="No candidate passed manifest validation"
         return {},[],None,None,meta
     meta["membership_sha256"]=raw["historical_index"]["intervals_sha256"]
     meta["state"]="loaded"
-    # Respect the manifest range and its pinned membership coverage boundary.
-    through=raw["historical_index"].get("covered_through")
-    if isinstance(through,str):
-        right=min(right,date.fromisoformat(through)+timedelta(days=1))
+    meta["study_from"]=left.isoformat()
+    meta["study_to_exclusive"]=right.isoformat()
+    meta["mapped_members"]=sorted(resolved)
     stocks={};budget=[h.MAX_TOTAL]
     for symbol,identity in sorted(resolved.items()):
         try:
@@ -70,7 +85,8 @@ def _load_banks(start,stop,batch_id):
                                         min(stop,right),budget)
             meta["source_hashes"][symbol]=digest
         except (ValueError,OSError,TypeError,KeyError,OverflowError,csv.Error) as exc:
-            meta["failures"][symbol]=type(exc).__name__
+            known=("missing original receipt","Original minute","One-minute","Unsafe original")
+            meta["failures"][symbol]=str(exc) if isinstance(exc,ValueError) and str(exc).startswith(known) else type(exc).__name__
     return stocks,intervals,left,right,meta
 
 
@@ -99,7 +115,8 @@ def _bank_vector(signal,stocks,intervals,prior_dates,weights):
             if denom>0:
                 relative=min(5.,sum(series[k][4] for k in range(minute-4,minute+1))/denom)
                 vols[symbol]=relative*(1 if returns[symbol]>0 else -1 if returns[symbol]<0 else 0)
-    detail={"state":"missing_constituent_bars","members":len(members),"matched":len(returns)}
+    detail={"state":"missing_constituent_bars","members":len(members),"matched":len(returns),
+            "missing_members":sorted(set(members)-set(returns))}
     if set(returns)!=set(members):
         return None,detail
     n=len(members);mean=sum(returns.values())/n
@@ -152,7 +169,10 @@ def attach(signals,*,mode="receipt",batch_id="auto"):
             global_meta["state"]="context_source_unavailable"
             global_meta["error"]=type(exc).__name__
     stock_dates=sorted({d for series in stocks.values() for d in series})
+    bank_meta["observed_sessions_by_symbol"]={s:len(v) for s,v in stocks.items()}
+    bank_meta["observed_session_count"]=len(stock_dates)
     weights={};audit={};coverage=Counter();factor_coverage=Counter();factor_hashes=set()
+    bank_states=Counter();global_states=Counter();missing_members=Counter()
     for key,s in sorted(unique.items()):
         day,minute,side=key
         bvec=None;bdetail={"state":"outside_membership_batch"}
@@ -163,6 +183,8 @@ def attach(signals,*,mode="receipt",batch_id="auto"):
                 weights[day]=bank._weights_for(date.fromisoformat(day),cutoff,members) if members else None
             bvec,bdetail=_bank_vector(s,stocks,intervals,[d for d in stock_dates if d<day],weights[day])
         gvec,gdetail=_global_vector(timelines,s)
+        bank_states[bdetail["state"]]+=1;global_states[gdetail["state"]]+=1
+        missing_members.update(bdetail.get("missing_members",[]))
         vectors={}
         if bvec is not None:
             vectors["constituents"]=bvec
@@ -184,6 +206,8 @@ def attach(signals,*,mode="receipt",batch_id="auto"):
     return {"state":"audited","mode":mode,"unique_anchors":len(unique),"coverage":dict(coverage),
             "factor_coverage":dict(factor_coverage),"factor_receipt_sha256":sorted(factor_hashes),
             "bank_sources":bank_meta,"global_sources":global_meta,"anchors":audit,
+            "constituent_state_counts":dict(bank_states),"global_state_counts":dict(global_states),
+            "missing_constituent_anchor_counts":dict(missing_members),
             "bank_feature_names":BANK_NAMES,"global_feature_names":GLOBAL_NAMES,
             "warning":"Unweighted breadth is not index attribution. Verified weights require an earlier dated receipt. "
                       "Archive mode trusts reviewed availability; absent groups are not filled. No causal market influence is established."}

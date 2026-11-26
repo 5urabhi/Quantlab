@@ -270,3 +270,53 @@ claiming any improvement. Report stores context source metadata,
 timestamped factor evidence, coverage, validation gates and scoped
 results. Context missingness or absent usable training labels is an
 explicit blocker, not synthesized evidence.
+
+
+## Context data readiness and historical recovery
+
+Run the local context-only preflight before another expensive option replay:
+
+```bash
+bash run.sh cpr-context-check
+```
+
+It verifies original index bars, checks the same recent 60-session regime
+scanner, and reports candidate membership manifests, explicit local
+validation failures, mapped symbols, verified source digests, available
+sessions per symbol, missing member counts, global inventory by receipt
+mode and date range, and train/validation/evaluation context coverage.
+It makes no provider requests by default.
+
+CPR may now read a bounded slice of a longer pinned BANKNIFTY membership
+batch, including up to 35 days of volume warmup. It still validates the
+original membership hash and exact security mapping and respects the
+pinned covered-through date. Other historical studies retain their
+original 240-day whole-batch guard. Auto selection tries remaining
+overlapping manifests if a higher-ranked one fails validation; it never
+chooses on model outcomes. Missing member bars remain blockers. Original
+files and manifests are not changed.
+
+If authorized to use FRED/ALFRED, set FRED_API_KEY in the existing ignored
+local .env (never paste it into chat, a report, or a committed file). Then
+run outside Indian market priority hours:
+
+```bash
+bash run.sh cpr-context-check --fetch-fred --confirm-reviewed
+```
+
+The command uses the existing fixed FRED endpoints and seven reviewed
+series mappings, requests bounded historical real-time periods, retains
+original payloads in the canonical context store, and marks imports as
+archive only. The real-time-period date is **not** an exact publication
+timestamp; use noon UTC on the next day as a conservative availability
+assumption. This deliberately sacrifices freshness to avoid same-day
+lookahead. It neither invents historical GIFT NIFTY prices nor backdates
+live receipts. See FRED's real-time-period and series observations API
+documentation. Provider permissions, vintage availability, data access
+and coverage remain local acceptance requirements. If no FRED key or
+eligible rows exist, report that explicitly. Conflicting source identities
+are not overwritten.
+
+Enable reviewed automatic context feeds in Global Markets for future
+receipt-time observations. FRED is only a daily context subset, not the
+complete global market, participant, or intraday futures universe.
