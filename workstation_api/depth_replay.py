@@ -28,10 +28,11 @@ def _first(identity,eligible,end,now):
 
 def _first_on_db(db,identity,eligible,end,now):
     """Same first-receipt lookup, using a caller-owned read-only connection."""
-    raw=db.execute("""SELECT received_utc,book_json,packet_pair_sha256
+    from . import replay_storage
+    raw=replay_storage.fetchone(db,"""SELECT received_utc,book_json,packet_pair_sha256
         FROM live_depth_books WHERE identity=? AND received_utc>=?
         AND received_utc<=? ORDER BY received_utc LIMIT 1""",
-        (identity,paper._iso(eligible),paper._iso(min(end,now)))).fetchone()
+        (identity,paper._iso(eligible),paper._iso(min(end,now))))
     if raw is None:
         return None,"no_book_in_fixed_window"
     verified=spread_scanner._original_book(identity,*raw)
