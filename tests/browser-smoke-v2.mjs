@@ -510,6 +510,50 @@ try{
    await page.unroute('**/api/trading-cockpit/spreads/readiness/auto')
    await page.unroute('**/api/trading-cockpit/spreads/speed-study')
    await page.unroute('**/api/jobs/fixture-auto-speed')
+   // Batch UI-only fixture. The numerical replay and freeze rules have
+   // independent Python tests; this checks request, progress and rendering.
+   let batchPosts=[]
+   const batchMetrics={attempted:60,scored:30,unscored:30,completion_pct:50,entry_complete:40,
+     profitable:10,losing:20,target_hits:4,mean_net:-24.5,total_net:-735,
+     worst_net:-120,mean_fees:45,scored_blocks:5,lower_block_mean:-30,robust_score:-30,
+     rankable:true,states:{complete_conditional_quote_replay:30,entry_unobservable:30}}
+   const batchRow={...batchMetrics,family:'directional',cohort:'fixed',strategy:'LONG_OPTION',
+     legs:[{identity:'NSE_FNO:62540',strike:62900,option_type:'CE',expiry:'2026-12-29',lot_size:30}],
+     identities:['NSE_FNO:62540'],direction:'UP',lots:2,latency_ms:1000,hold_seconds:60}
+   const signalRow={...batchRow,cohort:'signal',random_control:batchMetrics,signal_minus_random_mean:0}
+   const counts={fixed:{rows:48,rankable:1,positive_robust:0},signal:{rows:48,rankable:0,positive_robust:0}}
+   await page.route('**/api/trading-cockpit/spreads/batch/plans',route=>route.fulfill({json:{plans:[]}}))
+   await page.route('**/api/trading-cockpit/spreads/batch',route=>{
+     batchPosts.push(route.request().postDataJSON())
+     return route.fulfill({json:{job_id:'fixture-batch'}})
+   })
+   await page.route('**/api/jobs/fixture-batch',route=>route.fulfill({json:{status:'complete',percent:100,stage:'Output saved',result:{
+     run_id:'a'.repeat(32),mode:'exploration',day_ist:'2026-11-26',cutoff_utc:'2026-11-26T10:00:00Z',
+     worker_count:6,anchor_count:60,structures:56,configuration_count:4800,attempted_paths:288000,summary_rows:9600,
+     signal:{state:'available',valid:42,up:20,down:10,neutral:12,ticks:2000},
+     counts:{directional:counts,spread:counts},rankings:{directional:{fixed:[batchRow],signal:[signalRow]},spread:{fixed:[],signal:[]}},
+     thresholds:{min_scored:20,min_completion_pct:20,min_scored_blocks:4,block_minutes:30},
+     validation_rows:[],universe:{scanned_contracts:200,affordable_contracts:56,directional_contracts:56,
+       vertical_baskets:0,vertical_candidates_enumerated:10,vertical_candidates_screened:10,scan_truncated:false,vertical_screen_limited:false,scan_scope:'current_depth_watchlist'},
+     plan_id:null,frozen_configurations:[],warning:'Synthetic offline test result; no actual trades.'
+   }}}))
+   await page.getByRole('tab',{name:/Batch Research/}).click()
+   const batchPanel=page.getByRole('region',{name:'All-contract batch research'})
+   await batchPanel.getByRole('button',{name:'Run all eligible configurations'}).click()
+   await batchPanel.getByText('No qualifying positive configuration frozen').waitFor()
+   assert.equal(batchPosts.length,1)
+   assert.equal(batchPosts[0].capital,17000)
+   assert.equal(batchPosts[0].max_lots,3)
+   assert.equal(batchPosts[0].include_spreads,true)
+   assert.equal('identities' in batchPosts[0],false)
+   await batchPanel.getByRole('table',{name:'Batch research rankings'}).getByText('62,900 CE').waitFor()
+   await batchPanel.getByLabel('Entry cohort').selectOption('signal')
+   await batchPanel.getByRole('table',{name:'Batch research rankings'}).getByText('₹-24.5 (30/60)').waitFor()
+   await batchPanel.getByRole('link',{name:'Download all batch summary rows (CSV)'}).waitFor()
+   await shot('02-batch-research')
+   await page.unroute('**/api/trading-cockpit/spreads/batch/plans')
+   await page.unroute('**/api/trading-cockpit/spreads/batch')
+   await page.unroute('**/api/jobs/fixture-batch')
    await page.getByRole('tab',{name:/Live Spread Monitor/}).click()
    await page.getByRole('tabpanel',{name:'Live Spread Monitor'}).waitFor()
    await page.getByRole('button',{name:'Inspect'}).first().waitFor()

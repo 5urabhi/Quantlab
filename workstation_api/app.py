@@ -57,14 +57,14 @@ MAX_ACTIVE_LOCAL_JOBS = 6  # Shared admission bound; general writes remain seria
 
 
 def _job_lane(kind):
-    return "spread_replay" if kind == "spread_speed_study" else "research"
+    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation"} else "research"
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"spread_speed_study","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -1853,6 +1853,57 @@ def automatic_spread_study_readiness(body:AutomaticSpreadReadinessRequest):
         return spread_readiness.automatic(**body.model_dump())
     except (ValueError,OSError,sqlite3.Error) as exc:
         bad(exc)
+
+
+class SpreadBatchRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    day: str=Field(min_length=10,max_length=10)
+    capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
+    max_lots: int=Field(default=3,ge=1,le=3,strict=True)
+    target_net: float=Field(default=100,ge=0,le=1e6,allow_inf_nan=False)
+    window_seconds: int=Field(default=1,ge=1,le=30,strict=True)
+    step_minutes: Literal[1,5,15]=5
+    participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
+    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
+    expiry: str=Field(default="",max_length=10)
+    side: Literal["ALL","CE","PE"]="ALL"
+    search: str=Field(default="",max_length=80)
+    include_spreads: bool=Field(default=True,strict=True)
+
+
+class SpreadBatchValidationRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    plan_id: str=Field(pattern=r"^[a-f0-9]{64}$")
+    day: str=Field(min_length=10,max_length=10)
+
+
+@app.post("/api/trading-cockpit/spreads/batch")
+def start_spread_batch(body:SpreadBatchRequest):
+    from . import spread_batch
+    return _spawn("spread_batch_study",spread_batch.run,**body.model_dump())
+
+
+@app.get("/api/trading-cockpit/spreads/batch/plans")
+def spread_batch_plans():
+    from . import spread_batch
+    return {"plans":spread_batch.list_plans()}
+
+
+@app.post("/api/trading-cockpit/spreads/batch/validate")
+def start_spread_batch_validation(body:SpreadBatchValidationRequest):
+    from . import spread_batch
+    return _spawn("spread_batch_validation",spread_batch.validate,**body.model_dump())
+
+
+@app.get("/api/trading-cockpit/spreads/batch/results/{run_id}")
+def download_spread_batch(run_id: str):
+    from . import spread_batch
+    try:
+        path=spread_batch.result_path(run_id)
+    except (ValueError,FileNotFoundError) as exc:
+        raise HTTPException(404,str(exc)) from exc
+    return FileResponse(path,filename="quantlab_batch_"+run_id+".csv",media_type="text/csv")
 
 
 @app.post("/api/trading-cockpit/spreads/speed-study")

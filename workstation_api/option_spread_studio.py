@@ -147,7 +147,7 @@ def _payoff_per_unit(legs: list[dict], spot: float) -> float:
 
 
 def _terminal_payoff(legs: list[dict], entry_cashflow: float, fees: float,
-                     units: int) -> dict:
+                     units: int, *, include_chart: bool = True) -> dict:
     strikes = sorted({leg["strike"] for leg in legs})
     width = max(1.0, strikes[-1] - strikes[0])
     extremes = [max(0.0, strikes[0] - 2 * width),
@@ -175,7 +175,7 @@ def _terminal_payoff(legs: list[dict], entry_cashflow: float, fees: float,
     lo, hi = extremes
     points = [{"underlying": round(lo + (hi - lo) * i / 60, 2),
                "net_payoff_inr": net(lo + (hi - lo) * i / 60)}
-              for i in range(61)]
+              for i in range(61)] if include_chart else []
     return {
         "max_profit_before_expiry_settlement_inr": profit,
         "max_loss_before_expiry_settlement_inr": loss,
