@@ -19,27 +19,30 @@ STRATEGIES=("LONG_OPTION",*studio.STRATEGIES.keys())
 def _first(identity,eligible,end,now):
     try:
         with closing(ao._read_database()) as db:
-            raw=db.execute("""SELECT received_utc,book_json,packet_pair_sha256
-                FROM live_depth_books WHERE identity=? AND received_utc>=?
-                AND received_utc<=? ORDER BY received_utc LIMIT 1""",
-                (identity,paper._iso(eligible),paper._iso(min(end,now)))).fetchone()
+            return _first_on_db(db,identity,eligible,end,now)
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc) or "unable to open database file" in str(exc):
             return None,"source_table_unavailable"
         raise
+
+
+def _first_on_db(db,identity,eligible,end,now):
+    """Same first-receipt lookup, using a caller-owned read-only connection."""
+    raw=db.execute("""SELECT received_utc,book_json,packet_pair_sha256
+        FROM live_depth_books WHERE identity=? AND received_utc>=?
+        AND received_utc<=? ORDER BY received_utc LIMIT 1""",
+        (identity,paper._iso(eligible),paper._iso(min(end,now)))).fetchone()
     if raw is None:
         return None,"no_book_in_fixed_window"
-    stamp,body,digest=raw
-    verified=spread_scanner._original_book(identity,stamp,body,digest)
+    verified=spread_scanner._original_book(identity,*raw)
     if not verified:
         return None,"first_book_failed_original_validation"
-    book,stats,features=verified
-    item=studio._book_row(book,stats,features)
+    item=studio._book_row(*verified)
     if not item or not eligible<=item["stamp"]<=min(end,now):
         return None,"invalid_first_book_time_or_terms"
     if not paper._regular(item["stamp"]) or item["stamp"]>=paper._close(item["stamp"],item["expiry"]):
         return None,"book_outside_regular_session_or_expired"
-    return {**item,"digest":digest},None
+    return {**item,"digest":raw[2]},None
 
 
 def _execute(row,action,units,participation_pct,slippage_bps,profile,fee_floor_per_side=0.):
