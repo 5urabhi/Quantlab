@@ -8,7 +8,7 @@ run only on demand and are cached; no provider calls or recorder locks.
 from __future__ import annotations
 
 from contextlib import closing
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 import csv
 import json
 import os
@@ -399,3 +399,51 @@ def records(source, identity, qualifier="", before="", limit=50):
             "rows":[list(r) for r in output],"has_more":len(found)>limit,
             "before":output[-1][columns.index(stamp)] if output and len(found)>limit else None,
             "note":"Newest matching stored rows (scalar preview). Equal-time packets at a page boundary may be omitted. Not a complete source export."}
+
+
+def daily_activity(source, start, end):
+    """Bounded read-only calendar-day counts for one canonical record type.
+
+    Zero means no matching stored records for that calendar day after a
+    completed query, not a missing exchange session or a data outage.
+    """
+    if source not in SQL or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", start) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", end):
+        raise ValueError("Choose a canonical source and ISO calendar dates")
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    if not 0 <= (last-first).days < 90 or last == date.max:
+        raise ValueError("Choose an inclusive window of 1 to 90 calendar days")
+    table, identity, stamp, condition, _ = SQL[source]
+    label, unit, basis, _, _ = SOURCES[source]
+    report = {"source":source,"label":label,"unit":unit,"time_basis":basis,
+              "start":start,"end":end,"checked_utc":_now(),"rows":[],
+              "note":"Stored date prefixes; counts are distinct records of the selected type. Zero is not a confirmed missing trading session."}
+    path = shared_market_data.database_path()
+    if not _safe_file(path):
+        return {**report,"state":"not_recorded","detail":"Canonical store is unavailable."}
+    try:
+        with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True,timeout=0.5)) as db:
+            db.execute("PRAGMA query_only=ON")
+            db.execute("PRAGMA trusted_schema=OFF")
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                return {**report,"state":"not_recorded","detail":"Source table has not been created."}
+            where = [stamp+">=?", stamp+"<?"]
+            if condition:
+                where.append(condition.removeprefix("WHERE "))
+            deadline = time.monotonic()+2.0
+            db.set_progress_handler(lambda:int(time.monotonic()>deadline),5000)
+            result = db.execute("SELECT substr("+stamp+",1,10),COUNT(*),COUNT(DISTINCT "+identity+") FROM "+
+                 table+" WHERE "+" AND ".join(where)+" GROUP BY 1 ORDER BY 1",
+                 (start,(last+timedelta(days=1)).isoformat())).fetchall()
+            counts = {}
+            for day, count, instruments in result:
+                if not isinstance(day,str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}",day) or not first<=date.fromisoformat(day)<=last:
+                    raise ValueError("Invalid saved timestamp")
+                counts[day] = (count,instruments)
+            rows=[]
+            for i in range((last-first).days+1):
+                day=(first+timedelta(days=i)).isoformat()
+                count,instruments=counts.get(day,(0,0))
+                rows.append({"date":day,"count":count,"instruments":instruments})
+            return {**report,"state":"stored","rows":rows,"detail":"Completed bounded SQLite query; original data unchanged."}
+    except (sqlite3.Error,OSError,ValueError):
+        return {**report,"state":"not_verified","detail":"The bounded read could not complete. Try a shorter date window."}

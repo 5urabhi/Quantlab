@@ -18,6 +18,7 @@ import PythonWorkbench from './PythonWorkbench'
 import PythonMonitors from './PythonMonitors'
 import PythonEnvironment from './PythonEnvironment'
 import ResearchPlot from './ResearchPlots'
+import SavedIndexAnalytics from './SavedIndexAnalytics'
 const CustomModelWorkspace = lazy(() => import('./CustomModelWorkspace'))
 const ResearchNotebook = lazy(() => import('./ResearchNotebook'))
 const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
@@ -37,7 +38,7 @@ type Dict = Record<string, unknown>
 type Dataset = {id:string; label:string; kind:string; ready:boolean; monthly_price_observations?:number; missing:string[]; files:string[]; has_prices:boolean; has_daily_prices?:boolean; has_daily_ohlcv?:boolean; source_interval_minutes?:number|null; daily_session_count?:number; benchmark_kind?:string; benchmark_is_total_return?:boolean; independently_verified?:boolean; has_fundamentals:boolean; has_sectors:boolean; basis:string}
 type Run = {id:string; name:string; dataset_id?:string; dataset_kind:string; created_utc?:string; metrics_by_split:Record<string,Dict>; coverage:Dict; status:string; first_price_date?:string; last_price_date?:string}
 type Job = {id:string; kind:string; status:'queued'|'running'|'complete'|'error'; error?:string; result?:unknown}
-type Detail = {id:string;meta:{config:Dict; metrics_by_split:Record<string,Dict>; coverage:Dict; limitations:string[]; first_price_date:string;last_price_date:string; generated_utc:string};source:Dict;returns:Dict[];latest_weights:{name:string;weight:number}[];rank_ic:Dict[];factor_exposures:Dict[];concentration:Dict[];rolling:Dict[];cost_sensitivity:Dict[];robustness:Dict[];methodologies:Dict[];audit:Dict;data_quality:Dict;artifacts:string[]}
+type Detail = {id:string;meta:{config:Dict; metrics_by_split:Record<string,Dict>; coverage:Dict; limitations:string[]; first_price_date:string;last_price_date:string; generated_utc:string};source:Dict;returns:Dict[];latest_weights:{name:string;weight:number}[];rank_ic:Dict[];factor_exposures:Dict[];concentration:Dict[];rolling:Dict[];cost_sensitivity:Dict[];robustness:Dict[];methodologies:Dict[];sector_exposure?:Dict[];methodology_returns?:Dict[];audit:Dict;data_quality:Dict;artifacts:string[]}
 type Health = {ok:boolean; mode:string; framework:string; read_only_market_data:boolean; broker_orders_enabled:boolean; dhan_token_configured:boolean; datasets:number;completed_runs:number}
 type DhanStatus = {token_configured:boolean;instrument_master_available:boolean;instrument_master_bytes:number;read_only:boolean}
 type DatasetTrash = {id:string;kind:string;title:string;trashed:boolean;archived:boolean;protected:boolean}
@@ -224,11 +225,6 @@ function EquityChart({rows,caption='Strategy vs benchmark',provenance='historica
   return <div className="ws-chart ws-interactive-chart"><div className="ws-chart-views" role="group" aria-label="Performance graph type">{([['wealth','Growth line'],['excess','Monthly difference'],['drawdown','Drawdown area']] as const).map(([id,name])=><button type="button" key={id} aria-pressed={view===id} className={view===id?'active':''} onClick={()=>setView(id)}>{name}</button>)}</div>
     <ResearchPlot plot={{kind:view==='excess'?'bar2d':view==='drawdown'?'area2d':'line2d',title:caption+' · '+label,x_label:'Observation date',y_label:label,x:points.map(p=>p.date),traces,reference_lines:[{value:view==='wealth'?1:0,label:view==='wealth'?'Initial capital = 1×':'Zero'}]}} provenance={provenance} formatY={v=>v.toFixed(view==='wealth'?3:2)}/>
     <p className="ws-caption">Cumulative wealth starts at 1× before the first observed return. Missing or invalid returns stop the cumulative path rather than silently fill missing data. Historical simulation, not proof of investability.</p></div>
-}
-function BarRows({rows,valueKey='weight',nameKey='name'}:{rows:Dict[];valueKey?:string;nameKey?:string}){
-  if(!rows.length)return <Empty title="No exposure data">Select a completed research run to inspect portfolio exposures.</Empty>
-  const top=rows.slice(0,14); const max=Math.max(...top.map(r=>Math.abs(Number(r[valueKey]||0))),.00001)
-  return <div className="ws-bars">{top.map((r,i)=><div className="ws-bar-row" key={i}><span title={String(r[nameKey])}>{String(r[nameKey]??'—')}</span><div><i style={{width:(Math.abs(Number(r[valueKey]||0))/max*100)+'%'}}/></div><strong>{percent(Number(r[valueKey]))}</strong></div>)}</div>
 }
 const weighted=(metric:Dict|undefined,key:string)=>metric?.[key]
 function App(){
@@ -427,7 +423,6 @@ function App(){
   const withRun=(content:React.ReactNode)=><>{runs.length===0?<Empty title="No research run selected" onAction={()=>begin('research')} action="Run an experiment">All charts are generated from Python research outputs, not hardcoded sample performance.</Empty>:<>{runPicker}{content}</>}</>
   const classification=<Tag tone={detail?.source.dataset_kind==='synthetic'?'warn':'blue'}>{detail?.source.dataset_kind==='synthetic'?'SYNTHETIC DATA — DEMONSTRATION':detail?'USER DATA · NOT INDEPENDENTLY AUDITED':'NO RESEARCH RUN'}</Tag>
   const chart=detail?<EquityChart rows={detail.returns} provenance={detail.source.dataset_kind==='synthetic'?'synthetic':'historical'}/>:null
-  const panel=(key: keyof Detail,description:string)=>withRun(<Card title={description}><Table rows={(detail?.[key] as Dict[]|undefined)??[]} max={20}/></Card>)
   return <div className={'ws-shell ws-v2 ql-v3 '+(compactNav?'ql-nav-compact':'')}>
     <aside className={'ws-sidebar '+(menu?'open':'')}>
       <div className="ws-brand"><span className="ws-brand-mark"><Activity size={23}/></span><div><strong>QUANT<span>LAB</span></strong><small>RESEARCH WORKSTATION</small></div><button type="button" className="ws-mobile-close" onClick={()=>setMenu(false)}><X size={19}/></button></div>
@@ -847,13 +842,10 @@ function App(){
           onWorkspace={()=>begin('workspace')}
           onData={()=>begin('data')}
           onReports={()=>begin('reports')}/>}
-        {tab==='factors'&&<>{withRun(<div className="ws-grid halves"><Card title="Factor rank information coefficient"><Table rows={detail?.rank_ic||[]}/></Card><Card title="Portfolio factor exposures"><Table rows={detail?.factor_exposures||[]}/></Card></div>)}</>}
-        {tab==='construction'&&<>{withRun(<div className="ws-grid halves"><Card title="Current allocation"><BarRows rows={detail?.latest_weights||[]}/></Card><Card title="Concentration history"><Table rows={detail?.concentration||[]}/></Card></div>)}</>}
-        {tab==='comparisons'&&<>{panel('methodologies','Methodology comparison outputs')}{panel('cost_sensitivity','Transaction cost sensitivity')}</>}
-        {tab==='rolling'&&<>{panel('rolling','Rolling relative return and tracking metrics')}</>}
-        {tab==='risk'&&<>{panel('concentration','Risk concentration over time')}{panel('rolling','Rolling relative risk metrics')}</>}
-        {tab==='robustness'&&<>{panel('robustness','Parameter sensitivity and robustness grid')}</>}
-        {tab==='visual'&&<>{withRun(<Card title="Cumulative strategy / benchmark path" extra={classification}>{chart}</Card>)}{panel('rank_ic','Cross-sectional factor validation')}</>}
+        {(['factors','construction','comparisons','rolling','risk','robustness','visual'] as Tab[]).includes(tab)&&withRun(detail&&detail.id===selectedRun?<>
+          {tab==='visual'&&<Card title="Cumulative strategy / benchmark path" extra={classification}>{chart}</Card>}
+          <SavedIndexAnalytics key={tab+':'+detail.id} route={tab as 'factors'|'construction'|'comparisons'|'rolling'|'risk'|'robustness'|'visual'} detail={detail}/>
+        </>:<Empty title="Loading selected saved run">Select a completed index research experiment.</Empty>)}
         {tab==='mathematics'&&<>
           <ModelLaboratory
             section="mathematics" enableCustomModels datasets={datasets} selectedDataset={selectedDataset}

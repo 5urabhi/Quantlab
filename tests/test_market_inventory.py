@@ -93,3 +93,36 @@ class MarketInventoryTests(unittest.TestCase):
         self.assertEqual(oi["rows"][0][oi["columns"].index("open_interest")],1000)
         with self.assertRaises(ValueError):
             inv.records("raw_intraday","NSE_EQ:123")
+
+    def test_daily_activity_counts_distinct_kinds_and_calendar_days(self):
+        path=inv.shared_market_data.database_path()
+        path.parent.mkdir(parents=True)
+        with sqlite3.connect(path) as db:
+            db.executescript("""
+            CREATE TABLE dhan_option_live_events(identity TEXT,received_utc TEXT,kind TEXT);
+            INSERT INTO dhan_option_live_events VALUES
+            ('NSE_FNO:1','2026-11-23T04:00:00+00:00','quote'),
+            ('NSE_FNO:1','2026-11-23T04:01:00+00:00','quote'),
+            ('NSE_FNO:2','2026-11-23T04:02:00+00:00','quote'),
+            ('NSE_FNO:1','2026-11-23T04:03:00+00:00','oi'),
+            ('NSE_FNO:2','2026-11-25T04:00:00+00:00','quote'),
+            ('NSE_FNO:3','2026-11-26T00:00:00+00:00','quote');
+            """)
+        result=inv.daily_activity('option_quote','2026-11-23','2026-11-25')
+        self.assertEqual(result['state'],'stored')
+        self.assertEqual(result['rows'],[
+            {'date':'2026-11-23','count':3,'instruments':2},
+            {'date':'2026-11-24','count':0,'instruments':0},
+            {'date':'2026-11-25','count':1,'instruments':1}])
+        self.assertEqual(inv.daily_activity('option_oi','2026-11-23','2026-11-23')['rows'][0]['count'],1)
+        self.assertEqual(inv.daily_activity('live_ticks','2026-11-23','2026-11-25')['state'],'not_recorded')
+        with self.assertRaises(ValueError):
+            inv.daily_activity('raw_daily','2026-11-23','2026-11-25')
+        with self.assertRaises(ValueError):
+            inv.daily_activity('option_quote','2026-01-01','2026-11-25')
+
+    def test_daily_activity_missing_store_remains_missing(self):
+        result=inv.daily_activity('daily_closes','2026-11-01','2026-11-25')
+        self.assertEqual(result['state'],'not_recorded')
+        self.assertEqual(result['rows'],[])
+        self.assertFalse(inv.shared_market_data.database_path().exists())
