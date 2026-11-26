@@ -1,6 +1,7 @@
 import {useEffect,useState} from 'react'
 import {CheckCircle2,Database,ExternalLink,RefreshCw,Search,ShieldAlert,Upload} from 'lucide-react'
 import './nse-source-assistant.css'
+import './operations-closeout.css'
 
 type Task='corporate_actions'|'stock_history'|'symbol_search'|'index_history'
 type Capability={configured:boolean;connection:string;tasks:{id:Task;name:string;purpose:string}[];
@@ -39,6 +40,30 @@ const TASKS:{id:Task;name:string;description:string}[]=[
   {id:'index_history',name:'Index context',description:'Inspect index prices — not NIFTY TRI'},
 ]
 
+type SavedReceipt={id:string;ingested_utc:string;files:{name:string;original_sha256:string;bytes:number}[];weightage_csv_candidates:number}
+type ReceiptList={receipts:SavedReceipt[];inspected:number;unreadable:number;partial:boolean;note:string}
+function ReceiptArchive({revision}:{revision:number}){
+  const [data,setData]=useState<ReceiptList|null>(null)
+  const [busy,setBusy]=useState(true)
+  const [error,setError]=useState('')
+  const [refresh,setRefresh]=useState(0)
+  const [query,setQuery]=useState('')
+  useEffect(()=>{
+    let active=true
+    setBusy(true);setError('')
+    void api<ReceiptList>('receipts').then(r=>{if(active)setData(r)}).catch(e=>{if(active)setError(e instanceof Error?e.message:String(e))}).finally(()=>{if(active)setBusy(false)})
+    return()=>{active=false}
+  },[revision,refresh])
+  const visible=data?.receipts.filter(r=>[r.id,r.ingested_utc,...r.files.map(f=>f.name)].join(' ').toLowerCase().includes(query.trim().toLowerCase()))||[]
+  return <section className="qoc-panel" aria-label="Saved NSE evidence receipts">
+    <header><div><h3>Saved NSE evidence receipts</h3><p>Browse the immutable intake metadata from earlier local imports. No NSE query or source-file verification is performed here.</p></div><button className="ws-button" type="button" disabled={busy} onClick={()=>setRefresh(n=>n+1)}>Refresh receipt archive</button></header>
+    {error&&<p role="alert" className="qoc-error">{error}</p>}
+    {data&&<><p className="qoc-note">{data.receipts.length} returned · {data.inspected} inspected · {data.unreadable} unreadable. {data.partial?'Partial inventory. ':''}{data.note}</p><label className="qoc-field">Search receipts<input aria-label="Search NSE receipts" type="search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Receipt ID, date or file name"/></label>
+    {visible.map(r=><details key={r.id} className="qoc-subpanel"><summary>{r.id} · {r.files.length} original file(s) · {r.ingested_utc.slice(0,10)}</summary><p className="qoc-note">{r.weightage_csv_candidates} possible weightage CSV(s) · Unverified local source evidence</p><div className="qoc-scroll"><table><thead><tr><th>Original file</th><th>Size (bytes)</th><th>Recorded SHA-256</th></tr></thead><tbody>{r.files.map(f=><tr key={f.name}><td>{f.name}</td><td>{f.bytes.toLocaleString()}</td><td><code>{f.original_sha256}</code></td></tr>)}</tbody></table></div></details>)}
+    {!visible.length&&<p className="qoc-note">No matching saved intake receipts.</p>}</>}
+  </section>
+}
+
 export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenDhan,onOpenData}:Props){
   const [capabilities,setCapabilities]=useState<Capability|null>(null)
   const [task,setTask]=useState<Task>('corporate_actions')
@@ -55,6 +80,7 @@ export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenD
   const [error,setError]=useState('')
   const [files,setFiles]=useState<File[]>([])
   const [receipt,setReceipt]=useState<Receipt|null>(null)
+  const [archiveRevision,setArchiveRevision]=useState(0)
 
   useEffect(()=>{
     let active=true
@@ -97,7 +123,7 @@ export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenD
 
   const intake=async()=>{
     if(!files.length||busy)return
-    setBusy('intake');setError('');setReceipt(null)
+    setBusy('intake');setError('');setReceipt(null);setArchiveRevision(n=>n+1)
     try{
       const form=new FormData()
       files.forEach(file=>form.append('files',file))
@@ -227,6 +253,7 @@ export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenD
           </details></div>
       </div>}
     </div>
+    <ReceiptArchive revision={archiveRevision}/>
     <p className="nse-footnote">NSE MCP results are informational and may be temporarily unavailable.
       Index price levels are not TRI. QuantLab never treats an unavailable response as zero events,
       invents historical observations, performs broker orders, or bypasses data licenses.
