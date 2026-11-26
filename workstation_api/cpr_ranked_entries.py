@@ -154,7 +154,7 @@ def _matched(episodes,scope):
 
 
 def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capital,risk_budget,
-           context_audit,q=None,progress=None):
+           context_audit,q=None,pattern_research=False,fixed_panel=False,progress=None):
     val_days,test_days=map(set,dates)
     val_signals=[s for s in signals if s["session"] in val_days]
     test_signals=[s for s in signals if s["session"] in test_days]
@@ -162,7 +162,15 @@ def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capita
     val_pool=[e for e in pools if e["session"] in val_days]
     test_pool=[e for e in pools if e["session"] in test_days]
     results={};journal=[]
-    scopes=("technical",) if context_audit.get("state")=="disabled" else cx.SCOPES
+    scopes=["technical"] if context_audit.get("state")=="disabled" else list(cx.SCOPES)
+    if fixed_panel and context_audit.get("state")!="disabled":
+        scopes.extend(cx.PANEL_SCOPES)
+    if pattern_research:
+        scopes.append("patterns")
+        if context_audit.get("state")!="disabled":
+            scopes.extend(("global_patterns","combined_patterns"))
+            if fixed_panel:
+                scopes.append("panel_global_patterns")
     # 'val' contains capital-independent learning trajectories; nearest actual
     # candidate episodes are built separately to match the trading account.
     nearest_val=[r._episode(s,table,index[s["session"]],hold=hold,lot_size=lot_size,
