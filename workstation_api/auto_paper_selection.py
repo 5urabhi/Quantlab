@@ -291,7 +291,7 @@ def _candidate(strategy,books,config,report,rejections):
         if len(outcomes)!=5:
             rejections["invalid_model_scenario"]+=1;continue
         favorable=min(outcomes[k] for k in ("favorable","favorable_iv_down","favorable_iv_up"))
-        if favorable<config["target_net"]:
+        if favorable<config["target_net"] and not config.get("_research_without_target_gate",False):
             reason="iv_stress_target_not_met" if outcomes["favorable"]>=config["target_net"] else "unstressed_target_not_met"
             rejections[reason]+=1;continue
         immediate=replay.fees._money(cash+sum(x["cashflow"] for x in exit_))
@@ -303,6 +303,10 @@ def _candidate(strategy,books,config,report,rejections):
             "entry_cashflow_inr":cash,"immediate_roundtrip_net_inr":immediate,
             "entry_fees_inr":sum(x["fees"] for x in entry),"immediate_exit_fees_inr":sum(x["fees"] for x in exit_),
             "stress_favorable_net_inr":favorable,"scenario_net_inr":outcomes,"score":round(score,6),
+            "scenario_target_met":favorable>=config["target_net"],
+            "modeled_payoff_loss_inr":max_loss,
+            "gross_buy_funding_inr":replay.fees._money(sum(-x["cashflow"] for x in entry if x["action"]=="BUY")),
+            "target_gate_applied":not config.get("_research_without_target_gate",False),
             "oldest_book_utc":paper._iso(min(stamps)),"newest_book_utc":paper._iso(max(stamps)),
             "legs":[{"identity":b["identity"],"strike":b["strike"],"side":b["option_type"],
                      "expiry":b["expiry"],"action":a,"bid":b["bid"],"ask":b["ask"],
@@ -366,4 +370,4 @@ def _finish(output,candidates,rejects):
     candidates.sort(key=lambda c:(-c["score"],-c["stress_favorable_net_inr"],c["modeled_risk_inr"],c["identities"]))
     output.update(rejections=dict(rejects),candidates=candidates[:3],eligible_candidates=len(candidates))
     if candidates:
-        output.update(action="PAPER_ENTRY",reason="modeled_scenario_and_source_gates_passed",selected=candidates[0])
+        output.update(action="PAPER_ENTRY",reason=("modeled_scenario_and_source_gates_passed" if candidates[0].get("target_gate_applied",True) else "research_candidate_without_target_gate"),selected=candidates[0])
