@@ -26,8 +26,8 @@ MAX_DAYS=240
 MAX_INSTRUMENTS=60
 MAX_FILE=160*1024*1024
 MAX_TOTAL=900*1024*1024
-POLICY={"version":VERSION,"horizons":HORIZONS,"splits":[30,10,20],
-        "sampling":"first 60 observed completed index dates; reserve predetermined windows before source or label gates; no substitutions",
+POLICY={"version":VERSION,"horizons":HORIZONS,"splits":[30,10,20],"session_close_splits":[60,20,40],
+        "sampling":"first 60 observed completed index dates (120 for session-close); reserve predetermined windows before source or label gates; no substitutions",
         "weight_modes":["unweighted","verified_weights"],
         "target":"close of completed decision bar to close of future bar; 0 = session close",
         "source":"pinned Dhan batch membership and original historical minute candles",
@@ -227,8 +227,12 @@ def run(*,batch_id,horizon=30,weight_mode="unweighted",progress=None):
     raw,start,stop,intervals,resolved=_batch(batch_id)
     if progress:progress(1,"Inspecting pinned membership and original batch")
     index,stocks,sources,failures=_sources(batch_id,raw,start,stop,resolved,progress)
-    dates=sorted(index)[:a.REQUIRED]
-    split=[dates[:a.TRAIN],dates[a.TRAIN:a.TRAIN+a.CALIBRATION],dates[a.TRAIN+a.CALIBRATION:]]
+    # A session-close label has only one independent window per day.
+    multiplier=2 if horizon==0 else 1
+    required=a.REQUIRED*multiplier
+    ntrain=a.TRAIN*multiplier;ncal=a.CALIBRATION*multiplier
+    dates=sorted(index)[:required]
+    split=[dates[:ntrain],dates[ntrain:ntrain+ncal],dates[ntrain+ncal:]]
     samples=[];audit=[];counts=Counter()
     for i,day in enumerate(dates):
         if progress:progress(42+17*i/max(1,len(dates)),"Auditing matched historical windows: "+day)
@@ -247,7 +251,7 @@ def run(*,batch_id,horizon=30,weight_mode="unweighted",progress=None):
                       "weight_sha256":weight_digest,**c})
     train,cal,test=([r for r in samples if r["session"] in set(part)] for part in split)
     status={"version":VERSION,"policy_sha256":POLICY_HASH,"batch_id":batch_id,"weight_mode":weight_mode,
-        "horizon_minutes":horizon,"recorded_sessions":len(dates),"required_sessions":a.REQUIRED,
+        "horizon_minutes":horizon,"recorded_sessions":len(dates),"required_sessions":required,
         "training_dates":split[0],"calibration_dates":split[1],"holdout_dates":split[2],
         "observed_index_dates":len(index),"source_hashes":sources,"source_failures":failures,
         "membership_sha256":raw["historical_index"]["intervals_sha256"],"evidence_counts":dict(counts),
@@ -256,9 +260,9 @@ def run(*,batch_id,horizon=30,weight_mode="unweighted",progress=None):
         "broker_orders_enabled":False,"live_model_promoted":False,
         "warning":"Retrospective latest-retrieved historical candles and reconstructed dated membership; not receipt-certified prospective predictions. "
         "Unweighted mode is a breadth/dispersion research feature, not official index weights or reconstructed index. Verified-weight mode requires dated weights actually recorded before the session. "
-        "The split retains the first 60 observed index dates, not all exchange sessions. Missing windows are counted, not filled. "
+        "The split retains the first 60 observed index dates (120 for session-close research), not all exchange sessions. Missing windows are counted, not filled. "
         "Close-to-close returns and fixed 5 bps index cost are hypothetical prediction metrics, not executable index or option P&L."}
-    if len(dates)<a.REQUIRED:
+    if len(dates)<required:
         status["state"]="awaiting_recorded_sessions"
     elif not (a._supported(train,60,20,train=True) and a._supported(cal,20,7) and a._supported(test,40,12)):
         status["state"]="insufficient_matched_evidence"
