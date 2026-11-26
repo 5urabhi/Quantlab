@@ -57,14 +57,14 @@ MAX_ACTIVE_LOCAL_JOBS = 6  # Shared admission bound; general writes remain seria
 
 
 def _job_lane(kind):
-    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research"} else "research"
+    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research"} else "research"
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -5417,6 +5417,36 @@ def constituent_derivative_analysis(horizon:int=5,as_of:str=""):
         return constituent_derivatives.analysis(horizon,as_of)
     except (ValueError,OSError,TypeError,OverflowError,sqlite3.Error) as exc:
         raise HTTPException(400,"Stored derivative analysis unavailable; inspect source and selected time") from exc
+
+
+from . import constituent_alpha
+
+
+class ConstituentAlphaRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    horizon: Literal[5,10,30,60]=30
+
+
+@app.get("/api/trading-cockpit/constituents/alpha/readiness")
+def constituent_alpha_readiness(horizon:int=30):
+    try:
+        return constituent_alpha.readiness(horizon)
+    except (ValueError,OSError,sqlite3.Error,RuntimeError) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/constituents/alpha/research")
+def start_constituent_alpha(body:ConstituentAlphaRequest):
+    return _spawn("constituent_alpha_research",constituent_alpha.run,**body.model_dump())
+
+
+@app.get("/api/trading-cockpit/constituents/alpha/results/{run_id}")
+def download_constituent_alpha(run_id:str):
+    try:
+        path=constituent_alpha.result_path(run_id)
+    except (ValueError,FileNotFoundError) as exc:
+        raise HTTPException(404,str(exc)) from exc
+    return FileResponse(path,filename="quantlab_constituent_alpha_"+run_id+".csv",media_type="text/csv")
 
 
 from . import constituent_calibration
