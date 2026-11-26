@@ -44,10 +44,13 @@ def _clock(row):
     return decision-timedelta(minutes=1),decision+timedelta(minutes=1),target
 
 
-def _load_options(rows,wings,progress=None,*,needed_stamps=None):
+def _load_options(rows,wings,progress=None,*,needed_stamps=None,evidence=None,evidence_days=None):
     root=service.DATA/"dhan_expired_options"
     needed=({t.isoformat() for row in rows for t in _clock(row)}
             if needed_stamps is None else set(needed_stamps))
+    requested_days=sorted(set(evidence_days if evidence_days is not None else (r["session"] for r in rows))) if evidence is not None else []
+    if evidence is not None:
+        evidence.update(checked_offsets=defaultdict(set),conflicts=set(),expected_offsets=tuple(exp._offsets(wings)))
     if len(needed)>100000:
         raise ValueError("Original option research clock exceeds bounded study")
     if not rows or not root.exists():
@@ -65,7 +68,7 @@ def _load_options(rows,wings,progress=None,*,needed_stamps=None):
             if len(paths)>sync.MAX_RECEIPTS:
                 raise ValueError("Option receipt count exceeds bounded research scan")
     paths.sort()
-    table={};conflicts=set();hashes={};rejected=0;budget=MAX_RECEIPT_BYTES
+    table={};conflicts=evidence["conflicts"] if evidence is not None else set();hashes={};rejected=0;budget=MAX_RECEIPT_BYTES
     for i,path in enumerate(paths):
         if progress and i%32==0:
             progress(35+15*i/max(1,len(paths)),"Verifying saved option receipts (no provider calls)")
@@ -90,8 +93,13 @@ def _load_options(rows,wings,progress=None,*,needed_stamps=None):
             payload=exp._get_cached(body)
             if payload is None:
                 raise ValueError("Receipt disappeared")
+            normalized=exp._normalize(payload,body)
             hashes[path.stem]=envelope["sha256"]
-            for item in exp._normalize(payload,body):
+            if evidence is not None:
+                for day in requested_days:
+                    if body["fromDate"]<=day<=body["toDate"]:
+                        evidence["checked_offsets"][(day,body["drvOptionType"])].add(body["strike"])
+            for item in normalized:
                 stamp=item["timestamp_utc"]
                 if stamp not in needed:
                     continue
