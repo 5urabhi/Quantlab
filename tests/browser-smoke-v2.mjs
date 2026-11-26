@@ -864,6 +864,10 @@ try{
          await evidence.getByText(/Page 2 of/).waitFor()
        }
        if(route==='robustness'){
+         const stress=pane.getByRole('region',{name:'Incremental execution cost stress'})
+         await stress.getByRole('button',{name:'Run incremental cost scenario'}).click()
+         await stress.getByRole('heading',{name:'Original versus cost-stressed wealth'}).waitFor()
+         await stress.getByRole('heading',{name:'Additional modeled monthly costs'}).waitFor()
          await pane.getByRole('combobox',{name:'Robustness metric'}).selectOption('strategy_cagr')
          await pane.getByRole('button',{name:'Show 3D surface'}).click()
          await pane.getByRole('img',{name:/Interactive 3D surface: Executed grid surface/}).waitFor()
