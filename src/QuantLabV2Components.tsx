@@ -128,6 +128,37 @@ function LaunchCard({title,subtitle,caption,icon:Icon,onOpen,readiness}:CardSpec
       <ArrowRight size={17}/></span>
   </button>
 }
+type SavedStrategy={id:string;name:string;kind:string;revision:number;updated_utc:string}
+type StrategyMonitor={id:string;name:string;kind:string;revision:number;state:string;enabled:boolean}
+function SavedStrategyLibrary({onPython}:{onPython:()=>void}){
+  const [scripts,setScripts]=useState<SavedStrategy[]>([])
+  const [monitors,setMonitors]=useState<StrategyMonitor[]>([])
+  const [query,setQuery]=useState('')
+  const [loading,setLoading]=useState(true)
+  const [error,setError]=useState('')
+  const refresh=useCallback(async()=>{
+    setLoading(true);setError('')
+    try{
+      const [sr,mr]=await Promise.all([fetch('/api/user-scripts'),fetch('/api/script-monitors')])
+      if(!sr.ok||!mr.ok)throw Error('Saved strategy or monitor registry unavailable')
+      const [sc,mc]=await Promise.all([sr.json() as Promise<{scripts:SavedStrategy[]}>,mr.json() as Promise<{monitors:StrategyMonitor[]}>])
+      setScripts(sc.scripts.filter(s=>s.kind==='strategy'))
+      setMonitors(mc.monitors.filter(m=>m.kind==='strategy'))
+    }catch(e){setError(getError(e))}finally{setLoading(false)}
+  },[])
+  useEffect(()=>{void refresh()},[refresh])
+  const visible=scripts.filter(s=>s.name.toLowerCase().includes(query.trim().toLowerCase()))
+  return <section className="ql-strategy-registry" aria-label="Saved strategy registry">
+    <div className="v2-section-head"><div><h3>My saved strategies</h3><p>Persistent code revisions from the local backend. Editing a script does not change an already pinned monitor revision.</p></div><div className="ws-actions"><button className="v2-secondary" type="button" disabled={loading} onClick={()=>void refresh()}>Refresh strategies</button><button className="v2-secondary" type="button" onClick={onPython}>Create in Python editor</button></div></div>
+    <div className="tc-ledger-summary"><span>Registered strategies <strong>{loading?'…':scripts.length}</strong></span><span>Enabled strategy monitors <strong>{loading?'…':monitors.filter(m=>m.enabled).length}</strong></span></div>
+    <label className="ql-strategy-search">Find a strategy<input type="search" aria-label="Search saved strategies" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search strategy name"/></label>
+    {error&&<p role="alert">{error}</p>}
+    <div className="ws-dataset-manage-list">{visible.map(s=><div className="ws-dataset-manage-row" key={s.id}><div><strong>{s.name}</strong><small>Latest saved revision {s.revision} · {s.updated_utc||'No update timestamp'}</small></div><button className="ws-button" type="button" onClick={()=>window.dispatchEvent(new CustomEvent('quantlab:open-saved-script',{detail:s.id}))}>Open saved strategy</button></div>)}</div>
+    {!loading&&!error&&!visible.length&&<p className="ws-caption">{scripts.length?'No matching saved strategy.':'No registered strategies yet. Save a Python script with the strategy category in My Scripts.'}</p>}
+    {monitors.length>0&&<details className="v2-strategy-source-details"><summary>Strategy monitor revisions and states</summary><div className="ws-dataset-manage-list">{monitors.map(m=><div className="ws-dataset-manage-row" key={m.id}><div><strong>{m.name}</strong><small>Pinned revision {m.revision} · {m.state.replaceAll('_',' ')}</small></div><span>{m.enabled?'Enabled':'Paused'}</span></div>)}</div><p className="ws-caption">Monitor controls remain in Running Python; no live orders are sent.</p></details>}
+  </section>
+}
+
 export function StrategyLibraryV2({onEMA,onPython,onOptions,onData}:{
   onEMA:()=>void;onPython:()=>void;onOptions:()=>void;onData:()=>void
 }){
@@ -154,6 +185,7 @@ export function StrategyLibraryV2({onEMA,onPython,onOptions,onData}:{
         caption="Analyze option P&L" icon={BarChart3} onOpen={onOptions}
         readiness="Actual option evidence required"/>
     </div>
+    <SavedStrategyLibrary onPython={onPython}/>
     <details className="v2-strategy-source-details">
       <summary>How signal research differs from an executable option trade</summary>
       <p>Index-direction results use saved BANKNIFTY candle observations.
