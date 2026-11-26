@@ -224,3 +224,54 @@ class CprHybridTests(TestCase):
         self.assertEqual(narrow["exit_reasons"],{"stop":1})
         self.assertEqual(wide["exit_reasons"],{"trailing_stop":1})
         self.assertEqual(wide["conditional_net_inr"],10)
+
+    def test_daily_scan_finds_continuations_without_altering_baseline(self):
+        prev=index(100);current=index(105)
+        base,_=r._signals(DAY,current,PREV,prev,frame=5,hold=60,max_signals=3)
+        scan,_=r._signals(DAY,current,PREV,prev,frame=5,hold=60,max_signals=375,entry_mode="daily_scan")
+        self.assertEqual(len(base),1)
+        self.assertGreater(len(scan),3)
+        self.assertEqual(scan[0],base[0])
+        self.assertTrue(any(x["entry_type"]=="trend_continuation" for x in scan))
+        self.assertTrue(all(x["side"]=="CALL" for x in scan))
+        changed=dict(current)
+        changed[200]=(80,81,79,80,1)
+        later,_=r._signals(DAY,changed,PREV,prev,frame=5,hold=60,max_signals=375,entry_mode="daily_scan")
+        self.assertEqual([x for x in scan if x["minute"]<200],[x for x in later if x["minute"]<200])
+
+    def test_daily_scan_abstains_inside_cpr(self):
+        scan,_=r._signals(DAY,index(100),PREV,index(100),frame=5,hold=60,
+                           max_signals=375,entry_mode="daily_scan")
+        self.assertEqual(scan,[])
+
+    def test_daily_account_does_not_overlap_positions(self):
+        a=episode(DAY,[step(0,.12,120,True)],minute=0)
+        a["path"][0]["exit_utc"]=r._stamp(DAY,40)
+        b=episode(DAY,[step(0,.12,120,True)],minute=15)
+        b["path"][0]["exit_utc"]=r._stamp(DAY,25)
+        c=episode(DAY,[step(0,.12,120,True)],minute=45)
+        c["path"][0]["exit_utc"]=r._stamp(DAY,55)
+        out,rows=r._evaluate([c,b,a],method="fixed_stop",capital=17000,risk_budget=4250,
+                              dates=[DAY,"2026-10-07"])
+        self.assertEqual([x["state"] for x in rows],["complete","position_still_open","complete"])
+        self.assertEqual(out["daily_coverage"]["reserved_sessions"],2)
+        self.assertEqual(out["daily_coverage"]["days_with_entry"],1)
+        self.assertEqual(out["daily_coverage"]["days_without_entry"],1)
+
+    def test_daily_attempt_cap_and_missing_sources(self):
+        eps=[]
+        for m in (0,15,30,45,60):
+            ep=episode(DAY,[step(0,.12,120,True)],minute=m)
+            ep["path"][0]["exit_utc"]=r._stamp(DAY,m+5)
+            eps.append(ep)
+        eps[0]["state"]="missing_signal_quotes"
+        out,rows=r._evaluate(eps,method="fixed_stop",capital=17000,risk_budget=4250)
+        self.assertEqual(out["states"],{"missing_signal_quotes":1,"complete":3,"daily_attempt_limit":1})
+        self.assertEqual(out["daily_coverage"]["by_session"][DAY]["entry_attempts"],3)
+
+    def test_daily_scan_never_uses_incomplete_prior(self):
+        prev=index(100)
+        del prev[74]
+        self.assertEqual(r._signals(DAY,index(105),PREV,prev,frame=5,hold=60,
+                                    max_signals=375,entry_mode="daily_scan"),
+                         ([],"prior_complete_session_unavailable"))
