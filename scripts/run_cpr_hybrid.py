@@ -25,6 +25,8 @@ def main():
     parser.add_argument("--debit-spreads",action="store_true",help="Compare paired debit spread gross-funding and net-debit paper lanes")
     parser.add_argument("--dynamic-q",action="store_true",help="Compare five-minute in-position bank/global context Q with static and technical exits")
     parser.add_argument("--context-q",action="store_true",help="Compare matched technical and contextual offline-Q exits")
+    parser.add_argument("--regimes",action="store_true",help="Compare causal trend, reversal and volatility regime features")
+    parser.add_argument("--utility-research",action="store_true",help="Direct net-return and execution-risk research; implies --regimes")
     parser.add_argument("--sequences",action="store_true",help="Add longer completed candle sequences and detailed bank features to matched ML")
     parser.add_argument("--derivatives",action="store_true",help="Add observed same-strike OI/raw IV/relative volume to matched ML")
     parser.add_argument("--patterns",action="store_true",help="Study and compare completed-candle pattern models")
@@ -49,6 +51,7 @@ def main():
             context_mode=a.context_mode,context_batch=a.context_batch,rank_entries=a.rank_entries,
             pattern_research=a.patterns,fixed_panel=a.fixed_panel,context_q=a.context_q,debit_spreads=a.debit_spreads,
             sessions=a.sessions,dense_training=a.dense_training,sequence_research=a.sequences,derivative_research=a.derivatives,dynamic_q=a.dynamic_q,
+            regime_research=a.regimes,utility_research=a.utility_research,
             lot_size=a.lot_size,max_lots=a.max_lots,wings=a.wings,premium_penalty_bps=a.penalty_bps,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
@@ -107,6 +110,17 @@ def main():
         print("Debit spread lane:",lane,json.dumps({k:v for k,v in item.items() if k!="methods"}))
         for name,result in item["methods"].items():
             print(name,json.dumps({k:v for k,v in result.items() if k not in ("daily","daily_coverage")} | {"days_with_entry":result["daily_coverage"]["days_with_entry"]}))
+    if a.regimes or a.utility_research:
+        print("Observed regime anchors:",json.dumps(report["regime_anchor_counts"]))
+    if a.utility_research:
+        utility=report["utility_research"]
+        for name,info in utility.get("models",{}).items():
+            print("Direct utility model:",name,json.dumps(info))
+        for name,result in utility.get("methods",{}).items():
+            summary={k:v for k,v in result.items() if k not in ("daily","daily_coverage")}
+            if "daily_coverage" in result:
+                summary["daily_coverage"]={k:v for k,v in result["daily_coverage"].items() if k!="by_session"}
+            print("Direct utility method:",name,json.dumps(summary))
     print("Report:",path.resolve())
     print("No actual fills, profitability, or live RL approval certified.")
     return 0
