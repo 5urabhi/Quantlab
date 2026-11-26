@@ -4733,3 +4733,44 @@ def unified_market_activity(source: str, start: str, end: str):
         return market_inventory.daily_activity(source,start,end)
     except ValueError as exc:
         raise HTTPException(400,str(exc)) from exc
+
+
+# Constituent intelligence is local/read-only and uses the already-consented
+# all-option feed only when the user additionally enables constituent capture.
+from . import banknifty_constituents
+
+class BankConstituentCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+class BankConstituentWeightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    snapshot_date: str = Field(min_length=10,max_length=10)
+    csv_text: str = Field(min_length=1,max_length=16000)
+    source: str = Field(min_length=3,max_length=300)
+    confirm_reviewed: bool = False
+
+@app.get("/api/trading-cockpit/constituents/status")
+def bank_constituent_status():
+    return banknifty_constituents.status()
+
+@app.post("/api/trading-cockpit/constituents/capture")
+def bank_constituent_capture(body: BankConstituentCaptureRequest):
+    try:
+        return banknifty_constituents.set_enabled(body.enabled)
+    except (ValueError,OSError) as exc:
+        bad(exc)
+
+@app.post("/api/trading-cockpit/constituents/weights")
+def bank_constituent_weights(body: BankConstituentWeightRequest):
+    try:
+        return banknifty_constituents.save_weights(body.snapshot_date,body.csv_text,body.source,body.confirm_reviewed)
+    except (ValueError,TypeError,OSError,KeyError) as exc:
+        bad(exc)
+
+@app.get("/api/trading-cockpit/constituents/analysis")
+def bank_constituent_analysis(horizon: int = 5, as_of: str = ""):
+    try:
+        return banknifty_constituents.analyze(horizon,as_of)
+    except (ValueError,OverflowError,OSError,TypeError) as exc:
+        bad(exc)
