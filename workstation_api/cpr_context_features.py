@@ -40,7 +40,7 @@ def _batch_candidates(start,stop):
             left,right=map(date.fromisoformat,(b["from_date"],b["to_date"]))
             overlap=(min(stop,right)-max(start,left)).days
             if overlap>0:
-                items.append((overlap,int(b["status"]=="complete"),b["id"]))
+                items.append((overlap,int(b["status"] in ("complete","completed")),b["id"]))
         except (TypeError,ValueError,KeyError):
             continue
     return [x[2] for x in sorted(items,reverse=True)]
@@ -114,7 +114,8 @@ def _load_fixed_panel(start,stop,batch_meta,*,enabled):
         raw=h.dw._load_batch(batch_meta["batch_id"])
         left=date.fromisoformat(raw["from_date"])
         covered=date.fromisoformat(raw["historical_index"]["covered_through"])
-        if not left<=start<=covered or not set(PANEL_SYMBOLS)<=set(h._member_set(raw["historical_index"]["intervals"],start.isoformat())):
+        selected=max(start,left)
+        if not selected<=covered or selected>=stop or not set(PANEL_SYMBOLS)<=set(h._member_set(raw["historical_index"]["intervals"],selected.isoformat())):
             raise ValueError("Fixed panel must be documented before the study starts")
         # _load_banks already validates this pinned membership and its hash;
         # validate exact mapping here too, independently of later outcomes.
@@ -123,7 +124,7 @@ def _load_fixed_panel(start,stop,batch_meta,*,enabled):
             raise ValueError("Invalid fixed panel identity mapping")
     except (OSError,ValueError,KeyError,TypeError):
         meta["state"]="no_validated_panel_mapping";return {},[],meta
-    meta.update(state="loaded",mapping_batch=batch_meta["batch_id"],selection_as_of=start.isoformat(),
+    meta.update(state="loaded",mapping_batch=batch_meta["batch_id"],selection_as_of=selected.isoformat(),
                 identities={s:v[0] for s,v in mapping.items()})
     stocks={};budget=[h.MAX_TOTAL]
     for s,ids in mapping.items():
@@ -132,12 +133,12 @@ def _load_fixed_panel(start,stop,batch_meta,*,enabled):
             if not sig:
                 raise ValueError("Missing original panel minute receipt")
             file,_=h.pq._raw(ids[0])
-            stocks[s]=h._read_file(file,sig["source_sha256"],start-timedelta(days=35),stop,budget)
+            stocks[s]=h._read_file(file,sig["source_sha256"],selected-timedelta(days=35),stop,budget)
             meta["source_hashes"][s]=sig["source_sha256"]
         except (ValueError,OSError,KeyError,TypeError,OverflowError,csv.Error) as exc:
             meta["failures"][s]=type(exc).__name__
     # These intervals are the fixed panel research definition, NOT NSE data.
-    intervals=[{"symbol":s,"valid_from":start.isoformat(),"valid_to":None} for s in PANEL_SYMBOLS]
+    intervals=[{"symbol":s,"valid_from":selected.isoformat(),"valid_to":None} for s in PANEL_SYMBOLS]
     meta["observed_sessions_by_symbol"]={s:len(v) for s,v in stocks.items()}
     return stocks,intervals,meta
 
@@ -189,6 +190,40 @@ def _bank_vector(signal,stocks,intervals,prior_dates,weights):
     return values,detail
 
 
+PANEL_DETAIL_NAMES=tuple(s+"_"+name for s in PANEL_SYMBOLS for name in (
+    "return_5m_bps","return_15m_bps","return_30m_bps","relative_volume_5m",
+    "volume_baseline_missing","index_divergence_5m_bps"))
+
+
+def _panel_detail(signal,panel,intervals,prior_dates):
+    """All five exact stock identities, neutral (not option-side signed).
+    Past completed price moves and prior-session relative volume only.
+    """
+    from statistics import median
+    day,minute=signal["session"],signal["minute"]
+    if minute<30 or set(h._member_set(intervals,day))!=set(PANEL_SYMBOLS):
+        return None
+    index_move=signal.get("index_return_5m_bps")
+    if index_move is None or not math.isfinite(index_move):
+        return None
+    values=[]
+    for s in PANEL_SYMBOLS:
+        history=panel.get(s,{})
+        bars=history.get(day,{})
+        if any(k not in bars for k in range(minute-30,minute+1)):
+            return None
+        price=bars[minute][3]
+        if min(price,*(bars[minute-k][3] for k in (5,15,30)))<=0:
+            return None
+        moves=[10000*(price/bars[minute-k][3]-1) for k in (5,15,30)]
+        ref=[sum(history[d][k][4] for k in range(minute-4,minute+1))
+             for d in prior_dates[-20:] if d in history and all(k in history[d] for k in range(minute-4,minute+1))]
+        base=median(ref) if len(ref)>=5 else 0.
+        rel=min(10.,sum(bars[k][4] for k in range(minute-4,minute+1))/base) if base>0 else 0.
+        values.extend((*moves,rel,float(base<=0),moves[0]-index_move))
+    return values if all(math.isfinite(x) for x in values) else None
+
+
 def _global_vector(timelines,signal):
     cutoff=m._stamp(signal["decision_utc"])
     vector,details,ok=m.factor_at(timelines,cutoff)
@@ -201,7 +236,7 @@ def _global_vector(timelines,signal):
                                     "factors":available}
 
 
-def attach(signals,*,mode="receipt",batch_id="auto",fixed_panel=False):
+def attach(signals,*,mode="receipt",batch_id="auto",fixed_panel=False,panel_detail=False):
     if mode not in ("receipt","archive","off"):
         raise ValueError("Invalid CPR context availability mode")
     if mode=="off" or not signals:
@@ -250,6 +285,11 @@ def attach(signals,*,mode="receipt",batch_id="auto",fixed_panel=False):
                 coverage["bank_panel"]+=1
                 if gvec is not None:
                     coverage["panel_global"]+=1
+                if panel_detail:
+                    detail_vector=_panel_detail(s,panel,panel_intervals,[d for d in panel_dates if d<day])
+                    if detail_vector is not None:
+                        vectors["panel_detail"]=detail_vector
+                        coverage["panel_detail"]+=1
         else:
             pdetail={"state":"disabled_or_missing_panel"}
         if gvec is not None:
@@ -272,6 +312,7 @@ def attach(signals,*,mode="receipt",batch_id="auto",fixed_panel=False):
             "constituent_state_counts":dict(bank_states),"global_state_counts":dict(global_states),
             "missing_constituent_anchor_counts":dict(missing_members),
             "bank_feature_names":BANK_NAMES,"global_feature_names":GLOBAL_NAMES,
+            "panel_detail_feature_names":PANEL_DETAIL_NAMES if panel_detail else (),
             "warning":"Unweighted breadth is not index attribution. Verified weights require an earlier dated receipt. "
                       "Archive mode trusts reviewed availability; absent groups are not filled. No causal market influence is established."}
 
