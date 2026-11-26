@@ -54,8 +54,11 @@ def target(r,ep):
     # at full planned funding in this separate adverse scenario.
     stress=realized if good else min(-1.,realized) if realized is not None else -1.
     reason=result.get("reason")
+    failure_reason=(None if good else result["state"] if result["state"]!="complete" else
+                    "late_squareoff" if result.get("exit_after_squareoff") else
+                    "monitoring_gap" if reason=="monitoring_gap_exit" else "delayed_exit")
     trigger="unverified_or_delayed" if not good else "target_first" if reason=="target" else "stop_first" if reason=="stop" else "other_exit"
-    return {"timely":good,"bad":int(not good),"trigger":trigger,"observed_net_per_planned_funding":realized,
+    return {"timely":good,"bad":int(not good),"trigger":trigger,"failure_reason":failure_reason,"observed_net_per_planned_funding":realized,
             "timely_net_per_planned_funding":realized if good else None,"stress_utility":stress}
 
 
@@ -100,7 +103,8 @@ def _fit(r,episodes,regime):
     days={ep["session"] for ep,_ in rows}
     info={"paths":len(rows),"sessions":len(days),"timely_paths":len(timely),
           "timely_days":len({ep["session"] for ep,_ in timely}),
-          "execution_failure_paths":len(rows)-len(timely)}
+          "execution_failure_paths":len(rows)-len(timely),
+          "execution_failure_reasons":dict(Counter(y["failure_reason"] for _,y in rows if not y["timely"]))}
     if len(days)<20 or info["timely_days"]<15 or len(timely)<40 or len(rows)<100:
         return None,info
     X=[_design(ep,regime) for ep,_ in rows]
@@ -130,7 +134,8 @@ def _metrics(r,bundle,info,episodes):
     fail=np.asarray([v["predicted_execution_failure"] for v in pred])
     timely=[i for i,(_,v) in enumerate(rows) if v["timely"]]
     out={"scored_paths":len(rows),"sessions":len({ep["session"] for ep,_ in rows}),
-         "timely_paths":len(timely),"stress_rmse":float(np.sqrt(np.average((ev-y)**2,weights=w))),
+         "timely_paths":len(timely),"execution_failure_reasons":dict(Counter(v["failure_reason"] for _,v in rows if not v["timely"])),
+         "stress_rmse":float(np.sqrt(np.average((ev-y)**2,weights=w))),
          "stress_prior_rmse":float(np.sqrt(np.average((info["stress_prior"]-y)**2,weights=w))),
          "stress_mean_forecast":float(np.average(ev,weights=w)),"stress_mean_observed":float(np.average(y,weights=w)),
          "failure_brier":float(np.average((fail-bad)**2,weights=w)),
