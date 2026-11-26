@@ -2,6 +2,7 @@ import {useEffect,useState} from 'react'
 import {Database,RefreshCw,Search,ArrowRight,Download,HardDrive,Clock3} from 'lucide-react'
 import {marketApi,readableError} from './tradingCockpitApi'
 import ContextDrawer from './ContextDrawer'
+import MarketInventoryCharts from './MarketInventoryCharts'
 import {openSnapshotInPython} from './pythonBridge'
 import './market-inventory.css'
 
@@ -66,7 +67,7 @@ export default function MarketInventory({compact=false,onAcquire,onReplay,onMode
    </div>
    {error&&<p role="alert" className="mi-error">{error} {report?'Previously inspected inventory remains visible; refresh before relying on it.':''}</p>}
    {busy&&<p role="status" className="mi-caption">Inspecting saved storage. Large tables have bounded reads to protect the recorder.</p>}
-   {report&&<><div className="mi-section-title"><div><h3>Coverage by data type</h3><p>First and last observed values use the stated timestamp basis. Gaps may exist between them.</p></div><button type="button" className="ws-button" onClick={()=>exportJSON('quantlab-market-coverage.json',{checked_utc:report.checked_utc,sources:report.sources,note:report.note})}><Download size={14}/> Export coverage</button></div>
+   {report&&<>{!compact&&<MarketInventoryCharts sources={report.sources} onChoose={choose}/>}<div className="mi-section-title"><div><h3>Coverage by data type</h3><p>First and last observed values use the stated timestamp basis. Gaps may exist between them.</p></div><button type="button" className="ws-button" onClick={()=>exportJSON('quantlab-market-coverage.json',{checked_utc:report.checked_utc,sources:report.sources,note:report.note})}><Download size={14}/> Export coverage</button></div>
      {categories.map(group=><div key={group.title} className="mi-category"><h4>{group.title}</h4><div className="mi-coverage-grid">
        {group.ids.map(id=>report.sources.find(s=>s.id===id)).filter((s):s is Source=>!!s).map(s=><button type="button" key={s.id} className={'mi-coverage-card '+(source===s.id?'selected':'')} aria-pressed={source===s.id} aria-label={'View '+s.label+' coverage'} onClick={()=>choose(s.id)}>
          <div className="mi-card-top"><strong>{s.label}</strong><span className={'mi-state '+s.state}>{stateText(s.state)}</span></div><div className="mi-count">{fmt(s.count)} <small>{s.unit}</small></div>
