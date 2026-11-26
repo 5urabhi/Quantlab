@@ -14,6 +14,7 @@ from statistics import mean,median
 from . import depth_replay as replay, liquidity_spreads as fees, paper_execution as paper
 
 HORIZONS=(1,2,5,15,30,60,120,300)
+LATENCIES_MS=(100,250,500,1000,3000,5000)
 MAX_COVERAGE_ROWS=50000
 STEP_MINUTES=5
 
@@ -99,7 +100,7 @@ def _coverage(day, identities, now):
 def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
         latency_ms=1000,window_seconds=1,max_skew_seconds=2.,
         participation_pct=25.,slippage_bps=5.,broker_profile="zerodha",
-        progress=None,now=None,step_minutes=STEP_MINUTES):
+        progress=None,now=None,step_minutes=STEP_MINUTES,compare_delays=False):
     now=now or paper._now()
     chosen=date.fromisoformat(day)
     if chosen>now.astimezone(paper.IST).date():
@@ -119,8 +120,12 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
     if step_minutes not in (1,5,15):
         raise ValueError("Choose 1, 5 or 15 minute decision spacing")
     coverage=_coverage(chosen,identities,now)
-    anchors=_anchors(chosen,now,latency_ms,window_seconds,step_minutes)
-    by_horizon={h:[] for h in HORIZONS}
+    delays=LATENCIES_MS if compare_delays else (latency_ms,)
+    # Use one cutoff and the longest delay for all cells. Never change the
+    # eligible time sample when comparing faster and slower execution.
+    anchors=_anchors(chosen,now,max(delays),window_seconds,step_minutes)
+    cells=[(delay,h) for delay in delays for h in HORIZONS]
+    by_cell={cell:[] for cell in cells}
     # All horizons use the same immutable first-book lookup for a decision.
     cache={}
     def lookup(identity,eligible,end,cutoff):
@@ -130,12 +135,12 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
         return cache[key]
     for i,decision in enumerate(anchors):
         cache.clear()
-        for h in HORIZONS:
+        for j,(delay,h) in enumerate(cells):
             if progress:
-                progress(95*(i*len(HORIZONS)+HORIZONS.index(h))/max(1,len(anchors)*len(HORIZONS)),
-                         f"Saved depth: decision {i+1}/{len(anchors)}, hold {h}s")
+                progress(95*(i*len(cells)+j)/max(1,len(anchors)*len(cells)),
+                         f"Saved depth: decision {i+1}/{len(anchors)}, delay {delay}ms, hold {h}s")
             result=replay.replay(strategy=strategy,identities=identities,decision_utc=paper._iso(decision),
-                lots=lots,capital=capital,hold_seconds=h,latency_ms=latency_ms,
+                lots=lots,capital=capital,hold_seconds=h,latency_ms=delay,
                 window_seconds=window_seconds,max_skew_seconds=max_skew_seconds,
                 participation_pct=participation_pct,slippage_bps=slippage_bps,
                 broker_profile=broker_profile,now=now,first_book=lookup)
@@ -157,17 +162,27 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
                     charge=paper._fees("BUY",turnover,broker_profile)
                     item["passive_bid_entry_markout_inr"]=fees._money(
                         result["net_pnl_inr"]-entry["cashflow"]-turnover-charge)
-            by_horizon[h].append(item)
-    matched=set.intersection(*[
-        {r["decision_utc"] for r in rows if r["net_pnl_inr"] is not None}
-        for rows in by_horizon.values()]) if anchors else set()
+            by_cell[delay,h].append(item)
+    observed={cell:{r["decision_utc"] for r in rows if r["net_pnl_inr"] is not None}
+              for cell,rows in by_cell.items()}
+    matched=set.intersection(*observed.values())
+    # Less restrictive matched comparisons: all delays at the same hold,
+    # and all holds at the same delay. Do not silently compare disjoint samples.
+    same_hold={h:set.intersection(*(observed[d,h] for d in delays)) for h in HORIZONS}
+    same_delay={d:set.intersection(*(observed[d,h] for h in HORIZONS)) for d in delays}
     summaries=[]
-    for h,rows in by_horizon.items():
+    for (delay,h),rows in by_cell.items():
         scored=[r for r in rows if r["net_pnl_inr"] is not None]
         net=[r["net_pnl_inr"] for r in scored]
         passive=[r["passive_bid_entry_markout_inr"] for r in scored if r["passive_bid_entry_markout_inr"] is not None]
         comparable=[r["net_pnl_inr"] for r in scored if r["decision_utc"] in matched]
-        summaries.append({"hold_seconds":h,"attempted":len(rows),"scored":len(scored),
+        comparable_delay=[r["net_pnl_inr"] for r in scored if r["decision_utc"] in same_hold[h]]
+        comparable_hold=[r["net_pnl_inr"] for r in scored if r["decision_utc"] in same_delay[delay]]
+        summaries.append({"latency_ms":delay,"hold_seconds":h,"attempted":len(rows),"scored":len(scored),
+            "matched_same_hold_count":len(comparable_delay),"matched_same_hold_net":_stats(comparable_delay),
+            "matched_same_delay_count":len(comparable_hold),"matched_same_delay_net":_stats(comparable_hold),
+            "entry_complete_count":sum(r["entry_delay_seconds"] is not None for r in rows),
+            "entry_complete_exit_unscored":sum(r["entry_delay_seconds"] is not None and r["net_pnl_inr"] is None for r in rows),
             "unscored":len(rows)-len(scored),"positive":sum(v>0 for v in net),
             "target_hits":sum(v>=target_net for v in net),"negative":sum(v<0 for v in net),
             "net":_stats(net),"matched_net":_stats(comparable),"worst_net":min(net) if net else None,
@@ -177,7 +192,10 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
             "roundtrip":_stats([r["elapsed_seconds"] for r in scored]),
             "passive_bid_entry_markout":_stats(passive),
             "passive_target_hits":sum(v>=target_net for v in passive) if passive else None,
-            "states":dict(Counter(r["state"] for r in rows)),"observations":rows})
+            "states":dict(Counter(r["state"] for r in rows)),
+            # A batch has at most ~17k paths. Return summaries rather than
+            # duplicating thousands of licensed quote-derived rows in jobs.
+            "observations":rows if not compare_delays else []})
     if progress:
         progress(100,"Original-depth speed diagnostics complete")
     return {"day_ist":day,"strategy":strategy,"identities":identities,"lots":lots,"capital":capital,
@@ -186,8 +204,12 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
             "max_skew_seconds":max_skew_seconds,"broker_profile":broker_profile,
             "decision_count":len(anchors),"matched_decisions":len(matched),"rows":summaries,
             "coverage":coverage,"step_minutes":step_minutes,
+            "latencies_ms":list(delays),"hold_seconds":list(HORIZONS),
+            "compare_delays":bool(compare_delays),"configuration_count":len(cells),
+            "cutoff_utc":paper._iso(now),
             "actual_fills_observed":False,"broker_margin_verified":False,
             "warning":"Fixed clock diagnostic for selected exact contracts, not an entry strategy or unbiased backtest. "
             "First received original books after assumed reaction delay; observed quote delays are not broker execution times. "
+            "Subsecond delay scenarios are sensitivity checks on sampled local receipt timestamps, not measured subsecond exchange execution. "
             "Marketable depth and fees are modeled, passive bid entry is a conditional counterfactual. "
             "Partial or missing baskets are unscored, not zero losses. Broker margin, order queue, legging and actual fill latency are unverified."}
