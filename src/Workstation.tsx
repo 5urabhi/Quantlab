@@ -4,7 +4,7 @@ import {
   CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Clock3, Database,
   Gauge, LoaderCircle,
   LockKeyhole, Menu, Play, RefreshCw, Settings2,
-  ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp
+  ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp, Globe2
 } from 'lucide-react'
 import './workstation.css'
 import './quantlab-v3-modules.css'
@@ -20,7 +20,10 @@ import PythonEnvironment from './PythonEnvironment'
 import ResearchPlot from './ResearchPlots'
 import {HomeOperations,StorageOverview,ReportWorkspace,PrivacyChecks} from './OperationsCloseout'
 import ZerodhaProviderPanel from './ZerodhaProviderPanel'
-import ConstituentIntelligence from './ConstituentIntelligence'
+import ConstituentIntelligence, {type BankSection} from './ConstituentIntelligence'
+const ConstituentAlphaResearch = lazy(() => import('./ConstituentAlphaResearch'))
+const GlobalMarketWorkspace = lazy(() => import('./GlobalMarketWorkspace'))
+const MarketEventsWorkspace = lazy(() => import('./MarketEventsWorkspace'))
 import MarketPatternIntelligence from './MarketPatternIntelligence'
 import PositionsRisk from './PositionsRisk'
 import SavedIndexAnalytics from './SavedIndexAnalytics'
@@ -63,6 +66,7 @@ type RunConfig = {
 const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momentum:1,low_volatility:0,value:0,quality:0,size:0},top_n:10,weighting:'equal',max_weight:.2,rebalance_every:3,cost_bps:10,execution_lag:1,momentum_formation:12,momentum_skip:1,volatility_lookback:12,validation_start:'',final_test_start:'',sector_cap:null}
 type Tab =
   'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingspreads'|'tradingreplay'|'tradingjournal'|'tradingpaper'|'tradinganalytics'|'tradingdirectional'|'tradingpatterns'|'tradingpositions'|
+  'intelligencealpha'|'intelligencecontext'|'intelligenceevents'|
   'strategies'|'strategyema'|'strategypython'|'strategybacktest'|
   'mathematics'|'models'|'research'|'factors'|'construction'|'risk'|'rolling'|'robustness'|'modelgrids'|'indexstudio'|
   'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|'evidence'|
@@ -73,8 +77,11 @@ type PrimarySection={id:Tab;label:string;icon:typeof Activity;tabs:Tab[];navTabs
 const primarySections:PrimarySection[]=[
   {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
   {id:'trading',label:'Trading',icon:Activity,
-    tabs:['trading','tradingpatterns','tradingdirectional','tradingchain','tradinganalytics','tradingpositions','tradingjournal','tradingdepth','tradingspreads','tradingreplay','tradingpaper','customscanners'],
-    navTabs:['trading','tradingpatterns','tradingdirectional','tradingchain','tradingspreads','tradinganalytics','tradingpositions','tradingjournal']},
+    tabs:['trading','tradingchain','tradinganalytics','tradingpositions','tradingjournal','tradingdepth','tradingspreads','tradingreplay','tradingpaper','customscanners'],
+    navTabs:['trading','tradingchain','tradingspreads','tradinganalytics','tradingpositions','tradingjournal']},
+  {id:'tradingpatterns',label:'Market Intelligence',icon:Globe2,
+    tabs:['tradingpatterns','tradingdirectional','intelligencecontext','intelligenceevents','intelligencealpha'],
+    navTabs:['tradingpatterns','tradingdirectional','intelligencecontext','intelligenceevents','intelligencealpha']},
   {id:'strategies',label:'Strategies',icon:TrendingUp,
     tabs:['strategies','strategyema','strategypython','strategybacktest','pythonmonitors'],
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
@@ -97,7 +104,7 @@ const titles:Record<Tab,string>={
   overview:'Home',trading:'Live Market',tradingchain:'Option Chain',
   tradingdepth:'20-Level Order Book',tradingspreads:'Liquidity & Spreads',
   tradingreplay:'Market Replay',
-  tradingjournal:'Trade Journal',tradingpaper:'Paper Trading',tradinganalytics:'Options Analytics',tradingdirectional:'Directional Trading',tradingpatterns:'Market Intelligence',tradingpositions:'Positions & Risk',strategies:'Strategy Library',
+  tradingjournal:'Trade Journal',tradingpaper:'Paper Trading',tradinganalytics:'Options Analytics',tradingdirectional:'Bank Constituents',tradingpatterns:'Market Overview',intelligencecontext:'Global Markets & Positioning',intelligenceevents:'Economic Events',intelligencealpha:'Alpha Research',tradingpositions:'Positions & Risk',strategies:'Strategy Library',
   strategyema:'EMA Explorer',strategypython:'Python Editor',
   strategybacktest:'BANKNIFTY Backtests',pythonmonitors:'Running Python',custommodels:'Custom Models',customscanners:'Custom Scanners',pythonenvironment:'Python Environment',
   mathematics:'Model Catalog',models:'Advanced Research Tools',
@@ -131,6 +138,9 @@ const descriptions:Record<Tab,string>={
   tradinganalytics:'Compare Greek sensitivities, volatility, liquidity and contract scenarios.',
   tradingdirectional:'Analyze BANKNIFTY constituent movements, dated weights, relative volume and directional option scenarios without placing orders.',
   tradingpatterns:'Rolling historical movement, intraday seasonality, conditional patterns and underlying bank breadth.',
+  intelligencecontext:'Inspect international market factors, domestic relative strength, derivatives positioning, and authorized feed collection.',
+  intelligenceevents:'Track source-backed macro release dates and central-bank announcements with actual receipt timestamps.',
+  intelligencealpha:'Compare matched chronological directional prediction models without sending orders.',
   tradingpositions:'Monitor manually recorded long-option positions, observed bid marks and combined model risk.',
   strategies:'Choose a strategy, test real index signals, then study historical CE/PE contracts.',
   strategyema:'Test one EMA pair, chosen combinations or all 11,026 valid pairs.',
@@ -243,6 +253,7 @@ function App(){
   const showPython=useCallback(()=>setPythonOpen(true),[])
   const [menu,setMenu]=useState(false)
   const [notebookOpenSequence,setNotebookOpenSequence]=useState(0)
+  const [bankStart,setBankStart]=useState<BankSection>('movement')
   const [compactNav,setCompactNav]=useState(()=>{try{return localStorage.getItem('ql-v3-compact-nav')==='1'}catch{return false}})
   useEffect(()=>{try{localStorage.setItem('ql-v3-compact-nav',compactNav?'1':'0')}catch{/* optional preference */}},[compactNav])
   const [health,setHealth]=useState<Health|null>(null)
@@ -590,7 +601,10 @@ function App(){
         </div>}>
         {tab==='tradingpatterns'&&<><MarketPatternIntelligence showBankHeatmap/></>}
         {tab==='tradingpositions'&&<PositionsRisk onOpenJournal={()=>begin('tradingjournal')} onOpenChain={()=>begin('tradingchain')}/>}
-        {tab==='tradingdirectional'&&<ConstituentIntelligence onOpenRecording={()=>begin('recordingsettings')} onOpenSources={()=>begin('nse')} onOpenData={()=>begin('data')} onOpenOptions={()=>begin('tradinganalytics')}/>}
+        {tab==='tradingdirectional'&&<ConstituentIntelligence initialSection={bankStart} onOpenAlpha={()=>begin('intelligencealpha')} onOpenRecording={()=>begin('recordingsettings')} onOpenSources={()=>begin('nse')} onOpenData={()=>begin('data')} onOpenOptions={()=>begin('tradinganalytics')}/>}
+        {tab==='intelligencealpha'&&<ConstituentAlphaResearch onOpenSetup={()=>{setBankStart('setup');begin('tradingdirectional')}} onOpenLedger={()=>{setBankStart('research');begin('tradingdirectional')}} onOpenContext={()=>begin('intelligencecontext')}/>}
+        {tab==='intelligencecontext'&&<GlobalMarketWorkspace onOpenAlpha={()=>begin('intelligencealpha')} onOpenEvents={()=>begin('intelligenceevents')}/>}
+        {tab==='intelligenceevents'&&<MarketEventsWorkspace onOpenSources={()=>begin('intelligencecontext')}/>}
         {(['trading','tradingchain','tradinganalytics','tradingdepth','tradingreplay',
             'tradingjournal','strategybacktest'].includes(tab)||
             (tab==='connections'&&connectionEditing))&&
