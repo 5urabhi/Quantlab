@@ -17,7 +17,7 @@ VERSION = "cpr_ml_offline_q_v1"
 SPLITS = (30, 10, 20)
 TARGET = .10
 STOP = -.05
-CLASSES = ("target", "stop", "timeout")
+CLASSES = ("target", "stop", "other")
 METHODS = ("no_stop", "fixed_stop", "ml_fixed", "offline_q", "ml_offline_q", "no_trade")
 FRAMES = (1, 3, 5, 15)
 HOLDS = (15, 30, 60, 120)
@@ -32,6 +32,7 @@ WARNING = (
     "one full minute before modeled entry/exit at an observed open. Stops and targets "
     "are net marks, not guaranteed realized prices. Missing paths are censored, not "
     "zero P&L. Current tariff and adverse premium penalties are cost assumptions. "
+    "Independent daily accounts reset to starting capital; the aggregate is not a compounded account path. "
     "No-stop is a paper comparator only; full premium may be lost. No live approval."
 )
 
@@ -207,6 +208,11 @@ def _exit(ep, policy, q=None):
     return {"state":"exit_censored"}
 
 
+def _label(result):
+    # Label the delayed realized net outcome, not a target/stop mark.
+    return "target" if result["net_return"]>=TARGET else "stop" if result["net_return"]<=STOP else "other"
+
+
 def _training_rows(episodes):
     out=[]
     for ep in episodes:
@@ -265,16 +271,16 @@ def _fit_ml(train,validation):
     from sklearn.preprocessing import StandardScaler
     import numpy as np
     tr=_training_rows(train);va=_training_rows(validation)
-    counts=Counter(r["reason"] for _,r in tr)
-    info={"training_labels":dict(counts),"validation_labels":dict(Counter(r["reason"] for _,r in va)),
+    counts=Counter(_label(r) for _,r in tr)
+    info={"training_labels":dict(counts),"validation_labels":dict(Counter(_label(r) for _,r in va)),
           "training_episodes":len(tr),"validation_episodes":len(va),"validation_brier":{}}
     if (len(tr)<40 or len({e["session"] for e,_ in tr})<15
             or min(counts.get(c,0) for c in CLASSES)<5
             or len(va)<10 or len({e["session"] for e,_ in va})<5):
         return None,{},info
-    X=[e["features"] for e,_ in tr];y=[r["reason"] for _,r in tr]
+    X=[e["features"] for e,_ in tr];y=[_label(r) for _,r in tr]
     V=[e["features"] for e,_ in va]
-    truth=np.asarray([[float(r["reason"]==c) for c in CLASSES] for _,r in va])
+    truth=np.asarray([[float(_label(r)==c) for c in CLASSES] for _,r in va])
     models={"logistic":make_pipeline(StandardScaler(),LogisticRegression(max_iter=500,random_state=42)),
             "random_forest":RandomForestClassifier(n_estimators=100,max_depth=4,min_samples_leaf=5,
                                                   random_state=42,n_jobs=1)}
@@ -287,9 +293,24 @@ def _fit_ml(train,validation):
         fitted[name]=model
     selected=min(fitted,key=lambda n:(info["validation_brier"][n],n))
     info["selected"]=selected
-    means={c:sum(r["net_return"] for _,r in tr if r["reason"]==c)/counts[c] for c in CLASSES}
+    means={c:sum(r["net_return"] for _,r in tr if _label(r)==c)/counts[c] for c in CLASSES}
     info["train_only_class_mean_returns"]=means
     return fitted[selected],means,info
+
+
+def _holdout_ml(model, episodes):
+    import numpy as np
+    rows=_training_rows(episodes)
+    if model is None or not rows:
+        return {"scored":0,"brier":None,"labels":{}}
+    truth=np.asarray([[float(_label(r)==c) for c in CLASSES] for _,r in rows])
+    pred=model.predict_proba([e["features"] for e,_ in rows])
+    ordered=pred[:,[list(model.classes_).index(c) for c in CLASSES]]
+    return {"scored":len(rows),"brier":float(np.mean(np.sum((ordered-truth)**2,axis=1))),
+            "labels":dict(Counter(_label(r) for _,r in rows)),
+            "predicted_target_mean":float(np.mean(ordered[:,0])),
+            "observed_target_fraction":float(np.mean(truth[:,0])),
+            "note":"Conditional on observable fixed-stop exit; missing outcomes are not scored."}
 
 
 def _ml_accept(model,means,ep):
@@ -302,10 +323,14 @@ def _ml_accept(model,means,ep):
 
 def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None):
     balance=capital; peak=capital;dd=0.;gross_losses=0.;day=None;halted=False
+    daily=defaultdict(lambda:{"conditional_net_inr":0.,"scored":0,"unresolved":0})
     counts=Counter();journal=[];net=0.;charges=0.;winners=0;targets=0
     for ep in episodes:
         if day!=ep["session"]:
             day=ep["session"];gross_losses=0.;halted=False
+            # Independent day accounts avoid carrying unobserved positions into
+            # the next session. Aggregate net is not a compounded account path.
+            balance=capital;peak=capital
         state=None
         if method=="no_trade":
             state="no_trade"
@@ -329,8 +354,10 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             value=result["net"];net+=value;charges+=result["fees"];balance+=value
             gross_losses+=max(0.,-value);peak=max(peak,balance);dd=max(dd,peak-balance)
             winners+=int(value>0);targets+=int(result["target_realized"])
+            daily[day]["conditional_net_inr"]+=value;daily[day]["scored"]+=1
         elif state in ("missing_entry","exit_censored"):
             halted=True
+            daily[day]["unresolved"]+=1
         journal.append({"method":method,"session":day,"decision_utc":ep["decision_utc"],
                         "side":ep["side"],"strike":ep.get("strike"),**result})
     scored=counts["complete"]
@@ -338,8 +365,8 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
     return {"states":dict(counts),"signals":len(episodes),"scored_trades":scored,
             "profitable_trades":winners,"realized_target_hits":targets,
             "conditional_net_inr":round(net,2) if scored or method=="no_trade" else None,
-            "conditional_fees_inr":round(charges,2),"conditional_drawdown_inr":round(dd,2),
-            "conditional_end_cash_inr":round(balance,2) if scored or method=="no_trade" else None,
+            "conditional_fees_inr":round(charges,2),"max_within_day_closed_drawdown_inr":round(dd,2),
+            "independent_daily_accounts":True,"daily":dict(daily),
             "unresolved_trades":unresolved,"full_account_pnl_certified":False},journal
 
 
@@ -401,6 +428,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         model,means,ml_info=_fit_ml(train,val)
         q,q_info=_fit_q(train)
         report.update(state="chronological_holdout_assessment",ml=ml_info,offline_q=q_info,
+                      ml_holdout=_holdout_ml(model,test),
                       q_policy_sha256=sha256(json.dumps(sorted((list(k),list(v)) for k,v in q.items()),
                                                          separators=(",",":")).encode()).hexdigest())
         for method in METHODS:
