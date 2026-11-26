@@ -6,6 +6,8 @@ import {
   ShieldCheck, Trash2, X
 } from 'lucide-react'
 import './market-data-workspace.css'
+import ResearchPlot from './ResearchPlots'
+import './operations-closeout.css'
 
 const MarketInventory = lazy(() => import('./MarketInventory'))
 const MarketLibraryPanel = lazy(() => import('./MarketLibraryPanel'))
@@ -176,6 +178,8 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
   const [savingToken,setSavingToken]=useState(false)
   const [sourceWorking,setSourceWorking]=useState(false)
   const [batches,setBatches]=useState<Batch[]>([])
+  const [batchFilter,setBatchFilter]=useState('all')
+  const [batchSearch,setBatchSearch]=useState('')
   const [deleted,setDeleted]=useState<Batch[]>([])
   const [selectedBatch,setSelectedBatch]=useState('')
   const [detail,setDetail]=useState<Batch|null>(null)
@@ -429,6 +433,7 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
   }
   const sourceNeedsSetup=Boolean(plan?.next_actions.some(a=>
     a.kind==='sync_membership'||a.kind==='refresh_catalog'))
+  const displayedBatches=batches.filter(b=>(batchFilter==='all'||(batchFilter==='saved'?Boolean(b.prepared_dataset_id):batchFilter==='attention'?!b.prepared_dataset_id&&(b.errors>0||['error','failed','interrupted','paused','cancelled'].includes(b.status)):batchFilter==='active'?['queued','running'].includes(b.status):b.status===batchFilter))&&[b.id,modeNames[b.selection as Selection]||b.selection,b.from_date,b.to_date,b.status].join(' ').toLowerCase().includes(batchSearch.trim().toLowerCase()))
   const batch=detail?.id===selectedBatch?detail:completion
   const percent=batch?.total?Math.round(batch.processed/batch.total*100):0
   const active=Boolean(batch&&['running','queued'].includes(batch.status))
@@ -856,15 +861,26 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
         <strong>No downloads yet</strong><p>Data acquisition jobs appear here immediately after authorization.</p>
         <button className="mdw-button" onClick={()=>goPage('get')}>Get data</button>
       </div>}
+      {batches.length>0&&<div className="qoc-subpanel" aria-label="Download queue overview">
+        <div className="qoc-grid">{[
+          ['Returned download receipts',batches.length],
+          ['Queued or running',batches.filter(b=>['queued','running'].includes(b.status)).length],
+          ['Prepared source receipts',batches.filter(b=>b.prepared_dataset_id).length],
+          ['Receipts with errors',batches.filter(b=>b.errors>0).length]
+        ].map(([name,value])=><div className="qoc-stat" key={name}><span>{name}</span><strong>{value}</strong><small>Returned batch records only</small></div>)}</div>
+        <div className="qoc-actions"><label className="qoc-field">Queue status<select aria-label="Filter download status" value={batchFilter} onChange={e=>setBatchFilter(e.target.value)}><option value="all">All receipts</option><option value="active">Queued / running</option><option value="saved">Prepared source receipts</option><option value="attention">Needs review</option></select></label><label className="qoc-field">Find a receipt<input aria-label="Search download receipts" type="search" value={batchSearch} onChange={e=>setBatchSearch(e.target.value)} placeholder="ID, selection, date or state"/></label></div>
+        <p className="qoc-note">{displayedBatches.length} matching returned receipt(s). Batch dates describe requested windows, not verified continuous data coverage.</p>
+      </div>}
       {batches.length>0&&<div className="mdw-batch-layout">
-        <div className="mdw-batch-list">{batches.slice(0,100).map(b=><button type="button"
+        <div className="mdw-batch-list">{displayedBatches.slice(0,100).map(b=><button type="button"
           key={b.id} className={selectedBatch===b.id?'active':''}
           onClick={()=>{setSelectedBatch(b.id);setShowDiagnostics(false)}}>
           <span><strong>{modeNames[b.selection as Selection]||statusLabel(b.selection)}</strong>
             <small>{b.from_date} → {previousDay(b.to_date)} · {b.interval||'Daily'} {b.interval?'min':''}</small></span>
           <span className={'mdw-badge '+(b.prepared_dataset_id?'good':b.errors?'warn':'')}>
             {b.prepared_dataset_id?'Saved':statusLabel(b.status)}</span></button>)}</div>
-        {batch&&<div className="mdw-batch-detail">
+        {!displayedBatches.length&&<p className="mdw-help">No download receipts match your filters. Adjust the filter or search.</p>}
+        {batch&&displayedBatches.some(b=>b.id===batch.id)&&<div className="mdw-batch-detail">
           <div className="mdw-batch-detail-head"><strong>{modeNames[batch.selection as Selection]||batch.selection}</strong>
             <span className={'mdw-badge '+(batch.prepared_dataset_id?'good':'')}>
               {batch.prepared_dataset_id?'Sources saved':statusLabel(batch.status)}</span></div>
@@ -878,6 +894,8 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
             <div><strong>{fmt(batch.counts.failed||0)}</strong><small>Failed</small></div>
             <div><strong>{fmt(batch.counts.no_data||0)}</strong><small>No source candles</small></div>
           </div>
+          {Object.keys(batch.counts).length>0&&<ResearchPlot provenance="Local download batch receipt" plot={{kind:'bar2d',title:'Reported instrument outcome counts',x_label:'Batch outcome',y_label:'Reported count',x:Object.keys(batch.counts).map(statusLabel),traces:[{name:'Reported outcome count',y:Object.values(batch.counts)}]}}/>}
+          <p className="mdw-help">Outcome counts are from this batch receipt, not unique securities across the whole library.</p>
           {batch.current_symbol&&<p className="mdw-inline-status" role="status">
             {active?<LoaderCircle size={16} className="mdw-spin"/>:<Clock3 size={16}/>}
             {active?'Working on':'Last attempted'} {batch.current_symbol}
