@@ -50,11 +50,13 @@ def main():
     print("State:",report["state"])
     print("Sessions:",report["recorded_index_sessions"],"/",report["required_sessions"])
     print("Episode states:",report["episode_states"])
-    print("Split support:",json.dumps(report["split_support"]))
+    print("Account-constrained split support:",json.dumps(report["split_support"]))
+    print("Capital-independent learning support:",json.dumps(report["learning_support"]))
     if "ml" in report:
         print("ML:",json.dumps(report["ml"]))
         print("ML holdout:",json.dumps(report["ml_holdout"]))
-        print("Offline Q:",json.dumps(report["offline_q"]))
+        print("Offline Q (5% stop):",json.dumps(report["offline_q"]))
+        print("Offline Q (15% emergency stop):",json.dumps(report["offline_q_emergency_stop"]))
     for name,result in report["methods"].items():
         print(name,json.dumps({k:v for k,v in result.items() if k!="daily"}))
     print("Report:",path.resolve())
