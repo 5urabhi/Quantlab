@@ -44,9 +44,12 @@ def _clock(row):
     return decision-timedelta(minutes=1),decision+timedelta(minutes=1),target
 
 
-def _load_options(rows,wings,progress=None):
+def _load_options(rows,wings,progress=None,*,needed_stamps=None):
     root=service.DATA/"dhan_expired_options"
-    needed={t.isoformat() for row in rows for t in _clock(row)}
+    needed=({t.isoformat() for row in rows for t in _clock(row)}
+            if needed_stamps is None else set(needed_stamps))
+    if len(needed)>100000:
+        raise ValueError("Original option research clock exceeds bounded study")
     if not rows or not root.exists():
         return {},{"verified_receipts":0,"rejected_receipts":0,"source_hashes":{},"conflicted_bars":0}
     if root.is_symlink() or not root.is_dir():
