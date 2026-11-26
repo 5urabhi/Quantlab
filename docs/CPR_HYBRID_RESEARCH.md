@@ -382,3 +382,109 @@ remains censored. Q fitting continues to require complete original
 decision and exact delayed-open trajectories. Reports separate unverified
 entries/exits, recovered delayed exits, max delay and exits after 15:20.
 The strategy is still paper-only and no live broker square-off is certified.
+
+
+## Completed-candle pattern research and fixed bank panel (v7)
+
+Quick direction-only study (no option replay or network calls):
+
+```bash
+bash run.sh candle-research
+```
+
+It uses 60 reserved observed index sessions split chronologically 30/10/20.
+For 1, 5, 15 and 30-minute trailing candles, build causal morphology from
+completed original bars: signed body, wick lengths, relative range, close
+location, three-candle direction, realized movement and volatility, session
+range position and time. Fixed pattern flags include bullish/bearish
+engulfing, lower/upper rejection, inside/outside bars, three rising/falling
+candle bodies and local breakout. A missing prefix invalidates the feature;
+15-minute context is explicitly masked during warmup in the CPR feature
+vector. The next completed candle's body color (open-to-close) is separate
+from directional return relative to the decision close. Direction labels
+use a predeclared one-basis-point flat band. Pattern tables include
+next-color counts, subsequent three-candle color sequence counts, directional
+frequencies, and upward/downward price excursions. Multi-candle sequences
+can overlap and are descriptive, not independent trades. Compare a
+training-only class prior, shrunk empirical pattern/color lookup, regularized
+logistic regression and shallow random forest. Select on validation
+multiclass Brier score; report all later comparisons, per-day weighted
+accuracy and directional coverage. These previously inspected dates remain
+exploratory. The output is saved under results/candle_patterns_*.json.
+
+Enable the independently labeled five-bank research panel in Data Centre >
+Automatic data maintenance. It downloads HDFCBANK, ICICIBANK, SBIN, AXISBANK
+and KOTAKBANK with the existing serialized Dhan queue and shared verified
+minute files. Existing configurations migrate with this new scope OFF.
+Historical CPR uses exact identities from an earlier pinned membership
+manifest and can read their subsequent stock candles without asserting
+that the official index membership continued. This is a fixed exploratory
+watchlist selected for economic relevance, not a survivorship-free index
+or an official weighted attribution. The true dated-membership study still
+stops at documented coverage. Automatic maintenance retains the original
+membership refresh and attempts to repair missing verified member bars;
+new membership evidence remains necessary for later true constituents.
+Enable index and options maintenance, set wings to 5, and approve the
+desired recurring scopes. The duplicate POST maintenance route is resolved;
+legacy bodyless derived-only repair remains compatible.
+
+Global Markets > Configure automatic source collection now includes opt-in
+Alpaca daily and optional five-minute US ETF proxies, plus existing FRED,
+Twelve Data and announcements. Existing settings migrate with Alpaca OFF.
+Select the same entitled IEX/SIP feed already used for the factor archive;
+changing provider identity is not silently accepted. Completed five-minute
+bars use actual receipt timestamps and a separate factor identity. During
+Indian trading hours, US ETFs may have no trades or be stale; they are
+not actual global futures, Asian exchange or GIFT NIFTY intraday feeds.
+Those still require reviewed entitled sources. The worker runs while the
+app is open, never submits orders, and does not backdate recent receipts.
+
+Run a fast matching context audit after panel acquisition:
+
+```bash
+bash run.sh cpr-context-check --fixed-panel --hold 0
+```
+
+Full additional comparisons:
+
+```bash
+bash run.sh cpr-research --entry-mode regime_scan --hold 0 --frame 5 \
+    --risk-budget 12000 --wings 5 --context-mode archive --rank-entries \
+    --patterns --fixed-panel --context-q --debit-spreads
+```
+
+The INR 12,000 exposure is a historical paper diagnostic, not a live
+recommendation. Pattern, global+pattern, true constituent+global+pattern,
+fixed-bank panel and panel+global(+pattern) scopes compare augmented ML to
+the technical baseline on matched eligible observations. A direction-only
+5-minute candle forecast is selected using development data, then used
+only on later CPR signals as an additional rule; it requires at least 55%
+probability in the signal direction and a 10 percentage point advantage
+over the opposite direction. The prior-only model cannot approve entries.
+Option-outcome ML receives raw completed-candle features, not in-sample
+index predictions. Earlier-only contextual Q uses a compact frozen
+entry-time agreement/mixed/conflict regime from the requested observed
+scope, plus the existing dynamic P&L/time/trend/drawdown state. Compare
+against technical Q fitted on the same earlier scope rows; missing or
+unsupported Q states fall back to the fixed stop/target. This does not
+continuously update global/constituent state during the position.
+ML validation now also requires no exits after 15:20 and at most two
+minutes of modeled exit delay; a previously recovered 108-minute exit
+is not acceptable promotion evidence.
+
+Debit-spread comparators pair the same observed rolling expiry family and
+side using a lower-strike long CALL/higher-strike short CALL or the reverse
+for PUT. Only same-minute, positive-volume, price-consistent observations
+are used. Use deterministic signal-time selection, modeled Zerodha fees
+for both legs, and original delayed-exit and square-off control. Compare
+gross-long funding plus fees with a separately labeled counterfactual
+net-debit-plus-fees budget. Neither verifies broker margin, exact expiry
+identity, synchronous executable quotes, legging risk or fills. A
+net-debit-affordable pair can still require far more capital at the
+broker. Recover missing exit evidence only at the first later valid
+paired open in the same session. Keep this in paper research.
+
+No additional data source, price, or result is synthesized. These are
+experimental policies, not live deployment approval. Freeze policy and
+reserve new prospective sessions before making an independent claim;
+the existing rolling historical results are exploratory.
