@@ -99,6 +99,10 @@ def reversal(entry_direction, result, now, entry_received_utc):
             return False
         if not 0 <= (now - cutoff).total_seconds() <= MAX_FORECAST_AGE_SECONDS:
             return False
-        return result["direction"] == ("DOWN" if entry_direction == "UP" else "UP")
+        probabilities = [result["p_down"], result["p_flat"], result["p_up"]]
+        if any(not math.isfinite(x) or not 0 <= x <= 1 for x in probabilities) or abs(sum(probabilities)-1)>1e-8:
+            return False
+        opposite = -1 if entry_direction == "UP" else 1
+        return alpha._call(probabilities) == opposite and result["direction"] == ("DOWN" if opposite == -1 else "UP")
     except (KeyError, ValueError, TypeError):
         return False
