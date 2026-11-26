@@ -29,3 +29,22 @@ It is not a separate dataset and never submits orders or opens a new socket.
 Local acceptance: python -m unittest discover -s tests -p 'test_market_patterns.py' -v
 and npm run build, then launch with bash run.sh. Verify coverage with actual
 Dhan data. No real market data or credentials are included in fixtures.
+
+## Workspace organization
+Live Market keeps the index chart first, with compact movement context and
+an all-member heatmap alongside on wide screens. Heatmap colors use observed
+interval returns or observed opening-sample returns; missing/stale values
+are gray. Dated weights determine tile order, not invented size. Full
+historical tables live on Market Intelligence; full constituent diagnostics
+remain on Directional Trading. Options Analytics and Positions & Risk are
+primary trading destinations. Depth, spreads, replay, paper trading and
+custom scanners remain accessible through More tools.
+
+Positions & Risk reads the existing manual trade journal and full-size
+bid marks. It adds combined conditional BSM scenarios over -2000..+2000
+points, with a shared spot reference, per-leg inferred IV, spread/slippage
+and fee assumptions. Incomplete, expired, unsynchronized or invalid-IV
+baskets do not produce a portfolio scenario. No actual broker-account
+positions are claimed. Conditional historical pattern tables use fixed
+rules, a chronological 70/30 split, one first event per session, next-open
+index proxies and MFE/MAE; not option returns or proof of profitability.

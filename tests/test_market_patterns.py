@@ -56,6 +56,18 @@ class MarketPatternTests(unittest.TestCase):
         self.assertEqual(sum((y-x).days for x,y in windows), 365-59)
         self.assertEqual(mp.missing_windows(a,b,[(a,b)]), [])
 
+    def test_conditional_chronological_split_and_excursion(self):
+        from datetime import timedelta
+        start = date(2026, 1, 1)
+        days = {(start+timedelta(days=i)).isoformat(): day() for i in range(30)}
+        report = mp.conditional_patterns(days)
+        self.assertEqual(report["development_sessions"], 21)
+        self.assertEqual(report["evaluation_sessions"], 9)
+        rows = [r for r in report["rows"] if r["cohort"]=="evaluation" and r["pattern"]=="five_consecutive_candles"]
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(r["n"]==9 and r["continuation_pct"]==100 for r in rows))
+        self.assertTrue(all(r["median_mfe"]>=0 and r["median_mae"]>=0 for r in rows))
+
     def test_first_breakout_is_next_open(self):
         bars = day()
         out = mp.baseline({"2026-11-23": bars})

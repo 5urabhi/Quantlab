@@ -7,7 +7,8 @@ aggregated buy/sell quantities are displayed liquidity, not executed trade flow.
 from __future__ import annotations
 
 from contextlib import closing
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as clock_time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from hashlib import sha256
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -374,6 +375,31 @@ def _quote(db, symbol, day, target):
     return dict(zip(("identity","received_utc","exchange_trade_utc","price","volume","atp","buy_quantity","sell_quantity"),row))
 
 
+def opening_sample(db, symbol, day, target):
+    """Last eligible quote in the first 30 seconds of the regular session.
+
+    This is an observed opening sample, not the exchange's official open.
+    Never use a sample later than the requested cutoff.
+    """
+    start = datetime.combine(day, clock_time(9, 15), ZoneInfo("Asia/Kolkata"))
+    end = min(target, start + timedelta(seconds=MAX_AGE))
+    if end < start:
+        return None
+    sample = _quote(db, symbol, day, end)
+    if not sample:
+        return None
+    if datetime.fromisoformat(sample["received_utc"]) < start or datetime.fromisoformat(sample["exchange_trade_utc"]) < start:
+        return None
+    return sample
+
+
+def session_return(current, opening):
+    if not current or not opening or current["identity"] != opening["identity"] or opening["price"] <= 0:
+        return {"session_return_pct": None, "session_anchor_utc": None}
+    return {"session_return_pct": 100*(current["price"]/opening["price"]-1),
+            "session_anchor_utc": opening["received_utc"]}
+
+
 def calculate_row(current, anchor, baselines, weight, index_anchor):
     out = {"return_pct":None,"volume_delta":None,"relative_volume":None,
            "baseline_sessions":0,"atp_deviation_pct":None,"displayed_quantity_imbalance":None,
@@ -455,14 +481,17 @@ def analyze(horizon=5, as_of=""):
                         c,a = _quote(db,symbol,previous,target-shift),_quote(db,symbol,previous,start-shift)
                         if current and c and a and c["identity"]==a["identity"]==current["identity"] and c["volume"]>=a["volume"]:
                             baseline.append(c["volume"]-a["volume"])
+                    opening = opening_sample(db, symbol, day, target)
                     rows.append({"symbol":symbol,"weight_pct":weights.get(symbol),"current":current,"anchor":anchor,
-                                 **calculate_row(current,anchor,baseline,weights.get(symbol),index)})
+                                 **calculate_row(current,anchor,baseline,weights.get(symbol),index),
+                                 **session_return(current,opening)})
         except (sqlite3.Error,OSError,ValueError,TypeError):
             rows=[]
             blockers.append("Stored quote query could not complete; data remains unavailable. Retry without interrupting the recorder.")
     if not rows:
         rows=[{"symbol":s,"weight_pct":weights.get(s),"current":None,"anchor":None,
-               **calculate_row(None,None,[],weights.get(s),None)} for s in members]
+               **calculate_row(None,None,[],weights.get(s),None),
+               **session_return(None,None)} for s in members]
     observed=[r for r in rows if r["return_pct"] is not None]
     weighted=[r for r in observed if r["weight_pct"] is not None]
     coverage=sum(r["weight_pct"] for r in weighted) if snapshot else None

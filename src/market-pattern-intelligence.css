@@ -12,3 +12,5 @@
 .mpi-detail summary{font-weight:650;cursor:pointer;padding:4px 0}
 .mpi-detail .tc-table-scroll{max-height:420px;margin-top:8px}
 .mpi .tc-table-scroll table{width:100%;white-space:nowrap;font-variant-numeric:tabular-nums}
+
+.mpi-compact{display:grid;gap:6px}.mpi-compact-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.mpi-compact-grid .mpi-card{padding:8px}.mpi-compact-grid .mpi-card strong{font-size:1rem;overflow-wrap:anywhere}.mpi-compact .mpi-callout{font-size:.75rem}.mpi-compact .mpi-card small{font-size:.68rem}

@@ -1,5 +1,7 @@
 import LivePythonResults from './LivePythonResults'
 import MarketPatternIntelligence from './MarketPatternIntelligence'
+import BankHeatmap from './BankHeatmap'
+import './market-intelligence-dashboard.css'
 import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Activity,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
 import './live-feed.css'
@@ -214,16 +216,19 @@ export default function LiveFeedPanel({
       onDraftJournal={(contract,lots)=>onDraftJournal?.(contract,lots)}
     />}
     {view==='options'&&<LivePythonResults mode="options"/>}
-    {view==='options'&&<details className="tc-panel"><summary>Market movement &amp; historical scalping context</summary><MarketPatternIntelligence identity="INDEX:BANKNIFTY"/></details>}
+    {view==='options'&&<div className="mi-live-grid"><MarketPatternIntelligence compact/><BankHeatmap/></div>}
     {feed?.index_packet_note&&!livePrice&&<p className="tc-warning" role="status">
       Broker index packet not supported by the published binary layout · {feed.unsupported_index_packets} observed.
       {' '}{feed.index_packet_note}</p>}
     {view==='signals'&&<>
-      <MarketPatternIntelligence identity={watchedIndex}/>
-      <ObservedIndexChartV2 rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'}
-        sourceWarning={signal?.source_warning||''}/>
-      {automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'&&<RecordedChainSpot/>}
-      {watchedIndex!=='INDEX:NIFTY50'&&<LivePythonResults mode="index"/>}
+      <div className="mi-live-grid">
+        <div className="mi-live-main"><ObservedIndexChartV2 rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'}
+          sourceWarning={signal?.source_warning||''}/>
+          {automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'&&<RecordedChainSpot/>}
+          {watchedIndex!=='INDEX:NIFTY50'&&<details className="mi-card"><summary>Running Python research results</summary><LivePythonResults mode="index"/></details>}
+        </div>
+        <aside className="mi-live-side"><MarketPatternIntelligence compact identity={watchedIndex}/>{watchedIndex==='INDEX:BANKNIFTY'&&<BankHeatmap/>}<a className="mi-link" href="#/tradingpositions">Open positions &amp; portfolio risk →</a></aside>
+      </div>
       <div className="lf-cards">
       <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
         <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':

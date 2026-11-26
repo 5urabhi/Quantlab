@@ -21,6 +21,9 @@ import ResearchPlot from './ResearchPlots'
 import {HomeOperations,StorageOverview,ReportWorkspace,PrivacyChecks} from './OperationsCloseout'
 import ZerodhaProviderPanel from './ZerodhaProviderPanel'
 import ConstituentIntelligence from './ConstituentIntelligence'
+import MarketPatternIntelligence from './MarketPatternIntelligence'
+import PositionsRisk from './PositionsRisk'
+import BankHeatmap from './BankHeatmap'
 import SavedIndexAnalytics from './SavedIndexAnalytics'
 const CustomModelWorkspace = lazy(() => import('./CustomModelWorkspace'))
 const ResearchNotebook = lazy(() => import('./ResearchNotebook'))
@@ -60,7 +63,7 @@ type RunConfig = {
 }
 const defaultConfig:RunConfig = {name:'quant_research_v1', factor_weights:{momentum:1,low_volatility:0,value:0,quality:0,size:0},top_n:10,weighting:'equal',max_weight:.2,rebalance_every:3,cost_bps:10,execution_lag:1,momentum_formation:12,momentum_skip:1,volatility_lookback:12,validation_start:'',final_test_start:'',sector_cap:null}
 type Tab =
-  'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingspreads'|'tradingreplay'|'tradingjournal'|'tradingpaper'|'tradinganalytics'|'tradingdirectional'|
+  'overview'|'trading'|'tradingchain'|'tradingdepth'|'tradingspreads'|'tradingreplay'|'tradingjournal'|'tradingpaper'|'tradinganalytics'|'tradingdirectional'|'tradingpatterns'|'tradingpositions'|
   'strategies'|'strategyema'|'strategypython'|'strategybacktest'|
   'mathematics'|'models'|'research'|'factors'|'construction'|'risk'|'rolling'|'robustness'|'modelgrids'|'indexstudio'|
   'data'|'dhan'|'dataexplorer'|'dataquality'|'datadownloads'|'nse'|'evidence'|
@@ -71,8 +74,8 @@ type PrimarySection={id:Tab;label:string;icon:typeof Activity;tabs:Tab[];navTabs
 const primarySections:PrimarySection[]=[
   {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
   {id:'trading',label:'Trading',icon:Activity,
-    tabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper','tradinganalytics','tradingdirectional','customscanners'],
-    navTabs:['trading','tradingdirectional','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper']},
+    tabs:['trading','tradingpatterns','tradingdirectional','tradingchain','tradinganalytics','tradingpositions','tradingjournal','tradingdepth','tradingspreads','tradingreplay','tradingpaper','customscanners'],
+    navTabs:['trading','tradingpatterns','tradingchain','tradinganalytics','tradingpositions','tradingjournal']},
   {id:'strategies',label:'Strategies',icon:TrendingUp,
     tabs:['strategies','strategyema','strategypython','strategybacktest','pythonmonitors'],
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
@@ -95,7 +98,7 @@ const titles:Record<Tab,string>={
   overview:'Home',trading:'Live Market',tradingchain:'Option Chain',
   tradingdepth:'20-Level Order Book',tradingspreads:'Liquidity & Spreads',
   tradingreplay:'Market Replay',
-  tradingjournal:'Trade Journal',tradingpaper:'Paper Trading',tradinganalytics:'Options Analytics',tradingdirectional:'Directional Trading',strategies:'Strategy Library',
+  tradingjournal:'Trade Journal',tradingpaper:'Paper Trading',tradinganalytics:'Options Analytics',tradingdirectional:'Directional Trading',tradingpatterns:'Market Intelligence',tradingpositions:'Positions & Risk',strategies:'Strategy Library',
   strategyema:'EMA Explorer',strategypython:'Python Editor',
   strategybacktest:'BANKNIFTY Backtests',pythonmonitors:'Running Python',custommodels:'Custom Models',customscanners:'Custom Scanners',pythonenvironment:'Python Environment',
   mathematics:'Model Catalog',models:'Advanced Research Tools',
@@ -128,6 +131,8 @@ const descriptions:Record<Tab,string>={
   tradingpaper:'Manage virtual cash, simulated orders and original-depth historical replays without broker execution.',
   tradinganalytics:'Compare Greek sensitivities, volatility, liquidity and contract scenarios.',
   tradingdirectional:'Analyze BANKNIFTY constituent movements, dated weights, relative volume and directional option scenarios without placing orders.',
+  tradingpatterns:'Rolling historical movement, intraday seasonality, conditional patterns and underlying bank breadth.',
+  tradingpositions:'Monitor manually recorded long-option positions, observed bid marks and combined model risk.',
   strategies:'Choose a strategy, test real index signals, then study historical CE/PE contracts.',
   strategyema:'Test one EMA pair, chosen combinations or all 11,026 valid pairs.',
   strategypython:'Paste, run and save isolated Python research without interrupting Dhan capture.',
@@ -584,8 +589,10 @@ function App(){
         <Suspense fallback={<div className="ws-empty" role="status" aria-live="polite">
           <LoaderCircle size={18}/> Loading {titles[tab]}…
         </div>}>
+        {tab==='tradingpatterns'&&<><div className="mi-card"><div className="mi-heading"><h3>Market intelligence tools</h3><button className="ws-button" onClick={()=>begin('tradingdirectional')}>Full bank analysis →</button></div><BankHeatmap/></div><MarketPatternIntelligence/></>}
+        {tab==='tradingpositions'&&<PositionsRisk onOpenJournal={()=>begin('tradingjournal')} onOpenChain={()=>begin('tradingchain')}/>}
         {tab==='tradingdirectional'&&<ConstituentIntelligence onOpenRecording={()=>begin('recordingsettings')} onOpenSources={()=>begin('nse')} onOpenData={()=>begin('data')} onOpenOptions={()=>begin('tradinganalytics')}/>}
-        {(['trading','tradingchain','tradinganalytics','tradingdirectional','tradingdepth','tradingreplay',
+        {(['trading','tradingchain','tradinganalytics','tradingdepth','tradingreplay',
             'tradingjournal','strategybacktest'].includes(tab)||
             (tab==='connections'&&connectionEditing))&&
           <TradingCockpit
@@ -594,9 +601,9 @@ function App(){
               tab==='tradingjournal'?'journal':
               tab==='strategybacktest'?'strategy':
               tab==='connections'?'setup':'live'}
-            initialOptionMode={tab==='tradinganalytics'?'analytics':tab==='tradingdirectional'?'directional':tab==='tradingchain'?'overview':undefined}
+            initialOptionMode={tab==='tradinganalytics'?'analytics':tab==='tradingchain'?'overview':undefined}
             focusLive={tab==='trading'?'signals':
-              ['tradingchain','tradinganalytics','tradingdirectional'].includes(tab)?'options':
+              ['tradingchain','tradinganalytics'].includes(tab)?'options':
               tab==='tradingdepth'?'depth':undefined}
             onNavigateLiveView={view=>begin(({
               signals:'trading',options:'tradingchain',depth:'tradingdepth'

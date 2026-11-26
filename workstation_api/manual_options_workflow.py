@@ -266,6 +266,61 @@ def _depth_mark(p,now):
         return None
 
 
+def portfolio_scenario(legs, total, complete, now, horizon, iv_shock, rate, dividend, slippage):
+    """Use one common spot reference and only a complete, timely model basket.
+
+    Quote mid IV is inverted at each leg's original receipt. Reprice at a
+    shared timestamp and spot shock. No partial portfolio totals.
+    """
+    result = {"state": "unavailable", "reason": "All open journal legs need fresh linked model receipts.",
+              "anchor_spot": None, "points": [], "premium_at_risk": None,
+              "horizon_minutes": horizon, "iv_change_points": iv_shock,
+              "max_receipt_skew_seconds": None}
+    if not total:
+        result["reason"] = "No open journal positions."
+        return result
+    if not complete or len(legs) != total:
+        return result
+    stamps = [ao.timestamp(item[1]["received_utc"]) for item in legs]
+    skew = (max(stamps)-min(stamps)).total_seconds()
+    result["max_receipt_skew_seconds"] = skew
+    if skew > 10:
+        result["reason"] = "Model receipts differ by more than 10 seconds; synchronized basket unavailable."
+        return result
+    latest = max(legs, key=lambda item: ao.timestamp(item[1]["received_utc"]))
+    spot = ao.positive(latest[1]["underlying_spot"])
+    if spot is None or spot <= 2000:
+        result["reason"] = "No valid common underlying spot."
+        return result
+    horizon_end = now+timedelta(minutes=horizon)
+    prepared = []
+    for position, snapshot, row, sigma in legs:
+        expiry = datetime.combine(date.fromisoformat(position["expiry"]),time(15,30),IST)
+        years = (expiry-horizon_end).total_seconds()/ao.YEAR_SECONDS
+        vol = sigma+iv_shock/100
+        if years <= 0 or not ao.MIN_IV < vol <= ao.MAX_IV:
+            result["reason"] = "Requested horizon crosses an expiry or IV shock is outside model limits."
+            return result
+        half = (row["ask"]-row["bid"])/2
+        prepared.append((position,row,years,vol,half))
+    values = []
+    for move in range(-2000,2001,250):
+        pnl = 0.
+        for position,row,years,vol,half in prepared:
+            mid = ao.bsm(spot+move,row["strike"],years,rate/100,vol,row["option_type"],dividend/100)["price"]
+            estimate = max(0.,mid-half)*(1-slippage/10000)
+            units = position["quantity"]
+            if estimate*units > 1e10:
+                result["reason"] = "Modeled turnover exceeds supported fee range."
+                return result
+            net,_ = _net(position["entry_price"],estimate,units,position["broker_profile"] or "zerodha")
+            pnl += net
+        values.append({"move_points":move,"net_pnl_inr":fees._money(pnl)})
+    result.update(state="ready",reason="",anchor_spot=spot,points=values,
+                  premium_at_risk=sum(p["entry_price"]*p["quantity"] for p,_,_,_ in legs))
+    return result
+
+
 def position_marks(*, target_pct=5., stop_pct=2.5, horizon_minutes=5, iv_change_points=0.,
                    rate_pct=6.5, dividend_pct=0., slippage_bps=10., now=None):
     for v,lo,hi in ((target_pct,.01,1000),(stop_pct,.01,100),(horizon_minutes,1,1440),
@@ -276,6 +331,7 @@ def position_marks(*, target_pct=5., stop_pct=2.5, horizon_minutes=5, iv_change_
     positions=journal.open_trades()
     cache={}
     results=[]
+    portfolio_legs=[]
     for p in positions:
         result={**p,"mark":None,"estimated_net_pnl_inr":None,"estimated_charges_inr":None,
                 "greeks":None,"iv_pct":None,"model_receipt_utc":None,"exit_levels":None,
@@ -311,6 +367,7 @@ def position_marks(*, target_pct=5., stop_pct=2.5, horizon_minutes=5, iv_change_
                 result["greeks"]={k:v*units for k,v in model.items() if k!="price"}
                 result["iv_pct"]=sigma*100
                 if fresh and open_now:
+                    portfolio_legs.append((p,snapshot,row,sigma))
                     for item in levels.values():
                         item["model_underlying_move_points"]=_underlying_move(snapshot,row,sigma,years,
                            item["sell_bid"],horizon_minutes,iv_change_points,rate_pct,dividend_pct,slippage_bps)
@@ -346,6 +403,7 @@ def position_marks(*, target_pct=5., stop_pct=2.5, horizon_minutes=5, iv_change_
        "aggregate_greeks":{k:sum(p["greeks"][k] for p in fresh_greeks)
           for k in ("delta","gamma","theta_day","vega_iv_point","rho_rate_point")} if fresh_greeks else None,
        "fresh_greeks_count":len(fresh_greeks),"generated_utc":_iso(now),"read_only":True,"orders_enabled":False,
+       "portfolio_scenario":portfolio_scenario(portfolio_legs,len(results),complete,now,horizon_minutes,iv_change_points,rate_pct,dividend_pct,slippage_bps),
        "warning":"User-entered fills, estimated round-trip charges, most recent saved full-size bid. "
          "Exit levels are observations and conditional model inversions, not orders. "
          "Greek aggregation covers only fresh model receipts and is not synchronized. "

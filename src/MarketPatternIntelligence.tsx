@@ -7,7 +7,8 @@ type Stats={n:number;mean:number|null;median:number|null;p10:number|null;p25:num
 type Session={date:string;open:number|null;high:number;low:number;close:number;range:number;range_pct:number|null;up:number|null;down:number|null;net:number|null;bars:number}
 type Current=Session&{as_of_ist:string;age_seconds:number;state:string;missing_prefix_bars:number;historical_bars:number;live_observed_bars:number;gap:number|null;full_day_range_percentile:number|null;same_time_percentile:number|null;same_time_range:Stats;historical_remaining_excursion:Stats}
 type Sync={enabled:boolean;state:string;last_attempt_utc:string|null;message:string}
-type Report={identity:string;date_ist:string;requested_start:string;generated_utc:string;source:string;warning:string;current:Current|null;sync:Sync;coverage:{observed_prior_sessions:number;excluded_partial_sessions:number;verified_receipts:number;rejected_receipts:number;omitted_receipts:number;overlap_revisions:number;live_read_error:string|null};baseline:{sessions:number;first:string|null;last:string|null;daily:Session[];range:Stats;range_pct:Stats;up:Stats;down:Stats;abs_open_close:Stats;bullish_pct:number|null;bearish_pct:number|null;windows:{window:number;sessions:number;range:Stats;range_pct:Stats;abs_open_close:Stats}[];thresholds:{points:number;n:number;range_pct:number|null;either_pct:number|null;up_pct:number|null;down_pct:number|null;both_pct:number|null}[];percent_thresholds:{threshold_pct:number;n:number;range_pct:number|null;either_pct:number|null}[];gap_fill:{points:number;side:string;n:number;fill_pct:number|null}[];horizons:{minutes:number;n:number;absolute_move:Stats;up_pct:number|null;down_pct:number|null;move_50_pct:number|null;move_100_pct:number|null;move_200_pct:number|null}[];time_buckets:{time_ist:string;range:Stats}[];opening_patterns:{opening_minutes:number;hold_minutes:number;signals:number;n:number;positive_pct:number|null;signed_points:Stats}[]}}
+type Conditional={state:string;development_sessions:number;evaluation_sessions:number;evaluation_from?:string;development_first_hour_p90_pct?:number;rows:{cohort:string;pattern:string;horizon:number;n:number;continuation_pct:number|null;reversal_pct:number|null;continuation_interval_pct:number[]|null;mean_signed_points:number|null;median_mfe:number|null;median_mae:number|null}[]}
+type Report={identity:string;date_ist:string;requested_start:string;generated_utc:string;source:string;warning:string;current:Current|null;sync:Sync;coverage:{observed_prior_sessions:number;excluded_partial_sessions:number;verified_receipts:number;rejected_receipts:number;omitted_receipts:number;overlap_revisions:number;live_read_error:string|null};baseline:{sessions:number;first:string|null;last:string|null;daily:Session[];range:Stats;range_pct:Stats;up:Stats;down:Stats;abs_open_close:Stats;bullish_pct:number|null;bearish_pct:number|null;windows:{window:number;sessions:number;range:Stats;range_pct:Stats;abs_open_close:Stats}[];thresholds:{points:number;n:number;range_pct:number|null;either_pct:number|null;up_pct:number|null;down_pct:number|null;both_pct:number|null}[];percent_thresholds:{threshold_pct:number;n:number;range_pct:number|null;either_pct:number|null}[];gap_fill:{points:number;side:string;n:number;fill_pct:number|null}[];horizons:{minutes:number;n:number;absolute_move:Stats;up_pct:number|null;down_pct:number|null;move_50_pct:number|null;move_100_pct:number|null;move_200_pct:number|null}[];time_buckets:{time_ist:string;range:Stats}[];opening_patterns:{opening_minutes:number;hold_minutes:number;signals:number;n:number;positive_pct:number|null;signed_points:Stats}[];conditional?:Conditional}}
 const fmt=(n:number|null|undefined,d=1)=>n==null?'—':n.toLocaleString('en-IN',{maximumFractionDigits:d})
 const pct=(n:number|null|undefined)=>n==null?'—':fmt(n)+'%'
 const ftime=(v:string)=>new Date(v).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',dateStyle:'short',timeStyle:'short'})
@@ -17,7 +18,7 @@ function Card({label,value,detail}:{label:string;value:string;detail?:string}){
 function Table({headers,rows}:{headers:string[];rows:(string|number)[][]}){
   return <div className="tc-table-scroll"><table><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((r,i)=><tr key={i}>{r.map((v,j)=><td key={j}>{v}</td>)}</tr>)}</tbody></table></div>
 }
-export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY'}:{identity?:string}){
+export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',compact=false}:{identity?:string;compact?:boolean}){
   const [data,setData]=useState<Report|null>(null)
   const [error,setError]=useState('')
   const [refresh,setRefresh]=useState(0)
@@ -41,6 +42,20 @@ export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY'}:{
     finally{setSaving(false)}
   }
   const b=data?.baseline,c=data?.current
+  if(compact)return <section className="mi-card mpi-compact" aria-label="Current market movement context">
+    <div className="mi-heading"><div><span className="mi-kicker">MOVEMENT CONTEXT</span><h3>Today's range</h3></div><a href="#/tradingpatterns">All statistics →</a></div>
+    {error&&<p role="status" className="mi-muted">{error} · current context unavailable.</p>}
+    {c&&!error?<><p className="mpi-source">{c.state==='recent_completed_bar'?'Recent completed bar':'Saved / stale'} · {ftime(c.as_of_ist)} IST · {c.missing_prefix_bars} missing prefix minutes</p>
+      <div className="mpi-compact-grid">
+        <Card label="Observed high–low" value={fmt(c.range)+' pts'} detail={pct(c.range_pct)+' of open'}/>
+        <Card label="Same-clock percentile" value={pct(c.same_time_percentile)} detail={'Median by now '+fmt(c.same_time_range.median)+' pts'}/>
+        <Card label="From session open" value={fmt(c.net)+' pts'} detail={'High '+fmt(c.high)+' · low '+fmt(c.low)}/>
+        <Card label="Typical remaining excursion" value={fmt(c.historical_remaining_excursion.median)+' pts'} detail="Historical, not predicted"/>
+      </div>
+      {c.same_time_percentile!=null&&<p className="mpi-callout">{c.same_time_percentile>=90?'Unusually wide by this time.':c.same_time_percentile<=10?'Unusually narrow by this time.':'Compare with historical ranges, not direction.'}</p>}
+    </>:<p className="mi-muted">No current original completed-minute context. Historical data may still be available.</p>}
+    <p className="mi-muted">{b?b.sessions+' complete historical sessions · median full-day range '+fmt(b.range.median)+' points.':'Checking historical coverage…'} {data&&!data.sync.enabled?'History auto-sync is off.':''}</p>
+  </section>
   return <section className="tc-panel mpi" aria-label="Market pattern intelligence">
     <div className="mpi-head"><div><span className="tc-page-kicker">MARKET INTELLIGENCE · ROLLING 365 DAYS</span><h3>{identity.replace('INDEX:','')} movement &amp; scalping context</h3><p>Observed index behaviour, not a CE/PE trade recommendation. Refreshes every 30 seconds from the shared library.</p></div><button type="button" onClick={()=>setRefresh(x=>x+1)}>Refresh</button></div>
     {error&&<p role="alert" className="tc-error">{error}{data?' · displayed report may be stale.':''}</p>}
@@ -97,6 +112,9 @@ export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY'}:{
         <details className="mpi-detail"><summary>Opening range breakout · next-open index proxy</summary>
           <Table headers={['Opening range (min)','Hold (min)','Signals','Scored','Positive proxy','Mean signed points']} rows={b.opening_patterns.map(p=>[p.opening_minutes,p.hold_minutes,p.signals,p.n,pct(p.positive_pct),fmt(p.signed_points.mean)])}/>
           <p className="tc-muted">First close beyond opening range; next observed minute open to horizon close. In-sample only, no fees, option spread, volatility, or fill assumption. Not a strategy ranking.</p>
+        </details>
+        <details className="mpi-detail"><summary>Conditional continuation / reversal and favorable / adverse excursion</summary>
+          {b.conditional?.state==='descriptive'?<><p className="tc-muted">Fixed rules · {b.conditional.development_sessions} development sessions, {b.conditional.evaluation_sessions} chronological evaluation sessions from {b.conditional.evaluation_from}. First qualifying event per session; enter at next observed open. Index proxy only, not option P&amp;L. Wilson intervals are descriptive and do not account for serial dependence or multiple comparisons.</p><Table headers={['Pattern','Sample','Hold min','Events','Continuation','Reversal','Wilson 95% range','Mean signed pts','Median MFE','Median MAE']} rows={b.conditional.rows.map(r=>[r.pattern.replaceAll('_',' '),r.cohort,r.horizon,r.n,pct(r.continuation_pct),pct(r.reversal_pct),r.continuation_interval_pct?r.continuation_interval_pct.map(x=>pct(x)).join(' – '):'—',fmt(r.mean_signed_points),fmt(r.median_mfe),fmt(r.median_mae)])}/></>:<p className="tc-muted">At least 20 development and 5 evaluation sessions required; no pattern probabilities inferred yet.</p>}
         </details>
         <details className="mpi-detail"><summary>Historical sessions · exact observed OHLC</summary><Table headers={['Session','Open','High','Low','Close','Range','Up','Down','Net']} rows={[...b.daily].reverse().map(s=>[s.date,fmt(s.open),fmt(s.high),fmt(s.low),fmt(s.close),fmt(s.range),fmt(s.up),fmt(s.down),fmt(s.net)])}/></details>
       </>}

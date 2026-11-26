@@ -165,6 +165,79 @@ def _session(bars):
             "missing_prefix_bars": keys[-1]+1-len(keys)}
 
 
+def conditional_patterns(complete):
+    """Fixed descriptive rules, first qualifying trigger per direction/session.
+
+    Fit range thresholds on the first 70% of sessions only; report the
+    remaining chronological sample separately. No strategy selection or fees.
+    """
+    dates = sorted(complete)
+    split = int(len(dates)*.7)
+    if split < 20 or len(dates)-split < 5:
+        return {"state":"insufficient_sessions","development_sessions":split,
+                "evaluation_sessions":len(dates)-split,"rows":[]}
+    development = dates[:split]
+    evaluation = dates[split:]
+    # Percent-of-open range threshold at minute 59 from development only.
+    def prefix_range(bars,k):
+        values = [bars[i] for i in range(k+1)]
+        return 100*(max(v[1] for v in values)-min(v[2] for v in values))/bars[0][0]
+    high_range = _stats([prefix_range(complete[d],59) for d in development])["p90"]
+    rows = []
+    for cohort, sample in (("development",development),("evaluation",evaluation)):
+        for kind in ("open_move_0_5pct","five_consecutive_candles","prior_high_low_break","wide_first_hour"):
+            for horizon in (5,15,30,60):
+                outcomes = []
+                for day in sample:
+                    bars = complete[day]
+                    op = bars[0][0]
+                    idx = dates.index(day)
+                    prev = complete[dates[idx-1]] if idx else None
+                    prev_high = max(x[1] for x in prev.values()) if prev else None
+                    prev_low = min(x[2] for x in prev.values()) if prev else None
+                    for i in range(4, MINUTES-horizon):
+                        side = 0
+                        close = bars[i][3]
+                        if kind == "open_move_0_5pct":
+                            r = close/op-1
+                            side = 1 if r >= .005 else -1 if r <= -.005 else 0
+                        elif kind == "five_consecutive_candles":
+                            signs = [bars[j][3]-bars[j][0] for j in range(i-4,i+1)]
+                            side = 1 if min(signs)>0 else -1 if max(signs)<0 else 0
+                        elif kind == "prior_high_low_break" and prev_high is not None:
+                            side = 1 if close > prev_high else -1 if close < prev_low else 0
+                        elif kind == "wide_first_hour" and i==59 and prefix_range(bars,i)>=high_range:
+                            side = 1 if close>op else -1 if close<op else 0
+                        if not side:
+                            continue
+                        entry = bars[i+1][0]
+                        future = [bars[j] for j in range(i+1,i+horizon+1)]
+                        end = future[-1][3]
+                        hi,lo = max(x[1] for x in future),min(x[2] for x in future)
+                        mfe = max(0,hi-entry if side>0 else entry-lo)
+                        mae = max(0,entry-lo if side>0 else hi-entry)
+                        outcomes.append((side*(end-entry),mfe,mae))
+                        break
+                n=len(outcomes)
+                wins=sum(x[0]>0 for x in outcomes)
+                # Wilson interval for session-level descriptive outcome fraction.
+                interval=None
+                if n:
+                    p=wins/n; z=1.96; den=1+z*z/n
+                    center=(p+z*z/(2*n))/den
+                    half=z*math.sqrt(p*(1-p)/n+z*z/(4*n*n))/den
+                    interval=[100*max(0,center-half),100*min(1,center+half)]
+                rows.append({"cohort":cohort,"pattern":kind,"horizon":horizon,"n":n,
+                             "continuation_pct":_rate(wins,n),"reversal_pct":_rate(sum(x[0]<0 for x in outcomes),n),
+                             "continuation_interval_pct":interval,
+                             "mean_signed_points":mean([x[0] for x in outcomes]) if n else None,
+                             "median_mfe":median([x[1] for x in outcomes]) if n else None,
+                             "median_mae":median([x[2] for x in outcomes]) if n else None})
+    return {"state":"descriptive","development_sessions":len(development),
+            "evaluation_sessions":len(evaluation),"evaluation_from":evaluation[0],
+            "development_first_hour_p90_pct":high_range,"rows":rows}
+
+
 def baseline(complete, observed=None):
     """Complete regular sessions only. Forward windows overlap: not independent trades."""
     dates = sorted(complete)
@@ -258,7 +331,8 @@ def baseline(complete, observed=None):
             "bearish_pct": _rate(sum(s["net"] < 0 for s in summaries), n),
             "windows": windows, "thresholds": thresholds, "percent_thresholds": percent_thresholds,
             "gap_fill": gap_fill, "horizons": horizons, "time_buckets": time_buckets,
-            "opening_patterns": opening_patterns}
+            "opening_patterns": opening_patterns,
+            "conditional": conditional_patterns(complete)}
 
 
 def current_context(bars, complete):
