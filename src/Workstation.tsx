@@ -23,7 +23,6 @@ import ZerodhaProviderPanel from './ZerodhaProviderPanel'
 import ConstituentIntelligence from './ConstituentIntelligence'
 import MarketPatternIntelligence from './MarketPatternIntelligence'
 import PositionsRisk from './PositionsRisk'
-import BankHeatmap from './BankHeatmap'
 import SavedIndexAnalytics from './SavedIndexAnalytics'
 const CustomModelWorkspace = lazy(() => import('./CustomModelWorkspace'))
 const ResearchNotebook = lazy(() => import('./ResearchNotebook'))
