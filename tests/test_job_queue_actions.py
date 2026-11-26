@@ -1,4 +1,4 @@
-"""Bounded serial queue and safe retry guarantees; no real worker/API calls."""
+"""Bounded general queue, independent spread replay and safe cancellation."""
 from __future__ import annotations
 
 from concurrent.futures import Future
@@ -22,6 +22,7 @@ class StoppedWorker:
 class JobQueueTests(unittest.TestCase):
     def setUp(self):
         self.worker=StoppedWorker()
+        self.spread_worker=StoppedWorker()
         self.before=(module.JOBS,module.JOB_FUTURES,
                      module.JOB_RETRY_SPECS,module.JOB_STOP_SIGNALS)
         module.JOBS={}
@@ -30,6 +31,7 @@ class JobQueueTests(unittest.TestCase):
         module.JOB_STOP_SIGNALS={}
         self.mocks=[
             patch.object(module,"RUNNER",self.worker),
+            patch.object(module,"SPREAD_REPLAY_RUNNER",self.spread_worker),
             patch.object(module,"_persist_job",return_value=None),
             patch.object(module.research_library,"list_job_history",return_value=[]),
         ]
@@ -49,7 +51,9 @@ class JobQueueTests(unittest.TestCase):
         self.assertEqual(len(module.JOBS),6)
         snapshot=module.workspace_jobs()
         self.assertEqual(snapshot["max_pending_or_running"],6)
-        self.assertEqual(snapshot["worker_concurrency"],1)
+        self.assertEqual(snapshot["worker_concurrency"],2)
+        self.assertEqual(snapshot["research_worker_concurrency"],1)
+        self.assertEqual(snapshot["spread_replay_worker_concurrency"],1)
         order=[j for j in reversed(snapshot["jobs"])]
         self.assertEqual([j["queue_position"] for j in order],[1,2,3,4,5,6])
         self.assertTrue(all(j["status"]=="queued" for j in order))
@@ -57,6 +61,31 @@ class JobQueueTests(unittest.TestCase):
             module._spawn("workspace_validation",lambda:None)
         self.assertEqual(fail.exception.status_code,409)
         self.assertIn("full",fail.exception.detail)
+
+    def test_spread_replay_can_complete_while_history_download_is_waiting(self):
+        first=module._spawn("expired_option_history_acquisition",lambda:None)["job_id"]
+        second=module._spawn("workspace_validation",lambda:None)["job_id"]
+        spread=module._spawn("spread_speed_study",lambda:{"ok":True})["job_id"]
+        self.assertEqual(len(self.worker.pending),2)
+        self.assertEqual(len(self.spread_worker.pending),1)
+        rows={j["id"]:j for j in module.workspace_jobs()["jobs"]}
+        self.assertEqual(rows[first]["queue_position"],1)
+        self.assertEqual(rows[second]["queue_position"],2)
+        self.assertEqual(rows[spread]["queue_position"],1)
+        self.assertEqual(rows[spread]["worker_lane"],"spread_replay")
+        with self.assertRaises(HTTPException) as fail:
+            module._spawn("spread_speed_study",lambda:None)
+        self.assertEqual(fail.exception.status_code,409)
+        action,future=self.spread_worker.pending[0]
+        self.assertTrue(future.set_running_or_notify_cancel())
+        action()
+        future.set_result(None)
+        self.assertEqual(module.JOBS[spread]["status"],"complete")
+        self.assertEqual(module.JOBS[first]["status"],"queued")
+        self.assertEqual(module.JOBS[second]["status"],"queued")
+        new=module._spawn("spread_speed_study",lambda:None)["job_id"]
+        self.assertEqual(module.workspace_cancel_job(new)["status"],"cancelled")
+        self.assertTrue(module.JOB_FUTURES[new].cancelled())
 
     def test_cancel_queued_releases_capacity_and_safe_retry(self):
         first=module._spawn("workspace_validation",lambda:None)["job_id"]

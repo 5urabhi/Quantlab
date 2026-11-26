@@ -119,6 +119,8 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
         paper._check(value,lo,hi,label)
     if step_minutes not in (1,5,15):
         raise ValueError("Choose 1, 5 or 15 minute decision spacing")
+    if progress:
+        progress(0, "Inspecting saved depth coverage in read-only library")
     coverage=_coverage(chosen,identities,now)
     delays=LATENCIES_MS if compare_delays else (latency_ms,)
     # Use one cutoff and the longest delay for all cells. Never change the
