@@ -53,6 +53,19 @@ FACTORS={
     "FII_CASH_NET_CR":("daily_flow","participants","FII/FPI cash net buy, INR crore"),
     "DII_CASH_NET_CR":("daily_flow","participants","DII cash net buy, INR crore"),
 }
+# US-listed ETFs are explicit proxy series, not the index/futures levels
+# and not live Asian exchange prices. Keep their identities independent.
+ALPACA_PROXIES={
+    "US_SPY_ETF_CLOSE":("SPY","global_equity","US large-cap ETF price"),
+    "US_QQQ_ETF_CLOSE":("QQQ","global_equity","Nasdaq-100 ETF price"),
+    "US_KBE_ETF_CLOSE":("KBE","global_equity","US bank ETF price"),
+    "JAPAN_EWJ_ETF_CLOSE":("EWJ","asia","US-listed Japan equity ETF price proxy"),
+    "CHINA_FXI_ETF_CLOSE":("FXI","asia","US-listed China equity ETF price proxy"),
+    "US_TLT_ETF_CLOSE":("TLT","macro","US long Treasury ETF price proxy"),
+    "GOLD_GLD_ETF_CLOSE":("GLD","macro","Gold ETF price proxy"),
+}
+for key,(_,group,description) in ALPACA_PROXIES.items():
+    FACTORS[key]=("daily_return",group,description)
 for category in ("FII","DII","CLIENT","PRO"):
     for position in ("INDEX_FUT_NET","INDEX_CALL_NET","INDEX_PUT_NET"):
         FACTORS[category+"_"+position]=("daily_position","participants",
