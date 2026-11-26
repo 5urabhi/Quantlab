@@ -18,7 +18,7 @@ def _identity(scope,horizon):
     from . import context_alpha
     if scope not in context_alpha.SCOPES or horizon not in a.HORIZONS:
         raise ValueError("Select a supported context scope and original ledger horizon")
-    return context_alpha.POLICY_HASH
+    return context_alpha.policy_for(horizon)
 
 def register(scope,horizon,confirm,*,now=None):
     if confirm is not True:
