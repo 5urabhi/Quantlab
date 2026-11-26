@@ -26,8 +26,8 @@ MIN_STATE_DAYS = 3
 WARNING = (
     "Historical conditional OHLC proxies only: same-session rolling near-monthly "
     "strike/side, assumed lot size, no verified exact contract, bid/ask or fills. "
-    "Prior OHLC uses the preceding observed complete index session, not an official "
-    "exchange-calendar guarantee. Positive minute volume is an observation-quality "
+    "Prior OHLC requires the preceding weekday complete index session; "
+    "unverified holidays/special sessions are skipped, not inferred. Positive minute volume is an observation-quality "
     "condition, not execution proof. Decisions use completed bars, then delay "
     "one full minute before modeled entry/exit at an observed open. Stops and targets "
     "are net marks, not guaranteed realized prices. Missing paths are censored, not "
@@ -61,8 +61,13 @@ def _bar_closes(bars, frame):
 
 def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals):
     levels = _cpr(previous)
-    # Exclude unusually stale previous observed sessions; holidays are not inferred.
-    if levels is None or not 0 < (date.fromisoformat(day)-date.fromisoformat(prev_day)).days <= 4:
+    # Fail closed on an unverified missing weekday rather than using a stale
+    # CPR. Official holidays/special sessions need separate calendar evidence.
+    current=date.fromisoformat(day)
+    expected=current-timedelta(days=1)
+    while expected.weekday()>=5:
+        expected-=timedelta(days=1)
+    if levels is None or current.weekday()>=5 or date.fromisoformat(prev_day)!=expected:
         return [], "prior_complete_session_unavailable"
     op,hi,lo,close,pivot,bottom,top=levels
     seed=_bar_closes(previous,frame)
@@ -235,13 +240,22 @@ def _fit_q(episodes, *, sweeps=20):
     for ep in episodes:
         if ep["state"]!="entered" or not ep["path"] or not ep["path"][-1]["terminal"]:
             continue
+        # Value of following the fixed rule from each next state, used when
+        # the learned state has insufficient support.
+        fallback={}
+        continuation=ep["path"][-1]["exit_net"]/ep["debit"]
+        for j in range(len(ep["path"])-1,-1,-1):
+            s=ep["path"][j]
+            if _forced(s,stop=True):
+                continuation=s["exit_net"]/ep["debit"]
+            fallback[j]=continuation
         for i,step in enumerate(ep["path"][:-1]):
             if _forced(step,stop=True):
                 break
             nxt=ep["path"][i+1]
             transitions[_key(step)].append((ep["session"],ep["minute"],
                 step["exit_net"]/ep["debit"],_key(nxt),
-                nxt["exit_net"]/ep["debit"],bool(_forced(nxt,stop=True))))
+                fallback[i+1],bool(_forced(nxt,stop=True))))
     supported={k:v for k,v in transitions.items()
                if len({(x[0],x[1]) for x in v})>=MIN_STATE_EPISODES
                and len({x[0] for x in v})>=MIN_STATE_DAYS}
@@ -385,7 +399,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     if progress:progress(1,"Verifying original BANKNIFTY minute receipts")
     index,index_hashes,failures=h.shared_index_sources(start-timedelta(days=7),stop,[h.MAX_TOTAL])
     ordered=sorted(index)
-    dates=[d for d in ordered if from_date<=d<to_date][-sum(SPLITS):]
+    dates=[d for d in ordered if from_date<=d<to_date and date.fromisoformat(d).weekday()<5][-sum(SPLITS):]
     splits=[dates[:30],dates[30:40],dates[40:60]]
     signals=[];counts=Counter();day_audit={}
     for day in dates:
