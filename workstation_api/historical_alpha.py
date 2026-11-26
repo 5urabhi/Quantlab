@@ -36,21 +36,36 @@ POLICY={"version":VERSION,"horizons":HORIZONS,"splits":[30,10,20],"session_close
 POLICY_HASH=sha256(json.dumps(POLICY,sort_keys=True).encode()).hexdigest()
 
 
-def _batch(batch_id):
+def _batch(batch_id, *, study_start=None, study_stop=None):
     raw=dw._load_batch(batch_id)
     if raw.get("selection")!="banknifty_pit" or raw.get("interval")!=1:
         raise ValueError("Select a BANKNIFTY dated-membership one-minute batch")
     start,stop=map(date.fromisoformat,(raw["from_date"],raw["to_date"]))
     local=datetime.now(IST)
     max_stop=local.date()+timedelta(days=int(local.hour>=16))
-    if not 0<(stop-start).days<=MAX_DAYS or stop>max_stop:
-        raise ValueError("Use a completed historical range up to 240 calendar days, end exclusive")
+    if study_start is None and study_stop is None:
+        if not 0<(stop-start).days<=MAX_DAYS or stop>max_stop:
+            raise ValueError("Use a completed historical range up to 240 calendar days, end exclusive")
+    else:
+        if type(study_start) is not date or type(study_stop) is not date or not 0<(study_stop-study_start).days<=MAX_DAYS or study_stop>max_stop or start>=stop:
+            raise ValueError("Invalid bounded historical study slice")
+        start,stop=max(start,study_start),min(stop,study_stop)
+        if start>=stop:
+            raise ValueError("No overlap with requested study slice")
     info=raw.get("historical_index",{})
     intervals=info.get("intervals",[])
     payload=json.dumps(intervals,sort_keys=True,separators=(",",":")).encode()
     if not intervals or sha256(payload).hexdigest()!=info.get("intervals_sha256"):
         raise ValueError("Pinned historical membership missing or hash mismatch")
     items=raw.get("items",[])
+    if study_start is not None:
+        # The pinned membership hash above covers the entire original payload.
+        # Restrict the actual study to relevant dated membership, not today's universe.
+        needed={r["symbol"] for r in intervals if r["valid_from"]<stop.isoformat()
+                and (not r["valid_to"] or r["valid_to"]>start.isoformat())}
+        if not needed or len(needed)>MAX_INSTRUMENTS:
+            raise ValueError("Study slice has missing or oversized membership")
+        items=[x for x in items if x.get("pit_symbol") in needed]
     if not 1<=len(items)<=MAX_INSTRUMENTS:
         raise ValueError("Historical universe outside bounded study")
     resolved={}
