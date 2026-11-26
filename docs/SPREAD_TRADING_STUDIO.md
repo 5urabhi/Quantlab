@@ -224,3 +224,31 @@ Strategy Research reports the number of scans containing evidence-qualified cont
 
 ### Paper entry profile comparison (chronological v3)
 The Strategy Research checkbox compares three independent historical entry profiles, each with its own cash account for every exit policy and lane. Strict retains the previous remaining-session-loss exposure cap and minimum conservative favorable-net scenario gate. Capital-funded allows a position's conservative funding/risk proxy to fit available cash, capped at the initial capital, while retaining the scenario gate. Capital-funded without target gate uses the same funding rules and scenario ranking but does not require the conservative favorable scenario to reach the target before entry. It retains valid original evidence, side/delta, depth, contract terms, roundtrip liquidity, whole-lot funding and finite scenario checks. This is an ablation, not a recommendation or expected-return forecast. The original profit target remains available to the exit policy. All three stop opening new positions after gross scored losses reach the session allowance; funded profiles can exceed that allowance on one position, and a stop-loss mark cannot guarantee execution or cap losses. Unknown/censored exits halt the account. No actual orders or live settings are changed; the historical API remains strict-only unless comparison is requested. No broker margin or legging feasibility is certified. Results explicitly show profile-specific candidate gates, observed risk proxy, gross scored losses, allowance overshoot, and separate trade rows including position budget, gross buy funding and modeled payoff loss. Compare accounts individually; do not sum their P&L as a single account. Recorded-data validation is still required.
+
+
+## Frozen forecast-adaptive paper exit
+
+In Trading → automatic paper decisions, select Forecast adaptive and explicitly
+choose an earlier-session, receipt-based frozen logistic candidate from the
+registry. The selected version is pinned in each new paper decision. Existing
+positions retain their previous settings. Entry selection is still the rule-based
+stress selector; this is an exit research experiment, not automatic model
+promotion or real order execution.
+
+The model scores the same matched constituent/index features used in training,
+from bounded original receipt-ledger slots known by the evaluation clock; no
+label or outcome columns are read. Only a new post-entry cutoff, at most 90
+seconds old and with a still-future target, can trigger a reversal. The fixed
+directional probability threshold is 0.60. Neutral, unavailable, stale or
+incompatible forecasts do not force an exit. Hard loss marks, trailing floors,
+liquidity deterioration and maximum hold remain in force. Conditional exit books
+are selected after the recorded decision, not assumed filled at the signal.
+
+The panel displays the pinned candidate, latest probabilities and local decision
+processing time, plus conditional entry/exit receipt delays. The latter are
+measured from decision timestamps to first eligible modeled book receipts, not
+broker order acknowledgements or actual fills. No live execution latency or
+profitability is certified. Use the existing frozen prospective monitoring
+workflow to assess predictive performance separately.
+
+Offline tests: `python -m unittest discover -s tests -p 'test_paper_forecast.py' -v`.
