@@ -154,7 +154,7 @@ def _matched(episodes,scope):
 
 
 def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capital,risk_budget,
-           context_audit,progress=None):
+           context_audit,q=None,progress=None):
     val_days,test_days=map(set,dates)
     val_signals=[s for s in signals if s["session"] in val_days]
     test_signals=[s for s in signals if s["session"] in test_days]
@@ -202,13 +202,16 @@ def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capita
                 info["matched_nearest_holdout"].update(training_prior_brier=prior_brier,
                     brier_skill_vs_training_prior=1-score/prior_brier if prior_brier>0 else None)
             chosen=rank(r,model,means,tpv,ntv)
-            for method in ("ml_fixed","ml_trailing_stop"):
+            for method in ("ml_fixed","ml_trailing_stop","ml_offline_q"):
                 name=scope+":"+variant+":"+method
                 if model.target_threshold>1:
                     item["methods"][name]={"state":"no_supported_positive_validation_gate"}
                     continue
+                if method=="ml_offline_q" and not q:
+                    item["methods"][name]={"state":"insufficient_q_training_support"}
+                    continue
                 metrics,rows=r._evaluate(chosen,method=method,capital=capital,risk_budget=risk_budget,
-                                  model=model,means=means,dates=dates[1])
+                                  model=model,means=means,q=q,dates=dates[1])
                 item["methods"][name]=metrics
                 journal.extend({**row,"method":name} for row in rows)
         if scope!="technical":
