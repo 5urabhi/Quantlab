@@ -69,3 +69,34 @@ class ContextReadinessTests(TestCase):
             with self.assertRaisesRegex(ValueError,"Explicit authorization"):
                 arc.backfill(date(2024,1,1),date(2024,1,9))
             http.assert_not_called()
+
+
+    def test_fred_retry_preserves_archive_formats(self):
+        with patch.object(arc.alpha_retraining,"safe_window",return_value=True), \
+             patch.object(arc.feeds,"_http",side_effect=[ValueError("Provider HTTP 400 [vintage_parameters_rejected]"),
+                       ValueError("Provider HTTP 400 [vintage_parameters_rejected]"),b"archive"]) as http:
+            raw,mode,attempts=arc._fetch_vintages("local-key","SP500",date(2024,1,1),date(2024,1,9))
+        self.assertEqual((raw,mode),(b"archive","initial_release_only"))
+        self.assertEqual(len(attempts),3)
+        params=[x.args[1] for x in http.call_args_list]
+        self.assertEqual([x["output_type"] for x in params],[1,1,4])
+        self.assertEqual(params[1]["realtime_start"],"2024-01-01")
+
+    def test_alpaca_proxy_availability_after_new_york_day(self):
+        from workstation_api import cpr_alpaca_archive as alpaca
+        rows=[{"t":"2024-07-01T04:00:00Z","o":100,"h":102,"l":99,"c":101,"v":1000},
+              {"t":"2024-07-02T04:00:00Z","o":101,"h":103,"l":100,"c":102,"v":1000}]
+        now=datetime(2024,7,2,6,tzinfo=timezone.utc)
+        text,n=alpaca.normalize("US_SPY_ETF_CLOSE",rows,date(2024,7,1),date(2024,7,3),now)
+        self.assertEqual(n,1)
+        parsed=m.parse_csv(text,now)
+        self.assertEqual(m._stamp(parsed[0][2]),datetime(2024,7,2,4,15,tzinfo=timezone.utc))
+        self.assertEqual(m.FACTORS["JAPAN_EWJ_ETF_CLOSE"][1],"asia")
+        self.assertNotEqual("JAPAN_EWJ_ETF_CLOSE","NIKKEI_CLOSE")
+
+    def test_alpaca_network_requires_authorization(self):
+        from workstation_api import cpr_alpaca_archive as alpaca
+        with patch.object(alpaca,"_http") as http:
+            with self.assertRaisesRegex(ValueError,"Review Alpaca"):
+                alpaca.backfill(date(2024,7,1),date(2024,7,3))
+            http.assert_not_called()
