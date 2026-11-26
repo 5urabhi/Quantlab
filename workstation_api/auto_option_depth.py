@@ -528,6 +528,8 @@ def _store_book(session_id: str, book: dict, feature: dict) -> bool:
         raise
     if changed:
         recorder_storage.saved("auto_depth", book["received_utc"])
+        from . import market_observations
+        market_observations.publish()
     return bool(changed)
 
 
