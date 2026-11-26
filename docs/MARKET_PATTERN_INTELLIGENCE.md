@@ -48,3 +48,22 @@ baskets do not produce a portfolio scenario. No actual broker-account
 positions are claimed. Conditional historical pattern tables use fixed
 rules, a chronological 70/30 split, one first event per session, next-open
 index proxies and MFE/MAE; not option returns or proof of profitability.
+
+## Range-bound research and scalping costs
+A fixed 30-change close efficiency ratio (absolute net displacement /
+sum of absolute close changes) distinguishes a narrow compressed range,
+low-efficiency range, high-efficiency trend and mixed movement. The
+thresholds 0.30/0.65 and 0.10% close-width floor are uncalibrated research
+heuristics, not probabilities or safe trade signals. Contiguous data is
+required. The nonoverlapping historical study uses a fixed 20% edge band
+and an inward close movement; chronological 70/30 comparison uses next
+minute open to horizon close with excursion metrics. Paper Rule-Based
+Replay supports the same causal rule with original saved option-depth
+evidence; select Range-gated reversal and edge fraction 0.20. Existing
+quote coverage, capital, size, execution windows, fees, and unresolved
+fill safeguards remain active. It does not target a trade count.
+
+Scalping economics is a user-input scenario, not a backtest. The
+break-even win fraction is (average gross loss + round-trip friction) /
+(average gross winner + average gross loss). Separate extra spread and
+slippage are zero if already reflected in fill-based gross returns.

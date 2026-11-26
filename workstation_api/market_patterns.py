@@ -21,7 +21,7 @@ import sqlite3
 import time
 import uuid
 
-from . import cockpit_sources, intraday_parquet, live_market, service, dhan_auth
+from . import cockpit_sources, intraday_parquet, live_market, service, dhan_auth, range_research
 
 IST = ZoneInfo("Asia/Kolkata")
 MINUTES = 375
@@ -332,7 +332,8 @@ def baseline(complete, observed=None):
             "windows": windows, "thresholds": thresholds, "percent_thresholds": percent_thresholds,
             "gap_fill": gap_fill, "horizons": horizons, "time_buckets": time_buckets,
             "opening_patterns": opening_patterns,
-            "conditional": conditional_patterns(complete)}
+            "conditional": conditional_patterns(complete),
+            "range_reversion": range_research.historical(complete)}
 
 
 def current_context(bars, complete):
@@ -342,6 +343,7 @@ def current_context(bars, complete):
     n = len(complete)
     now["full_day_range_percentile"] = _rate(
         sum(_session(v)["range"] <= now["range"] for v in complete.values()), n)
+    now["regime"] = range_research.current_regime(bars)
     now["same_time_range"] = _stats([])
     now["same_time_percentile"] = None
     now["historical_remaining_excursion"] = _stats([])

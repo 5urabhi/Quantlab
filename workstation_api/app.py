@@ -1092,7 +1092,7 @@ class RuleDepthReplayRequest(BaseModel):
     day: str
     call_identity: str=Field(min_length=9,max_length=20)
     put_identity: str=Field(min_length=9,max_length=20)
-    rule: Literal["EMA_CROSSOVER","MOMENTUM","MEAN_REVERSION"]="EMA_CROSSOVER"
+    rule: Literal["EMA_CROSSOVER","MOMENTUM","MEAN_REVERSION","RANGE_REVERSION"]="EMA_CROSSOVER"
     fast: int=Field(default=9,ge=2,le=149)
     slow: int=Field(default=21,ge=3,le=150)
     lookback: int=Field(default=10,ge=2,le=150)
