@@ -1840,6 +1840,7 @@ class DynamicStrategyRequest(BaseModel):
     slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
     include_spreads: bool=Field(default=True,strict=True)
+    compare_entry_profiles: bool=Field(default=False,strict=True)
 
 
 @app.post("/api/trading-cockpit/strategy-research")

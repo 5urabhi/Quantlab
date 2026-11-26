@@ -18,7 +18,16 @@ from . import auto_paper_engine as engine, auto_paper_selection as select
 from . import dynamic_exit_policy as policy, spread_batch_core as batch
 from . import depth_replay as replay, paper_execution as paper, service
 
-VERSION="chronological_dynamic_strategy_v2"
+VERSION="chronological_dynamic_strategy_v3"
+ENTRY_PROFILES={
+    "strict": {"funded":False,"without_target_gate":False},
+    "capital_funded": {"funded":True,"without_target_gate":False},
+    "capital_funded_no_target_gate": {"funded":True,"without_target_gate":True},
+}
+
+
+def _profiles(compare):
+    return tuple(ENTRY_PROFILES) if compare else ("strict",)
 
 
 def _variants(cfg):
@@ -56,7 +65,7 @@ def _summary(account, capital, complete_session):
         cash=replay.fees._money(cash+value)
         peak=max(peak,cash)
         drawdown=max(drawdown,peak-cash)
-    return {"policy":account["name"],"lane":account["lane"],
+    return {"policy":account["name"],"lane":account["lane"],"entry_profile":account.get("entry_profile","strict"),
         "hold_cap_seconds":account["config"]["hold_seconds"],
         "entry_attempts":len(rows),"scored":len(completed),
         "entry_rejected":rejected,"unknown_entry_attempts":missing,"censored":censored,
@@ -70,7 +79,12 @@ def _summary(account, capital, complete_session):
         "fees_inr":replay.fees._money(sum(r["fees_inr"] for r in completed)) if completed else None,
         "exit_reasons":dict(Counter(r.get("exit_trigger","unavailable") for r in completed)),
         "no_trade_reasons":dict(account["no_trade"]),
-        "halted":bool(censored),"remaining_modeled_loss_inr":max(0.,min(capital,account["config"]["max_loss"])-sum(max(0.,-p) for p in pnl))}
+        "halted":bool(censored),
+        "gross_scored_losses_inr":replay.fees._money(sum(max(0.,-p) for p in pnl)),
+        "loss_allowance_overshoot_inr":replay.fees._money(max(0.,sum(max(0.,-p) for p in pnl)-account["config"]["max_loss"])),
+        "session_loss_halt":account["gross_loss"]>=account["config"]["max_loss"],
+        "max_observed_entry_risk_inr":max((r.get("observed_entry_risk_inr") or 0. for r in rows),default=None),
+        "remaining_modeled_loss_inr":max(0.,min(capital,account["config"]["max_loss"])-sum(max(0.,-p) for p in pnl))}
 
 
 def _record(account,row,state,**changes):
@@ -83,16 +97,29 @@ def _record(account,row,state,**changes):
 
 
 def _budget(account,cfg):
-    return max(0.,replay.fees._money(min(account["cash"],cfg["max_loss"]-account["gross_loss"])))
+    remaining=cfg["max_loss"]-account["gross_loss"]
+    if remaining<=0:
+        return 0.
+    profile=ENTRY_PROFILES[account.get("entry_profile","strict")]
+    # Research-only funded profiles treat the loss allowance as a halt on
+    # NEW entries, NOT a hard loss bound. One trade can exceed it.
+    cap=min(cfg["capital"],account["cash"])
+    if not profile["funded"]:
+        cap=min(cap,remaining)
+    return max(0.,replay.fees._money(cap))
 
 
 def _flatten(row,account):
-    return {"policy":account["name"],"lane":account["lane"],"state":row["state"],
+    return {"policy":account["name"],"lane":account["lane"],"entry_profile":account.get("entry_profile","strict"),"state":row["state"],
             "decision_utc":row["decision_utc"],"direction":row["source"].get("direction"),
             "source_bar_utc":row["source"].get("bar_utc"),"source_chain_utc":row["source"].get("chain_utc"),
             "source_chain_sha256":row["source"].get("chain_sha256"),
             "applied_config":json.dumps(row["config"],sort_keys=True,separators=(",",":")),
             "selection_score":row["selected"].get("score"),"selection_scenario_net_inr":row["selected"].get("stress_favorable_net_inr"),
+            "selected_gross_buy_funding_inr":row["selected"].get("gross_buy_funding_inr"),
+            "selected_modeled_payoff_loss_inr":row["selected"].get("modeled_payoff_loss_inr"),
+            "selection_target_met":row["selected"].get("scenario_target_met"),
+            "position_budget_inr":row["risk_budget_inr"],
             "strategy":row["selected"]["strategy"],"contracts":" / ".join(row["selected"]["identities"]),
             "contract_legs":json.dumps(row["selected"]["legs"],separators=(",",":")),
             "lots":row["selected"]["lots"],"units":row["selected"]["units"],
@@ -109,7 +136,7 @@ def _flatten(row,account):
 
 def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
         trail_net=50.,max_lots=3,hold_seconds=1800,liquidity_grace_seconds=20,
-        slippage_bps=0.,broker_profile="zerodha",include_spreads=True,progress=None,now=None):
+        slippage_bps=0.,broker_profile="zerodha",include_spreads=True,compare_entry_profiles=False,progress=None,now=None):
     cutoff=now or paper._now()
     chosen=date.fromisoformat(day)
     if chosen.weekday()>=5 or chosen>cutoff.astimezone(paper.IST).date():
@@ -118,8 +145,9 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
         "max_loss":max_loss,"target_net":target_net,"stop_net":stop_net,"trail_net":trail_net,
         "max_lots":max_lots,"hold_seconds":hold_seconds,"liquidity_grace_seconds":liquidity_grace_seconds,
         "slippage_bps":slippage_bps,"broker_profile":broker_profile})
-    if type(include_spreads) is not bool:
-        raise ValueError("Choose whether to include spreads")
+    if type(include_spreads) is not bool or type(compare_entry_profiles) is not bool:
+        raise ValueError("Choose boolean research comparison settings")
+    profiles=_profiles(compare_entry_profiles)
     start=datetime.combine(chosen,time(9,15),paper.IST).astimezone(timezone.utc)
     close=datetime.combine(chosen,time(15,30),paper.IST).astimezone(timezone.utc)
     end=min(cutoff,close)
@@ -131,13 +159,16 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
         progress(1,"Reconstructing received BANKNIFTY ticks; no revised candles")
     snapshots={}
     directions,source_stats=batch.signal_cohorts(chosen,anchors,end,snapshot_sink=snapshots)
-    accounts=[{"name":name,"lane":lane,"config":variant,"cash":capital,"gross_loss":0.,
-               "halted":False,"rows":[],"no_trade":Counter(),"last_attempt_minute":None}
-              for name,variant in _variants(cfg) for lane in (engine.LANES if include_spreads else ("directional",))]
+    research_lanes=engine.LANES if include_spreads else ("directional",)
+    accounts=[{"name":name,"lane":lane,"entry_profile":profile,"config":variant,
+               "cash":capital,"gross_loss":0.,"halted":False,"rows":[],
+               "no_trade":Counter(),"last_attempt_minute":None}
+              for profile in profiles for name,variant in _variants(cfg) for lane in research_lanes]
     entry_sources=Counter()
     source_rejections=Counter()
-    lane_diagnostics={lane:{"evaluations":0,"with_candidate":0,"outcomes":Counter(),"rejections":Counter()}
-                      for lane in (engine.LANES if include_spreads else ("directional",))}
+    profile_diagnostics={profile:{lane:{"evaluations":0,"with_candidate":0,
+                            "outcomes":Counter(),"rejections":Counter()}
+                        for lane in research_lanes} for profile in profiles}
     diagnostics=[]
     scan_count=qualified_scans=max_qualified=0
     total_qualified=0
@@ -203,17 +234,24 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
                     "valid_contracts":qualified,"rejections":report.get("rejections",{}),
                     "evidence":{k:v for k,v in report.items() if k!="rejections"}})
                 picks={}
+                counted=set()
                 for a in eligible:
                     cap=_budget(a,cfg)
                     if cap<=0:
                         a["no_trade"]["session_loss_budget_exhausted"]+=1
                         continue
-                    key=(a["lane"],cap)
+                    profile=a["entry_profile"]
+                    without_gate=ENTRY_PROFILES[profile]["without_target_gate"]
+                    key=(a["lane"],cap,without_gate)
                     if key not in picks:
-                        _,lanes=select.from_source(report,books,reason,selection_cfg,{a["lane"]:cap})
+                        _,lanes=select.from_source(report,books,reason,
+                            {**selection_cfg,"_research_without_target_gate":without_gate},{a["lane"]:cap})
                         picks[key]=lanes[a["lane"]]
-                        pick=picks[key]
-                        d=lane_diagnostics[a["lane"]]
+                    pick=picks[key]
+                    diagnostic_key=(profile,a["lane"],cap)
+                    if diagnostic_key not in counted:
+                        counted.add(diagnostic_key)
+                        d=profile_diagnostics[profile][a["lane"]]
                         d["evaluations"]+=1
                         d["with_candidate"]+=int(pick["action"]=="PAPER_ENTRY")
                         d["outcomes"][pick.get("reason",pick["action"])]+=1
@@ -221,7 +259,7 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
                         diagnostics.append({"record_type":"lane_evaluation","decision_utc":paper._iso(tick),
                             "lane":a["lane"],"risk_budget_inr":cap,"outcome":pick.get("reason",pick["action"]),
                             "valid_contracts":qualified,"rejections":pick.get("rejections",{}),
-                            "evidence":{"eligible_candidates":pick.get("eligible_candidates",0),
+                            "evidence":{"entry_profile":profile,"eligible_candidates":pick.get("eligible_candidates",0),
                                         "selected":pick.get("selected")}})
                     pick=picks[key]
                     if pick["action"]!="PAPER_ENTRY":
@@ -242,11 +280,11 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
                 _record(a,a["rows"][-1],"exit_censored",exit_reason="unresolved_at_session_close")
     summaries=[_summary(a,capital,complete) for a in accounts]
     journal=[_flatten(r,a) for a in accounts for r in a["rows"]]
-    journal.sort(key=lambda r:(r["decision_utc"],r["policy"],r["lane"]))
+    journal.sort(key=lambda r:(r["decision_utc"],r["entry_profile"],r["policy"],r["lane"]))
     run_id=uuid.uuid4().hex
     final=_root()/("run-"+run_id+".csv")
     temp=final.with_suffix(".tmp")
-    fields=list(journal[0]) if journal else ["policy","lane","state","decision_utc","net_pnl_inr"]
+    fields=list(journal[0]) if journal else ["policy","lane","entry_profile","state","decision_utc","net_pnl_inr"]
     try:
         with temp.open("x",newline="",encoding="utf-8") as f:
             writer=csv.DictWriter(f,fieldnames=fields)
@@ -255,11 +293,12 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
         temp.replace(final)
     finally:
         temp.unlink(missing_ok=True)
+    by_profile={profile:{lane:{**d,"outcomes":dict(d["outcomes"]),"rejections":dict(d["rejections"])}
+                            for lane,d in lanes.items()} for profile,lanes in profile_diagnostics.items()}
     diagnostic_summary={"scans_with_qualified_contracts":qualified_scans,
         "max_qualified_contracts_per_scan":max_qualified,"total_qualified_contract_observations":total_qualified,
         "source_rejections":dict(source_rejections),
-        "lanes":{lane:{**d,"outcomes":dict(d["outcomes"]),"rejections":dict(d["rejections"])}
-                 for lane,d in lane_diagnostics.items()}}
+        "lanes":by_profile["strict"],"profiles":by_profile}
     # Keep trade journal semantics intact. The separate diagnostic CSV always
     # contains a run summary, even when no source scans or trades occurred.
     diagnostic_file=final.with_name("run-"+run_id+"-diagnostics.csv")
@@ -269,7 +308,7 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
     summary_row={"record_type":"run_summary","decision_utc":paper._iso(end),
         "lane":"","risk_budget_inr":cfg["max_loss"],"outcome":"complete",
         "valid_contracts":max_qualified,"rejections":dict(source_rejections),
-        "evidence":{"config":cfg,"signal_evidence":source_stats,"candidate_scans":scan_count,
+        "evidence":{"config":cfg,"entry_profiles":list(profiles),"signal_evidence":source_stats,"candidate_scans":scan_count,
                     "source_reasons":dict(entry_sources),"journal_count":len(journal),
                     "diagnostics":diagnostic_summary}}
     try:
@@ -288,12 +327,15 @@ def run(*,day,capital=17000.,max_loss=4250.,target_net=100.,stop_net=250.,
     if progress:
         progress(100,"Dynamic strategy comparison saved")
     return {"version":VERSION,"run_id":run_id,"day_ist":day,"cutoff_utc":paper._iso(end),
-        "complete_session":complete,"config":cfg,"observation_ticks":len(anchors),
+        "complete_session":complete,"config":cfg,"entry_profiles":list(profiles),"observation_ticks":len(anchors),
         "signal_evidence":source_stats,"candidate_scans":scan_count,"source_reasons":dict(entry_sources),
         "entry_diagnostics":diagnostic_summary,"diagnostic_rows":len(diagnostics)+1,
         "policies":summaries,"recent":recent,"journal_count":len(journal),"broker_orders_enabled":False,
-        "warning":"Chronological in-sample conditional paper replay. Each policy/lane has an independent virtual budget, not shared real cash. "
+        "warning":"Chronological in-sample conditional paper replay. Each entry profile/policy/lane has an independent virtual budget, not shared real cash. "
         "Five-second observation checks and fresh completed-minute signals are sampled, not exchange ticks or actual broker latency. "
         "Historical selection intersects contemporaneous chain IDs with fresh saved original depth before the 200-ID cap (up to 4000 chain IDs scanned), not today's watchlist. "
         "Missing source/entry/exit evidence is not zero profit; no actual fills, margin, reliable stop execution or profitability are verified. "
-        "Selection horizon is five minutes for every policy; holding caps and exits differ. No parameter is automatically promoted to live trading."}
+        "Selection horizon is five minutes for every policy; holding caps and exits differ. "
+        "Capital-funded profiles are paper-only sensitivity studies: exposure can reach available capital, and the session loss allowance only halts NEW entries after scored losses. "
+        "A stop mark does not guarantee a fill or a loss cap. The no-target-gate profile retains scenario ranking but removes its minimum favorable-net threshold. "
+        "Spread funding is a conservative proxy, not verified broker margin. No parameter is automatically promoted to live trading."}
