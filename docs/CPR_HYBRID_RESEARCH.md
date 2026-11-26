@@ -577,3 +577,106 @@ examined dates. Reserve new sessions before any policy promotion. No
 changes to current order permissions, no synthetic missing prices,
 and no guarantees of profitability. Debit spreads remain optional
 and are omitted from the example due to their negative earlier results.
+
+
+## Volatility regimes, direct utility and forward reservation (v9)
+
+Run the regime study separately from expensive option replay:
+
+```bash
+bash run.sh candle-research --sessions 90 --regimes \
+    --context-mode archive --fixed-panel
+```
+
+This retains original completed index and stock receipts. It measures
+5/30-minute RMS returns in basis points, path efficiency, shorter
+opposing returns, relative range, and the prior 20 sessions' same-clock
+median RMS (requires at least five earlier observations; otherwise an
+explicit missing mask). Fixed observed regime labels are up/down trend,
+up/down reversal candidate and range. They are descriptive past-state
+heuristics, not labels for a future direction. Volatility state is
+expanded/compressed/normal. Future RMS is expansion above 1.25 times
+the trailing 30-minute RMS, contraction below 0.8, otherwise stable.
+The training-only prior, shrunk regime lookup, shrunk regime+pattern
+lookup and shallow multioutput forest compete on validation Brier.
+
+Normalized price barriers are 0.75, 1.5 and 3 times the decision-time
+index point scale: spot times trailing 30-minute one-minute RMS in
+return units times square root of horizon, with a 0.05 bp RMS floor and
+one-point scale floor. This is a scaling heuristic, not a Brownian
+assumption or guarantee of barrier crossing. Future outcomes never
+change the barrier. Missing path bars censor the target; within-minute
+order ambiguity remains a separate class. Compare the bank-augmented
+forest on identical rows. A separate ridge experiment predicts future
+index return from lagged HDFC/ICICI 5/15/30m returns and the same index
+regime inputs. Select ridge penalty on earlier development dates.
+Report matched day-block error differences, not causal attribution.
+All existing fixed-point and individual bank target studies remain
+available. New reports are saved as results/candle_regimes_*.json.
+
+For direct expected net return and execution-risk research:
+
+```bash
+bash run.sh cpr-research --entry-mode regime_scan --hold 0 --frame 5 \
+    --sessions 90 --dense-training --risk-budget 12000 --wings 5 \
+    --context-mode archive --rank-entries --fixed-panel --regimes \
+    --utility-research --freeze-utility
+```
+
+Previous options studies can still opt into --patterns, --sequences,
+--derivatives, --context-q and --dynamic-q; these are not required for
+this focused comparison. The direct model compares technical inputs
+plus decision-time observation quality with the same inputs plus regime
+features. It fits conditional timely net return per planned funding,
+execution failure, first observed fixed target/stop/other/unverified
+trigger, and an adverse stress utility on earlier trajectories. Trigger
+order is evaluated at observed marks, not intraminute price order.
+The direct candidate gate requires at least 8/10 recent same-strike
+observations and the last three all observed, positive predicted timely
+net return and expected stress utility, predicted failure <=10%, and
+positive 20th percentile of stress-forest tree estimates. The tree
+disagreement statistic is not a calibrated confidence interval.
+Only planned affordable candidates are ranked; future fill availability
+cannot enter features or ranking.
+
+Missing entries/exits, monitoring-gap exits even if promptly recovered,
+late square-off and exits delayed more than two minutes are explicitly
+unacceptable execution observations. The strict account lane halts that
+session after such a failure. Keep recovered prices and realized proxy
+net separate from stress accounting. An unresolved attempted position
+or unacceptable recovered exit incurs a full planned-funding loss
+scenario (or the larger observed loss); this is deliberately adverse,
+not a certified loss bound or actual charge. Candidate-level model
+targets also penalize non-timely funding failures; the account lane
+does not charge an ordinary rejected funding attempt as a realized loss.
+Report conditional proxy P&L and stress utility separately. Earlier-only
+session weighting remains. Weighted logistic features use a centered
+two-pass finite scaler to avoid cancellation on nearly constant
+context columns. No warning suppression.
+
+Choose a utility threshold only on development dates with >=10 timely
+scored trades across >=5 days, positive stress utility, no unresolved
+trades, no monitoring-gap/late exits, no delayed exits beyond two
+minutes. An unsuccessful gate abstains. Never tune on the holdout.
+
+Explicit --freeze-utility exports only the predesignated regime utility
+lane if its development gate passes. The numeric tree arrays are
+serialized as JSON (not pickle) with code hashes, source digest, fixed
+threshold, settings and a 45-calendar-day reservation beginning strictly
+after both the freeze date in IST and the previously examined sessions.
+A blocked gate creates no policy. The local hash is an integrity check,
+not an externally attested timestamp. After the reservation ends:
+
+```bash
+bash run.sh cpr-research --forward-utility results/utility_forward_<sha256>.json
+```
+
+Only the frozen reservation/settings are used. No model fitting,
+changing the date window, or early scoring. The forward report is
+created once under its policy digest. Missing weekdays are explicitly
+reported (not verified as market holidays); source corrections, rolling
+contract identity, actual receipt chronology and execution remain
+limitations. This is a fixed later-date replay of frozen parameters,
+not a genuine recorded live paper order stream. No strategy is
+automatically promoted, and no execution permission is granted. These
+research updates do not modify the React workstation layout.
