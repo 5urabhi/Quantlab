@@ -72,6 +72,7 @@ def main():
     print("Entry mode:",report["settings"]["entry_mode"])
     print("Sessions:",report["recorded_index_sessions"],"/",report["required_sessions"])
     print("Episode states:",report["episode_states"])
+    print("Signal-time funding coverage:",json.dumps(report["funding_diagnostic"]))
     print("Account-constrained split support:",json.dumps(report["split_support"]))
     print("Capital-independent learning support:",json.dumps(report["learning_support"]))
     context=report["context_coverage"]
