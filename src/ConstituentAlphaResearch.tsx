@@ -1,6 +1,7 @@
 import {useEffect,useState} from 'react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import HistoricalAlphaResearch from './HistoricalAlphaResearch'
+import VolatilityEvidenceResearch from './VolatilityEvidenceResearch'
 
 type Cohort={start_session:string;registered_utc:string;cohort_id:string}
 type Scope='none'|'options'|'global'|'participants'|'events'|'combined'|'all'
@@ -68,6 +69,7 @@ export default function ConstituentAlphaResearch({onOpenSetup,onOpenLedger,onOpe
  <p className="bci-note">{result.warning}</p></>}
  {scope!=='none'&&mode==='receipt'&&<details className="bci-note"><summary>Fixed forward context cohort</summary><p>Register once per scope and horizon. The first 60 recorded sessions after the fixed start are retained, including poor-coverage sessions. No backdating or automatic model promotion.</p><label>Evaluation cohort<select value={appliedCohort} disabled={active||registerBusy} onChange={e=>setCohort(e.target.value as 'original'|'registered')}><option value="original">Original ledger cohort</option><option value="registered" disabled={!registration}>Registered forward cohort</option></select></label>{registration?<p>Registered {registration.registered_utc}; eligible sessions begin {registration.start_session} · ID {registration.cohort_id.slice(0,12)}</p>:<><label><input type="checkbox" checked={confirm} disabled={active||registerBusy} onChange={e=>setConfirm(e.target.checked)}/> Fix the future start permanently for this policy, scope and horizon</label><button className="ws-button" disabled={active||registerBusy||!confirm} onClick={()=>void register()}>Register forward cohort</button></>}</details>}
  <HistoricalAlphaResearch/>
+ <VolatilityEvidenceResearch/>
  <p className="bci-note">No prediction is automatically promoted to live paper trading. Option pricing, IV calibration, portfolio sizing, and actual fee-adjusted instrument validation are separate next steps.</p>
  </section>
 }
