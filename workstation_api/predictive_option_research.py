@@ -53,7 +53,6 @@ def _load_options(rows,wings,progress=None):
         raise ValueError("Unsafe original option receipt directory")
     left=min(date.fromisoformat(r["session"]) for r in rows)
     right=max(date.fromisoformat(r["session"]) for r in rows)
-    sample_body=exp._request_body(left,left+timedelta(days=1),"MONTH",0,"ATM","CALL")
     keys=[sync._key(exp._request_body(left,left+timedelta(days=1),"MONTH",0,offset,side))
           for side in ("CALL","PUT") for offset in exp._offsets(wings)]
     paths=[]
@@ -309,15 +308,22 @@ def _outcome(candidate,row,table,budget,bps,broker):
             "fees_inr":cost,"stress_fees_inr":stress_fees,"entry_prices":initial,"exit_prices":final}
 
 
-def _evaluate(train,cal,test,table,pools,capital,max_loss,lot_size,max_lots,bps,broker,progress):
+def _evaluate(train,cal,test,table,pools,capital,max_loss,lot_size,max_lots,bps,broker,progress,*,dates,horizon):
+    from . import alpha_model_registry as registry
     configs={name:(name,None) for name in MODELS}
     configs.update({"constituent_directional":("constituent_logistic",("long_call","long_put")),
                     "constituent_debit_spreads":("constituent_logistic",("bull_call_debit","bear_put_debit"))})
     configs.update({name:(name,None) for name in RULES})
-    probs={}
+    probs={};versions={}
     for name in MODELS:
         fit=a._fit(name,train)
-        probs[name]=a._temperature(a._predict(fit,test),a._calibrate(a._predict(fit,cal),cal))
+        temp=a._calibrate(a._predict(fit,cal),cal)
+        probs[name]=a._temperature(a._predict(fit,test),temp)
+        if name.endswith("logistic"):
+            try:
+                versions[name]={"state":"frozen","model_id":registry.freeze(name,fit,temp,train,cal,test,source="historical",policy=h.POLICY_HASH,horizon=horizon,dates=dates)}
+            except (ValueError,OSError,TypeError):
+                versions[name]={"state":"registry_unavailable"}
     priors={(rule,call):_rule_prior(train,rule,call) for rule in RULES for call in (-1,1)}
     records=[];summary={}
     for j,(name,(model,families)) in enumerate(configs.items()):
@@ -381,7 +387,7 @@ def _evaluate(train,cal,test,table,pools,capital,max_loss,lot_size,max_lots,bps,
                          "positive_trades":0,"negative_trades":0,"conditional_net_inr":0.,"conditional_stress_net_inr":0.,
                          "conditional_fees_inr":0.,"conditional_drawdown_inr":0.,"unobservable_windows":0,
                          "conditional_end_balance_inr":capital,"full_account_pnl_certified":False}
-    return summary,records
+    return summary,records,versions
 
 
 def run(*,batch_id,horizon=15,capital=17000.,max_loss=4250.,lot_size=30,max_lots=3,wings=3,
@@ -423,8 +429,8 @@ def run(*,batch_id,horizon=15,capital=17000.,max_loss=4250.,lot_size=30,max_lots
         result["option_coverage"]={k:v for k,v in option_meta.items() if k!="source_hashes"}
         result["analog_pool_counts"]={family+":"+str(cls):len(v["anchors"]) for (family,cls),v in pools.items()}
         if pools:
-            methods,records=_evaluate(train,cal,test,table,pools,capital,max_loss,lot_size,max_lots,premium_penalty_bps,broker_profile,progress)
-            result.update(state="conditional_holdout_assessment_available",methods=methods,run_id=a._save(records))
+            methods,records,versions=_evaluate(train,cal,test,table,pools,capital,max_loss,lot_size,max_lots,premium_penalty_bps,broker_profile,progress,dates=splits,horizon=horizon)
+            result.update(state="conditional_holdout_assessment_available",methods=methods,model_versions=versions,run_id=a._save(records))
         else:
             result["state"]="insufficient_training_option_observations"
     evidence={"result":result,"index_and_constituent_sources":source_hashes,"option_sources":option_meta["source_hashes"],
