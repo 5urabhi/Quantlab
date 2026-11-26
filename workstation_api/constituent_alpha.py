@@ -266,7 +266,7 @@ def sample_day(rows):
         counts["scored"]+=1
         scale=max(1.,rv*math.sqrt(30))
         regime="trend_up" if r30>=scale else "trend_down" if r30<=-scale else "compression" if rv<=3. else "range"
-        samples.append({"session":row["session_ist"],"decision_utc":row["decided_utc"],"target_utc":row["target_utc"],
+        samples.append({"session":row["session_ist"],"decision_utc":row["decided_utc"],"cutoff_utc":row["cutoff_utc"],"target_utc":row["target_utc"],
             "reference_price":price,"return_bps":label,"class":1 if label>DEADBAND_BPS else -1 if label<-DEADBAND_BPS else 0,
             "index":index,"full":index+bank,"regime":regime,
             "ema_rsi":row["ema_rsi"],"pressure":row["pressure"],"volume_pressure":row["volume_pressure"]})
