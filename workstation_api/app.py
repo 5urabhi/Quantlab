@@ -5196,7 +5196,7 @@ class MarketMaintenanceRequest(BaseModel):
     index_days: int=Field(default=365,ge=30,le=365,strict=True)
     constituent_days: int=Field(default=240,ge=30,le=240,strict=True)
     option_days: int=Field(default=365,ge=30,le=365,strict=True)
-    wings: int=Field(default=3,ge=0,le=5,strict=True)
+    wings: int=Field(default=3,ge=0,le=10,strict=True)
     confirm_readonly: bool=False
 
 
@@ -5256,7 +5256,7 @@ class ExpiredHistoryAcquisitionRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
     start_date: str = Field(min_length=10,max_length=10)
     end_date: str = Field(min_length=10,max_length=10)
-    wings: int = Field(default=3,ge=0,le=5,strict=True)
+    wings: int = Field(default=3,ge=0,le=10,strict=True)
     confirm_readonly: bool = False
 
 
