@@ -1,6 +1,8 @@
 import {useCallback,useEffect,useState} from 'react'
 import {Archive,RefreshCw} from 'lucide-react'
 import {marketApi,readableError} from './tradingCockpitApi'
+import ResearchPlot from './ResearchPlots'
+import './constituent-intelligence.css'
 
 type Source={identity:string;observations:number;first_utc:string;last_utc:string}
 type CaptureCatalog={
@@ -82,6 +84,10 @@ export default function SavedCaptureReview(){
     finally{setBusy(false)}
   }
   const chosenBook=selectedBook===null?null:books?.snapshots[selectedBook]
+  const orderedBooks=[...(books?.snapshots||[])].sort((a,b)=>a.received_utc.localeCompare(b.received_utc))
+  const bookX=orderedBooks.map(b=>b.received_utc)
+  const gap=bookX.map((t,i)=>i>0&&Date.parse(t)-Date.parse(bookX[i-1])>120000)
+  const orderedReplay=[...(replay?.days||[])].sort((a,b)=>a.session_ist.localeCompare(b.session_ist))
   return <section className="tc-panel tc-archive" aria-label="Captured live history">
     <div className="tc-panel-title"><div><strong><Archive size={17}/> Saved live-data recordings</strong>
       <p className="tc-muted">Live observations become historical evidence in dhan_shared. Original minute prices and recorded 20-level order books are separate, source-labelled series.</p></div>
@@ -125,6 +131,11 @@ export default function SavedCaptureReview(){
         {books&&<p className="tc-confirm">{books.snapshots.length} original snapshots in the selected recorded window.</p>}
       </div>
     </div>
+    {orderedReplay.length>0&&<div className="bci-panel" aria-label="Captured directional replay charts">
+      <ResearchPlot provenance="Retrospective replay of captured index minutes" plot={{kind:'bar2d',title:'Captured replay scored and unverifiable outcomes',x_label:'Session (IST)',y_label:'Signal count',x:orderedReplay.map(d=>d.session_ist),traces:[{name:'Correct',y:orderedReplay.map(d=>d.correct),color:'#70e1ad'},{name:'Incorrect',y:orderedReplay.map(d=>d.incorrect),color:'#ff8192'},{name:'Unverifiable',y:orderedReplay.map(d=>d.unverifiable)}]}}/>
+      <ResearchPlot provenance="Retrospective replay of captured index minutes" plot={{kind:'line2d',title:'Captured directional accuracy by session',x_label:'Session (IST)',y_label:'Directional accuracy (%)',x:orderedReplay.map(d=>d.session_ist),traces:[{name:'Accuracy',y:orderedReplay.map(d=>d.directional_accuracy===null?null:100*d.directional_accuracy)}]}}/>
+      <p className="tc-muted">Retrospective directional outcomes are not realized option P&amp;L.</p>
+    </div>}
     {replay&&<div className="tc-table-scroll"><table>
       <thead><tr><th>IST session</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>Gaps</th><th>Directional accuracy</th></tr></thead>
       <tbody>{replay.days.map(d=><tr key={d.session_ist}><td>{d.session_ist}</td><td>{d.scored}</td>
@@ -137,6 +148,12 @@ export default function SavedCaptureReview(){
         liquidity prices use the contract's master-verified lot size and
         original 20-level quantities, not confirmed broker fills.
       </p>}
+    {orderedBooks.length>0&&<div className="bci-panel" aria-label="Recorded book charts">
+      <ResearchPlot provenance="Original recorded depth snapshots" plot={{kind:'line2d',title:'Recorded best bid and ask',x_label:'Source receipt time (UTC)',y_label:'Price (INR)',x:bookX,traces:[{name:'Best bid',y:orderedBooks.map(b=>b.best_bid),color:'#70e1ad'},{name:'Best ask',y:orderedBooks.map(b=>b.best_ask),color:'#ff8192'}],break_before:gap}}/>
+      <ResearchPlot provenance="Original recorded depth snapshots" plot={{kind:'line2d',title:'Recorded bid–ask spread',x_label:'Source receipt time (UTC)',y_label:'Spread (bps)',x:bookX,traces:[{name:'Spread',y:orderedBooks.map(b=>b.spread_bps)}],break_before:gap}}/>
+      <ResearchPlot provenance="Original recorded depth snapshots" plot={{kind:'line2d',title:'Recorded displayed bid depth share',x_label:'Source receipt time (UTC)',y_label:'Bid share of recorded quantity (%)',x:bookX,traces:[{name:'Bid share',y:orderedBooks.map(b=>50*(b.imbalance+1))}],reference_lines:[{value:50,label:'Balanced displayed quantities'}],break_before:gap}}/>
+      <p className="tc-muted">Latest returned saved snapshots only. Lines break at receipt gaps greater than two minutes. Displayed quantities are not aggressive trade flow or guaranteed fills.</p>
+    </div>}
     {books&&books.snapshots.length>0&&<div className="tc-table-scroll tc-archive-table">
       <table><thead><tr><th>Observed IST</th><th>Bid (₹)</th><th>Ask (₹)</th>
         <th>Spread (bps)</th><th>Bid depth share</th><th>Original levels</th>
@@ -163,6 +180,7 @@ export default function SavedCaptureReview(){
         sell VWAP ₹{fmt(chosenBook.computed_features.sell_vwap_for_units)}.
         Only levels present in Dhan's received packet are included.
       </p>}
+      <div className="bci-panel"><ResearchPlot provenance="Selected original recorded book" plot={{kind:'bar2d',title:'Selected snapshot displayed quantity by level',x_label:'Depth level (best to farther)',y_label:'Displayed quantity',x:Array.from({length:Math.max(chosenBook.bid.length,chosenBook.ask.length)},(_,i)=>i+1),traces:[{name:'Bid quantity',color:'#70e1ad',y:Array.from({length:Math.max(chosenBook.bid.length,chosenBook.ask.length)},(_,i)=>chosenBook.bid[i]?.quantity??null)},{name:'Ask quantity',color:'#ff8192',y:Array.from({length:Math.max(chosenBook.bid.length,chosenBook.ask.length)},(_,i)=>chosenBook.ask[i]?.quantity??null)}]}}/></div>
       <div className="tc-table-scroll"><table><thead><tr><th>Level</th><th>Bid (₹)</th><th>Bid qty</th><th>Ask (₹)</th><th>Ask qty</th></tr></thead>
       <tbody>{Array.from({length:Math.max(chosenBook.bid.length,chosenBook.ask.length)},(_,i)=><tr key={i}>
         <td>{i+1}</td><td>{fmt(chosenBook.bid[i]?.price)}</td><td>{fmt(chosenBook.bid[i]?.quantity,0)}</td>
