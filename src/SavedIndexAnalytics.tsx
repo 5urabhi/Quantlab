@@ -1,6 +1,7 @@
 import {useMemo,useState} from 'react'
 import ResearchPlot,{type ResearchPlotData} from './ResearchPlots'
 import './saved-index-analytics.css'
+import {ExecutionCostStress} from './LegacySafetyPanels'
 import {marketApi,readableError} from './tradingCockpitApi'
 
 type Row=Record<string,unknown>
@@ -108,7 +109,7 @@ export default function SavedIndexAnalytics({route,detail}:{route:AnalyticsRoute
  {route==='factors'&&panel('Portfolio factor exposures','Weight-averaged source factor scores; not return or risk attribution.',detail.factor_exposures,observedMetrics(detail.factor_exposures,['date','index'],'Saved factor score'),'portfolio_factor_exposures.csv')}
  {route==='construction'&&<>{panel('Latest constituent allocation','Largest positive saved positions (API returns at most 40). Unshown weight is not cash.',detail.latest_weights,[pct('weight','Portfolio weight')],'post_rebalance_weights.csv',{key:'name',label:'Constituent'},'bar2d')}{concentration()}{panel('Sector allocation history','Only available when dated sector classifications were used.',detail.sector_exposure||[],observedMetrics(detail.sector_exposure||[],['date','index'],'%',100),'sector_exposure.csv')}{panel('Turnover and costs','Saved monthly traded weight and cost fraction.',detail.returns,[pct('turnover','Turnover'),pct('transaction_cost_fraction','Transaction cost')],'monthly_results.csv')}</>}
  {(route==='risk'||route==='rolling')&&<>{rolling()}{panel('Rolling Sharpe and beta','Derived from 12 consecutive saved monthly paired returns. Sharpe uses zero risk-free rate; beta uses the saved benchmark. Invalid or missing months are not filled.',derived,[scalar('sharpe','Sharpe (zero risk-free rate)'),scalar('beta','Benchmark beta')])}{route==='risk'&&<>{concentration()}<ActiveRiskPanel {...p}/></>}</>}
- {route==='robustness'&&<><Stability {...p} rows={detail.robustness} artifact={artifact('robustness_grid.csv')}/>{panel('Cost sensitivity','Repricing the fixed trade path; not reoptimization.',detail.cost_sensitivity,[pct('annualized_return','Annualized return'),pct('total_turnover','Total turnover')],'cost_sensitivity.csv',{key:'cost_bps',label:'Transaction cost (bps)'})}</>}
+ {route==='robustness'&&<><ExecutionCostStress key={detail.id} {...p}/><Stability {...p} rows={detail.robustness} artifact={artifact('robustness_grid.csv')}/>{panel('Cost sensitivity','Repricing the fixed trade path; not reoptimization.',detail.cost_sensitivity,[pct('annualized_return','Annualized return'),pct('total_turnover','Total turnover')],'cost_sensitivity.csv',{key:'cost_bps',label:'Transaction cost (bps)'})}</>}
  {route==='comparisons'&&<>{panel('Comparable methodology metrics','Same-date backtest methodology results. Compare one unit at a time.',detail.methodologies,performanceMetrics,'methodology_summary.csv',{key:'methodology',label:'Methodology'},'bar2d')}{panel('Methodology monthly return history','Saved net returns, not independently verified performance.',detail.methodology_returns||[],observedMetrics(detail.methodology_returns||[],['date','index'],'%',100),'methodology_returns.csv')}{panel('Cost sensitivity','Fixed-trade-path cost approximation.',detail.cost_sensitivity,[pct('annualized_return','Annualized return')],'cost_sensitivity.csv',{key:'cost_bps',label:'Transaction cost (bps)'})}</>}
  </section>
 }
