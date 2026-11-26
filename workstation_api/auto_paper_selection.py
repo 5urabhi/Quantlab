@@ -31,10 +31,10 @@ DIVIDEND = 0.
 
 
 def latest_book(db, identity, now):
-    raw = db.execute("""SELECT received_utc,book_json,packet_pair_sha256
+    raw = replay_storage.fetchone(db,"""SELECT received_utc,book_json,packet_pair_sha256
         FROM live_depth_books WHERE identity=? AND received_utc>=? AND received_utc<=?
         ORDER BY received_utc DESC LIMIT 1""",
-        (identity,paper._iso(now-timedelta(seconds=MAX_BOOK_AGE)),paper._iso(now))).fetchone()
+        (identity,paper._iso(now-timedelta(seconds=MAX_BOOK_AGE)),paper._iso(now)))
     if not raw:
         return None
     stamp,body,digest=raw
@@ -51,17 +51,17 @@ def latest_book(db, identity, now):
 
 def _activity(db, identity, now, lot_size):
     cutoff=paper._iso(now-timedelta(seconds=120)); stop=paper._iso(now)
-    receipts=db.execute("""SELECT COUNT(*),COUNT(DISTINCT packet_pair_sha256)
+    receipts=replay_storage.fetchone(db,"""SELECT COUNT(*),COUNT(DISTINCT packet_pair_sha256)
         FROM live_depth_books WHERE identity=? AND received_utc>=? AND received_utc<=?""",
-        (identity,cutoff,stop)).fetchone()
+        (identity,cutoff,stop))
     if receipts[0]<MIN_RECEIPTS or receipts[1]<2:
         return None,"insufficient_recent_depth"
     try:
         # Bounded last 120 seconds for this exact indexed identity.
-        trades=db.execute("""SELECT COUNT(DISTINCT exchange_trade_utc),
+        trades=replay_storage.fetchone(db,"""SELECT COUNT(DISTINCT exchange_trade_utc),
             MAX(volume)-MIN(volume) FROM dhan_option_live_events WHERE identity=? AND kind='quote'
             AND received_utc>=? AND received_utc<=? AND exchange_trade_utc>=? AND exchange_trade_utc<=?
-            AND volume>=0""",(identity,cutoff,stop,cutoff,stop)).fetchone()
+            AND volume>=0""",(identity,cutoff,stop,cutoff,stop))
     except sqlite3.OperationalError as exc:
         if "no such table" not in str(exc):
             raise
@@ -74,8 +74,10 @@ def _activity(db, identity, now, lot_size):
 
 def _source(now, config, *, historical=False, signal_override=None):
     day=now.astimezone(paper.IST).date().isoformat()
-    with recorder.LOCK:
-        subscribed=[dict(row) for row in recorder.STATE.get("contracts",[])][:MAX_CONTRACTS]
+    subscribed=[]
+    if not historical:
+        with recorder.LOCK:
+            subscribed=[dict(row) for row in recorder.STATE.get("contracts",[])][:MAX_CONTRACTS]
     subscribed={row["identity"]:row for row in subscribed if replay.fees.ID.fullmatch(row.get("identity",""))}
     report={"source_cutoff_utc":paper._iso(now),"direction":"NO_TRADE","rejections":{},
             "subscribed_contracts":len(subscribed),"valid_contracts":0}
