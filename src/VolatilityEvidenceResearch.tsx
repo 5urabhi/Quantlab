@@ -1,0 +1,36 @@
+import {useEffect,useState} from 'react'
+import {marketApi,marketPost,readableError} from './tradingCockpitApi'
+type Batch={id:string;from_date:string;to_date:string;status:string}
+type Quantile={count:number;quantiles_pp:Record<string,number>;mean_pp:number|null;absolute_p95_pp:number|null}
+type IVMetric={descriptive_all:Quantile;train:Quantile;test:Quantile;holdout_90pct_interval_coverage:number|null;holdout_fixed_2pp_coverage:number|null}
+type RVMetric={samples:number;rmse_variance_bps2:number;mae_volatility_bps:number;qlike:number}
+type Result={state:string;recorded_sessions:number;horizon_minutes:number;evidence_counts:Record<string,number>;metrics?:Record<string,IVMetric>;methods?:Record<string,Record<string,RVMetric>>;run_id:string|null;audit_id:string;warning:string;garch_state?:string}
+type Job={status:string;stage?:string;percent?:number;result?:Result;error?:string}
+const base='/api/market-intelligence/volatility'
+const files='/api/trading-cockpit/constituents/alpha'
+const day=(d:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(d)
+const fmt=(v:number|null|undefined)=>v==null?'—':v.toLocaleString('en-IN',{maximumFractionDigits:3})
+const pct=(v:number|null|undefined)=>v==null?'—':fmt(v*100)+'%'
+export default function VolatilityEvidenceResearch(){
+ const [mode,setMode]=useState<'iv'|'realized'>('iv'),[start,setStart]=useState(()=>day(new Date(Date.now()-90*86400000))),[end,setEnd]=useState(()=>day(new Date()))
+ const [horizon,setHorizon]=useState(15),[batch,setBatch]=useState(''),[batches,setBatches]=useState<Batch[]>([]),[revision,setRevision]=useState(0)
+ const [job,setJob]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[stage,setStage]=useState(''),[progress,setProgress]=useState(0),[result,setResult]=useState<Result|null>(null)
+ useEffect(()=>{let active=true;marketApi<{batches:Batch[]}>('/api/market-intelligence/historical-alpha/batches').then(r=>{if(active){setBatches(r.batches);setBatch(v=>r.batches.some(b=>b.id===v)?v:r.batches[0]?.id||'')}}).catch(e=>{if(active)setError(readableError(e))});return()=>{active=false}},[revision])
+ useEffect(()=>{if(!job)return;let active=true,polling=false
+ const poll=async()=>{if(polling)return;polling=true;try{const r=await marketApi<Job>('/api/jobs/'+encodeURIComponent(job));if(!active)return;setStage(r.stage||r.status);setProgress(r.percent??0);if(r.status==='complete'){if(r.result)setResult(r.result);setJob('')}else if(['error','cancelled','interrupted'].includes(r.status)){setError(r.error||r.stage||r.status);setJob('')}}catch(e){if(active)setError(readableError(e))}finally{polling=false}}
+ void poll();const timer=window.setInterval(()=>void poll(),2000);return()=>{active=false;window.clearInterval(timer)}},[job])
+ const active=busy||!!job
+ const run=async()=>{if(active)return;setBusy(true);setError('');setResult(null);setProgress(0);setStage('Submitting volatility evidence research')
+ try{const r=await marketPost<{job_id:string}>(base+'/'+mode,mode==='iv'?{from_date:start,to_date:end,horizon}:{batch_id:batch,horizon});setJob(r.job_id)}catch(e){setError(readableError(e))}finally{setBusy(false)}}
+ const cancel=async()=>{if(!job)return;try{await marketPost('/api/workspace/jobs/'+encodeURIComponent(job)+'/cancel',{});setStage('Cancellation requested')}catch(e){setError(readableError(e))}}
+ return <details className="bci-note"><summary><strong>Volatility Research · observed IV and forecast comparison</strong></summary><p>Estimate empirical volatility changes before considering an option. These studies do not alter the existing live or paper execution gate.</p>
+ <div className="bci-actions"><label>Study<select value={mode} disabled={active} onChange={e=>setMode(e.target.value as typeof mode)}><option value="iv">Same-contract IV changes</option><option value="realized">Historical realized-volatility forecasts</option></select></label><label>Horizon<select value={horizon} disabled={active} onChange={e=>setHorizon(Number(e.target.value))}>{[5,15,30,60].map(h=><option value={h} key={h}>{h} minutes</option>)}</select></label>
+ {mode==='iv'?<><label>From<input type="date" value={start} disabled={active} onChange={e=>setStart(e.target.value)}/></label><label>End exclusive<input type="date" value={end} disabled={active} onChange={e=>setEnd(e.target.value)}/></label></>:<><label>Original historical batch<select value={batch} disabled={active} onChange={e=>setBatch(e.target.value)}><option value="">Select batch</option>{batches.map(b=><option value={b.id} key={b.id}>{b.from_date} to {b.to_date} · {b.status}</option>)}</select></label><button className="ws-button" disabled={active} onClick={()=>setRevision(v=>v+1)}>Refresh batches</button></>}
+ <button className="ws-button primary" disabled={active||(mode==='iv'?(!start||!end||start>=end||end>day(new Date())||(Date.parse(end)-Date.parse(start))/86400000>120):!batch)} onClick={()=>void run()}>Run volatility evidence study</button></div>
+ {stage&&<p role="status">{stage} {active&&<progress value={progress} max={100}/>} {job&&<button className="ws-button" onClick={()=>void cancel()}>Cancel research</button>}</p>}{error&&<p className="bci-error" role="alert">{error}</p>}
+ {result&&<><h4>{result.state.replaceAll('_',' ')} · {result.horizon_minutes} minutes</h4><p>{result.recorded_sessions} observed sessions. {Object.entries(result.evidence_counts).map(([k,v])=>k.replaceAll('_',' ')+': '+v).join(' · ')}</p>
+ {result.metrics&&<div className="bci-scroll"><table aria-label="Same-contract implied volatility evidence"><thead><tr><th>IV change (percentage points)</th><th>All matched observations</th><th>All p05 / median / p95</th><th>Training p05 / p95</th><th>Holdout 90% interval coverage</th><th>Holdout ±2 pp coverage</th></tr></thead><tbody>{Object.entries(result.metrics).map(([k,v])=><tr key={k}><td>{k.replaceAll('_',' ')}</td><td>{v.descriptive_all.count}</td><td>{['0.05','0.5','0.95'].map(q=>fmt(v.descriptive_all.quantiles_pp[q])).join(' / ')}</td><td>{['0.05','0.95'].map(q=>fmt(v.train.quantiles_pp[q])).join(' / ')}</td><td>{pct(v.holdout_90pct_interval_coverage)}</td><td>{pct(v.holdout_fixed_2pp_coverage)}</td></tr>)}</tbody></table></div>}
+ {result.methods&&Object.keys(result.methods).length>0&&<div className="bci-scroll"><table aria-label="Realized volatility forecast comparison"><thead><tr><th>Model</th><th>Split</th><th>Samples</th><th>Volatility MAE (bps)</th><th>Variance RMSE (bps²)</th><th>QLIKE ↓</th></tr></thead><tbody>{Object.entries(result.methods).flatMap(([method,splits])=>Object.entries(splits).map(([split,v])=><tr key={method+split}><td>{method.replaceAll('_',' ')}</td><td>{split}</td><td>{v.samples}</td><td>{fmt(v.mae_volatility_bps)}</td><td>{fmt(v.rmse_variance_bps2)}</td><td>{fmt(v.qlike)}</td></tr>))}</tbody></table></div>}
+ {result.garch_state&&<p>GARCH: {result.garch_state}</p>}<div className="bci-actions"><a className="ws-button" download href={files+'/audit/'+encodeURIComponent(result.audit_id)}>Download evidence audit</a>{result.run_id&&<a className="ws-button" download href={files+'/results/'+encodeURIComponent(result.run_id)}>Download observed changes / forecasts</a>}</div><p>{result.warning}</p></>}
+ </details>
+}
