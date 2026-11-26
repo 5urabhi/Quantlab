@@ -205,6 +205,12 @@ def _discover() -> tuple[list[dict], int]:
     options = _safe_master_contracts(master, expiries, today=today, spot=spot)
     if not options:
         raise ValueError("No fresh, uniquely mapped original BANKNIFTY options")
+    # Keep valid already-subscribed exact identities ahead of new ones if
+    # the documented capacity ever binds. Do not rotate on ATM movement.
+    with LOCK:
+        previous=set(CATALOG)
+    if len(options)>MAX_INSTRUMENTS:
+        options=sorted(options,key=lambda row:row["identity"] not in previous)
     return options[:MAX_INSTRUMENTS], max(0, len(options)-MAX_INSTRUMENTS)
 
 
@@ -303,8 +309,34 @@ def _init_storage() -> None:
               ON dhan_option_live_events(session_id,received_utc);
             CREATE INDEX IF NOT EXISTS dhan_live_quote_received
               ON dhan_option_live_events(received_utc);
+            CREATE TABLE IF NOT EXISTS dhan_option_contract_sessions(
+                session_id TEXT NOT NULL, identity TEXT NOT NULL,
+                expiry TEXT NOT NULL, strike REAL NOT NULL, option_type TEXT NOT NULL,
+                lot_size INTEGER NOT NULL, mapped_utc TEXT NOT NULL,
+                PRIMARY KEY(session_id,identity)
+            );
             """)
         STORAGE_INITIALIZED = True
+
+
+def _contract_signature(rows):
+    return {row["identity"]:(row["expiry"],float(row["strike"]),row["option_type"],row["lot_size"]) for row in rows}
+
+
+def _persist_session_contracts(session,contracts):
+    """Keep exact master terms even when IDs later expire or are reused."""
+    _init_storage()
+    stamp=_iso(_utc())
+    terms=_contract_signature(contracts)
+    if len(terms)!=len(contracts):
+        raise ValueError("Duplicate exact option identity")
+    with live_market._database() as db:
+        existing={identity:(expiry,strike,side,lot) for identity,expiry,strike,side,lot in db.execute(
+            "SELECT identity,expiry,strike,option_type,lot_size FROM dhan_option_contract_sessions WHERE session_id=?",(session,))}
+        if existing and existing!=terms:
+            raise ValueError("Session contract identity changed")
+        db.executemany("INSERT OR IGNORE INTO dhan_option_contract_sessions VALUES(?,?,?,?,?,?,?)",
+                       [(session,identity,*term,stamp) for identity,term in terms.items()])
 
 
 def _ingest(event: dict, received: datetime, session: str) -> None:
@@ -738,6 +770,7 @@ def _session_rollover() -> None:
     with LOCK:
         LATEST.clear()
         HISTORY.clear()
+        CATALOG.clear()
         STATUS.update({
             "quote_packets": 0, "oi_packets": 0,
             "stored_events": 0, "dropped_events": 0,
@@ -814,7 +847,10 @@ def _run(stop: Event) -> None:
                     url = ("wss://api-feed.dhan.co?version=2&token=" + quote(token,safe="")
                            + "&clientId="+quote(client,safe="")+"&authType=2")
                     from websockets.sync.client import connect
-                    session = "options_"+day.replace("-","")+"_"+str(int(time.time()))
+                    session = "options_"+day.replace("-","")+"_"+str(time.time_ns())
+                    # Persist source identity mapping before receiving events.
+                    # A storage failure must not create new unmapped sessions.
+                    _persist_session_contracts(session,contracts)
                     shared_index_requested=[]
                     index_subscription_sent=False
                     subscribed_at=0.0
@@ -866,8 +902,7 @@ def _run(stop: Event) -> None:
                                     break
                                 if time.monotonic() >= until:
                                     updated, _ = _discover()
-                                    if [row["identity"] for row in updated] != [
-                                            row["identity"] for row in contracts]:
+                                    if _contract_signature(updated)!=_contract_signature(contracts):
                                         break
                                     until = time.monotonic()+DISCOVER_SECONDS
                                 try:

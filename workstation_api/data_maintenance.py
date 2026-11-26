@@ -68,7 +68,7 @@ def validate(cfg):
     for k in ("enabled","index","constituents","options","bank_panel"):
         if type(cfg[k]) is not bool:
             raise ValueError("Maintenance switches must be boolean")
-    for k,lo,hi in (("index_days",30,365),("constituent_days",30,240),("option_days",30,365),("wings",0,5)):
+    for k,lo,hi in (("index_days",30,365),("constituent_days",30,240),("option_days",30,365),("wings",0,options.MAX_NEAR_WINGS)):
         if type(cfg[k]) is not int or not lo<=cfg[k]<=hi:
             raise ValueError("Maintenance scope outside supported bound: "+k)
     if cfg["enabled"] and not any(cfg[k] for k in ("index","constituents","options","bank_panel")):

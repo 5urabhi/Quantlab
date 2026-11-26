@@ -161,7 +161,7 @@ def assess(index,splits,signals,table,evidence,*,today,progress=None):
     for sides in windows.values():
         for value in sides.values():
             observed.update({k:v for k,v in value.items() if k.startswith("minutes_") or k.endswith("_strike_bars")})
-    report={"version":VERSION,"settings":{"capital_inr":CAPITAL,"budget_inr":BUDGET,"assumed_lot":LOT,"wings":WINGS,
+    report={"version":VERSION,"settings":{"capital_inr":CAPITAL,"budget_inr":BUDGET,"assumed_lot":LOT,"wings":(len(evidence["expected_offsets"])-1)//2,
             "hold_minutes":HOLDS,"cost_bps_per_side":COSTS},
             "request_windows":windows,"repairable_missing_offset_session_pairs":sum(
                 len(v["missing_offsets"]) for sides in windows.values() for v in sides.values() if v["expired_eligible"]),
@@ -223,12 +223,14 @@ def assess(index,splits,signals,table,evidence,*,today,progress=None):
     return report
 
 
-def run(*,sessions=90,to_date=None,progress=None,now=None):
+def run(*,sessions=90,to_date=None,wings=WINGS,progress=None,now=None):
     now=now or datetime.now(timezone.utc)
     today=now.astimezone(h.IST).date()
     if not alpha_retraining.safe_window(now):
         raise ValueError("Run outside Indian market priority hours")
     stop=date.fromisoformat(to_date) if to_date else today
+    if type(wings) is not int or not 0<=wings<=10:
+        raise ValueError("Audit supports up to ten near-expiry strike wings")
     if sessions not in r.SESSION_SPLITS or stop>today:
         raise ValueError("Use 60/90/120 completed observed sessions")
     start=stop-timedelta(days={60:100,90:150,120:200}[sessions])
@@ -254,7 +256,7 @@ def run(*,sessions=90,to_date=None,progress=None,now=None):
     # audit is not restricted to days with profitable signals.
     clock={r._stamp(d,m) for d in dates for m in range(375)}
     evidence={}
-    table,meta=p._load_options(signals,WINGS,progress,needed_stamps=clock,evidence=evidence,evidence_days=dates)
+    table,meta=p._load_options(signals,wings,progress,needed_stamps=clock,evidence=evidence,evidence_days=dates)
     report=assess(index,splits,signals,table,evidence,today=today,progress=progress)
     report.update(index_sources=hashes,index_failures=failures,day_states=day_states,option_sources=meta,
                   requested_sessions=sessions,training_dates=splits[0],validation_dates=splits[1],recent_audit_dates=splits[2])

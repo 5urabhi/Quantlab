@@ -40,7 +40,7 @@ class MaintenanceTests(TestCase):
         self.assertFalse(m.enabled())
 
     def test_scope_and_request_bounds(self):
-        for invalid in ({**m.DEFAULT,"index_days":366},{**m.DEFAULT,"wings":6},
+        for invalid in ({**m.DEFAULT,"index_days":366},{**m.DEFAULT,"wings":11},
                         {**m.DEFAULT,"enabled":True,"index":False,"constituents":True}):
             with self.assertRaises(ValueError):
                 m.validate(invalid)

@@ -732,3 +732,51 @@ and the previous strict validation gate at both costs. No selection
 on already examined recent dates, no new policy freeze or promotion.
 Positive minute volume is not proof of fill, exact listed contract,
 or historical bid/ask. Results do not guarantee live returns.
+
+
+## Original option receipt repair and exact live identities
+
+With the local workstation stopped normally during off-market priority
+hours, use:
+
+```bash
+bash run.sh cpr-repair --sessions 90
+```
+
+Runs CPR, history-sync, maintenance and full-feed regression tests; loads
+only the local ignored .env; requires existing opted-in read-only options
+maintenance and authenticated Dhan access. Fills missing verified
+near-month request windows for the actual observed study dates, up to 440
+core requests per invocation. Prioritize observed sessions and ATM +/-5
+before wider offsets. The new process lock coordinates updated backend
+and CLI history-sync writers. An already running old backend may not
+honor it, so the standalone command refuses to run while the usual
+local API port is occupied. It never terminates the recorder.
+
+Dhan's v2 expired-options documentation describes up to ATM +/-10
+for near-expiry index options. Test both signs and sides at each width
+6 through 10 on one already expired observed session. Only observed
+positive-volume rows support the incremental width. A rejected or empty
+response cannot establish coverage; a verified receipt is never
+overwritten. A supported wider scope gets up to 112 additional requests
+and the already authorized maintenance scope can expand to that width.
+No claim that the probe proves wider availability on all dates. Bounded
+passes are resumable; ordinary authorized maintenance fills remaining
+request windows outside priority hours. Read-only audit retains the
+ATM +/-5 comparison and, when wider observations were verified, a
+separate wider audit. No unseen date is treated as a market holiday.
+
+The existing full-universe Dhan quote/OI feed now preserves each
+subscription session's exact master identity, expiry, strike, side
+and lot size in the existing SQLite database. Reordering by distance
+to ATM no longer causes unnecessary reconnects. Existing valid IDs
+take priority if subscription capacity binds. No new socket or change
+to the live packet mode. Existing REST chain bid/ask and rotating
+depth recorders remain enabled according to their previous consent.
+New chain snapshots also record REST request duration. The saved-data
+audit reports bounded exact-mapping coverage, bid/ask spread per lot,
+source trade age at receipt and measured REST round-trip time. Legacy
+unmapped records remain explicitly unmapped. These are not actual
+order latency, fill prices, continuous per-contract books or execution
+certification. No orders are transmitted. New live mapping/duration
+fields begin on the next normal workstation start and market session.
