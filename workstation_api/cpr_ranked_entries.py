@@ -156,7 +156,8 @@ def _matched(episodes,scope):
 
 
 def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capital,risk_budget,
-           context_audit,q=None,pattern_research=False,fixed_panel=False,context_q=False,progress=None):
+           context_audit,q=None,pattern_research=False,fixed_panel=False,context_q=False,
+           sequence_research=False,derivative_research=False,progress=None):
     val_days,test_days=map(set,dates)
     val_signals=[s for s in signals if s["session"] in val_days]
     test_signals=[s for s in signals if s["session"] in test_days]
@@ -173,6 +174,14 @@ def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capita
             scopes.extend(("global_patterns","combined_patterns"))
             if fixed_panel:
                 scopes.append("panel_global_patterns")
+    if sequence_research:
+        scopes.append("sequences")
+        if fixed_panel and context_audit.get("state")!="disabled":
+            scopes.append("sequence_panel_global")
+    if derivative_research:
+        scopes.append("derivatives")
+        if sequence_research:
+            scopes.append("sequence_derivatives")
     # 'val' contains capital-independent learning trajectories; nearest actual
     # candidate episodes are built separately to match the trading account.
     nearest_val=[r._episode(s,table,index[s["session"]],hold=hold,lot_size=lot_size,
@@ -231,6 +240,9 @@ def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capita
             name=scope+":matched_fixed_stop"
             item["methods"][name]=metrics
             journal.extend({**row,"method":name} for row in rows)
+            if scope in cx.ML_ONLY_SCOPES:
+                # No invented rule or Q regime for a pure feature ablation.
+                continue
             metrics,rows=r._evaluate(nt,method="fixed_stop",capital=capital,risk_budget=risk_budget,
                                     dates=dates[1],context_filter=lambda e:cx.rule_accept(e,scope))
             name=scope+":context_rule_fixed_stop"
