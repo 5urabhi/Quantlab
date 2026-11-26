@@ -510,9 +510,10 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         def rejected(request, timeout):
             self.assertEqual(request.get_method(), "POST")
             self.assertEqual(body["expiryCode"], 1)
+            self.assertEqual(request.get_header("Client-id"),"1234567890")
             raise HTTPError(
                 exp.ENDPOINT, 400, "Bad Request", {}, BytesIO(bad_response))
-        with patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": "SECRET-FOR-TEST-ONLY"}):
+        with patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": "SECRET-FOR-TEST-ONLY","DHAN_CLIENT_ID":"1234567890"}):
             with self.assertRaisesRegex(ValueError, "Dhan expired-options HTTP 400") as caught:
                 exp._original_response(body, opener=rejected)
         public_message = str(caught.exception)
@@ -530,21 +531,42 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
             pass
         def opener(request,timeout):
             wire=json.loads(request.data)
+            self.assertEqual(request.get_header("Client-id"),"1234567890")
+            self.assertEqual(wire.pop("dhanClientId"),"1234567890")
             calls.append(wire)
-            if isinstance(wire["interval"],str):
+            if isinstance(wire["interval"],int):
                 raise HTTPError(exp.ENDPOINT,400,"Bad Request",{},BytesIO(
                     b'{"errorCode":"DH-905","errorMessage":"Missing required fields"}'))
             return Reply(b'{"data":{"ce":{"timestamp":[]}}}')
         state={}
-        with patch.dict("os.environ",{"DHAN_ACCESS_TOKEN":"TEST-TOKEN-ONLY"}):
+        with patch.dict("os.environ",{"DHAN_ACCESS_TOKEN":"TEST-TOKEN-ONLY","DHAN_CLIENT_ID":"1234567890"}):
             payload=exp._original_response(body,opener=opener,wire_state=state)
             exp._original_response(body,opener=opener,wire_state=state)
         self.assertEqual(len(calls),3)
-        self.assertEqual(calls[0],body)
-        self.assertEqual(calls[1],{**body,"interval":1})
+        self.assertEqual(calls[0],{**body,"interval":1})
+        self.assertEqual(calls[1],body)
         self.assertEqual(calls[1],calls[2])
         self.assertEqual(state["wire_request"],calls[1])
         self.assertEqual(payload,{"data":{"ce":{"timestamp":[]}}})
+
+    def test_rolling_sdk_client_id_resolved_once_and_not_in_receipt_scope(self):
+        import json
+        from workstation_api import dhan_option_chain
+        body=exp._request_body(date(2025,11,26),date(2025,11,27),"MONTH",0,"ATM","CALL")
+        def opener(request,timeout):
+            self.assertEqual(request.get_header("Client-id"),"1234567890")
+            wire=json.loads(request.data)
+            self.assertEqual(wire.pop("dhanClientId"),"1234567890")
+            self.assertEqual(wire,{**body,"interval":1})
+            return BytesIO(b'{"data":{"ce":{"timestamp":[]}}}')
+        state={}
+        with patch.dict("os.environ",{"DHAN_ACCESS_TOKEN":"TEST-TOKEN-ONLY","DHAN_CLIENT_ID":""}), \
+             patch.object(dhan_option_chain,"_client_id",return_value="1234567890") as resolve:
+            exp._original_response(body,opener=opener,wire_state=state)
+            exp._original_response(body,opener=opener,wire_state=state)
+        resolve.assert_called_once_with("TEST-TOKEN-ONLY")
+        self.assertNotIn("dhanClientId",state["wire_request"])
+        self.assertNotIn("dhanClientId",body)
 
     def test_rolling_auth_failure_is_not_retried(self):
         body=exp._request_body(date(2025,11,26),date(2025,12,26),"MONTH",0,"ATM","CALL")
@@ -552,7 +574,7 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         def opener(request,timeout):
             calls.append(request)
             raise HTTPError(exp.ENDPOINT,401,"Unauthorized",{},BytesIO(b'{}'))
-        with patch.dict("os.environ",{"DHAN_ACCESS_TOKEN":"TEST-TOKEN-ONLY"}):
+        with patch.dict("os.environ",{"DHAN_ACCESS_TOKEN":"TEST-TOKEN-ONLY","DHAN_CLIENT_ID":"1234567890"}):
             with self.assertRaisesRegex(ValueError,"access denied"):
                 exp._original_response(body,opener=opener)
         self.assertEqual(len(calls),1)

@@ -178,9 +178,23 @@ def _original_response(body: dict, *, opener=None, wire_state=None) -> dict:
     expiry ordinals, fields or strike semantics to obtain a successful reply.
     Remember the accepted representation for this acquisition job.
     """
+    # Match DhanHTTP._send_request: client identity in header AND JSON.
+    # Resolve once per acquisition/token; keep credentials out of receipts.
+    token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
+    if not token or len(token) > 4096:
+        raise ValueError("Connect your Dhan Data API token under Trading Copilot > Connections")
+    from . import dhan_option_chain
+    auth_key = sha256(token.encode()).hexdigest()
+    cached_auth = wire_state.get("_auth") if wire_state is not None else None
+    if cached_auth and cached_auth[0] == auth_key:
+        client_id = cached_auth[1]
+    else:
+        client_id = dhan_option_chain._client_id(token)
+        if wire_state is not None:
+            wire_state["_auth"] = (auth_key, client_id)
     variants = [
-        dict(body),
         {**body, "interval": int(body["interval"])},
+        dict(body),
         {**body, "interval": int(body["interval"]), "securityId": str(body["securityId"])},
         {**body, "securityId": str(body["securityId"])},
     ]
@@ -191,7 +205,7 @@ def _original_response(body: dict, *, opener=None, wire_state=None) -> dict:
         if attempt and opener is None:
             time.sleep(.45)
         try:
-            payload = _original_response_once(variants[i], opener=opener)
+            payload = _original_response_once(variants[i], opener=opener, token=token, client_id=client_id)
         except RollingInputError as exc:
             last = exc
             continue
@@ -203,13 +217,15 @@ def _original_response(body: dict, *, opener=None, wire_state=None) -> dict:
     ) from None
 
 
-def _original_response_once(body: dict, *, opener=None) -> dict:
-    token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
-    if not token or len(token) > 4096:
-        raise ValueError("Connect your Dhan Data API token under Trading Copilot > Connections")
-    req = Request(ENDPOINT, data=json.dumps(body, separators=(",", ":")).encode(),
-                  headers={"access-token": token, "Accept": "application/json",
-                           "Content-Type": "application/json"}, method="POST")
+def _original_response_once(body: dict, *, opener=None, token: str, client_id: str) -> dict:
+    if not client_id.isdigit() or len(client_id) > 30:
+        raise ValueError("Dhan client identity unavailable. Check Connections.")
+    # Do not mutate body: canonical request and receipt metadata stay private.
+    wire = {**body, "dhanClientId": client_id}
+    req = Request(ENDPOINT, data=json.dumps(wire, separators=(",", ":")).encode(),
+                  headers={"access-token": token, "client-id": client_id,
+                           "Accept": "application/json", "Content-Type": "application/json"},
+                  method="POST")
     try:
         with (opener or urlopen)(req, timeout=25) as resp:
             raw = resp.read(MAX_RESPONSE_BYTES + 1)
@@ -240,6 +256,7 @@ def _original_response_once(body: dict, *, opener=None) -> dict:
                         and not any(secret in message.lower()
                                     for secret in ("token", "bearer", "secret",
                                                    "password", "client id", "jwt"))
+                        and token not in message and client_id not in message
                         and not any(len(word) > 32
                                     for word in message.split())):
                     detail += f": {message}"
