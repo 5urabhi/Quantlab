@@ -4866,3 +4866,25 @@ def constituent_prospective_report(horizon:int=5,limit:int=12000):
         return constituent_prospective.report(horizon,limit)
     except (OSError,ValueError,sqlite3.Error) as exc:
         raise HTTPException(400,"Prospective report unavailable; check local store and selected horizon") from exc
+
+
+from . import session_coverage
+
+class ReviewedSessionCoverageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: str = Field(max_length=40)
+    identity: str = Field(min_length=1,max_length=160)
+    start: str = Field(min_length=10,max_length=10)
+    end: str = Field(min_length=10,max_length=10)
+    calendar_csv: str = Field(min_length=1,max_length=20000)
+    source_label: str = Field(min_length=3,max_length=300)
+    confirm_reviewed: bool = False
+    expect_recording: bool = False
+    qualifier: str = Field(default="",max_length=180)
+
+@app.post("/api/data-manager/inventory/session-coverage")
+def reviewed_session_coverage(body:ReviewedSessionCoverageRequest):
+    try:
+        return session_coverage.audit(**body.model_dump())
+    except (ValueError,TypeError,KeyError,OverflowError) as exc:
+        raise HTTPException(400,str(exc)) from exc
