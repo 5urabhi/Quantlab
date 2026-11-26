@@ -1,6 +1,7 @@
 import {useEffect,useState} from 'react'
 import ResearchPlot from './ResearchPlots'
 import ScalpingEconomics from './ScalpingEconomics'
+import ScalpingValidation from './ScalpingValidation'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './market-pattern-intelligence.css'
 
@@ -100,6 +101,7 @@ export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',co
       <h4>Sideways market research</h4>
       <div className="mpi-grid"><Card label="30m regime (observed)" value={c?.regime?.state.replaceAll('_',' ')||'Unavailable'} detail={c?.state==='recent_completed_bar'?'Recent completed minute':'Saved / stale or unavailable'}/><Card label="Close-range boundaries" value={fmt(c?.regime?.low)+' / '+fmt(c?.regime?.high)} detail="Prior 30 close changes; not guaranteed support/resistance"/><Card label="Directional efficiency" value={fmt(c?.regime?.efficiency,3)} detail="≤0.30 range-bound; ≥0.65 trend; heuristic"/><Card label="Close range width" value={pct(c?.regime?.range_pct)} detail="Below 0.10% classified as compressed"/></div>
       <ScalpingEconomics/>
+      {identity==='INDEX:BANKNIFTY'&&<ScalpingValidation/>}
       <details className="mpi-detail"><summary>Range-gated mean reversion · chronological research</summary>
         {b.range_reversion?.state==='descriptive'?<><p className="tc-muted">Development {b.range_reversion.development_sessions} sessions · evaluation {b.range_reversion.evaluation_sessions} from {b.range_reversion.evaluation_from}. Fixed prior range, 20% edge band, inward movement; next-minute open entry and nonoverlapping index proxy holds. No fees, premium or fill inference.</p><Table headers={['Sample','Hold min','Sessions','Triggers','Triggers/day','Positive index proxy','Mean signed pts','Median MFE','Median MAE']} rows={b.range_reversion.rows.map(r=>[r.cohort,r.hold_minutes,r.sessions,r.signals,fmt(r.mean_signals_per_session),pct(r.positive_pct),fmt(r.mean_signed_points),fmt(r.median_mfe),fmt(r.median_mae)])}/></>:<p className="tc-muted">Insufficient complete sessions for chronological evaluation.</p>}
         <p><a className="mi-link" href="#/tradingpaper">Test actual saved CE/PE depth using Range-gated reversal in Rule-Based Replay →</a></p>

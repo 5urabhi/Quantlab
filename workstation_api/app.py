@@ -1162,6 +1162,52 @@ def paper_depth_replay(body: DepthReplayRequest):
         bad(exc)
 
 
+class ScalpingValidationRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    start_date: str = Field(min_length=10,max_length=10)
+    end_date: str = Field(min_length=10,max_length=10)
+    capital: float = Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
+    lots: int = Field(default=3,ge=1,le=50)
+    target_premium: float = Field(default=180,ge=10,le=20000,allow_inf_nan=False)
+    tolerance: float = Field(default=60,ge=0,le=5000,allow_inf_nan=False)
+    max_spread_bps: float = Field(default=150,ge=1,le=10000,allow_inf_nan=False)
+    hold_minutes: Literal[1,3,5,10,15]=5
+    latency_ms: int = Field(default=1000,ge=0,le=60000)
+    window_seconds: int = Field(default=30,ge=1,le=180)
+    participation_pct: float = Field(default=25,ge=1,le=100,allow_inf_nan=False)
+    slippage_bps: float = Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"]="zerodha"
+    fee_floor_per_side: float = Field(default=50,ge=0,le=1000,allow_inf_nan=False)
+    daily_loss_limit_pct: float = Field(default=10,ge=1,le=100,allow_inf_nan=False)
+
+
+@app.post("/api/trading-cockpit/paper/scalping-validation")
+def start_scalping_validation(body:ScalpingValidationRequest):
+    from . import scalping_validation
+    try:
+        return _spawn("scalping_net_edge_validation",scalping_validation.run,**body.model_dump())
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/paper/scalping-validation/latest")
+def latest_scalping_validation():
+    from . import scalping_validation
+    try:
+        return scalping_validation.latest()
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/paper/scalping-validation/{study_id}")
+def saved_scalping_validation(study_id:str):
+    from . import scalping_validation
+    try:
+        return scalping_validation.saved(study_id)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.post("/api/trading-cockpit/paper/rule-replay")
 def paper_rule_replay(body: RuleDepthReplayRequest):
     from . import depth_replay

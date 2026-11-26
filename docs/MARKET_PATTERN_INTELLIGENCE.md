@@ -67,3 +67,26 @@ Scalping economics is a user-input scenario, not a backtest. The
 break-even win fraction is (average gross loss + round-trip friction) /
 (average gross winner + average gross loss). Separate extra spread and
 slippage are zero if already reflected in fill-based gross returns.
+
+## Matched net scalping validation
+Market Intelligence includes a user-started local background study, saved as
+derived JSON under trading_cockpit/scalping_studies. It uses all requested
+weekdays (max 60 calendar days, prior completed dates only; not an official
+holiday calendar), requires original observed index minutes 09:15–15:28
+with chronological receipt decisions, and fixes each day's pair using
+the nearest observed monthly or other available expiry at 09:45 from a
+hash-checked prior chain receipt no older than 120 seconds. Select the CE/PE
+nearest the target ask within the premium band, size/affordability and spread
+constraints; never select by future depth availability or profitability.
+Each day/rule independently starts with the same research capital. Three
+frozen rules use identical fixed holding time and original-depth replay
+settings. Missing entry or exit observations stop and censor the day;
+only days complete across all rules enter the matched comparison. Report
+requested dates, reasons, attempts, fees, net P&L, profit factor, drawdown,
+and extra fixed friction stress. Matched samples can be selection-biased;
+no causal or profitable-edge claim follows. The 70/30 chronological weekday
+split is fixed before replay. The per-side fee floor uses max(estimated
+broker fee, floor) on executed turnover, not their sum. A daily loss
+budget blocks new entries only after completed trades; it cannot guarantee
+a loss bound. No provider calls or live orders. Test with
+python -m unittest discover -s tests -p 'test_scalping_validation.py' -v.
