@@ -89,6 +89,10 @@ def _budget(account,cfg):
 def _flatten(row,account):
     return {"policy":account["name"],"lane":account["lane"],"state":row["state"],
             "decision_utc":row["decision_utc"],"direction":row["source"].get("direction"),
+            "source_bar_utc":row["source"].get("bar_utc"),"source_chain_utc":row["source"].get("chain_utc"),
+            "source_chain_sha256":row["source"].get("chain_sha256"),
+            "applied_config":json.dumps(row["config"],sort_keys=True,separators=(",",":")),
+            "selection_score":row["selected"].get("score"),"selection_scenario_net_inr":row["selected"].get("stress_favorable_net_inr"),
             "strategy":row["selected"]["strategy"],"contracts":" / ".join(row["selected"]["identities"]),
             "contract_legs":json.dumps(row["selected"]["legs"],separators=(",",":")),
             "lots":row["selected"]["lots"],"units":row["selected"]["units"],
