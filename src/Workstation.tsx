@@ -18,6 +18,7 @@ import PythonWorkbench from './PythonWorkbench'
 import PythonMonitors from './PythonMonitors'
 import PythonEnvironment from './PythonEnvironment'
 import ResearchPlot from './ResearchPlots'
+import ConstituentIntelligence from './ConstituentIntelligence'
 import SavedIndexAnalytics from './SavedIndexAnalytics'
 const CustomModelWorkspace = lazy(() => import('./CustomModelWorkspace'))
 const ResearchNotebook = lazy(() => import('./ResearchNotebook'))
@@ -69,7 +70,7 @@ const primarySections:PrimarySection[]=[
   {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
   {id:'trading',label:'Trading',icon:Activity,
     tabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper','tradinganalytics','tradingdirectional','customscanners'],
-    navTabs:['trading','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper']},
+    navTabs:['trading','tradingdirectional','tradingchain','tradingdepth','tradingspreads','tradingreplay','tradingjournal','tradingpaper']},
   {id:'strategies',label:'Strategies',icon:TrendingUp,
     tabs:['strategies','strategyema','strategypython','strategybacktest','pythonmonitors'],
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
@@ -124,7 +125,7 @@ const descriptions:Record<Tab,string>={
   tradingjournal:'Review manually entered fills and prospective signal accuracy separately.',
   tradingpaper:'Manage virtual cash, simulated orders and original-depth historical replays without broker execution.',
   tradinganalytics:'Compare Greek sensitivities, volatility, liquidity and contract scenarios.',
-  tradingdirectional:'Evaluate directional option research and scenario-driven contract selection without placing orders.',
+  tradingdirectional:'Analyze BANKNIFTY constituent movements, dated weights, relative volume and directional option scenarios without placing orders.',
   strategies:'Choose a strategy, test real index signals, then study historical CE/PE contracts.',
   strategyema:'Test one EMA pair, chosen combinations or all 11,026 valid pairs.',
   strategypython:'Paste, run and save isolated Python research without interrupting Dhan capture.',
@@ -579,6 +580,7 @@ function App(){
         <Suspense fallback={<div className="ws-empty" role="status" aria-live="polite">
           <LoaderCircle size={18}/> Loading {titles[tab]}…
         </div>}>
+        {tab==='tradingdirectional'&&<ConstituentIntelligence onOpenRecording={()=>begin('recordingsettings')} onOpenSources={()=>begin('nse')} onOpenData={()=>begin('data')} onOpenOptions={()=>begin('tradinganalytics')}/>}
         {(['trading','tradingchain','tradinganalytics','tradingdirectional','tradingdepth','tradingreplay',
             'tradingjournal','strategybacktest'].includes(tab)||
             (tab==='connections'&&connectionEditing))&&
