@@ -333,7 +333,12 @@ def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
         recovery=_next_open_exit(table,day,side,strike,j+3,ep["entry"],units,bps) if future is None else None
         if recovery is not None:
             recovery["exit_delay_minutes"]+=1
+        dynamic=None
+        if "_dynamic_states" in signal:
+            from .cpr_dynamic_context import state_at
+            dynamic=state_at(signal,j)
         ep["path"].append({"minute":j,"elapsed":j-first+1,"mark_return":r,
+                           "dynamic_regime":dynamic,
                            "drawdown":peak-r,"trend":trend,
                            "exit_net":net,"exit_fees":charges,
                            "exit_utc":_stamp(day,j+2),"terminal":j==deadline-2,
@@ -363,6 +368,16 @@ def _key(step):
     return (pnl,elapsed,int(step["trend"]>=0),int(step["drawdown"]>=.03))
 
 
+DYNAMIC_SCOPE="dynamic_panel_global"
+
+
+def _q_key(step,scope,entry_context):
+    if scope is None:
+        return _key(step)
+    context=step.get("dynamic_regime") if scope==DYNAMIC_SCOPE else entry_context
+    return _key(step)+(context,) if context is not None else None
+
+
 def _forced(step, *, stop, stop_mark=STOP):
     if step["mark_return"]>=TARGET:
         return "target"
@@ -377,7 +392,7 @@ def _exit(ep, policy, q=None, *, stop_mark=STOP,context_scope=None):
     if ep["state"]!="entered":
         return {"state":ep["state"]}
     context=None
-    if context_scope is not None:
+    if context_scope is not None and context_scope!=DYNAMIC_SCOPE:
         from .cpr_context_features import context_state
         context=context_state(ep,context_scope)
     low=high=None
@@ -407,8 +422,8 @@ def _exit(ep, policy, q=None, *, stop_mark=STOP,context_scope=None):
         if reason is None and floor is not None and mark<=floor+1e-12:
             reason="trailing_stop"
         if reason is None and policy=="offline_q":
-            key=_key(step) if context_scope is None else _key(step)+(context,)
-            values=(q or {}).get(key) if context_scope is None or context is not None else None
+            key=_q_key(step,context_scope,context)
+            values=(q or {}).get(key) if key is not None else None
             # Unknown or tied states use the fixed target/stop baseline.
             if values is not None and values[0]>values[1]:
                 reason="learned_exit"
@@ -463,13 +478,13 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
         if ep["state"]!="entered" or not _full_path(ep):
             continue
         context=None
-        if context_scope is not None:
+        if context_scope is not None and context_scope!=DYNAMIC_SCOPE:
             from .cpr_context_features import context_state
             context=context_state(ep,context_scope)
             if context is None:
                 continue
         def key_for(step):
-            return _key(step) if context_scope is None else _key(step)+(context,)
+            return _q_key(step,context_scope,context)
         # Value of following the fixed rule from each next state, used when
         # the learned state has insufficient support.
         fallback={}
@@ -483,7 +498,10 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
             if _forced(step,stop=True,stop_mark=stop_mark):
                 break
             nxt=ep["path"][i+1]
-            transitions[key_for(step)].append((ep["session"],ep["minute"],ep.get("strike"),
+            key=key_for(step)
+            if key is None:
+                continue
+            transitions[key].append((ep["session"],ep["minute"],ep.get("strike"),
                 step["exit_net"]/ep["debit"],key_for(nxt),
                 fallback[i+1],bool(_forced(nxt,stop=True,stop_mark=stop_mark))))
     supported={k:v for k,v in transitions.items()
@@ -729,7 +747,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
         context_mode="off",context_batch="auto",rank_entries=False,
         pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,
-        sessions=60,dense_training=False,sequence_research=False,derivative_research=False,progress=None):
+        sessions=60,dense_training=False,sequence_research=False,derivative_research=False,dynamic_q=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
@@ -743,6 +761,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     ntrain,nval,ntest=SESSION_SPLITS[sessions]
     if context_mode not in ("off","receipt","archive"):
         raise ValueError("Unsupported context availability mode")
+    if dynamic_q and (not fixed_panel or context_mode=="off"):
+        raise ValueError("Dynamic Q requires fixed-panel and archive or receipt context")
     if fixed_panel and context_mode=="off":
         raise ValueError("Fixed-panel research requires receipt or archive context mode")
     if context_q and context_mode=="off" and not pattern_research:
@@ -814,6 +834,13 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             s.setdefault("context_vectors",{})["sequence"]=desc["short"]+desc["sequence"]
         if derivative_research:
             s["derivative_research"]=True
+    dynamic_report={};dynamic_states={}
+    if dynamic_q:
+        from . import cpr_dynamic_context as dynamic
+        if progress:progress(20,"Preparing causal five-minute bank/global snapshots")
+        dynamic_states,dynamic_report=dynamic.snapshots(index,dates,_stamp,mode=context_mode,batch_id=context_batch)
+        for s in all_signals:
+            s["_dynamic_states"]=dynamic_states.get(s["session"],{})
     pattern_report={}
     if pattern_research:
         from . import candle_pattern_research as patterns
@@ -840,7 +867,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,
              "requested_sessions":sessions,"split_sizes":SESSION_SPLITS[sessions],
              "dense_training":dense_training,"learning_day_balance":dense_training,
-             "sequence_research":sequence_research,"derivative_research":derivative_research,
+             "sequence_research":sequence_research,"derivative_research":derivative_research,"dynamic_q":dynamic_q,
              "derivative_feature_names":DERIVATIVE_NAMES if derivative_research else (),
              "dense_train_interval_minutes":DENSE_TRAIN_INTERVAL if dense_training else None,
              "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,
@@ -866,6 +893,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "index_source_failures":failures,"option_coverage":{k:v for k,v in meta.items() if k!="source_hashes"},
              "context_coverage":{k:v for k,v in context_audit.items() if k!="anchors"},
              "ranked_entry_research":{},"candle_patterns":pattern_report,"debit_spread_research":{},
+             "dynamic_context":dynamic_report,
              "methods":{},"state":"descriptive_only_insufficient_sessions","broker_orders_enabled":False,
              "live_model_promoted":False,"warning":WARNING,
              "learning_warning":"Overlapping candidate paths are not independent. Dense mode balances sessions; previously inspected dates remain exploratory."}
@@ -889,6 +917,16 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             metrics,rows=_evaluate(test,method=method,capital=capital,risk_budget=risk_budget,
                                    model=model,means=means,q=wide_q if method=="offline_q_emergency_stop" else q,dates=splits[2])
             report["methods"][method]=metrics;journal.extend(rows)
+        if dynamic_q:
+            dq,di=_fit_q(broad_train,context_scope=DYNAMIC_SCOPE)
+            report["dynamic_q_training"]=di
+            if dq:
+                metrics,rows=_evaluate(test,method="contextual_q",capital=capital,risk_budget=risk_budget,
+                                       q=dq,context_scope=DYNAMIC_SCOPE,dates=splits[2])
+                report["methods"]["dynamic_panel_global_q"]=metrics
+                journal.extend({**row,"method":"dynamic_panel_global_q"} for row in rows)
+            else:
+                report["methods"]["dynamic_panel_global_q"]={"state":"insufficient_training_support"}
         if rank_entries or context_mode!="off" or pattern_research or sequence_research or derivative_research:
             from . import cpr_ranked_entries as ranked
             ranked_results,ranked_rows=ranked.assess(
@@ -913,7 +951,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             metrics,rows=_evaluate(episodes,method=method,capital=capital,risk_budget=risk_budget,dates=dates)
             report["methods"][method]=metrics;journal.extend(rows)
     evidence={"index_sources":index_hashes,"option_sources":meta["source_hashes"],
-              "context_evidence":context_audit,"candle_pattern_evidence":pattern_report}
+              "context_evidence":context_audit,"candle_pattern_evidence":pattern_report,
+              "dynamic_context_evidence":{"report":dynamic_report,"states":dynamic_states}}
     report["source_sha256"]=sha256(json.dumps(evidence,sort_keys=True).encode()).hexdigest()
     if progress:progress(100,"CPR strategy comparison complete")
     return report,journal,evidence
