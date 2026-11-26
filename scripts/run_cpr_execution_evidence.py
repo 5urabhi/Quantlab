@@ -1,5 +1,4 @@
 """Single-command off-market execution evidence study."""
-from datetime import datetime
 from pathlib import Path
 import argparse
 import json
@@ -32,6 +31,7 @@ def main():
         return 2
     print("Request-window states:",json.dumps(report["window_state_counts"]))
     print("Expired missing offset/session pairs:",report["repairable_missing_offset_session_pairs"])
+    print("Observed quote coverage:",json.dumps(report["observed_quote_coverage"]))
     for name,part in report["parts"].items():
         print("Evidence:",name,json.dumps({k:v for k,v in part.items() if k not in ("dates","events","by_session")}))
     for name,screen in report["development_screen"].items():
