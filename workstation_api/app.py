@@ -4832,7 +4832,6 @@ def index_execution_stress(run_id:str,body:ExecutionStressRequest):
 # Explicit opt-in prospective, local-only research. The UI does not drive the
 # worker clock or submit arbitrary past observations.
 from . import constituent_prospective
-import sqlite3
 
 class ConstituentProspectiveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
