@@ -5559,6 +5559,28 @@ def sync_market_context_feeds(body:ContextFeedSyncRequest):
         raise HTTPException(400,str(exc)) from exc
 
 
+class ParticipantInboxRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    enabled: bool=False
+    source: str=Field(default="",max_length=200)
+    confirm_reviewed: bool=False
+
+
+@app.get("/api/market-intelligence/participant-inbox")
+def participant_inbox_status():
+    from . import participant_inbox
+    return participant_inbox.status()
+
+
+@app.post("/api/market-intelligence/participant-inbox")
+def participant_inbox_configure(body:ParticipantInboxRequest):
+    from . import participant_inbox
+    try:
+        return participant_inbox.configure(**body.model_dump())
+    except (ValueError,TypeError,OSError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
 @app.get("/api/market-intelligence/events")
 def market_context_events():
     try:
