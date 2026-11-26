@@ -18,7 +18,8 @@ class OptionsHistorySyncTests(unittest.TestCase):
     def test_preview_excludes_active_series_and_bounds_year(self):
         p=sync.preview("2025-11-26","2026-11-25",3,self.today)
         self.assertEqual(p["excluded_active_calendar_days"],1)
-        self.assertLessEqual(p["full_scope_request_estimate"],300)
+        self.assertLessEqual(p["full_scope_request_estimate"],sync.MAX_REQUESTS)
+        self.assertGreater(p["full_scope_request_estimate"],2000)
         with self.assertRaises(ValueError):
             sync.preview("2024-11-26","2026-11-25",3,self.today)
         self.assertEqual(sync.preview("2026-11-25","2026-11-25",0,self.today)["eligible_calendar_days"],0)
@@ -35,32 +36,64 @@ class OptionsHistorySyncTests(unittest.TestCase):
         r=sync.run(start_date="2026-10-01",end_date="2026-10-05",wings=0,fetcher=fetch,today=self.today)
         self.assertEqual(r["existing_verified_receipts"],2)
         self.assertEqual(r["new_receipts"],2)
-        self.assertEqual({x["fromDate"] for x in requests},{"2026-10-03"})
+        self.assertEqual({x["fromDate"] for x in requests},{"2026-10-04"})
+        self.assertEqual({x["toDate"] for x in requests},{"2026-10-05"})
         requests.clear()
         r=sync.run(start_date="2026-10-01",end_date="2026-10-05",wings=0,fetcher=fetch,today=self.today)
         self.assertFalse(requests)
         self.assertEqual(r["new_receipts"],0)
         self.assertFalse(r["continuous_coverage_certified"])
 
-    def test_rejected_long_window_splits_and_reuses_original_subwindows(self):
+    def test_short_inclusive_pairs_and_resume(self):
         requests=[]
         def fetch(body):
             requests.append(body)
-            days=(date.fromisoformat(body["toDate"])-date.fromisoformat(body["fromDate"])).days
-            if days>15:
-                raise exp.RollingInputError("Dhan DH-905")
+            self.assertEqual((date.fromisoformat(body["toDate"])-date.fromisoformat(body["fromDate"])).days,1)
             side="ce" if body["drvOptionType"]=="CALL" else "pe"
             return {"data":{side:{"timestamp":[]}}}
         args=dict(start_date="2025-11-26",end_date="2025-12-25",wings=0,fetcher=fetch,today=self.today)
         r=sync.run(**args)
-        self.assertEqual(r["split_rejected_windows"],2)
-        self.assertEqual(r["new_receipts"],4)
-        self.assertEqual(len(requests),6)
+        self.assertEqual(r["new_receipts"],30)
+        self.assertEqual(len(requests),30)
+        self.assertEqual(r["rejected_requests"],[])
         self.assertFalse(r["continuous_coverage_certified"])
         requests.clear()
         r=sync.run(**args)
-        self.assertEqual(r["existing_verified_receipts"],4)
+        self.assertEqual(r["existing_verified_receipts"],30)
         self.assertEqual(requests,[])
+
+    def test_one_day_remainder_uses_previous_date_and_no_active_date(self):
+        self.assertEqual(list(exp._rolling_windows(date(2026,11,24),date(2026,11,25))),
+                         [(date(2026,11,23),date(2026,11,24))])
+        calls=[]
+        def fetch(body):
+            calls.append(body)
+            return {"data":{"ce" if body["drvOptionType"]=="CALL" else "pe":{"timestamp":[]}}}
+        sync.run(start_date="2026-11-24",end_date="2026-11-25",wings=0,fetcher=fetch,today=self.today)
+        self.assertEqual(len(calls),2)
+        self.assertEqual({x["toDate"] for x in calls},{"2026-11-24"})
+
+    def test_rejected_pair_is_not_marked_checked_and_can_resume(self):
+        calls=[]
+        def fetch(body):
+            calls.append(body)
+            if body["drvOptionType"]=="CALL":
+                raise exp.RollingInputError("DH-905")
+            return {"data":{"pe":{"timestamp":[]}}}
+        args=dict(start_date="2026-10-06",end_date="2026-10-07",wings=0,today=self.today)
+        r=sync.run(**args,fetcher=fetch)
+        self.assertEqual(r["state"],"partial_requests")
+        self.assertEqual(len(r["rejected_requests"]),1)
+        self.assertEqual(r["new_receipts"],1)
+        self.assertEqual(r["unattempted_requests"],0)
+        calls.clear()
+        def recover(body):
+            calls.append(body)
+            return {"data":{"ce":{"timestamp":[]}}}
+        r=sync.run(**args,fetcher=recover)
+        self.assertEqual(len(calls),1)
+        self.assertEqual(calls[0]["drvOptionType"],"CALL")
+        self.assertEqual(r["state"],"request_windows_checked")
 
     def test_failed_request_keeps_prior_completed_receipt(self):
         calls=[]

@@ -20,7 +20,7 @@ from . import expired_options_backtest as exp, market_patterns, depth_replay, se
 RULES=("EMA_CROSSOVER","MEAN_REVERSION","RANGE_REVERSION")
 HOLDS=(1,2,3,5,10,15,30)
 TARGETS=((1.,1.),(2.,2.),(3.,2.),(5.,3.),(10.,5.))
-MAX_RECEIPTS=4096
+MAX_RECEIPTS=20000
 MAX_SCAN_BYTES=2*1024**3
 MIN_COVERAGE=338 # 90% of 375 regular minutes on EACH side
 LOCK=Lock()
@@ -68,10 +68,11 @@ def _catalog(a,b,wings):
             body=item["request"]
             if body.get("expiryFlag")!="MONTH" or body.get("expiryCode")!=1 or body.get("strike") not in exp._offsets(wings) or body.get("drvOptionType") not in ("CALL","PUT"):
                 continue
-            lo,hi=date.fromisoformat(body["fromDate"]),date.fromisoformat(body["toDate"])
+            lo,last=date.fromisoformat(body["fromDate"]),date.fromisoformat(body["toDate"])
+            hi=last+timedelta(days=1)
             if hi<=a or lo>b:
                 continue
-            if body!=exp._request_body(lo,hi,"MONTH",0,body["strike"],body["drvOptionType"]) or p!=exp._cache_path(body) or item.get("source")!="Dhan v2 /charts/rollingoption":
+            if body!=exp._request_body(lo,last,"MONTH",0,body["strike"],body["drvOptionType"]) or p!=exp._cache_path(body) or item.get("source")!="Dhan v2 /charts/rollingoption":
                 raise ValueError("Unexpected receipt scope")
             payload=item["payload"]
             digest=sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).hexdigest()

@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import closing
 from datetime import datetime, date, timezone, timedelta
 import csv
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -38,6 +39,7 @@ SOURCES = {
     "live_depth_books": ("Recorded depth books", "books", "Receipt time (UTC)", "Canonical SQLite", "Saved books; count does not certify 20 valid levels"),
     "depth_features": ("Depth analytics", "feature rows", "Receipt time (UTC)", "Canonical SQLite", "Derived from recorded books"),
     "sector_history": ("Dated sector classifications", "classifications", "Effective date", "Canonical SQLite", "Effective-dated source classifications"),
+    "active_option_history": ("Contract-specific option history", "returned timestamp rows", "Observation time (UTC)", "Original Dhan intraday receipts", "Exact NSE_FNO security IDs captured while listed; strike, expiry and lot require archived instrument evidence; receipt ranges may overlap"),
     "expired_options": ("Expired option history", "returned timestamp rows", "Observation time (UTC)", "Original rolling-option receipts", "Rolling strike-offset responses; may overlap and include unusable prices"),
     "archives": ("Saved session archives", "archive receipts", "Session date", "Session archives", "Copies of canonical data, not extra observations"),
 }
@@ -278,37 +280,96 @@ def _historical():
 
 
 def _expired():
+    """Separate flat intraday contract receipts from nested rolling receipts.
+
+    Older versions saved both in the same folder with the same rolling
+    source label. Classify using the original request AND response shape.
+    Retain the old files byte-for-byte; no inferred strike or expiry.
+    """
     root=service.DATA/"dhan_expired_options"
-    rows=[];failed=0;bounded=False
-    deadline=time.monotonic()+1.5
+    kinds=("expired_options","active_option_history")
+    rows={k:[] for k in kinds}
+    failed={k:0 for k in kinds}
+    empty={k:0 for k in kinds}
+    inspected=0
+    unknown=0
+    bounded=False
+    deadline=time.monotonic()+2.5
     if root.is_dir() and not root.is_symlink():
         for path in root.iterdir():
             if not re.fullmatch(r"[0-9a-f]{64}\.json",path.name):
                 continue
-            if len(rows)+failed>=MAX_RECEIPTS or time.monotonic()>deadline:
-                bounded=True;break
+            if inspected>=MAX_RECEIPTS or time.monotonic()>deadline:
+                bounded=True
+                break
+            inspected+=1
+            kind=None
             try:
                 item=_json(path,MAX_JSON)
                 body=item["request"]
-                side=body["drvOptionType"]
-                if side not in ("CALL","PUT") or item.get("source")!="Dhan v2 /charts/rollingoption":
-                    raise ValueError("Unknown option receipt")
-                segment=item["payload"].get("data",{}).get("ce" if side=="CALL" else "pe") or {}
-                stamps=segment.get("timestamp") or []
+                payload=item["payload"]
+                if not isinstance(body,dict) or not isinstance(payload,dict):
+                    raise ValueError("Bad receipt")
+                canonical=json.dumps(body,sort_keys=True,separators=(",",":")).encode()
+                raw=json.dumps(payload,sort_keys=True,separators=(",",":")).encode()
+                if sha256(canonical).hexdigest()!=path.stem or sha256(raw).hexdigest()!=item["sha256"]:
+                    raise ValueError("Option receipt SHA mismatch")
+                if body.get("exchangeSegment")!="NSE_FNO" or body.get("instrument")!="OPTIDX":
+                    raise ValueError("Unknown option instrument")
+                sid=str(body["securityId"])
+                if not sid.isdigit():
+                    raise ValueError("Bad option security ID")
+                interval=str(body.get("interval",""))
+                if interval not in ("1","5","15","25","60"):
+                    raise ValueError("Bad option interval")
+                if "drvOptionType" in body and isinstance(payload.get("data"),dict):
+                    kind="expired_options"
+                    side=body["drvOptionType"]
+                    if side not in ("CALL","PUT") or item.get("source")!="Dhan v2 /charts/rollingoption":
+                        raise ValueError("Unknown rolling option receipt")
+                    segment=payload["data"].get("ce" if side=="CALL" else "pe")
+                    if segment is None:
+                        segment={}
+                    if not isinstance(segment,dict):
+                        raise ValueError("Bad rolling response")
+                    stamps=segment.get("timestamp",[])
+                    identity="ROLLING:"+sid+":"+side+":"+str(body.get("strike",""))
+                    qualifier=str(body.get("expiryFlag",""))+" "+str(body.get("expiryCode",""))+" · "+path.stem[:12]
+                elif ("drvOptionType" not in body and type(body.get("oi")) is bool
+                      and isinstance(payload.get("timestamp"),list)):
+                    kind="active_option_history"
+                    if item.get("source") not in ("Dhan v2 /charts/intraday","Dhan v2 /charts/rollingoption"):
+                        raise ValueError("Unknown contract option receipt")
+                    stamps=payload["timestamp"]
+                    if any(not isinstance(payload.get(k),list) or len(payload[k])!=len(stamps)
+                           for k in ("open","high","low","close","volume")):
+                        raise ValueError("Unaligned contract response")
+                    identity="NSE_FNO:"+sid
+                    qualifier="Exact ID · "+path.stem[:12]
+                else:
+                    raise ValueError("Unknown option receipt structure")
                 if not isinstance(stamps,list):
                     raise ValueError("Bad source times")
                 if not stamps:
+                    empty[kind]+=1
                     continue
                 times=[datetime.fromtimestamp(float(t),tz=timezone.utc).isoformat() for t in stamps]
-                identity="ROLLING:"+str(body.get("securityId","25"))+":"+side+":"+str(body.get("strike",""))
-                qualifier=str(body.get("expiryFlag",""))+" "+str(body.get("expiryCode",""))+" · "+path.stem[:12]
-                rows.append(_entry("expired_options",identity,identity,
-                    str(body.get("interval",""))+" min",len(times),min(times),max(times),"receipt_timestamps",qualifier))
-            except (OSError,ValueError,TypeError,KeyError,OverflowError,UnicodeError):
-                failed+=1
-    return rows,_summary("expired_options",rows,"partial" if failed or bounded else "receipt" if rows else "not_recorded",
-        f"{failed} unreadable receipts. "+("Scan budget reached. " if bounded else "")+
-        "Actual timestamp arrays in saved responses; not deduplicated, price-validated or rehashed here.")
+                rows[kind].append(_entry(kind,identity,identity,interval+" min",
+                    len(times),min(times),max(times),"receipt_timestamps",qualifier))
+            except (OSError,ValueError,TypeError,KeyError,AttributeError,OverflowError,UnicodeError):
+                if kind is None:
+                    unknown+=1
+                else:
+                    failed[kind]+=1
+    summaries=[]
+    for kind in kinds:
+        state=("partial" if failed[kind] or unknown or bounded else
+               "receipt" if rows[kind] else "empty" if empty[kind] else "not_recorded")
+        summaries.append(_summary(kind,rows[kind],state,
+            f"{len(rows[kind])} nonempty verified receipts; {empty[kind]} empty; {failed[kind]} invalid; {unknown} unclassified. "
+            +("Scan budget reached. " if bounded else "")
+            +"Request and payload SHA-256 checked. Observed timestamp rows may overlap; no price or contract-term certification."))
+    return [r for kind in kinds for r in rows[kind]],summaries
 
 
 def _archives():
