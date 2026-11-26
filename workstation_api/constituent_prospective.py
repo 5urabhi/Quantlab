@@ -64,7 +64,10 @@ def _consent():
 def enabled():
     try:
         p=_consent()
-        return p.is_file() and not p.is_symlink() and p.stat().st_size<4096 and json.loads(p.read_text()).get("enabled") is True
+        if not p.is_file() or p.is_symlink() or p.stat().st_size>=4096:
+            return False
+        body=json.loads(p.read_text())
+        return body.get("enabled") is True and body.get("protocol_hash")==PROTOCOL_HASH
     except (OSError,ValueError,TypeError,AttributeError):
         return False
 
@@ -170,29 +173,42 @@ def pressure_rules(report):
 
 
 def _ema(db,cutoff):
-    # Reuse the existing frozen EMA-RSI baseline, with the entire available
-    # completed same-session tail. Mutable minute rows containing a receipt
-    # after the cutoff are excluded, not truncated or forward-filled.
+    # Reconstruct the completed bars from original receipt-cutoff ticks.
+    # The shared OHLC cache is mutable and its last-received field alone
+    # cannot prove point-in-time information when packets arrive out of order.
     session=_session(cutoff)
     start=session.replace(hour=9,minute=15,second=0,microsecond=0)
     minute=cutoff.replace(second=0,microsecond=0)
-    rows=db.execute("""SELECT minute_utc,session_ist,open,high,low,close,
-         tick_count,first_exchange_utc,last_exchange_utc,last_received_utc
-         FROM live_minute_bars WHERE identity='INDEX:BANKNIFTY'
-         AND minute_utc>=? AND minute_utc<? AND last_received_utc<=?
-         ORDER BY minute_utc LIMIT 376""",(_iso(start),_iso(minute),_iso(cutoff))).fetchall()
-    bars=[]
-    for row in rows:
-        stamp=datetime.fromisoformat(row[0])
-        first,last,received=map(datetime.fromisoformat,row[7:10])
-        if (row[6]<=0 or not stamp<=first<=last<stamp+timedelta(minutes=1)
-                or not last-timedelta(seconds=2)<=received<=cutoff):
+    rows=db.execute("""SELECT exchange_utc,received_utc,price,packet_sha256
+         FROM live_ticks WHERE identity='INDEX:BANKNIFTY'
+         AND exchange_utc>=? AND exchange_utc<? AND received_utc<=?
+         ORDER BY exchange_utc,received_utc,packet_sha256 LIMIT 60001""",
+         (_iso(start),_iso(minute),_iso(cutoff))).fetchall()
+    if len(rows)>60000:
+        return "UNAVAILABLE",{"reason":"bounded_original_tick_limit"}
+    grouped={}
+    for event,receipt,price,digest in rows:
+        observed=datetime.fromisoformat(event)
+        received=datetime.fromisoformat(receipt)
+        if not _valid_hash(digest) or not math.isfinite(price) or price<=0 or not -2<=(received-observed).total_seconds()<=15:
             continue
-        bars.append(dict(zip(("timestamp_utc","session_ist","open","high","low","close"),row[:6])))
+        if not start<=observed<minute or received>cutoff:
+            continue
+        key=_iso(observed.replace(second=0,microsecond=0))
+        bar=grouped.get(key)
+        if bar is None:
+            grouped[key]={"timestamp_utc":key,"session_ist":session.date().isoformat(),
+                          "open":price,"high":price,"low":price,"close":price}
+        else:
+            bar["high"]=max(bar["high"],price)
+            bar["low"]=min(bar["low"],price)
+            bar["close"]=price
+    bars=list(grouped.values())
     if not bars:
         return "UNAVAILABLE",{"reason":"no_completed_original_bars"}
     snap=trading_cockpit.snapshot("INDEX:BANKNIFTY",bars,now=cutoff,include_chart=False)
     features={k:snap[k] for k in ("last_observed_utc","ema9","ema21","rsi14","contiguous_session_bars","quote_mode")}
+    features["completed_bars_sha256"]=sha256(json.dumps(bars,sort_keys=True,allow_nan=False).encode()).hexdigest()
     if snap["quote_mode"]!="RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE" or snap["contiguous_session_bars"]<30:
         return "UNAVAILABLE",features
     return ("ABSTAIN" if snap["direction"]=="NO_TRADE" else snap["direction"]),features
@@ -229,7 +245,7 @@ def _record(cutoff):
     if not _regular(cutoff):
         return 0
     slot=cutoff.replace(second=0,microsecond=0)
-    if not 0<=(_now()-cutoff).total_seconds()<=5:
+    if not 5<=cutoff.second<=20 or not 0<=(_now()-cutoff).total_seconds()<=5:
         return 0
     try:
         with closing(_read()) as db:
@@ -330,13 +346,13 @@ def _loop():
             if slot==last or now.second<5:
                 continue
             last=slot
-            _resolve(now)
             if bank.enabled() and _regular(now) and now.second<=15:
                 cutoff=_now()
                 count=_record(cutoff)
                 state="recording" if count else "waiting_for_eligible_slot"
             else:
                 state="waiting_for_constituent_capture_or_session"
+            _resolve(_now())
             with LOCK:
                 STATE.update(state=state,last_attempt_utc=_iso(now),last_error=None)
         except Exception as exc:
