@@ -58,12 +58,12 @@ async function shot(name){
   await page.screenshot({path:path.join(dir,'v2-'+name+'.png'),fullPage:true})
 }
 try{
- await step('eight-page V2 default and usable global header',async()=>{
+ await step('nine-workspace default and usable global header',async()=>{
    await page.goto(base,{waitUntil:'domcontentloaded'})
    await page.locator('.ws-v2 .ws-nav-item').first().waitFor({timeout:35000})
-   assert.equal(await page.locator('.ws-sidebar .ws-nav-item').count(),8)
+   assert.equal(await page.locator('.ws-sidebar .ws-nav-item').count(),9)
    assert.deepEqual(await page.locator('.ws-sidebar .ws-nav-item').allTextContents(),
-     ['Home','Trading','Strategies','Models','Data Center',
+     ['Home','Trading','Market Intelligence','Strategies','Models','Data Center',
       'Results & Charts','Projects','Settings'])
    await page.getByRole('button',{name:/Recorder status/}).waitFor()
    await page.getByRole('button',{name:'Open Jobs and downloads'}).waitFor()
@@ -1085,26 +1085,35 @@ try{
      await page.goto(base+'#/tradingdirectional',{waitUntil:'domcontentloaded'})
      const workspace=page.getByRole('region',{name:'BANKNIFTY constituent intelligence'})
      await workspace.waitFor({timeout:30000})
-     await workspace.getByRole('button',{name:'Alpha research',exact:true}).click()
-     const alpha=workspace.getByRole('region',{name:'Constituent alpha research'})
+     assert.equal(await page.locator('.ws-sidebar .ws-nav-item[aria-current="page"]').innerText(),'Market Intelligence')
+     await sub('Global Markets & Positioning')
+     await page.getByText('BANKNIFTY paired option strikes',{exact:true}).waitFor()
+     await sub('Alpha Research')
+     const alpha=page.getByRole('region',{name:'Constituent alpha research'})
      await alpha.getByText('2 / 60',{exact:true}).waitFor()
-     await alpha.getByText('BANKNIFTY paired option strikes',{exact:true}).waitFor()
      await alpha.getByRole('combobox',{name:'Alpha research scope'}).selectOption('options')
      await alpha.getByRole('button',{name:'Audit evidence & run model comparison'}).click()
      await alpha.getByText(/No trained model or forecast produced/).waitFor()
      await alpha.getByText('context matched',{exact:true}).waitFor()
      assert.equal(await alpha.getByRole('link',{name:'Download all matched holdout predictions (CSV)'}).count(),0)
      await shot('constituent-alpha-insufficient')
+     await sub('Economic Events')
+     await page.getByRole('region',{name:'Economic events and official announcements'}).waitFor()
+     await top('Trading')
+     const tradeNav=page.getByRole('navigation',{name:'Modules within selected research destination'})
+     assert.equal(await tradeNav.getByRole('button',{name:'Alpha Research',exact:true}).count(),0)
+     assert.equal(await tradeNav.getByRole('button',{name:'Bank Constituents',exact:true}).count(),0)
+     assert.equal(await tradeNav.getByRole('button',{name:'Global Markets & Positioning',exact:true}).count(),0)
    }finally{for(const [pattern] of routes)await page.unroute(pattern)}
    await page.goto(base+'#/data',{waitUntil:'domcontentloaded'})
    await page.getByRole('heading',{name:'Market Library',exact:true}).waitFor()
  })
- await step('390-pixel responsive sidebar drawer and eight navigable pages',async()=>{
+ await step('390-pixel responsive sidebar drawer and nine navigable workspaces',async()=>{
    await page.setViewportSize({width:390,height:844})
    await page.getByRole('button',{name:'Open navigation'}).click()
    await page.locator('.ws-sidebar').getByRole('button',{name:'Data Center'}).click()
    await page.getByRole('heading',{name:'Market Library',exact:true}).waitFor()
-   assert.equal(await page.locator('.ws-sidebar .ws-nav-item').count(),8)
+   assert.equal(await page.locator('.ws-sidebar .ws-nav-item').count(),9)
    await shot('09-mobile-data')
  })
  assert.equal(errors.length,0,'React browser exceptions: '+JSON.stringify(errors))
