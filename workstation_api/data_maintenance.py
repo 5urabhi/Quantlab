@@ -19,13 +19,15 @@ from . import (service, market_patterns as mp, cockpit_sources, dhan_workspace a
 IST=ZoneInfo("Asia/Kolkata")
 DEFAULT={"enabled":False,"index":True,"constituents":True,"options":True,"bank_panel":False,
          "index_days":365,"constituent_days":240,"option_days":365,"wings":3}
-VERSION="automatic_market_library_v2"
+VERSION="automatic_market_library_v3"
 INDEX_IDENTITIES=("INDEX:BANKNIFTY","INDEX:NIFTY50")
 MAX_INDEX_WINDOWS=5
 MAX_OPTION_REQUESTS=112
 MAX_EQUITY_REPAIRS=2
 REPAIR_COOLDOWN=timedelta(days=7)
 RETRY=timedelta(hours=4)
+PRODUCTIVE_RETRY=timedelta(minutes=2)
+CHECKED_RETRY=timedelta(hours=24)
 LOCK=RLock()
 STOP=Event()
 WAKE=Event()
@@ -104,6 +106,7 @@ def configure(cfg,confirm):
         state=_state()
         if old!=cfg:
             state["next_due_utc"]=None
+            state["next_due_reason"]="configuration_changed"
             state["target"]=None
             _write("state",state)
     # Transfer the old index-only policy to this one master control.
@@ -139,9 +142,47 @@ def _due(cfg,state,now):
     if state.get("target")!=_target(now):
         return True
     try:
-        return not state.get("next_due_utc") or datetime.fromisoformat(state["next_due_utc"])<=now
+        due=state.get("next_due_utc")
+        # Upgrade an old productive checkpoint without requiring the user
+        # to press Check or wait for its previous four-hour schedule.
+        last=state.get("last_run") or {}
+        if due and not state.get("next_due_reason") and last.get("finished_utc") and last.get("state")=="partial":
+            delay,_=_next_schedule(last)
+            if delay==PRODUCTIVE_RETRY:
+                due=min(datetime.fromisoformat(due),datetime.fromisoformat(last["finished_utc"])+delay).isoformat()
+        return not due or datetime.fromisoformat(due)<=now
     except (ValueError,TypeError):
         return True
+
+def _next_schedule(report):
+    """Only accelerate bounded batches that made progress and have more work.
+    Persistent source errors, unavailable identities and cooldown-only gaps
+    retain normal backoff; never bypass the market or storage guard.
+    """
+    state=report["state"]
+    if state=="checked":
+        return CHECKED_RETRY,"all_authorized_scopes_checked"
+    if state!="partial":
+        return RETRY,"normal_backoff"
+    sources=report.get("sources",{})
+    index=list(sources.get("index",{}).values())
+    equity=[sources[k] for k in ("constituents","bank_panel") if k in sources]
+    option=sources.get("options",{})
+    if any(v.get("state") in ("blocked","paused") for v in [*index,*equity,option]):
+        return RETRY,"source_blocked_or_paused"
+    if (any(v.get("failed_windows",0) or v.get("rejected_receipts",0) or v.get("omitted_receipts",0) for v in index)
+        or any(v.get("batch_errors") or v.get("unavailable_sources",0) or v.get("unresolved")
+               or v.get("batch_status") not in (None,"completed") for v in equity)
+        or option.get("rejected_windows",0) or option.get("unreadable_receipts_encountered",0)):
+        return RETRY,"source_error_backoff"
+    if option.get("new_receipts",0)>0 and option.get("unattempted_requests",0)>0:
+        return PRODUCTIVE_RETRY,"more_option_requests"
+    if any(v.get("repair_dates_attempted",0)>0 and v.get("retryable_member_session_gaps",0)>0 for v in equity):
+        return PRODUCTIVE_RETRY,"more_unattempted_equity_repairs"
+    if any(v.get("downloaded_windows",0)>0 and v.get("uncovered_request_windows",0)>0 for v in index):
+        return PRODUCTIVE_RETRY,"more_index_windows"
+    return RETRY,"no_more_immediately_actionable_work"
+
 
 def status():
     try:
@@ -152,10 +193,11 @@ def status():
         cfg=dict(DEFAULT);state={};error="Maintenance configuration or checkpoint unreadable"
     now=_now()
     return {"version":VERSION,"config":cfg,"last_run":state.get("last_run"),"target":_target(now),
-            "next_due_utc":state.get("next_due_utc"),"batch_id":state.get("batch_id"),
+            "next_due_utc":state.get("next_due_utc"),"next_due_reason":state.get("next_due_reason"),"batch_id":state.get("batch_id"),
             "safe_window":safe_window(now),"worker_running":bool(THREAD and THREAD.is_alive()),
             "due":_due(cfg,state,now),"error":error,
-            "limits":{"option_requests_per_pass":MAX_OPTION_REQUESTS,"equity_repairs_per_instrument":MAX_EQUITY_REPAIRS},
+            "limits":{"option_requests_per_pass":MAX_OPTION_REQUESTS,"equity_repairs_per_instrument":MAX_EQUITY_REPAIRS,
+                      "productive_retry_seconds":int(PRODUCTIVE_RETRY.total_seconds()),"normal_retry_seconds":int(RETRY.total_seconds())},
             "note":"Runs while the backend is open, outside the Indian market recording window. Verified request coverage is not proof of every minute. Global feeds, approved report deliveries and live capture retain their own source permissions. Historical missed ticks/books, unknown membership, unavailable provider history and missing dated weights cannot be fabricated."}
 
 def request_check():
@@ -164,6 +206,7 @@ def request_check():
     with LOCK:
         state=_state()
         state["next_due_utc"]=None
+        state["next_due_reason"]="manual_check_requested"
         _write("state",state)
     WAKE.set()
     return status()
@@ -272,10 +315,10 @@ def _equity_audit(raw,start,stop,index_days,state,now,*,choose_repairs):
             path,_=pq._raw(identity)
             candles=ha._read_file(path,sig["source_sha256"],start,stop,budget)
             gaps=[d for d in days if len(candles.get(d,{}))<mp.MINUTES]
+            eligible=[d for d in gaps if _attempt_allowed(state.get("repairs",{}),identity+"|"+d,now)]
             result[symbol]={"expected_observed_index_sessions":len(days),"complete_sessions":len(days)-len(gaps),
-                            "missing_or_partial_sessions":len(gaps),"example_dates":gaps[:8]}
+                            "missing_or_partial_sessions":len(gaps),"retryable_sessions":len(eligible),"example_dates":gaps[:8]}
             if choose_repairs:
-                eligible=[d for d in gaps if _attempt_allowed(state.get("repairs",{}),identity+"|"+d,now)]
                 if eligible:
                     repairs[identity]=eligible[:MAX_EQUITY_REPAIRS]
         except (OSError,ValueError,TypeError,KeyError,OverflowError):
@@ -339,7 +382,9 @@ def _equity_pass(cfg,state,now,stop,progress,should_stop):
             "batch_id":raw["id"],"documented_through":info["covered_through"],"requested_end_exclusive":stop.isoformat(),
             "actual_end_exclusive":eligible_stop.isoformat(),"unresolved":plan["unresolved"],"batch_status":outcome["status"],
             "batch_counts":outcome["counts"],"observed_member_session_gaps":gaps,"unavailable_sources":unavailable,
-            "members":observed,"repair_dates_attempted":sum(map(len,repairs.values()))}
+            "members":observed,"repair_dates_attempted":sum(map(len,repairs.values())),
+            "retryable_member_session_gaps":sum(x.get("retryable_sessions",0) for x in observed.values()),
+            "batch_errors":bool(outcome["errors"])}
 
 def _panel_pass(cfg,state,now,stop,progress,should_stop):
     """Optional, independently labeled five-bank watchlist.
@@ -390,6 +435,8 @@ def _panel_pass(cfg,state,now,stop,progress,should_stop):
             "batch_id":raw["id"],"symbols":list(PANEL_SYMBOLS),"requested_end_exclusive":desired[1],
             "actual_end_exclusive":desired[1],"observed_member_session_gaps":gaps,"unavailable_sources":unavailable,
             "members":observed,"repair_dates_attempted":sum(map(len,repairs.values())),
+            "retryable_member_session_gaps":sum(x.get("retryable_sessions",0) for x in observed.values()),
+            "batch_status":outcome["status"],"batch_errors":bool(outcome["errors"]),
             "warning":"Fixed research watchlist, not verified BANKNIFTY membership or index attribution."}
 
 
@@ -401,7 +448,7 @@ def run(*,progress=None,now=None):
         state=_state()
     stop,option_end=target_dates(now)
     report={"started_utc":now.isoformat(),"state":"running","sources":{}}
-    state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),last_run=report)
+    state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),next_due_reason="pass_running",last_run=report)
     _save_state(state)
     def should_stop():
         return STOP.is_set() or config()!=cfg or not safe_window(_now()) or not recorder_storage.allow("market_maintenance")
@@ -463,18 +510,20 @@ def run(*,progress=None,now=None):
         states=[v["state"] for k,v in report["sources"].items() if k!="index"]
         states.extend(v["state"] for v in report["sources"].get("index",{}).values())
         report["state"]="paused" if should_stop() else "partial" if not states or any(x!="checked" for x in states) else "checked"
-        if report["state"]=="checked":
-            state["next_due_utc"]=(now+timedelta(hours=24)).isoformat()
         if progress:progress(100,"Automatic maintenance pass saved")
         return report
     finally:
         if report["state"]=="running":report["state"]="interrupted"
-        report["finished_utc"]=_now().isoformat()
+        finished=_now()
+        report["finished_utc"]=finished.isoformat()
+        delay,reason=_next_schedule(report)
+        state["next_due_utc"]=(finished+delay).isoformat()
+        state["next_due_reason"]=reason
         with LOCK:
             # Preserve a concurrently saved request to disable/reconfigure;
             # its new settings take effect at the next safe boundary.
             if config()!=cfg:
-                state["target"]=None;state["next_due_utc"]=None
+                state["target"]=None;state["next_due_utc"]=None;state["next_due_reason"]="configuration_changed"
             state["last_run"]=report
             _save_state(state)
 
