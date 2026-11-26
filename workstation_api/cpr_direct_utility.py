@@ -37,7 +37,7 @@ def execution_features(r,signal,table,strike):
 
 def _timely(result):
     return (result["state"]=="complete" and result.get("exit_delay_minutes",0)<=MAX_DELAY
-            and not result.get("exit_after_squareoff",False))
+            and not result.get("exit_after_squareoff",False) and result.get("reason")!="monitoring_gap_exit")
 
 
 def target(r,ep):
@@ -188,7 +188,7 @@ def _strict(r,rows,dates,capital,budget,*,filtered=False):
 def _gate(metrics):
     return (metrics["scored_trades"]>=MIN_VAL_TRADES
             and metrics["daily_coverage"]["days_with_scored_trade"]>=MIN_VAL_DAYS
-            and not metrics["unresolved_trades"] and not metrics["exits_after_1520"]
+            and not metrics["unresolved_trades"] and not metrics["exits_after_1520"] and not metrics["stress_failed_attempts"]
             and (metrics["max_exit_delay_minutes"] or 0)<=MAX_DELAY
             and metrics["stress_utility_inr"]>0)
 
@@ -221,6 +221,7 @@ def assess(r,*,train,val,pools,nearest,dates,capital,budget,freeze_policy=False)
             trials.append({"threshold":threshold,"eligible":eligible,"scored":metrics["scored_trades"],
                 "days":metrics["daily_coverage"]["days_with_scored_trade"],"conditional_net_inr":metrics["conditional_net_inr"],
                 "stress_utility_inr":metrics["stress_utility_inr"],"unresolved":metrics["unresolved_trades"],
+                "stress_failed_attempts":metrics["stress_failed_attempts"],
                 "max_exit_delay_minutes":metrics["max_exit_delay_minutes"]})
             if eligible:
                 score=(metrics["stress_utility_inr"],threshold)
