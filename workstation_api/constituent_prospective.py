@@ -32,6 +32,29 @@ PROTOCOL={
     "rules":"pressure requires complete weighted basket; volume_pressure additionally requires signed RVOL agreement; EMA-RSI uses existing unmodified baseline on same-session completed observed minute bars",
 }
 PROTOCOL_HASH=sha256(json.dumps(PROTOCOL,sort_keys=True).encode()).hexdigest()
+# Additive protocol: retain original v1 rows and consent hash verbatim.
+EXTRA_HORIZONS=(15,0)
+RECORD_HORIZONS=HORIZONS+EXTRA_HORIZONS
+EXTRA_PROTOCOL={**PROTOCOL,"version":"bank-constituent-paired-extra-v1",
+                "horizons":EXTRA_HORIZONS,
+                "close_target":"15:29:20 IST, first qualified tick within 30s, at least 5 minutes ahead; not official close"}
+EXTRA_PROTOCOL_HASH=sha256(json.dumps(EXTRA_PROTOCOL,sort_keys=True).encode()).hexdigest()
+
+
+def protocol_for(horizon):
+    if horizon in HORIZONS:
+        return PROTOCOL_HASH
+    if horizon in EXTRA_HORIZONS:
+        return EXTRA_PROTOCOL_HASH
+    raise ValueError("Unsupported prospective horizon")
+
+
+def target_for(decided,horizon):
+    if horizon==0:
+        local=_session(decided)
+        return local.replace(hour=15,minute=29,second=20,microsecond=0).astimezone(timezone.utc)
+    return decided+timedelta(minutes=horizon)
+
 STREAM="prospective_bank_signals"
 LOCK=RLock()
 STOP=Event()
@@ -264,12 +287,14 @@ def _record(cutoff):
         if ref is None:
             pressure=volume=ema="UNAVAILABLE"
         rows=[]
-        for h in HORIZONS:
-            target=decided+timedelta(minutes=h)
+        for h in RECORD_HORIZONS:
+            target=target_for(decided,h)
+            if h==0 and target-decided<timedelta(minutes=5):
+                continue
             if not _regular(target+timedelta(seconds=30)) or _session(target).date()!=_session(decided).date():
                 continue
             rows.append(("INDEX:BANKNIFTY",_iso(slot),_session(decided).date().isoformat(),
-                         PROTOCOL_HASH,_iso(cutoff),_iso(decided),_iso(target),h,
+                         protocol_for(h),_iso(cutoff),_iso(decided),_iso(target),h,
                          ref["price"] if ref else None,ref["sha256"] if ref else None,
                          pressure,volume,ema,json.dumps(evidence,allow_nan=False,sort_keys=True),
                          "PENDING" if ref else "UNVERIFIABLE"))
@@ -301,15 +326,15 @@ def _resolve(now):
     with closing(_read()) as db:
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name=? AND type='table'",(TABLE,)).fetchone():
             return 0
-        due=db.execute("""SELECT slot_utc,horizon_minutes,target_utc,reference_price
-           FROM banknifty_paired_signals WHERE protocol_hash=? AND outcome='PENDING' AND target_utc<=?
-           ORDER BY target_utc LIMIT 100""",(PROTOCOL_HASH,_iso(now-timedelta(seconds=90)))).fetchall()
+        due=db.execute("""SELECT slot_utc,horizon_minutes,target_utc,reference_price,protocol_hash
+           FROM banknifty_paired_signals WHERE protocol_hash IN (?,?) AND outcome='PENDING' AND target_utc<=?
+           ORDER BY target_utc LIMIT 100""",(PROTOCOL_HASH,EXTRA_PROTOCOL_HASH,_iso(now-timedelta(seconds=90)))).fetchall()
     if not due:
         return 0
     updates=[]
     # Individual bounded indexed queries prevent an old backlog from locking
     # the source writer. Missing evidence is never repaired using later prices.
-    for slot,horizon,target_text,reference in due:
+    for slot,horizon,target_text,reference,protocol in due:
         target=datetime.fromisoformat(target_text)
         try:
             with closing(_read()) as db:
@@ -317,7 +342,7 @@ def _resolve(now):
         except (OSError,sqlite3.Error,ValueError):
             continue
         outcome="UNVERIFIABLE" if not tick else "UP" if tick["price"]>reference else "DOWN" if tick["price"]<reference else "FLAT"
-        updates.append((outcome,tick["price"] if tick else None,tick["exchange_utc"] if tick else None,tick["received_utc"] if tick else None,tick["sha256"] if tick else None,_iso(now),PROTOCOL_HASH,slot,horizon))
+        updates.append((outcome,tick["price"] if tick else None,tick["exchange_utc"] if tick else None,tick["received_utc"] if tick else None,tick["sha256"] if tick else None,_iso(now),protocol,slot,horizon))
     if not updates or not recorder_storage.allow(STREAM,dropped=0):
         return 0
     with LOCK,closing(sqlite3.connect(path,timeout=.25)) as db:
@@ -378,7 +403,8 @@ def shutdown():
 def status():
     with LOCK:
         return {**STATE,"enabled":enabled(),"worker_running":bool(WORKER and WORKER.is_alive()),
-                "protocol":PROTOCOL,"protocol_sha256":PROTOCOL_HASH,"storage":recorder_storage.status(STREAM),
+                "protocol":PROTOCOL,"protocol_sha256":PROTOCOL_HASH,"extra_protocol":EXTRA_PROTOCOL,
+                "extra_protocol_sha256":EXTRA_PROTOCOL_HASH,"recorded_horizons":list(RECORD_HORIZONS),"storage":recorder_storage.status(STREAM),
                 "orders_enabled":False,"calibrated_probability":None}
 
 
@@ -430,7 +456,7 @@ def _summary(rows):
 
 
 def report(horizon=5,limit=12000):
-    if horizon not in HORIZONS or type(limit) is not int or not 1<=limit<=15000:
+    if horizon not in RECORD_HORIZONS or type(limit) is not int or not 1<=limit<=15000:
         raise ValueError("Select an approved horizon and bounded history limit")
     rows=[]
     if market_inventory._safe_file(shared_market_data.database_path()):
@@ -441,13 +467,13 @@ def report(horizon=5,limit=12000):
                      horizon_minutes,reference_price,pressure,volume_pressure,ema_rsi,outcome,observed_price,
                      observed_exchange_utc,observed_received_utc,reference_sha256,observed_sha256
                      FROM banknifty_paired_signals WHERE protocol_hash=? AND horizon_minutes=?
-                     ORDER BY slot_utc DESC LIMIT ?""",(PROTOCOL_HASH,horizon,limit+1))]
+                     ORDER BY slot_utc DESC LIMIT ?""",(protocol_for(horizon),horizon,limit+1))]
     truncated=len(rows)>limit
     rows=rows[:limit]
     groups={}
     for r in rows:
         groups.setdefault(r["session_ist"],[]).append(r)
     daily=[{"session_ist":day,**_summary(group)} for day,group in sorted(groups.items())]
-    return {"horizon_minutes":horizon,"protocol_sha256":PROTOCOL_HASH,"summary":_summary(rows),
+    return {"horizon_minutes":horizon,"protocol_sha256":protocol_for(horizon),"summary":_summary(rows),
             "days":daily,"latest":rows[:100],"truncated":truncated,
             "note":"Prospective local rule scoreboard, not calibrated probabilities, executable option P&L or verified alpha. Paired accuracy uses identical non-flat observed targets where both methods called. Coverage, missing outcomes and abstentions are reported separately. No retrospective backfill."}
