@@ -808,6 +808,97 @@ try{
    await notebook.getByRole('button',{name:'Export .ipynb',exact:true}).click()
    assert.ok((await saved).suggestedFilename().endsWith('.ipynb'))
  })
+ await step('Dedicated saved-index analytics and bounded market activity charts',async()=>{
+   // Run the actual numerical engine against its explicitly synthetic dataset.
+   const made=await page.request.post(base+'/api/datasets/synthetic')
+   assert.equal(made.status(),200)
+   const jobResponse=await page.request.post(base+'/api/experiments',{data:{dataset_id:'synthetic',name:'CI dedicated analytics — synthetic',factor_weights:{momentum:0.5,low_volatility:0.5},top_n:10,max_weight:0.2}})
+   assert.equal(jobResponse.status(),200,await jobResponse.text())
+   const jobId=(await jobResponse.json()).job_id
+   let job
+   const deadline=Date.now()+180000
+   do{
+     const status=await page.request.get(base+'/api/jobs/'+encodeURIComponent(jobId))
+     assert.equal(status.status(),200)
+     job=await status.json()
+     if(job.status==='complete'||job.status==='error')break
+     await new Promise(resolve=>setTimeout(resolve,500))
+   }while(Date.now()<deadline)
+   assert.equal(job.status,'complete',JSON.stringify(job))
+   assert.equal(typeof job.result,'string')
+   const runId=job.result
+   const detail=await page.request.get(base+'/api/runs/'+encodeURIComponent(runId))
+   assert.equal(detail.status(),200)
+   const saved=await detail.json()
+   assert.ok(saved.rolling.length>0&&saved.rank_ic.length>0)
+   assert.ok(saved.sector_exposure.length>0&&saved.methodology_returns.length>0)
+   await page.goto(base+'#/factors',{waitUntil:'domcontentloaded'})
+   await page.reload({waitUntil:'domcontentloaded'})
+   const analyticsRoutes=[
+     ['factors','Factor diagnostics analytics'],
+     ['construction','Portfolio composition analytics'],
+     ['risk','Risk and concentration analytics'],
+     ['rolling','Rolling validation analytics'],
+     ['robustness','Parameter stability analytics'],
+     ['comparisons','Methodology comparison analytics'],
+     ['visual','Historical validation analytics']
+   ]
+   for(const [width,height] of [[1440,900],[390,844]]){
+     await page.setViewportSize({width,height})
+     for(const [route,label] of analyticsRoutes){
+       await page.goto(base+'#/'+route,{waitUntil:'domcontentloaded'})
+       const selector=page.getByRole('combobox',{name:'Select completed experiment'})
+       await selector.waitFor()
+       await selector.selectOption(runId)
+       const pane=page.getByRole('region',{name:label,exact:true})
+       await pane.waitFor()
+       await pane.locator('.ql-chart-card').first().waitFor()
+       assert.match(await pane.innerText(),/Synthetic demonstration/)
+       if(route==='rolling'){
+         await pane.getByRole('combobox',{name:'Rolling relative metrics metric'}).selectOption('rolling_tracking_error')
+         await pane.getByRole('heading',{name:'Rolling relative metrics · Annualized tracking error',exact:true}).waitFor()
+         const evidence=pane.locator('details.sia-table').filter({hasText:'Rolling relative metrics evidence'})
+         await evidence.locator('summary').click()
+         await evidence.getByRole('table',{name:'Rolling relative metrics evidence'}).waitFor()
+         await evidence.getByRole('button',{name:'Next',exact:true}).click()
+         await evidence.getByText(/Page 2 of/).waitFor()
+       }
+       if(route==='robustness'){
+         await pane.getByRole('combobox',{name:'Robustness metric'}).selectOption('strategy_cagr')
+         await pane.getByRole('button',{name:'Show 3D surface'}).click()
+         await pane.getByRole('img',{name:/Interactive 3D surface: Executed grid surface/}).waitFor()
+       }
+       const dimensions=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth}))
+       assert.ok(dimensions.scroll<=dimensions.width+2,'Saved-run '+route+' overflow at '+width)
+       await shot('analytics-'+width+'-'+route)
+     }
+   }
+   await page.setViewportSize({width:1440,height:900})
+   // Explicit UI-only fixture: canonical-store SQL is verified separately in
+   // test_market_inventory.py. No simulated packet is written to Dhan storage.
+   await page.route('**/api/data-manager/inventory/activity?*',route=>{
+     const q=new URL(route.request().url()).searchParams
+     assert.equal(q.get('source'),'option_quote')
+     return route.fulfill({json:{source:'option_quote',label:'Live option quotes',unit:'quote packets',
+       time_basis:'Receipt time (UTC)',start:q.get('start'),end:q.get('end'),checked_utc:'2026-11-25T12:00:00Z',
+       state:'stored',detail:'SYNTHETIC UI FIXTURE',note:'Synthetic UI fixture; zero is not a missing trading session.',
+       rows:[{date:'2026-11-23',count:3,instruments:2},{date:'2026-11-24',count:0,instruments:0},{date:'2026-11-25',count:1,instruments:1}]}})
+   })
+   try{
+     await page.goto(base+'#/data',{waitUntil:'domcontentloaded'})
+     const activity=page.getByRole('region',{name:'Market data coverage and activity charts'})
+     await activity.waitFor({timeout:30000})
+     await activity.getByRole('combobox',{name:'Recording activity source'}).selectOption('option_quote')
+     await activity.getByLabel('Recording activity start',{exact:true}).fill('2026-11-23')
+     await activity.getByLabel('Recording activity end',{exact:true}).fill('2026-11-25')
+     await activity.getByRole('button',{name:'Inspect recording activity'}).click()
+     await activity.getByRole('heading',{name:'Live option quotes · daily stored records'}).waitFor()
+     await activity.getByRole('heading',{name:'Live option quotes · daily instrument coverage'}).waitFor()
+     await activity.getByRole('group',{name:'Stored calendar day activity'}).waitFor()
+     assert.match(await activity.innerText(),/2 \/ 3/)
+     await shot('data-calendar-activity')
+   }finally{await page.unroute('**/api/data-manager/inventory/activity?*')}
+ })
  await step('390-pixel responsive sidebar drawer and eight navigable pages',async()=>{
    await page.setViewportSize({width:390,height:844})
    await page.getByRole('button',{name:'Open navigation'}).click()

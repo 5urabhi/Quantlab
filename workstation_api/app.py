@@ -4735,3 +4735,10 @@ def unified_market_inventory_records(source: str, identity: str, qualifier: str 
         return market_inventory.records(source, identity, qualifier, before, limit)
     except ValueError as exc:
         raise HTTPException(400,str(exc)) from exc
+
+@app.get("/api/data-manager/inventory/activity")
+def unified_market_activity(source: str, start: str, end: str):
+    try:
+        return market_inventory.daily_activity(source,start,end)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc

@@ -9,6 +9,7 @@ import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './trading-cockpit.css'
 import LiveFeedPanel from './LiveFeedPanel'
 import TradingAcceptancePanel from './TradingAcceptancePanel'
+import {ManualTradeCharts,PredictionCharts} from './TradeJournalCharts'
 import type {OptionContract} from './OptionChainLive'
 
 type Entry = {id:string;created_utc:string;identity:string;bar_utc:string;direction:string;reference_close:number;horizon_minutes:number;quote_mode:string;evaluation:string;observed_close:number|null;actual_direction:string|null}
@@ -28,7 +29,7 @@ type LiveHeaderState = {
   quotes?:Record<string,{received_utc:string;fresh:boolean;price:number}>;
 }
 type ManualTrade = {id:string;symbol:string;direction:'CALL'|'PUT';quantity:number;entry_price:number;entry_recorded_utc:string;exit_price:number|null;exit_recorded_utc:string|null;holding_seconds:number;holding_rule_exceeded:boolean;gross_notional_inr:number;net_pnl_inr:number|null;status:'OPEN'|'CLOSED';data_quality:string}
-type TradeJournal = {trades:ManualTrade[];summary:{open:number;closed:number;closed_net_pnl_inr:number;holding_violations:number;days:{exit_session_ist:string;closed:number;net_pnl_inr:number;over_6_min:number}[]};disclaimer:string}
+type TradeJournal = {trades:ManualTrade[];summary:{open:number;closed:number;closed_net_pnl_inr:number;holding_violations:number;limited_to_recent?:boolean;days:{exit_session_ist:string;closed:number;net_pnl_inr:number;over_6_min:number}[]};disclaimer:string}
 
 const api = marketApi
 const fmt=(v:number|null|undefined,digits=2)=>v===null||v===undefined?'—':v.toLocaleString('en-IN',{maximumFractionDigits:digits})
@@ -440,7 +441,7 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
       </form>
       <p className="tc-muted">A verified exact Dhan identity links the user-entered fill to Advanced Analytics → Manual trading workflow → Positions &amp; exits. Unlinked records remain in the journal without invented market marks.</p>
       <div className="tc-ledger-summary"><span>Open positions <strong>{journal?.summary.open??0}</strong></span><span>Closed trades <strong>{journal?.summary.closed??0}</strong></span><span>Net realized from entered fills <strong>₹{fmt(journal?.summary.closed_net_pnl_inr)}</strong></span></div>
-      <details className="tc-optional-hold-metrics"><summary>Optional six-minute review statistics</summary>
+      {journal&&<ManualTradeCharts days={journal.summary.days} limited={Boolean(journal.summary.limited_to_recent)}/>}<details className="tc-optional-hold-metrics"><summary>Optional six-minute review statistics</summary>
         <p className="tc-muted">Historical timing metadata only. This is not a fixed exit rule or trade limit.</p>
         <strong>{journal?.summary.holding_violations??0}</strong> manually recorded trades exceeded six minutes.
       </details>
@@ -478,7 +479,7 @@ export default function TradingCockpit({selectedView,focusLive,integrated=false,
       <p className="tc-muted">Directional accuracy excludes no-trade decisions, flat moves and unverifiable source gaps. No historical option P&L is inferred from spot candles.</p>
       <div className="tc-report-title"><h3>End-of-day accuracy · prospective ledger only</h3><span className="tc-muted">No option trade P&amp;L or validated alpha</span></div>
       <div className="tc-ledger-summary"><span>Logged decisions <strong>{journalReport?.overall.total??0}</strong></span><span>Direction score <strong>{journalReport?.overall.directional_accuracy===null||journalReport?.overall.directional_accuracy===undefined?'—':(journalReport.overall.directional_accuracy*100).toFixed(1)+'%'}</strong></span><span>Pending <strong>{journalReport?.overall.pending??0}</strong></span><span>Source gaps <strong>{journalReport?.overall.unverifiable??0}</strong></span></div>
-      <div className="tc-table-scroll"><table><thead><tr><th>Session IST</th><th>Calls</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Pending</th><th>Gaps</th><th>Accuracy</th></tr></thead><tbody>{journalReport?.days.map(day=><tr key={day.session_ist}><td>{day.session_ist}</td><td>{day.total}</td><td>{day.scored}</td><td>{day.correct}</td><td>{day.incorrect}</td><td>{day.no_trade}</td><td>{day.pending}</td><td>{day.unverifiable}</td><td>{day.directional_accuracy===null?'—':(day.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}{!journalReport?.days.length&&<tr><td colSpan={9}>No prospective logged decisions yet.</td></tr>}</tbody></table></div>
+      {journalReport&&<PredictionCharts days={journalReport.days} truncated={journalReport.truncated}/>}<div className="tc-table-scroll"><table><thead><tr><th>Session IST</th><th>Calls</th><th>Scored</th><th>Correct</th><th>Incorrect</th><th>No trade</th><th>Pending</th><th>Gaps</th><th>Accuracy</th></tr></thead><tbody>{journalReport?.days.map(day=><tr key={day.session_ist}><td>{day.session_ist}</td><td>{day.total}</td><td>{day.scored}</td><td>{day.correct}</td><td>{day.incorrect}</td><td>{day.no_trade}</td><td>{day.pending}</td><td>{day.unverifiable}</td><td>{day.directional_accuracy===null?'—':(day.directional_accuracy*100).toFixed(1)+'%'}</td></tr>)}{!journalReport?.days.length&&<tr><td colSpan={9}>No prospective logged decisions yet.</td></tr>}</tbody></table></div>
       <div className="tc-table-scroll"><table><thead><tr><th>Recorded UTC</th><th>Source bar UTC</th><th>Signal</th><th>Horizon</th><th>Reference</th><th>Observed</th><th>Outcome</th></tr></thead><tbody>{journalHistory?.predictions.map(x=><tr key={x.id}><td>{x.created_utc.slice(0,19)}</td><td>{x.bar_utc.slice(0,19)}</td><td>{x.direction}</td><td>{x.horizon_minutes}m</td><td>{fmt(x.reference_close)}</td><td>{fmt(x.observed_close)}</td><td>{x.evaluation.replaceAll('_',' ')}</td></tr>)}{!journalHistory?.predictions.length&&<tr><td colSpan={7}>No prospective predictions logged for this instrument yet.</td></tr>}</tbody></table></div>
     </section>
       </>}

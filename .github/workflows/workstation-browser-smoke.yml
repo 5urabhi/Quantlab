@@ -85,6 +85,10 @@ jobs:
         if: ${{ !cancelled() && steps.local_services.outcome == 'success' }}
         run: node tests/browser-smoke-v2.mjs
 
+      - name: Exercise journal charts and saved strategy library
+        if: ${{ !cancelled() && steps.local_services.outcome == 'success' }}
+        run: node tests/browser-journal-strategies.mjs
+
       - name: Validate source-labeled demo recorder
         run: node --check scripts/record_quantlab_demo.mjs
 
