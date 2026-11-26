@@ -333,9 +333,13 @@ def _forced(step, *, stop, stop_mark=STOP):
     return None
 
 
-def _exit(ep, policy, q=None, *, stop_mark=STOP):
+def _exit(ep, policy, q=None, *, stop_mark=STOP,context_scope=None):
     if ep["state"]!="entered":
         return {"state":ep["state"]}
+    context=None
+    if context_scope is not None:
+        from .cpr_context_features import context_state
+        context=context_state(ep,context_scope)
     low=high=None
     drawdown=0.
     floor=None
@@ -363,7 +367,8 @@ def _exit(ep, policy, q=None, *, stop_mark=STOP):
         if reason is None and floor is not None and mark<=floor+1e-12:
             reason="trailing_stop"
         if reason is None and policy=="offline_q":
-            values=(q or {}).get(_key(step))
+            key=_key(step) if context_scope is None else _key(step)+(context,)
+            values=(q or {}).get(key) if context_scope is None or context is not None else None
             # Unknown or tied states use the fixed target/stop baseline.
             if values is not None and values[0]>values[1]:
                 reason="learned_exit"
@@ -405,7 +410,7 @@ def _training_rows(episodes):
     return out
 
 
-def _fit_q(episodes, *, sweeps=20, stop_mark=STOP):
+def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
     """Batch fitted tabular Q iteration on earlier, fully observed paths.
 
     Reward is terminal net return. Hold reward is zero. Finite horizon and
@@ -416,6 +421,14 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP):
     for ep in episodes:
         if ep["state"]!="entered" or not _full_path(ep):
             continue
+        context=None
+        if context_scope is not None:
+            from .cpr_context_features import context_state
+            context=context_state(ep,context_scope)
+            if context is None:
+                continue
+        def key_for(step):
+            return _key(step) if context_scope is None else _key(step)+(context,)
         # Value of following the fixed rule from each next state, used when
         # the learned state has insufficient support.
         fallback={}
@@ -429,8 +442,8 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP):
             if _forced(step,stop=True,stop_mark=stop_mark):
                 break
             nxt=ep["path"][i+1]
-            transitions[_key(step)].append((ep["session"],ep["minute"],ep.get("strike"),
-                step["exit_net"]/ep["debit"],_key(nxt),
+            transitions[key_for(step)].append((ep["session"],ep["minute"],ep.get("strike"),
+                step["exit_net"]/ep["debit"],key_for(nxt),
                 fallback[i+1],bool(_forced(nxt,stop=True,stop_mark=stop_mark))))
     supported={k:v for k,v in transitions.items()
                if len({(x[0],x[1]) for x in v})>=MIN_STATE_EPISODES
@@ -454,7 +467,7 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP):
         q=new
     return q,{"supported_states":len(q),"observed_states":len(transitions),
               "training_transitions":sum(len(v) for v in transitions.values()),
-              "sweeps":sweeps,"stop_mark":stop_mark,
+              "sweeps":sweeps,"stop_mark":stop_mark,"entry_context_scope":context_scope,
               "supported_unique_anchors":len({(x[0],x[1]) for rows in supported.values() for x in rows})}
 
 
@@ -532,7 +545,7 @@ def _ml_accept(model,means,ep):
     return float(pr["target"])>=getattr(model,"target_threshold",.50) and ev>0
 
 
-def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None,dates=None,max_attempts=MAX_DAILY_ATTEMPTS,context_filter=None):
+def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None,dates=None,max_attempts=MAX_DAILY_ATTEMPTS,context_filter=None,context_scope=None):
     balance=capital; peak=capital;dd=0.;gross_losses=0.;day=None;halted=False
     daily=defaultdict(lambda:{"conditional_net_inr":0.,"scored":0,"unresolved":0})
     counts=Counter();journal=[];net=0.;charges=0.;winners=0;targets=0
@@ -576,10 +589,11 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             if ep["state"]=="entered" and ep["funding"]>min(balance,risk_budget-gross_losses):
                 result={"state":"entry_limit_exceeded"}
             else:
-                learned=method in ("offline_q","ml_offline_q","offline_q_emergency_stop")
+                learned=method in ("offline_q","ml_offline_q","offline_q_emergency_stop","contextual_q")
                 wide=method in ("fixed_emergency_stop","offline_q_emergency_stop","trailing_emergency_stop")
                 policy="offline_q" if learned else "volatility_trailing" if method=="volatility_trailing_stop" else "trailing" if method in ("trailing_stop","trailing_emergency_stop","ml_trailing_stop") else method if method=="no_stop" else "fixed_stop"
-                result=_exit(ep,policy,q,stop_mark=EMERGENCY_STOP if wide else STOP)
+                result=_exit(ep,policy,q,stop_mark=EMERGENCY_STOP if wide else STOP,
+                             context_scope=context_scope if method=="contextual_q" else None)
         state=result["state"]
         counts[state]+=1
         coverage["states"][state]=coverage["states"].get(state,0)+1
@@ -611,7 +625,9 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
                         "qualified_contracts":ep.get("qualified_contracts"),
                         "ranked_expected_return":ep.get("ranked_expected_return"),
                         "ranked_target_probability":ep.get("ranked_target_probability"),
-                        "ranked_candidate_count":ep.get("ranked_candidate_count"),**result})
+                        "ranked_candidate_count":ep.get("ranked_candidate_count"),
+                        "candle_pattern_types":ep.get("candle_pattern_types"),
+                        "candle_direction_5m":ep.get("candle_direction_5m"),**result})
     scored=counts["complete"]
     unresolved=counts["missing_entry"]+counts["exit_censored"]
     return {"states":dict(counts),"signals":len(episodes),"scored_trades":scored,
@@ -638,7 +654,7 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
 def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
         context_mode="off",context_batch="auto",rank_entries=False,
-        pattern_research=False,fixed_panel=False,progress=None):
+        pattern_research=False,fixed_panel=False,context_q=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
@@ -717,7 +733,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "squareoff_ist":"15:20","last_retry_ist":"15:29","entry_mode":entry_mode,"scan_interval_minutes":SCAN_MINUTES,
              "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,
              "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,
-             "pattern_research":pattern_research,"fixed_panel":fixed_panel,"full_premium_and_fee_budget_inr":risk_budget,
+             "pattern_research":pattern_research,"fixed_panel":fixed_panel,"context_q":context_q,"full_premium_and_fee_budget_inr":risk_budget,
              "historical_lot_size_assumed":lot_size,"max_lots":max_lots,"strike_wings":wings,
              "primary_adverse_penalty_bps_per_side":bps,"target_net_return":TARGET,"fixed_stop_mark":STOP,
              "experimental_emergency_stop_mark":EMERGENCY_STOP,"max_learning_strikes_per_anchor":MAX_LEARNING_STRIKES,
@@ -768,7 +784,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
                 train=broad_train,val=broad_val,test=test,dates=(splits[1],splits[2]),
                 hold=hold,lot_size=lot_size,bps=bps,capital=capital,risk_budget=risk_budget,
                 context_audit=context_audit,q=q,pattern_research=pattern_research,
-                fixed_panel=fixed_panel,progress=progress)
+                fixed_panel=fixed_panel,context_q=context_q,progress=progress)
             report["ranked_entry_research"]=ranked_results
             journal.extend(ranked_rows)
     else:
