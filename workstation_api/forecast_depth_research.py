@@ -126,10 +126,17 @@ def run(*,horizon=15,capital=17000.,max_loss=4250.,max_lots=3,slippage_bps=0.,
          "Model fitting is retrospective on original recorded features and later outcomes. Selection uses only books and chain known at the decision. "
          "Partial/unobserved entry or exit halts that session; conditional account results omit unresolved losses. No live promotion."}
     if len(dates)==status["required_sessions"] and a._supported(train,60,20,train=True) and a._supported(cal,20,7) and a._supported(test,40,12):
-        moves=_moves(train);models=a.MODELS;predictions={}
+        from . import alpha_model_registry as registry
+        moves=_moves(train);models=a.MODELS;predictions={};versions={}
         for name in models:
             fit=a._fit(name,train)
-            predictions[name]=a._temperature(a._predict(fit,test),a._calibrate(a._predict(fit,cal),cal))
+            temp=a._calibrate(a._predict(fit,cal),cal)
+            predictions[name]=a._temperature(a._predict(fit,test),temp)
+            if name.endswith("logistic"):
+                try:
+                    versions[name]={"state":"frozen","model_id":registry.freeze(name,fit,temp,train,cal,test,source="prospective",policy=a.policy_for(horizon),horizon=horizon,dates=[status[k] for k in ("training_dates","calibration_dates","holdout_dates")])}
+                except (ValueError,OSError,TypeError):
+                    versions[name]={"state":"registry_unavailable"}
         accounts={name:{"cash":capital,"day":None,"gross_losses":0.,"halt":False,"counts":Counter(),"pnl":[],"fees":0.} for name in models}
         cfg={"capital":capital,"max_loss":max_loss,"hold_seconds":60*horizon,"max_lots":max_lots,
              "broker_profile":"zerodha","slippage_bps":slippage_bps,"target_net":100.}
@@ -175,7 +182,7 @@ def run(*,horizon=15,capital=17000.,max_loss=4250.,max_lots=3,slippage_bps=0.,
                 "full_account_pnl_certified":False}
         out["methods"]["no_trade"]={"states":{"no_trade":len(test)},"scored_trades":0,"eligible_windows":len(test),
             "conditional_net_inr":0.,"conditional_fees_inr":0.,"conditional_end_balance_inr":capital,"full_account_pnl_certified":False}
-        out.update(state="conditional_depth_assessment_available",run_id=a._save(records))
+        out.update(state="conditional_depth_assessment_available",model_versions=versions,run_id=a._save(records))
     out["audit_id"]=a._save([{"day":"RUN_SUMMARY","evidence_json":json.dumps(out,sort_keys=True,allow_nan=False)}],audit=True)
     if progress:progress(100,"Forecast-depth evidence saved")
     return out
