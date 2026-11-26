@@ -842,7 +842,7 @@ function App(){
           onWorkspace={()=>begin('workspace')}
           onData={()=>begin('data')}
           onReports={()=>begin('reports')}/>}
-        {(['factors','construction','comparisons','rolling','risk','robustness','visual'] as Tab[]).includes(tab)&&withRun(detail?<>
+        {(['factors','construction','comparisons','rolling','risk','robustness','visual'] as Tab[]).includes(tab)&&withRun(detail&&detail.id===selectedRun?<>
           {tab==='visual'&&<Card title="Cumulative strategy / benchmark path" extra={classification}>{chart}</Card>}
           <SavedIndexAnalytics key={tab+':'+detail.id} route={tab as 'factors'|'construction'|'comparisons'|'rolling'|'risk'|'robustness'|'visual'} detail={detail}/>
         </>:<Empty title="Loading selected saved run">Select a completed index research experiment.</Empty>)}
