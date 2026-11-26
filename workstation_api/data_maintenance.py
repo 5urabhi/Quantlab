@@ -347,7 +347,7 @@ def run(*,progress=None,now=None):
     state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),last_run=report)
     _save_state(state)
     def should_stop():
-        return STOP.is_set() or not enabled() or not safe_window(_now()) or not recorder_storage.allow("market_maintenance")
+        return STOP.is_set() or config()!=cfg or not safe_window(_now()) or not recorder_storage.allow("market_maintenance")
     try:
         if progress:progress(1,"Checking Dhan connection and shared storage")
         if should_stop():
