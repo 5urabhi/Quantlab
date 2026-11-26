@@ -59,7 +59,7 @@ try{
     await repair.getByRole('button',{name:'Download missing expired-option history'}).waitFor({timeout:30000})
     assert.equal(await repair.getByRole('button',{name:'Download missing expired-option history'}).isDisabled(),true,'Provider acquisition requires explicit consent')
     await page.screenshot({path:path.join(dir,mode+'-banknifty-data-repair.png'),fullPage:false})
-    await inventory.getByRole('button',{name:'Close data repair'}).click()
+    await inventory.getByRole('button',{name:'Close manual repair'}).click()
     await repair.waitFor({state:'hidden'})
     await page.goto(base+'#/overview',{waitUntil:'domcontentloaded'})
     const home=page.getByRole('region',{name:'Workstation operations overview'})
