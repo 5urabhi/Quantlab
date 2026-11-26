@@ -31,7 +31,7 @@ def check_files(folder: Path, expected: set[str]):
             raise RuntimeError(f"Missing/empty research artifact: {path}")
 
 
-def run_complete_acceptance(include_streamlit: bool=False,include_legacy: bool=False):
+def run_complete_acceptance(include_legacy: bool=False):
     with tempfile.TemporaryDirectory(prefix="equity_quant_acceptance_") as tmp:
         root=Path(tmp)
         inputs=root/"inputs"
@@ -71,46 +71,6 @@ def run_complete_acceptance(include_streamlit: bool=False,include_legacy: bool=F
                 raise RuntimeError("Research bundle missing outputs")
         print("PASS: synthetic factor experiment, as-of sectors, holdout, artifacts, PDF and ZIP")
 
-        if include_streamlit:
-            from streamlit.testing.v1 import AppTest
-            pages=[
-                "dashboard/app.py",
-                "dashboard/pages/1_Index_Research.py",
-                "dashboard/pages/2_Model_Comparison.py",
-                "dashboard/pages/3_Advanced_Mathematics.py",
-                "dashboard/pages/4_Rolling_Validation.py",
-                "dashboard/pages/5_Quantitative_Models.py",
-                "dashboard/pages/6_Factor_Laboratory.py",
-                "dashboard/pages/7_Index_Comparisons.py",
-                "dashboard/pages/8_Research_Report.py",
-                "dashboard/pages/9_Risk_Attribution.py",
-                "dashboard/pages/9_Robustness.py",
-                "dashboard/pages/10_Visual_Validation.py",
-                "dashboard/pages/11_Run_History.py",
-                "dashboard/pages/12_Dhan_Data_Setup.py",
-                "dashboard/pages/13_Empirical_Readiness.py",
-            ]
-            for name in pages:
-                app=AppTest.from_file(str(ROOT/name),default_timeout=60).run()
-                if app.exception:
-                    raise RuntimeError(f"Streamlit startup failure in {name}: {list(app.exception)}")
-                print("PASS: Streamlit page can render initially:",name)
-            # End-to-end UI interaction: switch on synthetic data and run the index page.
-            app=AppTest.from_file(str(ROOT/"dashboard/pages/1_Index_Research.py"),
-                                  default_timeout=120)
-            app.run()
-            if not app.toggle:
-                raise RuntimeError("Missing synthetic toggle on Index Research page")
-            app.toggle[0].set_value(True)
-            app.run()
-            if not app.button:
-                raise RuntimeError("Missing research run button")
-            app.button[0].click()
-            app.run()
-            if app.exception or app.error:
-                raise RuntimeError(f"End-to-end Streamlit run failed: {list(app.exception)} / {list(app.error)}")
-            print("PASS: Streamlit synthetic index experiment UI interaction")
-
         if include_legacy:
             inputs_legacy=root/"legacy"
             outputs_legacy=root/"legacy_result"
@@ -125,7 +85,7 @@ def run_complete_acceptance(include_streamlit: bool=False,include_legacy: bool=F
 
 
 def _build_react() -> None:
-    """Build the CURRENT React/Vite interface, not the archived Streamlit UI."""
+    """Build the current React/Vite interface."""
     completed = subprocess.run(
         ["npm", "run", "build"], cwd=ROOT, check=False, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -164,8 +124,6 @@ def _doctor(data_dir: str, config: str) -> str:
 def main(argv=None):
     parser=argparse.ArgumentParser(
         description="QuantLab current React/FastAPI software acceptance plus source-aware doctor")
-    parser.add_argument("--legacy-streamlit", action="store_true",
-                        help="Also run archived Streamlit checks (not the current UI)")
     parser.add_argument("--skip-ui", action="store_true",
                         help="Deprecated compatibility switch: legacy UI is skipped by default")
     parser.add_argument("--include-legacy", action="store_true",
@@ -179,10 +137,7 @@ def main(argv=None):
     parser.add_argument("--config", default="config/research_multifactor.json",
                         help="Research configuration for the source doctor")
     args=parser.parse_args(argv)
-    if args.legacy_streamlit and args.skip_ui:
-        parser.error("--legacy-streamlit and --skip-ui cannot be used together")
-    run_complete_acceptance(include_streamlit=args.legacy_streamlit,
-                            include_legacy=args.include_legacy)
+    run_complete_acceptance(include_legacy=args.include_legacy)
     if not args.skip_build:
         _build_react()
     if not args.skip_doctor:
