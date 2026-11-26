@@ -184,3 +184,43 @@ class CprHybridTests(TestCase):
         self.assertGreater(len(grid),1)
         self.assertTrue(all(x["entry_type"]=="scheduled_continuation" for x in grid))
         self.assertTrue(all(b["minute"]-a["minute"]>=63 for a,b in zip(grid,grid[1:])))
+
+    def test_trailing_activates_and_ratchets_only_on_observed_marks(self):
+        ep=episode(DAY,[step(0,.02,20),step(1,.005,5),step(2,.04,40),
+                        step(3,.08,80),step(4,.06,60),step(5,.049,35),
+                        step(6,.12,120,True)])
+        result=r._exit(ep,"trailing")
+        self.assertEqual(result["reason"],"trailing_stop")
+        self.assertAlmostEqual(result["trailing_floor_return"],.05)
+        self.assertEqual(result["net"],35)
+        self.assertAlmostEqual(result["max_observed_mark_return"],.08)
+        self.assertEqual(r._exit(ep,"fixed_stop")["reason"],"target")
+
+    def test_trailing_preserves_initial_stop_and_target(self):
+        early_loss=episode(DAY,[step(0,-.06,-65),step(1,.12,120,True)])
+        self.assertEqual(r._exit(early_loss,"trailing")["reason"],"stop")
+        self.assertEqual(r._exit(early_loss,"trailing",stop_mark=r.EMERGENCY_STOP)["reason"],"target")
+        target=episode(DAY,[step(0,.04,40),step(1,.11,105,True)])
+        self.assertEqual(r._exit(target,"trailing")["reason"],"target")
+
+    def test_trailing_missing_fill_is_censored(self):
+        ep=episode(DAY,[step(0,.06,60),step(1,.02,None),step(2,.12,120,True)])
+        result=r._exit(ep,"trailing")
+        self.assertEqual(result["state"],"exit_censored")
+        self.assertEqual(result["trigger"],"trailing_stop")
+        self.assertAlmostEqual(result["max_observed_peak_to_mark_drawdown"],.04)
+
+    def test_report_open_loss_despite_profitable_close(self):
+        ep=episode(DAY,[step(0,-.12,-120),step(1,.12,110,True)])
+        metrics,_=r._evaluate([ep],method="no_stop",capital=17000,risk_budget=4250)
+        self.assertAlmostEqual(metrics["worst_observed_mark_return"],-.12)
+        self.assertEqual(metrics["max_within_day_closed_drawdown_inr"],0)
+        self.assertEqual(metrics["conditional_net_inr"],110)
+
+    def test_trailing_comparators_match_initial_risk_and_report_reasons(self):
+        ep=episode(DAY,[step(0,-.08,-85),step(1,.06,60),step(2,.02,10),step(3,.12,120,True)])
+        narrow,_=r._evaluate([ep],method="trailing_stop",capital=17000,risk_budget=4250)
+        wide,_=r._evaluate([ep],method="trailing_emergency_stop",capital=17000,risk_budget=4250)
+        self.assertEqual(narrow["exit_reasons"],{"stop":1})
+        self.assertEqual(wide["exit_reasons"],{"trailing_stop":1})
+        self.assertEqual(wide["conditional_net_inr"],10)
