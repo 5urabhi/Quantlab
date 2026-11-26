@@ -7,6 +7,7 @@ Neither path calls a provider or synthesizes missing factors.
 from collections import Counter
 from contextlib import closing
 from datetime import date, datetime, timedelta
+import csv
 import math
 import sqlite3
 
@@ -53,6 +54,10 @@ def _load_banks(start,stop,batch_id):
         return {},[],None,None,meta
     meta["membership_sha256"]=raw["historical_index"]["intervals_sha256"]
     meta["state"]="loaded"
+    # Respect the manifest range and its pinned membership coverage boundary.
+    through=raw["historical_index"].get("covered_through")
+    if isinstance(through,str):
+        right=min(right,date.fromisoformat(through)+timedelta(days=1))
     stocks={};budget=[h.MAX_TOTAL]
     for symbol,identity in sorted(resolved.items()):
         try:
@@ -64,7 +69,7 @@ def _load_banks(start,stop,batch_id):
             stocks[symbol]=h._read_file(file,digest,max(left,start-timedelta(days=35)),
                                         min(stop,right),budget)
             meta["source_hashes"][symbol]=digest
-        except (ValueError,OSError,TypeError,KeyError,OverflowError) as exc:
+        except (ValueError,OSError,TypeError,KeyError,OverflowError,csv.Error) as exc:
             meta["failures"][symbol]=type(exc).__name__
     return stocks,intervals,left,right,meta
 
