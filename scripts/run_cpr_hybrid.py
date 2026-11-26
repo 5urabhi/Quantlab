@@ -17,6 +17,10 @@ def main():
     parser.add_argument("--to-date",default=today.isoformat(),help="End exclusive; completed sessions only")
     parser.add_argument("--entry-mode",choices=research.ENTRY_MODES,default="crossover",
                         help="Original crossover baseline or daily scheduled CPR/EMA opportunity scan")
+    parser.add_argument("--context-mode",choices=("off","receipt","archive"),default="off",
+                        help="Receipt-as-of context, or explicitly reviewed historical archive availability")
+    parser.add_argument("--context-batch",default="auto",help="Dated BANKNIFTY membership batch ID; auto selects by date overlap")
+    parser.add_argument("--rank-entries",action="store_true",help="Compare validation-calibrated probability and affordable contract ranking")
     parser.add_argument("--frame",type=int,choices=research.FRAMES,default=5)
     parser.add_argument("--hold",type=int,choices=research.HOLDS,default=60)
     parser.add_argument("--capital",type=float,default=17000)
@@ -30,6 +34,7 @@ def main():
     try:
         report,journal,sources=research.run(from_date=a.from_date,to_date=a.to_date,
             frame=a.frame,hold=a.hold,capital=a.capital,risk_budget=a.risk_budget,entry_mode=a.entry_mode,
+            context_mode=a.context_mode,context_batch=a.context_batch,rank_entries=a.rank_entries,
             lot_size=a.lot_size,max_lots=a.max_lots,wings=a.wings,premium_penalty_bps=a.penalty_bps,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
@@ -55,6 +60,8 @@ def main():
     print("Episode states:",report["episode_states"])
     print("Account-constrained split support:",json.dumps(report["split_support"]))
     print("Capital-independent learning support:",json.dumps(report["learning_support"]))
+    context=report["context_coverage"]
+    print("Context coverage:",json.dumps({k:v for k,v in context.items() if k not in ("bank_feature_names","global_feature_names","factor_receipt_sha256","warning")}))
     if "ml" in report:
         print("ML:",json.dumps(report["ml"]))
         print("ML holdout:",json.dumps(report["ml_holdout"]))
@@ -65,6 +72,17 @@ def main():
         if "daily_coverage" in result:
             summary["daily_coverage"]={k:v for k,v in result["daily_coverage"].items() if k!="by_session"}
         print(name,json.dumps(summary))
+    for scope,item in report["ranked_entry_research"].items():
+        print("Ranked scope:",scope,json.dumps({k:v for k,v in item.items() if k not in ("methods","models")}))
+        for name,info in item["models"].items():
+            print("Ranked model:",name,json.dumps({k:v for k,v in info.items() if k not in ("gate",)}))
+            if "gate" in info:
+                print("Development gate:",json.dumps(info["gate"]))
+        for name,result in item["methods"].items():
+            summary={k:v for k,v in result.items() if k not in ("daily","daily_coverage")}
+            if "daily_coverage" in result:
+                summary["daily_coverage"]={k:v for k,v in result["daily_coverage"].items() if k!="by_session"}
+            print(name,json.dumps(summary))
     print("Report:",path.resolve())
     print("No actual fills, profitability, or live RL approval certified.")
     return 0
