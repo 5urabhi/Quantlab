@@ -277,9 +277,27 @@ try{
          saved_book_received_utc:'2026-11-23T04:05:00+00:00',
          source_book_age_seconds:31,recent_original_pair_age_seconds:2,
          feed_fresh:true,receipt_status:'valid_book_saved',
-       }],
-       filtered_selected:1,configured_depth_contracts:200,
-       fresh_spread_sample_size:1,mean_fresh_spread_bps:40.08,
+       }, {...{
+         identity:'NSE_FNO:62539',expiry:'2026-11-23',strike:63400,
+         option_type:'CE',lot_size:30,coverage_role:'core',best_bid:249,
+         best_ask:250,spread_inr:1,spread_bps:40.08,imbalance_20:.25,
+         bid_quantity_20:3000,ask_quantity_20:3000,
+         top_bid_quantity:150,top_ask_quantity:150,
+         saved_book_received_utc:'2026-11-23T04:05:00+00:00',
+         source_book_age_seconds:31,recent_original_pair_age_seconds:2,
+         feed_fresh:true,receipt_status:'valid_book_saved',
+       },identity:'NSE_FNO:62541',strike:64000,option_type:'PE'}, {...{
+         identity:'NSE_FNO:62539',expiry:'2026-11-23',strike:63400,
+         option_type:'CE',lot_size:30,coverage_role:'core',best_bid:249,
+         best_ask:250,spread_inr:1,spread_bps:40.08,imbalance_20:.25,
+         bid_quantity_20:3000,ask_quantity_20:3000,
+         top_bid_quantity:150,top_ask_quantity:150,
+         saved_book_received_utc:'2026-11-23T04:05:00+00:00',
+         source_book_age_seconds:31,recent_original_pair_age_seconds:2,
+         feed_fresh:true,receipt_status:'valid_book_saved',
+       },identity:'NSE_FNO:62540',strike:62900,option_type:'CE'}],
+       filtered_selected:3,configured_depth_contracts:200,
+       fresh_spread_sample_size:3,mean_fresh_spread_bps:40.08,
        expiry_options:['2026-11-23'],connected:true,
        market_regular_hours:true,source_status:'recording_original_depth',
        source:'original_Dhan_20_level_fixture',read_only:true,warning:'Research only',
@@ -446,8 +464,52 @@ try{
    await scanner.getByText('Not a profit prediction').waitFor()
    await shot('02-spread-auto-scanner')
 
+   // Synthetic route fixtures verify the actual automatic request and chosen
+   // identity/quantity handoff without launching a real acquisition/replay.
+   let autoPick={identity:'NSE_FNO:62540',strike:62900,option_type:'CE',expiry:'2026-11-23',
+     study_lots:2,study_entry_inr:12030,lot_size:30,coverage_pct:23,
+     bid:199,ask:200,spread_bps:50.13,saved_receipts:120}
+   let speedPosts=[]
+   await page.route('**/api/trading-cockpit/spreads/readiness/auto',route=>{
+     const body=route.request().postDataJSON()
+     assert.equal(body.capital,17000);assert.equal(body.lots,3)
+     assert.equal(body.side,'ALL')
+     assert.equal('identities' in body,false)
+     return route.fulfill({json:{day_ist:body.day,scanned_contracts:3,
+       affordable_candidates:autoPick?1:0,scope:'current_depth_watchlist',
+       scan_truncated:false,candidates:autoPick?[autoPick]:[],automatic_pick:autoPick,
+       rejections:{budget_or_roundtrip_depth:autoPick?2:3},warning:'Synthetic source fixture'}})
+   })
+   await page.route('**/api/trading-cockpit/spreads/speed-study',route=>{
+     speedPosts.push(route.request().postDataJSON())
+     return route.fulfill({json:{job_id:'fixture-auto-speed'}})
+   })
+   await page.route('**/api/jobs/fixture-auto-speed',route=>route.fulfill({json:{status:'complete',percent:100,result:null}}))
    await page.getByRole('tab',{name:/Speed & Viability/}).click()
-   await page.getByRole('region',{name:'Original depth spread speed study'}).getByRole('button',{name:'Run speed & viability test'}).waitFor()
+   const speedPanel=page.getByRole('region',{name:'Original depth spread speed study'})
+   const speedRun=speedPanel.getByRole('button',{name:'Run speed & viability test'})
+   await speedRun.waitFor()
+   assert.equal(await page.getByRole('combobox',{name:'Speed study contract'}).count(),0)
+   await page.getByRole('group',{name:'Speed study selection mode'}).getByRole('button',{name:'Manual',exact:true}).click()
+   const contractMenu=page.getByRole('combobox',{name:'Speed study contract'})
+   await contractMenu.waitFor()
+   assert.deepEqual((await contractMenu.locator('option').allTextContents()).slice(1).map(s=>Number(s.match(/^[\d,]+/)[0].replaceAll(',',''))),[62900,63400,64000])
+   await page.getByRole('group',{name:'Speed study selection mode'}).getByRole('button',{name:'Automatic',exact:true}).click()
+   await speedRun.click()
+   await speedPanel.getByRole('heading',{name:/Automatically selected 62,900 CE/}).waitFor()
+   await speedRun.waitFor()
+   assert.equal(speedPosts.length,1)
+   assert.deepEqual(speedPosts[0].identities,['NSE_FNO:62540'])
+   assert.equal(speedPosts[0].lots,2)
+   assert.equal(speedPosts[0].compare_delays,true)
+   await shot('02-speed-automatic-selection')
+   autoPick=null
+   await speedRun.click()
+   await speedPanel.getByRole('heading',{name:'No eligible recorded contract'}).waitFor()
+   assert.equal(speedPosts.length,1)
+   await page.unroute('**/api/trading-cockpit/spreads/readiness/auto')
+   await page.unroute('**/api/trading-cockpit/spreads/speed-study')
+   await page.unroute('**/api/jobs/fixture-auto-speed')
    await page.getByRole('tab',{name:/Live Spread Monitor/}).click()
    await page.getByRole('tabpanel',{name:'Live Spread Monitor'}).waitFor()
    await page.getByRole('button',{name:'Inspect'}).first().waitFor()
