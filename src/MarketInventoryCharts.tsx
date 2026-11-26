@@ -1,5 +1,7 @@
 import {useEffect,useState} from 'react'
 import ResearchPlot from './ResearchPlots'
+import SessionCoverageAudit from './SessionCoverageAudit'
+import './operations-closeout.css'
 import {marketApi,readableError} from './tradingCockpitApi'
 
 type Source={id:string;label:string;unit:string;state:string;first:string|null;last:string|null;time_basis:string;count:number|null}
@@ -58,5 +60,6 @@ export default function MarketInventoryCharts({sources,onChoose}:{sources:Source
        <h4>Calendar activity heatmap</h4><div className="mi-calendar" role="group" aria-label="Stored calendar day activity">{shown.rows.map(r=><div key={r.date} title={r.date+': '+fmt(r.count)+' '+shown.unit} aria-label={r.date+': '+fmt(r.count)+' '+shown.unit} className={r.count?'mi-calendar-active':''} style={r.count?{background:'rgba(245,197,66,'+(0.14+0.75*Math.sqrt(r.count/max))+')'}:{}}><span>{r.date.slice(5)}</span><strong>{fmt(r.count)}</strong></div>)}</div>
        <p className="mi-caption">{shown.note} Weekend, holiday, not-yet-tracked and missing market-session distinctions require a verified exchange calendar and expected subscription scope. Checked {shown.checked_utc}.</p></>}
    </div>
+   <SessionCoverageAudit sources={sources}/>
  </section>
 }
