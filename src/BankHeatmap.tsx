@@ -43,7 +43,7 @@ export default function BankHeatmap(){
   <div className="mi-breadth" aria-label="Constituent breadth"><span className="mi-positive">▲ {counts.up} up</span><span className="mi-negative">▼ {counts.down} down</span><span>{counts.flat} flat</span><span>{counts.missing} unavailable</span></div>
   {report&&mode!=='session'&&!stale&&<div className="mi-weighted"><span>Weight coverage <b>{number(report.observed_weight_pct,1)}{report.observed_weight_pct!=null?'%':''}</b></span><span>Weighted breadth <b>{signed(report.weighted_breadth_pct)}</b></span></div>}
   {rows.length>0?<div className="mi-heat-grid">{rows.map(r=>{
-    const v=value(r),strength=v==null?0:Math.min(3,Math.floor(Math.abs(v)/(mode==='session'?.5:.15))+1)
+    const v=value(r),strength=v==null?0:Math.min(3,Math.floor(Math.abs(v)/(mode==='session' ? .5 : .15))+1)
     const cls=v==null?'missing':v===0?'flat':(v>0?'up':'down')+strength
     return <button key={r.symbol} type="button" className={'mi-tile '+cls+(selected===r.symbol?' selected':'')} aria-pressed={selected===r.symbol} aria-label={r.symbol+' '+signed(v)+'; weight '+number(r.weight_pct)+' percent'} onClick={()=>setSelected(selected===r.symbol?'':r.symbol)}>
       <strong>{r.symbol}</strong><span>{v==null?'—':(v>0?'▲ ':v<0?'▼ ':'')+signed(v)}</span><small>{r.weight_pct==null?'Weight —':number(r.weight_pct,1)+'% wt'}</small>

@@ -1,6 +1,7 @@
 import LivePythonResults from './LivePythonResults'
 import MarketPatternIntelligence from './MarketPatternIntelligence'
 import BankHeatmap from './BankHeatmap'
+import PositionsRisk from './PositionsRisk'
 import './market-intelligence-dashboard.css'
 import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Activity,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
@@ -227,7 +228,7 @@ export default function LiveFeedPanel({
           {automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'&&<RecordedChainSpot/>}
           {watchedIndex!=='INDEX:NIFTY50'&&<details className="mi-card"><summary>Running Python research results</summary><LivePythonResults mode="index"/></details>}
         </div>
-        <aside className="mi-live-side"><MarketPatternIntelligence compact identity={watchedIndex}/>{watchedIndex==='INDEX:BANKNIFTY'&&<BankHeatmap/>}<a className="mi-link" href="#/tradingpositions">Open positions &amp; portfolio risk →</a></aside>
+        <aside className="mi-live-side"><MarketPatternIntelligence compact identity={watchedIndex}/>{watchedIndex==='INDEX:BANKNIFTY'&&<BankHeatmap/>}<PositionsRisk compact/></aside>
       </div>
       <div className="lf-cards">
       <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>

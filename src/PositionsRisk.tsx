@@ -11,7 +11,7 @@ const fmt=(n:number|null|undefined,d=2)=>n==null?'—':n.toLocaleString('en-IN',
 const money=(n:number|null|undefined)=>n==null?'—':(n<0?'−₹':'₹')+fmt(Math.abs(n))
 const tm=(v:string|null|undefined)=>v?new Date(v).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',dateStyle:'short',timeStyle:'medium'}):'—'
 function Stat({label,value,detail}:{label:string;value:string;detail?:string}){return <div className="mi-risk-stat"><span>{label}</span><strong>{value}</strong>{detail&&<small>{detail}</small>}</div>}
-export default function PositionsRisk({onOpenJournal,onOpenChain}:{onOpenJournal:()=>void;onOpenChain:()=>void}){
+export default function PositionsRisk({onOpenJournal,onOpenChain,compact=false}:{onOpenJournal?:()=>void;onOpenChain?:()=>void;compact?:boolean}){
  const [data,setData]=useState<Risk|null>(null),[error,setError]=useState('')
  const [iv,setIv]=useState('0'),[horizon,setHorizon]=useState('5')
  const [settings,setSettings]=useState({iv:0,horizon:5})
@@ -27,6 +27,10 @@ export default function PositionsRisk({onOpenJournal,onOpenChain}:{onOpenJournal
  const g=safe?.aggregate_greeks,sc=safe?.portfolio_scenario
  const debit=safe&&!safe.coverage_limited?safe.positions.reduce((sum,p)=>sum+p.gross_notional_inr,0):null
  const allGreeks=!!safe&&!safe.coverage_limited&&safe.fresh_greeks_count===safe.total_open
+ if(compact)return <section className="mi-card" aria-label="Open option positions summary">
+  <div className="mi-heading"><div><span className="mi-kicker">MANUAL JOURNAL · READ-ONLY</span><h3>Open positions</h3></div><a href="#/tradingpositions">Portfolio risk →</a></div>
+  {safe?<><div className="mi-risk-grid"><Stat label="Recorded open positions" value={String(safe.total_open)}/><Stat label={safe.all_positions_marked?'Estimated net P&L':'Marked subset P&L'} value={money(safe.marked_net_pnl_inr)} detail={safe.marked_count+'/'+safe.total_open+' fresh bid marks'}/></div><p className="mi-muted">Premium debit {money(debit)} · {tm(safe.generated_utc)} IST. Not a broker account balance.</p></>:<p className="mi-muted">{error?'Current position marks unavailable.':'Checking manual positions…'}</p>}
+ </section>
  return <section className="mi-risk" aria-label="Options positions and portfolio risk">
   <header className="mi-card mi-heading"><div><span className="mi-kicker">READ-ONLY · LONG OPTIONS</span><h3>Positions &amp; risk</h3><p className="mi-muted">Reuses your manual trade journal and original quote/depth evidence. This is not a connected Zerodha account balance.</p></div><div className="mi-risk-actions"><button className="ws-button" onClick={onOpenChain}>Find contract</button><button className="ws-button" onClick={onOpenJournal}>Manage manual fills</button></div></header>
   {error&&<p className="tc-error" role="alert">{error} · previous marks withheld.</p>}

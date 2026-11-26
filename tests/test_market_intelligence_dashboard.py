@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import unittest
 from workstation_api import banknifty_constituents as bc, manual_options_workflow as mw
 
@@ -25,6 +25,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(len(result["points"]),17)
         self.assertEqual(result["premium_at_risk"],9000)
         self.assertEqual(mw.portfolio_scenario(legs,2,False,*args)["state"],"unavailable")
+        self.assertEqual(mw.portfolio_scenario(legs,2,True,now+timedelta(seconds=31),5,0,6.5,0,10)["state"],"unavailable")
         self.assertEqual(mw.portfolio_scenario(legs,2,True,now,5,-50,6.5,0,10)["state"],"unavailable")
 
 

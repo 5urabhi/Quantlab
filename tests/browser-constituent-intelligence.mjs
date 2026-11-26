@@ -22,6 +22,16 @@ try{
  await page.route('**/api/trading-cockpit/constituents/status',route=>route.fulfill({json:{enabled:false,connected:false,state:'not_subscribed',requested:{},saved:0,dropped:0,ignored_stale:0,sample_seconds:2,last_saved_utc:null,storage:{state:'not_observed',last_error:null},note:'CI-only fixture'}}))
  await page.route('**/api/trading-cockpit/constituents/analysis?*',route=>{
   const horizon=Number(new URL(route.request().url()).searchParams.get('horizon'))
+  if(new URL(page.url()).hash==='#/tradingpatterns'){
+    const liveStamp=new Date().toISOString()
+    const q={...current,received_utc:liveStamp,exchange_trade_utc:liveStamp}
+    return route.fulfill({json:{as_of_utc:liveStamp,anchor_utc:anchor,session_ist:'2026-11-23',horizon_minutes:horizon,
+      membership:{symbols:['BANKA','BANKB','BANKC']},weight_snapshot:{snapshot_date:'2026-11-23'},
+      rows:[{...rows[0],current:q,session_return_pct:1.5},{...rows[1],symbol:'BANKB',weight_pct:25,current:q,return_pct:-.5,session_return_pct:-1},
+            {...rows[1],symbol:'BANKC',weight_pct:15,session_return_pct:null}],
+      expected_members:3,observed_members:2,observed_weight_pct:85,weighted_breadth_pct:null,weighted_return_pct:null,
+      blockers:['Incomplete synthetic fixture'],note:'CI-only synthetic heatmap fixture'}})
+  }
   return route.fulfill({json:{as_of_utc:cutoff,anchor_utc:anchor,session_ist:'2026-11-23',horizon_minutes:horizon,
     membership:{date:'2026-11-23',symbols:['BANKA','BANKB']},weight_snapshot:{snapshot_date:'2026-11-23',source:'Synthetic CI-only weights',source_csv_sha256:'a'.repeat(64),recorded_utc:anchor,reported_weight_sum_pct:100},
     rows,expected_members:2,observed_members:1,observed_weight_pct:60,complete_weighted_coverage:false,weighted_return_pct:null,weighted_breadth_pct:null,partial_contribution_pp:.6,spot_anchor:60000,blockers:['Incomplete aligned constituent quotes. Unobserved moves are not zero-filled.'],note:'Synthetic browser fixture; not market evidence.'}})
@@ -45,6 +55,18 @@ try{
   await pane.getByRole('table',{name:'BANKNIFTY constituent metrics'}).waitFor()
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,'Constituent page overflow at '+width)
   await page.screenshot({path:path.join(dir,'constituent-intelligence-'+width+'.png'),fullPage:false})
+  await page.goto(base+'#/tradingpatterns',{waitUntil:'domcontentloaded'})
+  const heat=page.getByRole('region',{name:'Bank Nifty constituent heatmap'})
+  await heat.getByRole('button',{name:/BANKA/}).waitFor()
+  assert.match(await heat.getByRole('button',{name:/BANKA/}).getAttribute('class'),/\bup[123]\b/)
+  assert.match(await heat.getByRole('button',{name:/BANKB/}).getAttribute('class'),/\bdown[123]\b/)
+  assert.match(await heat.getByRole('button',{name:/BANKC/}).getAttribute('class'),/\bmissing\b/)
+  await heat.getByRole('button',{name:/BANKA/}).click()
+  await heat.getByRole('region',{name:'Bank details BANKA'}).waitFor()
+  await heat.getByRole('combobox',{name:'Bank heatmap return period'}).selectOption('session')
+  await heat.getByRole('button',{name:/BANKA \+1.5%/}).waitFor()
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,'Heatmap page overflow at '+width)
+  await page.screenshot({path:path.join(dir,'bank-heatmap-'+width+'.png'),fullPage:false})
  }
  assert.deepEqual(errors,[])
  console.log('Constituent intelligence desktop/mobile fixture passed')

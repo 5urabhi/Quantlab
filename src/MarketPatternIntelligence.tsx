@@ -18,7 +18,7 @@ function Card({label,value,detail}:{label:string;value:string;detail?:string}){
 function Table({headers,rows}:{headers:string[];rows:(string|number)[][]}){
   return <div className="tc-table-scroll"><table><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((r,i)=><tr key={i}>{r.map((v,j)=><td key={j}>{v}</td>)}</tr>)}</tbody></table></div>
 }
-export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',compact=false}:{identity?:string;compact?:boolean}){
+export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',compact=false,coverageOnly=false}:{identity?:string;compact?:boolean;coverageOnly?:boolean}){
   const [data,setData]=useState<Report|null>(null)
   const [error,setError]=useState('')
   const [refresh,setRefresh]=useState(0)
@@ -42,6 +42,16 @@ export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',co
     finally{setSaving(false)}
   }
   const b=data?.baseline,c=data?.current
+  if(coverageOnly)return <section className="mi-card" aria-label="Bank Nifty pattern history coverage">
+    <div className="mi-heading"><div><span className="mi-kicker">SHARED MARKET LIBRARY</span><h3>Bank Nifty minute-history coverage</h3></div><a href="#/tradingpatterns">Open market intelligence →</a></div>
+    {error&&<p role="alert" className="mi-muted">{error}</p>}
+    {data&&!error&&b?<><div className="mpi-compact-grid">
+      <Card label="Complete observed sessions" value={String(b.sessions)} detail={String(b.first||'—')+' to '+String(b.last||'—')}/>
+      <Card label="Excluded partial sessions" value={String(data.coverage.excluded_partial_sessions)} detail={data.coverage.verified_receipts+' verified original receipts'}/>
+      <Card label="Requested date window" value={data.requested_start} detail="Rolling 365 calendar days; not an exchange-calendar count"/>
+      <Card label="Receipt integrity" value={data.coverage.rejected_receipts+' rejected'} detail={data.coverage.omitted_receipts+' omitted · '+data.coverage.overlap_revisions+' overlap revisions'}/>
+    </div><p className="mi-muted">Automatic history sync: {data.sync.enabled?data.sync.state:'disabled'} · {data.sync.message}</p><button className="ws-button" type="button" disabled={saving} onClick={()=>void toggleSync()}>{data.sync.enabled?'Disable read-only sync':'Enable read-only history sync'}</button><p className="mi-muted">Checks missing requested date windows while the local server runs. A requested window does not establish complete minute or holiday coverage.</p></>:!error?<p className="mi-muted">Checking saved original receipts…</p>:null}
+  </section>
   if(compact)return <section className="mi-card mpi-compact" aria-label="Current market movement context">
     <div className="mi-heading"><div><span className="mi-kicker">MOVEMENT CONTEXT</span><h3>Today's range</h3></div><a href="#/tradingpatterns">All statistics →</a></div>
     {error&&<p role="status" className="mi-muted">{error} · current context unavailable.</p>}

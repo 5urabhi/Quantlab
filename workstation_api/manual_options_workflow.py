@@ -282,6 +282,9 @@ def portfolio_scenario(legs, total, complete, now, horizon, iv_shock, rate, divi
     if not complete or len(legs) != total:
         return result
     stamps = [ao.timestamp(item[1]["received_utc"]) for item in legs]
+    if any(not 0 <= (now-stamp).total_seconds() <= RECEIPT_AGE for stamp in stamps):
+        result["reason"] = "One or more model receipts are stale or future-dated."
+        return result
     skew = (max(stamps)-min(stamps)).total_seconds()
     result["max_receipt_skew_seconds"] = skew
     if skew > 10:
