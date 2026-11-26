@@ -1,3 +1,5 @@
+> **Historical record only.** The original dashboard described here has been removed from the active application. Use `bash run.sh` for the current React/FastAPI workstation. Do not execute the historical launcher instructions below.
+
 # QuantLab — Multi-Factor Equity Index Research & Explainability Platform
 
 **Current application:** local-first React 18 + Vite workstation, FastAPI/Python

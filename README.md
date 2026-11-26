@@ -19,8 +19,7 @@ This checks the React build, Python/math acceptance, synthetic factor research
 artifacts, and source-aware doctor. Missing authentic market inputs report
 **HISTORICAL RESEARCH: NOT READY** without falsely failing the software.
 GitHub Actions separately checks actual Chromium browser interactions.
-Use `bash run.sh evaluate` for labeled synthetic results; legacy Streamlit
-checks remain explicitly opt-in.
+Use `bash run.sh evaluate` for labeled synthetic results. The only supported UI is the React/FastAPI workstation.
 
 ### Reliability, data acceleration and research validation
 
@@ -203,5 +202,5 @@ audit and legal review. A matching checksum proves file identity, not accuracy.
 **Legacy notebooks and instructions** are archived in
 [the original README](docs/archive/README_legacy_20261113.md) and
 [legacy momentum documentation](docs/LEGACY_MOMENTUM_README.md). Their
-branch names, Streamlit launcher commands and historical performance figures
+branch names, retired dashboard commands and historical performance figures
 are not the current release instructions or validated investment claims.

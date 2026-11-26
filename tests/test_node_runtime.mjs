@@ -116,3 +116,29 @@ test('live indicators require exact source, timestamps, values, expiry and lates
   assert.equal(alignIndicator(item,'chain_spot_receipts','expiry',[...rows,['d',40]],['b','c','d']),null)
   assert.equal(alignIndicator(item,'chain_spot_receipts','expiry',rows,['unknown']),null)
 })
+
+
+test('every supported launcher alias opens only the current React/FastAPI workstation',()=>{
+  const temp=mkdtempSync(join(tmpdir(),'quantlab-launcher-only-'))
+  try{
+    mkdirSync(join(temp,'scripts'))
+    for(const name of ['run.sh','scripts/start.sh']){
+      writeFileSync(join(temp,name),readFileSync(join(root,name)),{mode:0o755})
+    }
+    writeFileSync(join(temp,'scripts/run_workstation.sh'),'#!/usr/bin/env bash\nprintf "CURRENT_WORKSTATION\\n"\n',{mode:0o755})
+    for(const launcher of ['run.sh','scripts/start.sh']){
+      for(const args of [[],['workstation'],['research'],['web'],['both']]){
+        const result=spawnSync('bash',[join(temp,launcher),...args],{encoding:'utf8'})
+        assert.equal(result.status,0,result.stderr)
+        assert.equal(result.stdout.trim(),'CURRENT_WORKSTATION')
+      }
+      const retired=spawnSync('bash',[join(temp,launcher),'legacy-streamlit'],{encoding:'utf8'})
+      assert.equal(retired.status,2)
+      assert.doesNotMatch(retired.stdout,/CURRENT_WORKSTATION/)
+      const syntax=spawnSync('bash',['-n',join(root,launcher)],{encoding:'utf8'})
+      assert.equal(syntax.status,0,syntax.stderr)
+    }
+    assert.doesNotMatch(readFileSync(join(root,'requirements.txt'),'utf8'),/^streamlit\b/im)
+    assert.doesNotMatch(readFileSync(join(root,'scripts/start.sh'),'utf8'),/8501|streamlit/i)
+  }finally{rmSync(temp,{recursive:true,force:true})}
+})

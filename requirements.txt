@@ -1,5 +1,5 @@
 # Equity-index quantitative research workstation (Python 3.11+).
-# Ubuntu / Linux compatible; installs mathematical research, local dashboard,
+# Ubuntu / Linux compatible; installs mathematical research, local API,
 # plots, PDF reports, and the read-only Dhan historical-data adapter.
 # Run: python -m pip install -r requirements.txt
 # The original legacy notebook dependency freeze is in requirements-legacy.txt.
@@ -8,7 +8,6 @@ numpy>=1.26,<3
 pandas>=2.2,<3
 scipy>=1.11,<2
 scikit-learn>=1.5,<2  # deterministic CPU supervised research baselines
-streamlit>=1.35,<2
 plotly>=5.22,<7
 reportlab>=4.2,<5
 python-dotenv>=1.0,<2
