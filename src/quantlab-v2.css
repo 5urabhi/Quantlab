@@ -249,3 +249,6 @@
  .ws-v2.ql-v3.ql-nav-compact .ws-main{margin-left:68px;width:calc(100% - 68px)}
  .ws-v2.ql-v3.ql-nav-compact :is(.ws-brand,.ws-env,.ws-sidefoot,.ws-nav-item){padding-left:0;padding-right:0;justify-content:center}
 }
+
+.ql-strategy-registry,.ql-journal-charts{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0;max-width:100%;border:1px solid var(--ql-border,#343438);background:var(--ql-panel,#151518);border-radius:10px;padding:16px;margin:12px 0}.ql-strategy-registry h3,.ql-journal-charts h3{margin:0;color:var(--ql-text,#f1f1f3)}.ql-strategy-search{display:grid;gap:6px;color:var(--ql-muted,#a5a5ad);font-size:12px;min-width:0}.ql-strategy-search input{width:100%;box-sizing:border-box;min-width:0;background:var(--ql-bg,#0b0b0d);border:1px solid var(--ql-border,#343438);color:var(--ql-text,#f1f1f3);padding:9px;border-radius:6px}.ql-journal-charts .tc-ledger-summary,.ql-strategy-registry .tc-ledger-summary{flex-wrap:wrap}
+@media(max-width:700px){.ql-strategy-registry,.ql-journal-charts{padding:10px}.ql-strategy-registry .ws-actions{flex-wrap:wrap}.ql-strategy-registry .v2-section-head{min-width:0;flex-wrap:wrap}}
