@@ -42,10 +42,12 @@ def _first(identity,eligible,end,now):
     return {**item,"digest":digest},None
 
 
-def _execute(row,action,units,participation_pct,slippage_bps,profile):
+def _execute(row,action,units,participation_pct,slippage_bps,profile,fee_floor_per_side=0.):
     result=paper.marketable_walk(row["book"],action,units,row["lot_size"],
          1e9 if action=="BUY" else 0.,participation_pct/100,slippage_bps)
     cost=paper._fees(action,result["turnover"],profile)
+    if result["turnover"]>0:
+        cost=max(cost,fee_floor_per_side)
     return {"identity":row["identity"],"option_type":row["option_type"],"strike":row["strike"],
        "expiry":row["expiry"],"action":action,"lot_size":row["lot_size"],
        "received_utc":row["received_utc"],"book_pair_sha256":row["digest"],
@@ -57,7 +59,7 @@ def _execute(row,action,units,participation_pct,slippage_bps,profile):
 def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes=5,
            latency_ms=1000,window_seconds=60,max_skew_seconds=2.,
            participation_pct=25.,slippage_bps=5.,broker_profile="zerodha",
-           now=None,exit_decision=None):
+           now=None,exit_decision=None,fee_floor_per_side=0.):
     now=now or paper._now()
     if strategy not in STRATEGIES or broker_profile not in fees.BROKER_PROFILES:
         raise ValueError("Unsupported replay strategy or brokerage profile")
@@ -71,6 +73,7 @@ def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes
                          (max_skew_seconds,0,30,"leg receipt skew"),(participation_pct,1,100,"participation"),
                          (slippage_bps,0,500,"slippage")):
         paper._check(v,lo,hi,label)
+    paper._check(fee_floor_per_side,0,1000,"minimum fee per executed side")
     decision=ao.timestamp(decision_utc)
     if decision>now or not paper._regular(decision):
         raise ValueError("Choose an observed historical regular-session decision time with timezone")
@@ -108,7 +111,7 @@ def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes
     skew=(max(stamps)-min(stamps)).total_seconds()
     result["entry_skew_seconds"]=skew
     result["entry_received_utc"]=paper._iso(max(stamps))
-    result["entries"]=[_execute(row,action,units,participation_pct,slippage_bps,broker_profile)
+    result["entries"]=[_execute(row,action,units,participation_pct,slippage_bps,broker_profile,fee_floor_per_side)
                        for row,action in zip(entry,actions)]
     if skew>max_skew_seconds:
         result["state"]="entry_leg_skew_exceeded"
@@ -161,7 +164,7 @@ def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes
     result["exit_skew_seconds"]=(max(exit_stamps)-min(exit_stamps)).total_seconds()
     result["exit_received_utc"]=paper._iso(max(exit_stamps))
     result["exits"]=[_execute(row,"SELL" if a=="BUY" else "BUY",units,
-                               participation_pct,slippage_bps,broker_profile) for row,a in zip(exit_rows,actions)]
+                               participation_pct,slippage_bps,broker_profile,fee_floor_per_side) for row,a in zip(exit_rows,actions)]
     if result["exit_skew_seconds"]>max_skew_seconds:
         result["state"]="exit_leg_skew_exceeded"
         return result
