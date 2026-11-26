@@ -115,6 +115,17 @@ export default function ResearchGuide({onNavigate}:Props){
           <button type="button" onClick={()=>onNavigate(step.route)}>{step.cta}<ArrowRight size={13}/></button>
         </div></article>)}</div>
     </section>
+    <section className="qg-panel"><div className="qg-head"><HelpCircle size={18}/><h3>Find the right workspace</h3></div><div className="qg-steps">{[
+    ['trading','Live Market','Inspect original index prices and source freshness.'],
+    ['data','Market Library','Inspect actual recorded source counts and date ranges.'],
+    ['datadownloads','Downloads','Inspect source receipts, pause or resume eligible queues.'],
+    ['mathematics','Model Catalog','Choose models by mathematical family and input readiness.'],
+    ['strategyema','EMA Explorer','Test causal signal rules against recorded candles.'],
+    ['history','Results Studio','Inspect saved outputs and source limitations.'],
+    ['reports','Research Reports','Generate and download reproducible saved artifacts.'],
+    ['connections','Connections','Manage Dhan and secondary Zerodha credentials.'],
+    ['storage','Storage & recovery','Inspect local database sizes and free disk space.']
+    ].map(([route,title,description])=><article key={route}><div><h4>{title}</h4><p>{description}</p><button type="button" onClick={()=>onNavigate(route)}>Open {title}<ArrowRight size={13}/></button></div></article>)}</div></section>
     <section className="qg-panel qg-metric-guide">
       <div className="qg-head"><BookOpen size={18}/><h3>Metric Guide · Click a formula to understand it</h3></div>
       <p>Select any quantitative metric for its definition, formula, interpretation and limitations. The complete formula guide is downloadable above.</p>

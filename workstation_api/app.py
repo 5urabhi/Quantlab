@@ -4183,6 +4183,15 @@ async def nse_local_original_source_intake(files: list[UploadFile] = File(...)):
             await upload.close()
 
 
+@app.get("/api/workspace/nse-sources/receipts")
+def nse_saved_intake_receipts(limit: int = 100):
+    """List previously prepared local evidence, never a source certification."""
+    try:
+        return nse_source_automation.saved_intake_receipts(limit)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/workspace/historical-sources/{dataset_id}")
 def historical_source_worklist(dataset_id: str,
                                validation_start: str | None = None,
