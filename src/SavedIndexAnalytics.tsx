@@ -1,6 +1,7 @@
 import {useMemo,useState} from 'react'
 import ResearchPlot,{type ResearchPlotData} from './ResearchPlots'
 import './saved-index-analytics.css'
+import {marketApi,readableError} from './tradingCockpitApi'
 
 type Row=Record<string,unknown>
 export type AnalyticsRoute='factors'|'construction'|'risk'|'rolling'|'robustness'|'comparisons'|'visual'
@@ -44,6 +45,7 @@ function Stability({rows,runId,provenance,artifact}:{rows:Row[];runId:string;pro
  const [key,setKey]=useState('strategy_cagr')
  const lags=[...new Set(rows.map(r=>num(r.execution_lag_months)).filter((n):n is number=>n!==null))].sort((a,b)=>a-b)
  const [lag,setLag]=useState(0)
+ const [surface,setSurface]=useState(false)
  const selectedLag=lags.includes(lag)?lag:lags[0]
  const metric=options.find(m=>m.key===key)||options[0]
  const slice=rows.filter(r=>r.execution_lag_months===selectedLag)
@@ -54,7 +56,8 @@ function Stability({rows,runId,provenance,artifact}:{rows:Row[];runId:string;pro
  const complete=has&&matrix.every(r=>r.every(v=>v!==null))
  return <article className="sia-panel"><header><div><h3>Executed parameter grid</h3><p>Compare saved configurations at a fixed execution lag. Missing or duplicate cells are unavailable, not interpolated. Exploratory selection is not frozen holdout evidence.</p></div><div className="sia-actions"><label>Metric<select aria-label="Robustness metric" value={metric?.key||''} onChange={e=>setKey(e.target.value)}>{options.map(m=><option key={m.key} value={m.key}>{m.label}</option>)}</select></label><label>Execution lag (months)<select aria-label="Robustness execution lag" value={selectedLag??''} onChange={e=>setLag(Number(e.target.value))}>{lags.map(n=><option key={n}>{n}</option>)}</select></label></div></header>
  {metric&&has?<><ResearchPlot provenance={provenance} plot={{kind:'line2d',title:'Sensitivity by transaction cost · '+metric.label,x_label:'Cost (bps)',y_label:metric.label+' ('+metric.unit+')',x:costs,traces:months.map((m,i)=>({name:m+' month rebalance',y:matrix[i]}))}}/>
- {complete&&months.length>=2&&costs.length>=2?<ResearchPlot provenance={provenance} plot={{kind:'heatmap2d',title:'Executed parameter heatmap · '+metric.label+' ('+metric.unit+')',x_label:'Cost (bps)',y_label:'Reconstitution (months)',labels:costs.map(String),row_labels:months.map(String),values:matrix.map(r=>r.map(v=>v!)),scale:'sequential'}}/>:<p className="sia-note">A complete two-dimensional grid is needed for the heatmap; available points remain visible above.</p>}</>:<p className="sia-empty">No executed sensitivity grid has been saved.</p>}
+ {complete&&months.length>=2&&costs.length>=2?<ResearchPlot provenance={provenance} plot={{kind:'heatmap2d',title:'Executed parameter heatmap · '+metric.label+' ('+metric.unit+')',x_label:'Cost (bps)',y_label:'Reconstitution (months)',labels:costs.map(String),row_labels:months.map(String),values:matrix.map(r=>r.map(v=>v!)),scale:'sequential'}}/>:<p className="sia-note">A complete two-dimensional grid is needed for the heatmap; available points remain visible above.</p>}
+ {complete&&months.length>=2&&costs.length>=2&&<><button type="button" className="ws-button" aria-expanded={surface} onClick={()=>setSurface(v=>!v)}>{surface?'Hide 3D surface':'Show 3D surface'}</button>{surface&&<ResearchPlot provenance={provenance} plot={{kind:'surface3d',title:'Executed grid surface · '+metric.label,x_label:'Cost (bps)',y_label:'Reconstitution (months)',z_label:metric.label+' ('+metric.unit+')',x:costs,y:months,z:matrix.map(r=>r.map(v=>v!))}}/>}</>}</>:<p className="sia-empty">No executed sensitivity grid has been saved.</p>}
  <DataTable rows={rows} title="Parameter grid evidence" runId={runId} artifact={artifact}/></article>
 }
 function rollingDerived(rows:Row[]):Row[]{
@@ -75,6 +78,22 @@ function rollingDerived(rows:Row[]):Row[]{
   return out
  })
 }
+
+type ActiveRiskResult={portfolio_weight_date:string;factor_estimation_start:string;factor_estimation_end:string;fitted_observations:number;annualized_active_tracking_error_estimate:number;systematic_fraction:number|null;factor_contributions:{factor:string;active_exposure:number;fraction_total_variance:number|null}[];top_active_weights:{ticker:string;active_weight:number}[];warning:string;method:string}
+function ActiveRiskPanel({runId,provenance}:{runId:string;provenance:string}){
+ const [result,setResult]=useState<ActiveRiskResult|null>(null)
+ const [error,setError]=useState('')
+ const [busy,setBusy]=useState(false)
+ const load=async()=>{setBusy(true);setError('');setResult(null);try{setResult(await marketApi<ActiveRiskResult>('/api/workspace/active-risk/'+encodeURIComponent(runId)))}catch(e){setError(readableError(e))}finally{setBusy(false)}}
+ return <article className="sia-panel"><header><div><h3>Benchmark-relative covariance attribution</h3><p>Estimate active factor risk using the existing sourced B F Bᵀ + D model. Requires actual benchmark weights and dated factor returns; missing inputs are never replaced with invented data.</p></div><button type="button" className="ws-button primary" disabled={busy} onClick={()=>void load()}>{busy?'Calculating…':'Calculate active risk'}</button></header>
+ {error&&<p role="alert" className="sia-note">{error}</p>}
+ {result&&<><div className="sia-actions"><strong>Estimated annualized tracking error: {(result.annualized_active_tracking_error_estimate*100).toFixed(2)}%</strong><span>{result.fitted_observations} prior months · {result.factor_estimation_start} to {result.factor_estimation_end}</span></div>
+ {result.factor_contributions.length>0&&<><ResearchPlot provenance={provenance} plot={{kind:'bar2d',title:'Estimated signed factor variance contributions',x_label:'Factor',y_label:'Share of total active variance (%)',x:result.factor_contributions.map(r=>r.factor),traces:[{name:'Variance contribution',y:result.factor_contributions.map(r=>r.fraction_total_variance===null?null:r.fraction_total_variance*100)}]}}/><ResearchPlot provenance={provenance} plot={{kind:'bar2d',title:'Estimated active factor exposure',x_label:'Factor',y_label:'Regression beta exposure',x:result.factor_contributions.map(r=>r.factor),traces:[{name:'Active exposure',y:result.factor_contributions.map(r=>r.active_exposure)}]}}/></>}
+ {result.top_active_weights.length>0&&<ResearchPlot provenance={provenance} plot={{kind:'bar2d',title:'Largest absolute active weights · signed',x_label:'Security',y_label:'Portfolio − benchmark weight (percentage points)',x:result.top_active_weights.map(r=>r.ticker),traces:[{name:'Active weight',y:result.top_active_weights.map(r=>100*r.active_weight)}]}}/>}
+ <p className="sia-note">{result.method} {result.warning} Weight date: {result.portfolio_weight_date}.</p><button type="button" className="ws-button" onClick={()=>download('quantlab-active-risk-'+runId+'.json',result)}>Export sourced attribution JSON</button></>}
+ </article>
+}
+
 export default function SavedIndexAnalytics({route,detail}:{route:AnalyticsRoute;detail:Detail}){
  const provenance=detail.source.dataset_kind==='synthetic'?'synthetic':'historical'
  const p={runId:detail.id,provenance}
@@ -88,7 +107,7 @@ export default function SavedIndexAnalytics({route,detail}:{route:AnalyticsRoute
  {(route==='factors'||route==='visual')&&factors()}
  {route==='factors'&&panel('Portfolio factor exposures','Weight-averaged source factor scores; not return or risk attribution.',detail.factor_exposures,observedMetrics(detail.factor_exposures,['date','index'],'Saved factor score'),'portfolio_factor_exposures.csv')}
  {route==='construction'&&<>{panel('Latest constituent allocation','Largest positive saved positions (API returns at most 40). Unshown weight is not cash.',detail.latest_weights,[pct('weight','Portfolio weight')],'post_rebalance_weights.csv',{key:'name',label:'Constituent'},'bar2d')}{concentration()}{panel('Sector allocation history','Only available when dated sector classifications were used.',detail.sector_exposure||[],observedMetrics(detail.sector_exposure||[],['date','index'],'%',100),'sector_exposure.csv')}{panel('Turnover and costs','Saved monthly traded weight and cost fraction.',detail.returns,[pct('turnover','Turnover'),pct('transaction_cost_fraction','Transaction cost')],'monthly_results.csv')}</>}
- {(route==='risk'||route==='rolling')&&<>{rolling()}{panel('Rolling Sharpe and beta','Derived from 12 consecutive saved monthly paired returns. Sharpe uses zero risk-free rate; beta uses the saved benchmark. Invalid or missing months are not filled.',derived,[scalar('sharpe','Sharpe (zero risk-free rate)'),scalar('beta','Benchmark beta')])}{route==='risk'&&<>{concentration()}<p className="sia-note">Security-level covariance risk contributions require aligned individual asset return and weight matrices; these are not supplied by this saved-run endpoint. Concentration is not covariance attribution.</p></>}</>}
+ {(route==='risk'||route==='rolling')&&<>{rolling()}{panel('Rolling Sharpe and beta','Derived from 12 consecutive saved monthly paired returns. Sharpe uses zero risk-free rate; beta uses the saved benchmark. Invalid or missing months are not filled.',derived,[scalar('sharpe','Sharpe (zero risk-free rate)'),scalar('beta','Benchmark beta')])}{route==='risk'&&<>{concentration()}<ActiveRiskPanel {...p}/></>}</>}
  {route==='robustness'&&<><Stability {...p} rows={detail.robustness} artifact={artifact('robustness_grid.csv')}/>{panel('Cost sensitivity','Repricing the fixed trade path; not reoptimization.',detail.cost_sensitivity,[pct('annualized_return','Annualized return'),pct('total_turnover','Total turnover')],'cost_sensitivity.csv',{key:'cost_bps',label:'Transaction cost (bps)'})}</>}
  {route==='comparisons'&&<>{panel('Comparable methodology metrics','Same-date backtest methodology results. Compare one unit at a time.',detail.methodologies,performanceMetrics,'methodology_summary.csv',{key:'methodology',label:'Methodology'},'bar2d')}{panel('Methodology monthly return history','Saved net returns, not independently verified performance.',detail.methodology_returns||[],observedMetrics(detail.methodology_returns||[],['date','index'],'%',100),'methodology_returns.csv')}{panel('Cost sensitivity','Fixed-trade-path cost approximation.',detail.cost_sensitivity,[pct('annualized_return','Annualized return')],'cost_sensitivity.csv',{key:'cost_bps',label:'Transaction cost (bps)'})}</>}
  </section>
