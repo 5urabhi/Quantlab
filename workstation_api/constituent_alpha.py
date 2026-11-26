@@ -200,12 +200,14 @@ def _label(row,price,target):
         return None
 
 
-def sample_day(rows):
+def sample_day(rows, *, features_only=False, as_of=None):
     """One horizon, one session, chronological frozen observations.
 
     Features never inspect the target/outcome. Reserve a nonoverlapping
     window on feature eligibility *before* attempting to score its label.
     """
+    if features_only and (as_of is None or as_of.tzinfo is None):
+        raise ValueError("Inference requires an explicit aware observation clock")
     refs={}
     samples=[]
     counts=Counter()
@@ -215,6 +217,8 @@ def sample_day(rows):
         try:
             e=json.loads(row["evidence_json"])
             cutoff,decided,target,price=_reference(row,e)
+            if features_only and (decided>as_of or cutoff>as_of):
+                raise ValueError("Feature receipt not available at observation clock")
             slot=_stamp(row["slot_utc"])
             if slot!=cutoff.replace(second=0,microsecond=0):
                 raise ValueError("Slot mismatch")
@@ -264,6 +268,14 @@ def sample_day(rows):
             counts[key]+=1
             continue
         counts["matched_features"]+=1
+        if features_only:
+            # Same matched feature schema as training; no target observation
+            # or outcome is consulted and no nonoverlap label gate is applied.
+            samples.append({"session":row["session_ist"],"decision_utc":row["decided_utc"],
+                "cutoff_utc":row["cutoff_utc"],"target_utc":row["target_utc"],
+                "reference_price":price,"reference_sha256":row["reference_sha256"],
+                "index":index,"full":index+bank})
+            continue
         if next_eligible is not None and decided<=next_eligible:
             counts["overlap_skipped"]+=1
             continue
