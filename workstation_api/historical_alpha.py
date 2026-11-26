@@ -19,7 +19,7 @@ import numpy as np
 from . import constituent_alpha as a, cockpit_sources, intraday_parquet as pq
 from . import dhan_workspace as dw, banknifty_constituents as bank, service
 
-VERSION="historical_minute_alpha_v1"
+VERSION="historical_minute_alpha_v2"
 IST=ZoneInfo("Asia/Kolkata")
 HORIZONS=(5,10,15,30,60,0)
 MAX_DAYS=240
@@ -31,7 +31,8 @@ POLICY={"version":VERSION,"horizons":HORIZONS,"splits":[30,10,20],"session_close
         "weight_modes":["unweighted","verified_weights"],
         "target":"close of completed decision bar to close of future bar; 0 = session close",
         "source":"pinned Dhan batch membership and original historical minute candles",
-        "features":"index returns 5/15/30m, realized volatility, EMA gap, RSI, time, EWMA volatility, ADX, opening range; constituent returns, breadth, dispersion and past-only relative volume"}
+        "features":"index returns 5/15/30m, realized volatility, EMA gap, RSI, time, EWMA volatility, rolling ADX-like proxy, causal CUSUM, opening range; constituent returns, breadth, dispersion and past-only relative volume",
+        "advanced_models":"training-only 3-state GMM and diagonal Gaussian HMM; forward-only held-out filter; optional LightGBM/XGBoost; same matched chronological windows"}
 POLICY_HASH=sha256(json.dumps(POLICY,sort_keys=True).encode()).hexdigest()
 
 
@@ -157,7 +158,14 @@ def _indicators(rows):
     r5,r15,r30=[10000*(close[-1]/close[-1-k]-1) for k in (5,15,30)]
     rv=float(np.std(ret[-30:],ddof=1))
     ema_gap=10000*(_ema(close,9)/_ema(close,21)-1)
-    return [r5,r15,r30,rv,ema_gap,float(rsi),math.sqrt(variance),adx]
+    # Standardized return-shift CUSUM; baseline uses earlier returns only.
+    baseline=float(np.mean(ret[:15]))
+    sigma=max(1.,float(np.std(ret[:15],ddof=1)))
+    upper=lower=0.
+    for z in (ret[15:]-baseline)/sigma:
+        upper=max(0.,upper+float(z)-.5)
+        lower=max(0.,lower-float(z)-.5)
+    return [r5,r15,r30,rv,ema_gap,float(rsi),math.sqrt(variance),adx,upper,lower]
 
 
 def _call(direction):
@@ -197,7 +205,7 @@ def _sample_day(day,index,stocks,members,weights,horizon,prior_days):
         opening_hi=max(index[k][1] for k in range(15)) if opening else price
         opening_lo=min(index[k][2] for k in range(15)) if opening else price
         range_position=(price-opening_lo)/(opening_hi-opening_lo) if opening and opening_hi>opening_lo else .5
-        index_features=x[:6]+[float(minute),x[6],x[7],float(range_position),float(not opening)]
+        index_features=x[:6]+[float(minute),x[6],x[7],float(range_position),float(not opening),x[8],x[9]]
         bank_features=[mean,breadth,disp,signed_volume,volume_missing]
         counts["matched_features"]+=1
         if target not in index:
@@ -269,7 +277,11 @@ def run(*,batch_id,horizon=30,weight_mode="unweighted",progress=None):
     else:
         status["walk_forward"]=a._walk_forward(train,split[0],progress)
         methods,regimes,q,records=a._compare(train,cal,test,progress)
-        status.update(state="holdout_assessment_available",methods=methods,regimes=regimes,quantiles=q,run_id=a._save(records),prediction_rows=len(records))
+        from . import fitted_alpha
+        extra,availability,extra_records=fitted_alpha.assess(train,cal,test,horizon,methods,progress)
+        methods.update(extra);records.extend(extra_records)
+        status.update(state="holdout_assessment_available",methods=methods,regimes=regimes,quantiles=q,
+                      model_availability=availability,run_id=a._save(records),prediction_rows=len(records))
     records=[{"day":"RUN_SUMMARY","state":status["state"],"counts_json":json.dumps(dict(counts),sort_keys=True),
               "evidence_json":json.dumps({"batch_id":batch_id,"source_hashes":sources,"source_failures":failures,
                   "membership_sha256":status["membership_sha256"],"weight_mode":weight_mode,"horizon":horizon,"support":status["support"]},sort_keys=True),
