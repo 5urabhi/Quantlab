@@ -7,7 +7,8 @@ import sqlite3
 from dotenv import load_dotenv
 from workstation_api import cpr_context_archive as archive, cpr_context_features as cx
 from workstation_api import cpr_hybrid_research as r, historical_alpha as h
-from workstation_api import context_feeds as feeds, alpha_retraining, service
+from workstation_api import context_feeds as feeds, alpha_retraining, service, pit_index
+from workstation_api import cpr_alpaca_archive as alpaca
 
 
 def main():
@@ -18,6 +19,8 @@ def main():
     p.add_argument("--context-batch",default="auto")
     p.add_argument("--mode",choices=("receipt","archive"),default="archive")
     p.add_argument("--fetch-fred",action="store_true",help="Opt in to local FRED/ALFRED vintage requests")
+    p.add_argument("--fetch-alpaca",action="store_true",help="Opt in to historical US-listed ETF proxy requests")
+    p.add_argument("--alpaca-feed",choices=("iex","sip"),default="iex")
     p.add_argument("--confirm-reviewed",action="store_true",help="Confirm reviewed provider permissions and conservative vintage-date availability assumption")
     a=p.parse_args()
     try:
@@ -26,8 +29,8 @@ def main():
             raise ValueError("Use a completed historical range up to 120 calendar days")
         if not alpha_retraining.safe_window(datetime.now(timezone.utc)):
             raise ValueError("Run context preflight outside Indian market priority hours")
-        if a.fetch_fred and (not a.confirm_reviewed or a.mode!="archive"):
-            raise ValueError("FRED vintage backfill requires --confirm-reviewed and archive mode")
+        if (a.fetch_fred or a.fetch_alpaca) and (not a.confirm_reviewed or a.mode!="archive"):
+            raise ValueError("Historical backfill requires --confirm-reviewed and archive mode")
         load_dotenv(service.ROOT/".env",override=False)
         index,_,failures=h.shared_index_sources(start-timedelta(days=7),stop,[h.MAX_TOTAL])
         ordered=sorted(index)
@@ -43,10 +46,18 @@ def main():
             signals.extend(rows)
         if a.fetch_fred:
             print("FRED archive:",json.dumps(archive.backfill(start,stop,confirmed=True)),flush=True)
+        if a.fetch_alpaca:
+            print("Alpaca archive:",json.dumps(alpaca.backfill(start,stop,feed=a.alpaca_feed,confirmed=True)),flush=True)
         status=feeds.status()
         print("Feed configuration:",json.dumps({"enabled":status["config"]["enabled"],
                     "fred_key_configured":status["fred_key_configured"],
-                    "twelve_key_configured":status["twelve_key_configured"]}),flush=True)
+                    "twelve_key_configured":status["twelve_key_configured"],
+                    "alpaca_credentials_configured":bool(alpaca.credentials())}),flush=True)
+        try:
+            membership=pit_index.status()
+            print("Membership source:",json.dumps({k:membership.get(k) for k in ("available","first_date","covered_through","synced_utc")}),flush=True)
+        except (OSError,ValueError,KeyError,TypeError):
+            print("Membership source: unavailable",flush=True)
         print("Stored context inventory:",json.dumps(archive.inventory()),flush=True)
         print("Reserved sessions:",len(dates),"Opportunity anchors:",len(signals),flush=True)
         audit=cx.attach(signals,mode=a.mode,batch_id=a.context_batch)
@@ -63,7 +74,7 @@ def main():
         return 0
     except (ValueError,OSError,sqlite3.Error) as exc:
         print("Context preflight unavailable:",type(exc).__name__)
-        if isinstance(exc,ValueError) and str(exc).startswith(("Use a completed","Run context","FRED vintage","No usable original")):
+        if isinstance(exc,ValueError) and str(exc).startswith(("Use a completed","Run context","Historical backfill","No usable original")):
             print(str(exc))
         return 2
 
