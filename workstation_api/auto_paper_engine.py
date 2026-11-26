@@ -28,6 +28,7 @@ WORKER=None
 HEALTH={"state":"idle","last_cycle_utc":None,"last_error":None}
 WARNING=("Paper research only. Each lane has a separate hypothetical budget. Scenario scores "
     "are not forecasts, and original quote-depth replay is not an actual execution. "
+    "The modeled session loss allowance is reduced by scored losses and not replenished by wins. "
     "Target/stop marks are sampled, exits can be late or unobservable, and actual loss "
     "and short-leg margin are not certified. No broker orders are enabled.")
 
@@ -125,25 +126,41 @@ def _entry(row,now):
     end=decision+timedelta(milliseconds=select.LATENCY_MS,seconds=select.WINDOW_SECONDS)
     if now<end:
         return
-    # Freeze entry evidence using only the predeclared entry window. Ignore
-    # any exit calculation; exit selection is a separate causal transition.
-    result=replay.replay(strategy=candidate["strategy"],identities=candidate["identities"],
-        decision_utc=row["decision_utc"],lots=candidate["lots"],capital=min(cfg["capital"],cfg["max_loss"]),
-        hold_seconds=cfg["hold_seconds"],latency_ms=select.LATENCY_MS,window_seconds=select.WINDOW_SECONDS,
-        max_skew_seconds=select.MAX_SKEW,participation_pct=select.PARTICIPATION,
-        slippage_bps=select.SLIPPAGE,broker_profile=cfg["broker_profile"],now=end)
-    if not result["entry_complete"]:
-        state="entry_censored" if result["state"]=="entry_partial_or_insufficient_depth" else "entry_rejected"
-        _update(row,state,entry_reason=result["state"],missing=result.get("missing",[]),
-                observed_entry_risk_inr=result.get("entry_risk_proxy"),finished_utc=paper._iso(now))
+    # Model only the first receipt per exact leg after the declared delay.
+    # Freeze the entry evidence; do not search for a better later price.
+    ready=decision+timedelta(milliseconds=select.LATENCY_MS)
+    books=[];missing=[]
+    for identity in candidate["identities"]:
+        book,reason=replay._first(identity,ready,end,end)
+        if reason:
+            missing.append({"identity":identity,"reason":reason})
+        else:
+            books.append(book)
+    if missing:
+        _update(row,"entry_rejected",entry_reason="missing_entry_books",missing=missing,finished_utc=paper._iso(now))
         return
-    if not _same_terms(result["entries"],candidate):
-        _update(row,"entry_censored",entry_reason="contract_terms_changed",finished_utc=paper._iso(now))
+    if not _same_terms(books,candidate):
+        _update(row,"entry_rejected",entry_reason="contract_terms_changed",finished_utc=paper._iso(now))
         return
-    entry_time=replay.ao.timestamp(result["entry_received_utc"])
-    _update(row,"paper_open",entry_received_utc=result["entry_received_utc"],
-        entries=result["entries"],entry_cashflow_inr=result["entry_cashflow"],
-        observed_entry_risk_inr=result["entry_risk_proxy"],
+    stamps=[b["stamp"] for b in books]
+    if (max(stamps)-min(stamps)).total_seconds()>select.MAX_SKEW:
+        _update(row,"entry_rejected",entry_reason="entry_leg_skew_exceeded",finished_utc=paper._iso(now))
+        return
+    entries=select.executions(books,candidate["strategy"],candidate["lots"],cfg["broker_profile"])
+    closes=select.executions(books,candidate["strategy"],candidate["lots"],cfg["broker_profile"],reverse=True)
+    if entries is None or closes is None:
+        # No actual fills are assumed when the all-leg conditional entry
+        # cannot be modeled. A possible partial basket is not scored as zero.
+        _update(row,"entry_censored",entry_reason="insufficient_displayed_roundtrip_depth",finished_utc=paper._iso(now))
+        return
+    cash,loss,risk=replay._entry_risk(candidate["strategy"],books,select.actions(candidate["strategy"]),entries,candidate["units"])
+    risk=replay.fees._money(max(risk,loss+sum(e["fees"] for e in closes)))
+    if risk>row["risk_budget_inr"] or (candidate["strategy"].endswith("debit") and cash>=0) or (candidate["strategy"].endswith("credit") and cash<=0):
+        _update(row,"entry_rejected",entry_reason="entry_risk_or_cashflow_changed",observed_entry_risk_inr=risk,finished_utc=paper._iso(now))
+        return
+    entry_time=max(stamps)
+    _update(row,"paper_open",entry_received_utc=paper._iso(entry_time),
+        entries=entries,entry_cashflow_inr=cash,observed_entry_risk_inr=risk,
         hold_deadline_utc=paper._iso(entry_time+timedelta(seconds=cfg["hold_seconds"])),
         entry_reason="conditional_original_depth_entry")
 
@@ -184,7 +201,7 @@ def _monitor(row,now):
     if mark is None:
         return
     value=mark["mark_net_inr"]
-    reason="target_mark" if value>=cfg["target_net"] else "loss_mark" if value<=-cfg["max_loss"] else None
+    reason="target_mark" if value>=cfg["target_net"] else "loss_mark" if value<=-row["risk_budget_inr"] else None
     if reason:
         _update(row,"awaiting_exit",**mark,exit_decision_utc=paper._iso(now),exit_trigger=reason,
                 trigger_processed_utc=paper._iso(now))
@@ -224,7 +241,7 @@ def _exit(row,now):
     pnl=replay.fees._money(row["entry_cashflow_inr"]+sum(e["cashflow"] for e in exits))
     _update(row,"complete",exits=exits,exit_received_utc=paper._iso(max(stamps)),
         net_pnl_inr=pnl,fees_inr=replay.fees._money(sum(e["fees"] for e in row["entries"]+exits)),
-        target_hit=pnl>=cfg["target_net"],loss_limit_exceeded=pnl<-cfg["max_loss"],
+        target_hit=pnl>=cfg["target_net"],loss_limit_exceeded=pnl<-row["risk_budget_inr"],
         finished_utc=paper._iso(now),exit_reason="conditional_original_depth_exit")
 
 
@@ -249,6 +266,14 @@ def _available_lanes(db,now):
     return [lane for lane in LANES if lane not in blocked]
 
 
+def _remaining_budget(db,now,cfg,lane):
+    day=now.astimezone(paper.IST).date().isoformat()
+    rows=_records(db,"SELECT "+FIELDS+" FROM decisions WHERE session_ist=? AND lane=? AND state='complete'",(day,lane))
+    # Do not compound wins or let them replenish the session loss allowance.
+    gross_losses=sum(max(0.,-r["net_pnl_inr"]) for r in rows)
+    return replay.fees._money(max(0.,min(cfg["capital"],cfg["max_loss"])-gross_losses))
+
+
 def cycle(now=None):
     # now override is for deterministic offline tests only. Production
     # records a decision timestamp AFTER source acquisition and computation.
@@ -261,6 +286,7 @@ def cycle(now=None):
         with _db() as db:
             cfg=_settings(db)
             lanes=_available_lanes(db,now) if cfg["enabled"] else []
+            budgets={lane:_remaining_budget(db,now,cfg,lane) for lane in lanes}
         if not lanes or not paper._regular(now):
             return
         # The existing signal baseline needs a completed bar observed within
@@ -270,7 +296,7 @@ def cycle(now=None):
         close=datetime.combine(now.astimezone(paper.IST).date(),time(15,30),paper.IST)
         if now+timedelta(seconds=cfg["hold_seconds"]+2*select.WINDOW_SECONDS+4)>=close:
             return
-        report,decisions=select.select(now,cfg)
+        report,decisions=select.select(now,cfg,lane_caps=budgets)
         decision=now if fixed else paper._now()
         day=decision.astimezone(paper.IST).date().isoformat()
         minute=paper._iso(decision.replace(second=0,microsecond=0))
@@ -293,7 +319,7 @@ def cycle(now=None):
                     pick.pop("selected",None)
                 state="awaiting_entry" if pick.get("action")=="PAPER_ENTRY" else "no_trade"
                 body={**pick,"source":report,"config":cfg,"decision_utc":paper._iso(decision),
-                      "policy_version":select.VERSION,"broker_orders_enabled":False}
+                      "policy_version":select.VERSION,"risk_budget_inr":budgets[lane],"broker_orders_enabled":False}
                 db.execute("""INSERT OR IGNORE INTO decisions(lane,minute_utc,session_ist,state,body)
                     VALUES(?,?,?,?,?)""",(lane,minute,day,state,_encode(body)))
     finally:
@@ -321,7 +347,7 @@ def status(now=None):
             "censored":sum(r["state"] in BLOCKED for r in rows),
             "entry_rejected":sum(r["state"]=="entry_rejected" for r in rows),
             "conditional_net_inr":replay.fees._money(sum(pnl)) if pnl else None,
-            "halted":blocked,"latest":rows[0] if rows else None,
+            "halted":blocked,"remaining_session_risk_inr":replay.fees._money(max(0.,min(cfg["capital"],cfg["max_loss"])-sum(max(0.,-v) for v in pnl))),"latest":rows[0] if rows else None,
             "active":next((r for r in active if r["lane"]==lane),None)}
     return {"config":cfg,"session_ist":day,"lanes":lanes,"recent":recent,"health":dict(HEALTH),
             "regular_session":paper._regular(now),"policy_version":select.VERSION,
