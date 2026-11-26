@@ -12,7 +12,7 @@ from workstation_api import paper_execution as paper, advanced_options as ao
 NOW=datetime(2026,11,26,5,0,5,tzinfo=timezone.utc)
 EXPIRY="2026-11-26"
 CONFIG={**engine.DEFAULTS,"enabled":True,"capital":17000.,"max_loss":4250.,
-        "target_net":100.,"hold_seconds":60}
+        "target_net":100.,"hold_seconds":60,"exit_mode":"target_stop"}
 
 
 def make_book(identity,strike,side,stamp=NOW,mid=None):
@@ -165,3 +165,46 @@ class JournalTests(TestCase):
     def test_rejects_invalid_limits(self):
         with self.assertRaises(ValueError):
             engine.configure({**self.config,"max_loss":20000})
+
+
+    def test_no_trade_does_not_block_later_fresh_entry_same_minute(self):
+        engine.configure(self.config)
+        original=self.picks
+        no={"action":"NO_TRADE","reason":"missing_fresh_book","candidates":[],"rejections":{}}
+        self.picks={"directional":no,"spread":no}
+        engine.cycle(NOW)
+        self.assertEqual(self.get()["lanes"]["directional"]["no_trade"],1)
+        self.picks=original
+        engine.cycle(NOW+timedelta(seconds=5))
+        lane=self.get()["lanes"]["directional"]
+        self.assertEqual(lane["decisions"],2)
+        self.assertEqual(lane["active"]["state"],"awaiting_entry")
+        engine.cycle(NOW+timedelta(seconds=5))
+        self.assertEqual(self.get()["lanes"]["directional"]["decisions"],2)
+
+    def test_reversal_trigger_uses_later_observation_not_entry_mark(self):
+        self.config["exit_mode"]="signal_reversal"
+        engine.configure(self.config)
+        engine.cycle(NOW)
+        with patch.object(engine.replay,"_first",side_effect=self.entry):
+            engine.cycle(NOW+timedelta(seconds=7))
+        observed=NOW+timedelta(seconds=15)
+        opposite={"last_observed_utc":paper._iso(observed-timedelta(seconds=70)),
+                  "contiguous_session_bars":40,"ema9":62900.,"ema21":63000.}
+        mark={"mark_net_inr":20.,"mark_observed_utc":paper._iso(observed),"mark_book_utc":paper._iso(observed)}
+        row=self.get()["lanes"]["directional"]["active"]
+        engine._monitor(row,observed,mark_lookup=lambda *_:mark,signal_lookup=lambda _:opposite)
+        row=self.get()["lanes"]["directional"]["active"]
+        self.assertEqual(row["exit_trigger"],"signal_reversal")
+        self.assertEqual(row["exit_decision_utc"],paper._iso(observed))
+        self.assertNotIn("net_pnl_inr",row)
+
+    def test_legacy_enabled_settings_are_not_silently_changed(self):
+        old={k:v for k,v in self.config.items() if k not in engine.policy.DEFAULTS}
+        with engine._db() as db:
+            db.execute("INSERT INTO settings VALUES(1,?)",(engine._encode(old),))
+            current=engine._settings(db)
+        self.assertEqual(current["exit_mode"],"target_stop")
+        self.assertEqual(current["slippage_bps"],5.)
+        self.assertEqual(current["hold_seconds"],old["hold_seconds"])
+        self.assertEqual(current["stop_net"],old["max_loss"])
