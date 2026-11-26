@@ -289,6 +289,25 @@ def status():
             "note":"Constituent recording uses spare slots on the existing all-option Quote/OI socket. Enablement applies at the next normal connection. No option subscription is displaced; no sixth socket is opened."}
 
 
+def _parse_weights(text):
+    reader = csv.DictReader(io.StringIO(text.strip()))
+    if reader.fieldnames != ["symbol","weight_pct"]:
+        raise ValueError("CSV columns must be exactly symbol,weight_pct")
+    weights = {}
+    for row in reader:
+        symbol = str(row["symbol"] or "").strip().upper()
+        weight = float(row["weight_pct"])
+        if None in row or row.get("weight_pct") is None or symbol in weights or not SYMBOL.fullmatch(symbol) or not math.isfinite(weight) or not 0<weight<=100:
+            raise ValueError("Invalid, duplicate or nonpositive weight")
+        weights[symbol] = weight
+        if len(weights)>MAX_MEMBERS:
+            raise ValueError("Too many constituents")
+    total = sum(weights.values())
+    if abs(total-100)>.1:
+        raise ValueError("Weights must contain every dated member exactly once and sum to 100% within 0.1 percentage point")
+    return weights, total
+
+
 def save_weights(snapshot_date, text, source, confirm):
     """User-supplied dated percentage weights, with strict membership and provenance."""
     if confirm is not True or not isinstance(text,str) or len(text)>16000 or not isinstance(source,str) or not 3<=len(source.strip())<=300:
@@ -297,21 +316,9 @@ def save_weights(snapshot_date, text, source, confirm):
     if day>_local_day(_now()):
         raise ValueError("Weight snapshot cannot be future dated")
     info = membership(day)
-    reader = csv.DictReader(io.StringIO(text.strip()))
-    if reader.fieldnames != ["symbol","weight_pct"]:
-        raise ValueError("CSV columns must be exactly symbol,weight_pct")
-    weights = {}
-    for row in reader:
-        symbol = str(row["symbol"] or "").strip().upper()
-        weight = float(row["weight_pct"])
-        if symbol in weights or not SYMBOL.fullmatch(symbol) or not math.isfinite(weight) or not 0<weight<=100:
-            raise ValueError("Invalid, duplicate or nonpositive weight")
-        weights[symbol] = weight
-        if len(weights)>MAX_MEMBERS:
-            raise ValueError("Too many constituents")
-    total = sum(weights.values())
-    if set(weights)!=set(info["symbols"]) or abs(total-100)>.1:
-        raise ValueError("Weights must contain every dated member exactly once and sum to 100% within 0.1 percentage point")
+    weights,total = _parse_weights(text)
+    if set(weights)!=set(info['symbols']):
+        raise ValueError('Weights must contain every dated member exactly once')
     body = {"snapshot_date":day.isoformat(),"source":source.strip(),"recorded_utc":_iso(_now()),
             "source_csv_sha256":sha256(text.encode()).hexdigest(),"original_csv":text,"membership_sha256":info["source_sha256"],
             "weights_pct":weights,"reported_weight_sum_pct":total,
@@ -341,11 +348,14 @@ def _weights_for(day, asof, members):
                 w = value["weights_pct"]
                 if not 0<=(day-snapshot).days<=35 or recorded>asof or set(w)!=set(members) or sha256(value["original_csv"].encode()).hexdigest()!=value["source_csv_sha256"]:
                     continue
+                raw_weights,raw_sum = _parse_weights(value['original_csv'])
+                if raw_weights!=w or abs(raw_sum-value['reported_weight_sum_pct'])>1e-8:
+                    continue
                 if any(type(x) not in (int,float) or not math.isfinite(x) or not 0<x<=100 for x in w.values()) or abs(sum(w.values())-100)>.1:
                     continue
                 candidates.append(value)
         return {k:v for k,v in max(candidates,key=lambda x:(x["snapshot_date"],x["recorded_utc"])).items() if k!='original_csv'} if candidates else None
-    except (OSError,ValueError,TypeError,KeyError,AttributeError):
+    except (OSError,ValueError,TypeError,KeyError,AttributeError,OverflowError):
         return None
 
 
