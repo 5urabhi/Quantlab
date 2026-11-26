@@ -1,4 +1,5 @@
 import LivePythonResults from './LivePythonResults'
+import MarketPatternIntelligence from './MarketPatternIntelligence'
 import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Activity,Database,Radio,RefreshCw,ShieldCheck,Square,Search} from 'lucide-react'
 import './live-feed.css'
@@ -213,10 +214,12 @@ export default function LiveFeedPanel({
       onDraftJournal={(contract,lots)=>onDraftJournal?.(contract,lots)}
     />}
     {view==='options'&&<LivePythonResults mode="options"/>}
+    {view==='options'&&<details className="tc-panel"><summary>Market movement &amp; historical scalping context</summary><MarketPatternIntelligence identity="INDEX:BANKNIFTY"/></details>}
     {feed?.index_packet_note&&!livePrice&&<p className="tc-warning" role="status">
       Broker index packet not supported by the published binary layout · {feed.unsupported_index_packets} observed.
       {' '}{feed.index_packet_note}</p>}
     {view==='signals'&&<>
+      <MarketPatternIntelligence identity={watchedIndex}/>
       <ObservedIndexChartV2 rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'}
         sourceWarning={signal?.source_warning||''}/>
       {automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'&&<RecordedChainSpot/>}

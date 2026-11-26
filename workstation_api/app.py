@@ -644,6 +644,41 @@ def trading_cockpit_snapshot(identity: str, limit: int = 500):
         bad(exc)
 
 
+class MarketPatternSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+@app.get("/api/trading-cockpit/market-patterns")
+def trading_market_patterns(identity: str = "INDEX:BANKNIFTY"):
+    from . import market_patterns
+    try:
+        return market_patterns.report(identity)
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/market-patterns/sync")
+def trading_market_patterns_sync(body: MarketPatternSyncRequest):
+    from . import market_patterns
+    try:
+        return market_patterns.configure_sync(body.enabled)
+    except (ValueError, OSError) as exc:
+        bad(exc)
+
+
+@app.on_event("startup")
+def resume_market_pattern_sync():
+    from . import market_patterns
+    market_patterns.start_sync()
+
+
+@app.on_event("shutdown")
+def stop_market_pattern_sync():
+    from . import market_patterns
+    market_patterns.stop_sync()
+
+
 @app.get("/api/trading-cockpit/historical/series")
 def trading_cockpit_historical_series(identity: str = "INDEX:BANKNIFTY",
                                       limit: int = 5000):
