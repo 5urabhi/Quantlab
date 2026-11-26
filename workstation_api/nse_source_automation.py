@@ -336,3 +336,70 @@ class NSEInfoMCP:
         if result.get("isError"):
             raise ValueError("Official NSE MCP reported that this lookup failed")
         return result
+
+
+def saved_intake_receipts(limit=100, *, root: Path | None = None) -> dict:
+    """Inspect bounded local intake metadata; do not reread or certify source files.
+
+    Never follow symlinks, expose local file paths, or contact the exchange.
+    Partial scans and malformed receipts are explicitly distinguished from
+    complete inventory. Pending imports are intentionally excluded.
+    """
+    if type(limit) is not int or not 1 <= limit <= 200:
+        raise ValueError("Receipt limit must be between 1 and 200")
+    base = root if root is not None else service.DATA / "nse" / "authorized_intake"
+    out = {"receipts": [], "inspected": 0, "unreadable": 0,
+           "partial": False, "read_only": True,
+           "note": "Saved intake metadata only; hashes are recorded, not reverified. "
+                   "No source or licence is independently verified."}
+    if not base.exists() and not base.is_symlink():
+        return out
+    if base.is_symlink() or not base.is_dir():
+        raise ValueError("Intake root is not an ordinary directory")
+    if root is None and (base.parent.is_symlink() or service.DATA.is_symlink()
+                         or not base.resolve().is_relative_to(service.DATA.resolve())):
+        raise ValueError("Unsafe intake directory")
+    rows = []
+    with os.scandir(base) as entries:
+        for i, entry in enumerate(entries):
+            if i >= 2000:
+                out["partial"] = True
+                break
+            if not re.fullmatch(r"intake_[0-9a-f]{16}", entry.name):
+                continue
+            if not entry.is_dir(follow_symlinks=False):
+                out["unreadable"] += 1
+                continue
+            out["inspected"] += 1
+            meta = Path(entry.path) / "SOURCE_INTAKE.json"
+            try:
+                if meta.is_symlink() or not meta.is_file() or meta.stat().st_size > 256000:
+                    raise ValueError("Missing or invalid receipt")
+                value = json.loads(meta.read_text())
+                if not isinstance(value, dict) or value.get("id") != entry.name or value.get("source") != "user_provided_local_export":
+                    raise ValueError("Receipt identity mismatch")
+                ts = value["ingested_utc"]
+                dt = datetime.fromisoformat(ts)
+                if dt.tzinfo is None:
+                    raise ValueError("Receipt timestamp lacks timezone")
+                files = value["files"]
+                candidates = value["weightage_csv_candidates"]
+                if not isinstance(files, list) or not 1 <= len(files) <= 20 or type(candidates) is not int or candidates < 0:
+                    raise ValueError("Invalid receipt fields")
+                clean = []
+                for f in files:
+                    name = _safe_name(f["name"])
+                    digest = f["original_sha256"]
+                    size = f["bytes"]
+                    if not isinstance(digest,str) or not re.fullmatch(r"[0-9a-f]{64}",digest) or type(size) is not int or not 0<size<=MAX_RAW_FILE:
+                        raise ValueError("Invalid receipt file metadata")
+                    clean.append({"name":name,"original_sha256":digest,"bytes":size})
+                rows.append({"id":entry.name,"ingested_utc":dt.astimezone(timezone.utc).isoformat(),
+                             "files":clean,"weightage_csv_candidates":candidates,
+                             "source_verified_by_nse":False,"license_verified":False})
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                out["unreadable"] += 1
+    rows.sort(key=lambda row:row["ingested_utc"], reverse=True)
+    out["receipts"] = rows[:limit]
+    out["partial"] = out["partial"] or bool(out["unreadable"]) or len(rows)>limit
+    return out
