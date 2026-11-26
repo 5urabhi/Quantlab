@@ -479,3 +479,48 @@ def analyze(horizon=5, as_of=""):
             "partial_contribution_pp":sum(r["contribution_pp"] for r in weighted) if weighted else None,
             "spot_anchor":index,"blockers":blockers,
             "note":"Descriptive price pressure using sampled, receipt-time-aligned original quotes and user-reviewed dated weights (not exact live index weights). Relative volume compares same-time intervals over available prior recorded sessions; at least five are required. ATP and displayed quantity imbalance are not aggressor flow. No calibrated forecast or trade recommendation."}
+
+
+def import_archived_weights(receipt_id,filename,snapshot_date,confirm_reviewed):
+    """Normalize exact percent columns from an authorized, hash-checked local CSV.
+    The original file remains immutable in the intake archive. Never fetch a
+    network source, guess publication dates, units, symbols or index membership.
+    """
+    from . import nse_source_automation as intake
+    if confirm_reviewed is not True or not re.fullmatch(r"intake_[0-9a-f]{16}",receipt_id or ""):
+        raise ValueError("Select a reviewed saved intake receipt")
+    name=intake._safe_name(filename)
+    if not name.lower().endswith(".csv"):
+        raise ValueError("Select an original CSV (not an extracted or arbitrary file)")
+    root=service.DATA/"nse"/"authorized_intake"/receipt_id
+    metadata=root/"SOURCE_INTAKE.json"
+    file=root/"originals"/name
+    if not market_inventory._safe_file(metadata) or not market_inventory._safe_file(file) or metadata.stat().st_size>256000 or not 0<file.stat().st_size<=200000:
+        raise ValueError("Saved original weight CSV or receipt is unavailable")
+    value=json.loads(metadata.read_text())
+    if value.get("id")!=receipt_id or value.get("source")!="user_provided_local_export":
+        raise ValueError("Receipt identity mismatch")
+    matches=[r for r in value.get("files",[]) if r.get("name")==name]
+    raw=file.read_bytes()
+    digest=sha256(raw).hexdigest()
+    if len(matches)!=1 or len(raw)!=matches[0].get("bytes") or digest!=matches[0].get("original_sha256"):
+        raise ValueError("Archived source bytes no longer match intake SHA-256")
+    reader=csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
+    cols=reader.fieldnames or []
+    symbols=[c for c in cols if c.strip().casefold() in ("symbol","ticker")]
+    weights=[c for c in cols if c.strip().casefold() in ("weight_pct","weightage","weightage (%)","weight (%)","weight")]
+    if len(symbols)!=1 or len(weights)!=1:
+        raise ValueError("Source must have one Symbol/Ticker and one explicitly reviewed percentage Weight column")
+    out=io.StringIO()
+    writer=csv.writer(out,lineterminator="\n")
+    writer.writerow(["symbol","weight_pct"])
+    for i,row in enumerate(reader):
+        if i>=MAX_MEMBERS or None in row:
+            raise ValueError("Source CSV must contain exactly the dated BANKNIFTY members, not multiple indices")
+        symbol=row.get(symbols[0])
+        weight=row.get(weights[0])
+        if symbol is None or weight is None:
+            raise ValueError("Missing original symbol or weight")
+        writer.writerow([symbol.strip().upper(),weight.strip().removesuffix("%").strip()])
+    return save_weights(snapshot_date,out.getvalue(),
+                        ("Authorized local intake "+receipt_id+" / "+name[:90]+" / original SHA-256 "+digest),True)
