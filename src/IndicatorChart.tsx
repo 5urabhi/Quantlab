@@ -4,7 +4,7 @@ import ResearchPlot,{type ResearchPlotData} from './ResearchPlots'
 import {alignIndicator,type AlignedMonitor,type Source,type SourceRow} from './indicatorAlignment.mjs'
 
 const formatTime=(x:string|number)=>new Date(x).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})
-export default function IndicatorChart({source,expiry=null,rows,plot,provenance,enabled=true}:{source:Source;expiry?:string|null;rows:SourceRow[];plot:ResearchPlotData;provenance:string;enabled?:boolean}){
+export default function IndicatorChart({source,expiry=null,rows,plot,provenance,enabled=true,compact=false}:{source:Source;expiry?:string|null;rows:SourceRow[];plot:ResearchPlotData;provenance:string;enabled?:boolean;compact?:boolean}){
   const [overlays,setOverlays]=useState<AlignedMonitor[]>([])
   const [selected,setSelected]=useState<string[]>([])
   const [error,setError]=useState('')
@@ -36,7 +36,7 @@ export default function IndicatorChart({source,expiry=null,rows,plot,provenance,
       {available.map(o=><label key={o.id}><input type="checkbox" checked={selected.includes(o.id)} onChange={e=>setSelected(v=>e.target.checked?[...v,o.id]:v.filter(x=>x!==o.id))}/>{o.name} · v{o.revision} · {o.sameUnits?'Overlay':'Companion panel'} · {o.plot.y_label}</label>)}
       {selected.some(id=>!available.some(o=>o.id===id))&&<p className="ws-caption">A selected indicator is paused, stale or awaiting a matching source update.</p>}
     </details>}
-    <ResearchPlot plot={merged} provenance={provenance} formatX={formatTime} syncGroup={group}/>
+    <ResearchPlot compact={compact} plot={merged} provenance={provenance} formatX={formatTime} syncGroup={group}/>
     {applied.filter(o=>!o.sameUnits).map(o=><ResearchPlot key={o.id} plot={{...o.plot,x:plot.x,traces:o.traces,break_before:plot.break_before}} provenance="custom-python-snapshot" allowApply={false} formatX={formatTime} syncGroup={group}/>)}
     {!!applied.length&&<p className="ws-caption">Custom traces are research calculations, not verified predictive signals or orders. No missing values are filled.</p>}
   </div>

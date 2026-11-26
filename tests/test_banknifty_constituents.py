@@ -29,6 +29,23 @@ class ConstituentTests(TestCase):
         raw=struct.pack("<fHIfIIIffff",price,10,int(trade.timestamp()),100.,volume,20,60,100.,100.,101.,99.)
         return struct.pack("<BHBI",4,50,segment,sid)+raw
 
+    def test_current_official_list_is_dated_and_not_backfilled(self):
+        from io import BytesIO
+        raw=("Company Name,Industry,Symbol,Series,ISIN Code\n"+
+             "".join(f"Bank {i},Financial Services,BANK{i},EQ,INE{i:09d}\n" for i in range(5))).encode()
+        r=b.refresh_current_membership(opener=lambda *a,**k:BytesIO(raw),now=self.target)
+        self.assertEqual(len(r["symbols"]),5)
+        day=b._local_day(self.target)
+        master=[{"id":f"NSE_EQ:{i+1}","symbol":f"BANK{i}","regular_eq":True,
+                 "exchange_segment":"NSE_EQ","trading_symbol_verified":True,"isin":f"INE{i:09d}"} for i in range(5)]
+        self.assertIsNone(b._current_membership(day,master,self.target-timedelta(seconds=1)))
+        self.assertIsNone(b._current_membership(day+timedelta(days=1),master,self.target+timedelta(days=1)))
+        info=b.membership(day,master,as_of=self.target)
+        self.assertEqual(len(info["resolved"]),5)
+        self.assertEqual(info["source"],b.CURRENT_MEMBERS_URL)
+        with self.assertRaises(ValueError):
+            b.refresh_current_membership(opener=lambda *a,**k:BytesIO(b"<html>Error</html>"),now=self.target)
+
     def test_mixed_parser_and_spare_capacity(self):
         eq=self.packet()
         opt=self.packet(sid=12,segment=2)

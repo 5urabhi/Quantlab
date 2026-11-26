@@ -10,6 +10,9 @@ from contextlib import closing
 from datetime import date, datetime, time as clock_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from hashlib import sha256
+from urllib.request import Request, urlopen
+from urllib.error import URLError
+from urllib.parse import urlparse
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import RLock
@@ -35,6 +38,10 @@ HORIZONS = (1, 5, 10, 30, 60)
 LOCK = RLock()
 SYMBOL = re.compile(r"^[A-Z0-9&_.-]{1,40}$")
 IDENTITY = re.compile(r"^NSE_EQ:[0-9]{1,12}$")
+CURRENT_MEMBERS_URL = "https://www.niftyindices.com/IndexConstituent/ind_niftybanklist.csv"
+MAX_CURRENT_CSV = 65536
+CURRENT_REFRESH_LOCK=RLock()
+CURRENT_REFRESH_LAST={}
 
 
 def _now():
@@ -93,8 +100,122 @@ def set_enabled(value):
     return status()
 
 
-def membership(day, instruments=None):
-    """Use only a date actually covered by the installed membership evidence."""
+def _parse_current_csv(text):
+    reader=csv.DictReader(io.StringIO(text))
+    cols={str(x).strip().casefold():x for x in (reader.fieldnames or [])}
+    if "symbol" not in cols or "series" not in cols or "isin code" not in cols:
+        raise ValueError("Official constituent CSV does not have Symbol, Series and ISIN Code")
+    members={}
+    for row in reader:
+        symbol=str(row.get(cols["symbol"]) or "").strip().upper()
+        series=str(row.get(cols["series"]) or "").strip().upper()
+        isin=str(row.get(cols["isin code"]) or "").strip().upper()
+        if not SYMBOL.fullmatch(symbol) or series!="EQ" or not re.fullmatch(r"IN[A-Z0-9]{10}",isin) or symbol in members:
+            raise ValueError("Official constituent CSV contains invalid or ambiguous member identity")
+        members[symbol]=isin
+    if not 5<=len(members)<=MAX_MEMBERS or len(set(members.values()))!=len(members):
+        raise ValueError("Official constituent CSV has an implausible or duplicate membership")
+    return members
+
+
+def refresh_current_membership(opener=urlopen,now=None):
+    """Download the public official list; no extrapolation or historical backdate."""
+    request=Request(CURRENT_MEMBERS_URL,headers={"Accept":"text/csv,application/octet-stream,*/*",
+                                                "User-Agent":"QuantLab/1.0 read-only research"})
+    try:
+        with opener(request,timeout=15) as response:
+            if hasattr(response,"geturl"):
+                source=urlparse(response.geturl())
+                if (source.scheme!="https" or source.hostname not in ("www.niftyindices.com","niftyindices.com")
+                        or source.path.lstrip("/").lower()!="indexconstituent/ind_niftybanklist.csv"):
+                    raise ValueError("Official constituent download redirected unexpectedly")
+            raw=response.read(MAX_CURRENT_CSV+1)
+    except (OSError,URLError,TimeoutError):
+        raise ValueError("Official NSE Indices constituent CSV unavailable; use the dated membership source or retry.") from None
+    if not raw or len(raw)>MAX_CURRENT_CSV:
+        raise ValueError("Official constituent CSV is empty or oversized")
+    # The source is known only after retrieval and validation, not when
+    # the network request began. Explicit now is for offline test fixtures.
+    text=raw.decode("utf-8-sig")
+    members=_parse_current_csv(text)
+    now=now or _now()
+    day=_local_day(now)
+    # Store the original decoded CSV, including any UTF-8 BOM on the wire.
+    original=raw.decode("utf-8")
+    receipt={"date":day.isoformat(),"retrieved_utc":_iso(now),"source":CURRENT_MEMBERS_URL,
+             "original_csv":original,"sha256":sha256(raw).hexdigest(),"symbols":sorted(members)}
+    path=_safe_folder()/("current_members_"+day.isoformat()+"_"+receipt["sha256"][:16]+".json")
+    if not path.exists():
+        _write_json(path,receipt)
+    return {"date":day.isoformat(),"symbols":sorted(members),"source_sha256":receipt["sha256"],
+            "capture_state":"Membership saved; enabled recording subscribes on the next normal shared-feed connection. No existing stream was stopped."}
+
+
+def maybe_refresh_current_membership():
+    """Bounded best-effort refresh for already-enabled recording, never a socket restart."""
+    if not enabled():
+        return
+    try:
+        now=_now()
+        day=_local_day(now)
+        if day.weekday()>=5 or _current_membership(day,None,now) is not None:
+            return
+        key=(str(service.DATA),day)
+        with CURRENT_REFRESH_LOCK:
+            if time.monotonic()-CURRENT_REFRESH_LAST.get(key,-100000)<1800:
+                return
+            CURRENT_REFRESH_LAST.clear()
+            CURRENT_REFRESH_LAST[key]=time.monotonic()
+        refresh_current_membership()
+    except (OSError,ValueError,TypeError,KeyError):
+        # Public source can be unavailable; no guessed members or retry storm.
+        return
+
+
+def _current_membership(day,instruments,as_of):
+    folder=_safe_folder()
+    paths=sorted(folder.glob("current_members_"+day.isoformat()+"_*.json"))[:64]
+    candidates=[]
+    for path in paths:
+        try:
+            if path.is_symlink() or path.stat().st_size>MAX_CURRENT_CSV*2:
+                continue
+            receipt=json.loads(path.read_text(encoding="utf-8"))
+            retrieved=datetime.fromisoformat(receipt["retrieved_utc"])
+            if receipt["source"]!=CURRENT_MEMBERS_URL or receipt["date"]!=day.isoformat() or _local_day(retrieved)!=day or retrieved>as_of:
+                continue
+            raw=receipt["original_csv"].encode("utf-8")
+            if sha256(raw).hexdigest()!=receipt["sha256"]:
+                continue
+            members=_parse_current_csv(raw.decode("utf-8-sig"))
+            if sorted(members)!=receipt["symbols"]:
+                continue
+            candidates.append((retrieved,receipt,members))
+        except (OSError,ValueError,TypeError,KeyError,UnicodeError):
+            continue
+    if not candidates:
+        return None
+    retrieved,receipt,members=max(candidates,key=lambda x:x[0])
+    resolved={}
+    for symbol,isin in members.items():
+        matches=[r["id"] for r in instruments or [] if r.get("symbol","").upper()==symbol
+                 and r.get("exchange_segment")=="NSE_EQ" and r.get("regular_eq")
+                 and r.get("trading_symbol_verified") and IDENTITY.fullmatch(str(r.get("id","")))
+                 and (not r.get("isin") or r.get("isin")==isin)]
+        if len(matches)==1:
+            resolved[symbol]=matches[0]
+    if len(set(resolved.values()))!=len(resolved):
+        raise ValueError("Ambiguous current constituent IDs")
+    return {"date":day.isoformat(),"symbols":sorted(members),"resolved":resolved,
+            "source_sha256":receipt["sha256"],"covered_through":day.isoformat(),
+            "source":CURRENT_MEMBERS_URL,"retrieved_utc":_iso(retrieved)}
+
+
+def membership(day, instruments=None, *, as_of=None):
+    """Current official list is valid only after capture on that same date."""
+    current=_current_membership(day,instruments,as_of or _now())
+    if current is not None:
+        return current
     result = pit_index.query("banknifty_pit", day.isoformat(),
                              (day + timedelta(days=1)).isoformat(), instruments)
     members = result["asof_members"]
@@ -285,7 +406,13 @@ CAPTURE = Capture()
 
 
 def status():
-    return {**CAPTURE.status(),"enabled":enabled(),"read_only":True,
+    current=CAPTURE.status()
+    allowed=enabled()
+    if allowed and not current["connected"] and current["state"] in ("not_enabled","not_subscribed","disabled_by_user"):
+        current["state"]="enabled_waiting_for_shared_connection"
+    elif not allowed:
+        current["state"]="disabled_by_user"
+    return {**current,"enabled":allowed,"read_only":True,
             "storage":recorder_storage.status(STREAM),
             "note":"Constituent recording uses spare slots on the existing all-option Quote/OI socket. Enablement applies at the next normal connection. No option subscription is displaced; no sixth socket is opened."}
 
@@ -451,7 +578,7 @@ def analyze(horizon=5, as_of=""):
     start = target-timedelta(minutes=horizon)
     blockers = []
     try:
-        info = membership(day)
+        info = membership(day,as_of=target)
     except (OSError,ValueError,TypeError,KeyError):
         info = {"date":day.isoformat(),"symbols":[]}
         blockers.append("Dated BANKNIFTY membership is unavailable for this session. Sync reviewed membership evidence.")

@@ -649,6 +649,32 @@ class MarketPatternSyncRequest(BaseModel):
     enabled: bool
 
 
+class DisplaySessionRepairRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    identity: Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY"
+    confirm_readonly: bool=False
+
+
+@app.get("/api/trading-cockpit/live/display-minutes")
+def live_display_minutes(identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY"):
+    from . import market_patterns
+    try:
+        return market_patterns.display_minutes(identity)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/live/repair-minutes")
+def repair_live_display_minutes(body:DisplaySessionRepairRequest):
+    from . import market_patterns
+    if not body.confirm_readonly:
+        raise HTTPException(400,"Confirm read-only Dhan current-session history repair")
+    try:
+        return market_patterns.repair_display_session(body.identity)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/market-patterns")
 def trading_market_patterns(identity: str = "INDEX:BANKNIFTY"):
     from . import market_patterns
@@ -4973,6 +4999,21 @@ def bank_constituent_capture(body: BankConstituentCaptureRequest):
         return banknifty_constituents.set_enabled(body.enabled)
     except (ValueError,OSError) as exc:
         bad(exc)
+
+class CurrentBankMembershipRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    confirm_current_source: bool=False
+
+
+@app.post("/api/trading-cockpit/constituents/membership/refresh")
+def refresh_bank_constituent_membership(body:CurrentBankMembershipRequest):
+    if not body.confirm_current_source:
+        raise HTTPException(400,"Confirm the official current constituent list download")
+    try:
+        return banknifty_constituents.refresh_current_membership()
+    except (ValueError,OSError,UnicodeError) as exc:
+        bad(exc)
+
 
 @app.post("/api/trading-cockpit/constituents/weights")
 def bank_constituent_weights(body: BankConstituentWeightRequest):

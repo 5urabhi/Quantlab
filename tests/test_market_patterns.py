@@ -1,5 +1,6 @@
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
+from unittest.mock import patch
 from workstation_api import market_patterns as mp
 
 
@@ -9,6 +10,22 @@ def day(start=1000, step=1):
 
 
 class MarketPatternTests(unittest.TestCase):
+    def test_display_uses_only_completed_original_current_rows(self):
+        now=datetime(2026,11,26,4,0,tzinfo=timezone.utc)  # 09:30 IST
+        today="2026-11-26"
+        bar=(100.,102.,99.,101.)
+        historical={"days":{today:{0:bar,1:bar,15:bar}}}
+        live={"rows":[{"timestamp_utc":"2026-11-26T03:46:00+00:00",
+                       "open":200,"high":201,"low":199,"close":200},
+                      {"timestamp_utc":"2026-11-26T03:47:00+00:00",
+                       "open":103,"high":104,"low":102,"close":103}]}
+        with patch.object(mp,"_history",return_value=historical),patch.object(mp.live_market,"minute_series",return_value=live):
+            result=mp.display_minutes(now=now)
+        self.assertEqual(result["historical_bars"],2)
+        self.assertEqual(result["live_observed_bars"],1)
+        self.assertEqual(result["missing_minutes"],12)
+        self.assertEqual([r["close"] for r in result["rows"]],[101.,101.,103])
+
     def test_full_daily_stats_and_horizon_counts(self):
         days = {"2026-11-23": day(), "2026-11-24": day(1500, -1)}
         b = mp.baseline(days)
