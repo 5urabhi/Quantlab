@@ -2422,7 +2422,7 @@ def data_manager_research_resolve_run(body: ResearchResolveRequest):
         bad(exc)
 
 
-@app.post("/api/data-manager/maintenance")
+@app.post("/api/data-manager/maintenance/derived")
 def data_manager_maintenance():
     # Local original candles and evidence are immutable. Only missing
     # derived views are eligible for source-safe automatic reconstruction.
@@ -5227,7 +5227,11 @@ def market_library_maintenance_status():
 
 
 @app.post("/api/data-manager/maintenance")
-def configure_market_library_maintenance(body:MarketMaintenanceRequest):
+def configure_market_library_maintenance(body:MarketMaintenanceRequest|None=None):
+    # Preserve bodyless legacy derived-repair requests without shadowing
+    # the automatic history settings handler on the same URL.
+    if body is None or not body.model_fields_set:
+        return data_manager_maintenance()
     try:
         return data_maintenance.configure(body.model_dump(exclude={"confirm_readonly"}),body.confirm_readonly)
     except (ValueError,OSError,TypeError) as exc:
