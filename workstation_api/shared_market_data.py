@@ -35,6 +35,24 @@ def database_path() -> Path:
     return service.DATA / "dhan" / "shared_market.sqlite3"
 
 
+def configure_concurrency():
+    """Enable persistent WAL on the canonical local database at API startup.
+
+    Never force a checkpoint, delete sidecars, copy a running SQLite file,
+    or switch journal mode from a replay reader. If another process holds a
+    conflicting lock, report the failure and leave the database unchanged.
+    """
+    from contextlib import closing
+    target=database_path()
+    target.parent.mkdir(parents=True,exist_ok=True)
+    with LOCK, closing(sqlite3.connect(target,timeout=8)) as conn:
+        conn.execute("PRAGMA busy_timeout=8000")
+        mode=conn.execute("PRAGMA journal_mode").fetchone()[0]
+        if mode.lower()!="wal":
+            mode=conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        return {"journal_mode":mode.lower(),"wal_enabled":mode.lower()=="wal"}
+
+
 def _connect():
     target = database_path()
     target.parent.mkdir(parents=True, exist_ok=True)
