@@ -5419,13 +5419,13 @@ def constituent_derivative_analysis(horizon:int=5,as_of:str=""):
         raise HTTPException(400,"Stored derivative analysis unavailable; inspect source and selected time") from exc
 
 
-from . import constituent_alpha, context_alpha, market_context
+from . import constituent_alpha, context_alpha, market_context, context_feeds, context_events
 
 
 class ConstituentAlphaRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
     horizon: Literal[5,10,30,60]=30
-    scope: Literal["none","options","global","participants","combined"]="none"
+    scope: Literal["none","options","global","participants","events","combined","all"]="none"
     mode: Literal["receipt","archive"]="receipt"
 
 
@@ -5512,6 +5512,59 @@ def import_constituent_participant_context(body:ParticipantContextImportRequest)
         raise HTTPException(400,str(exc)) from exc
     except (OSError,sqlite3.Error) as exc:
         raise HTTPException(503,"Shared market evidence temporarily unavailable") from exc
+
+
+class ContextFeedConfigRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    enabled: bool=False
+    fred: bool=True
+    news: bool=True
+    mappings: list[dict[str,str]]=Field(default_factory=list,max_length=8)
+    confirm_reviewed: bool=False
+
+
+class ContextFeedSyncRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    confirm_reviewed: bool=False
+
+
+@app.on_event("startup")
+def start_market_context_worker():
+    context_feeds.start()
+
+
+@app.on_event("shutdown")
+def stop_market_context_worker():
+    context_feeds.shutdown()
+
+
+@app.get("/api/market-intelligence/feeds")
+def market_context_feed_status():
+    return context_feeds.status()
+
+
+@app.post("/api/market-intelligence/feeds")
+def configure_market_context_feeds(body:ContextFeedConfigRequest):
+    try:
+        return context_feeds.configure(body.model_dump(exclude={"confirm_reviewed"}),body.confirm_reviewed)
+    except (ValueError,TypeError,OSError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.post("/api/market-intelligence/feeds/sync")
+def sync_market_context_feeds(body:ContextFeedSyncRequest):
+    try:
+        return context_feeds.request_sync(body.confirm_reviewed)
+    except (ValueError,TypeError,OSError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.get("/api/market-intelligence/events")
+def market_context_events():
+    try:
+        return context_events.snapshot()
+    except (ValueError,TypeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(503,"Stored event evidence temporarily unavailable") from exc
 
 
 from . import constituent_calibration
