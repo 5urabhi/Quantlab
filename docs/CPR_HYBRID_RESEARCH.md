@@ -187,3 +187,86 @@ The full JSON includes per-session counts even on zero-opportunity days.
 This is not a guarantee of daily trades or profitability. The previous
 evaluation dates have already been viewed, so compare exploratory outcomes
 and reserve fresh independent sessions for confirmation.
+
+
+## Context, ranked entries and adaptive exits (v5)
+
+Run the additional comparison in one command:
+
+```bash
+bash run.sh cpr-research --entry-mode regime_scan --frame 5 --hold 60 \
+    --risk-budget 12000 --wings 5 --context-mode archive --rank-entries
+```
+
+This is retrospective paper research. The INR 12,000 allowance is not a
+recommended live risk setting. Use `--context-mode receipt` for evidence
+known at actual import time; archive mode trusts reviewed historical
+availability dates and is not prospective verification. `--context-mode off
+--rank-entries` tests technical ranking without optional context. Existing
+crossover and daily_scan modes remain available. Wider wings read already
+saved verified near-monthly BANKNIFTY receipts only; use Data Manager's
+existing option-history sync for missing eligible wings. No API calls are
+made by this study. Exact-contract fills, lot size and bid/ask remain
+unverified. NIFTY option history is not wired into this BANKNIFTY-specific
+receipt loader.
+
+Constituents: automatically select the dated BANKNIFTY one-minute batch with
+the greatest manifest date overlap (or pass its ID using
+`--context-batch ID`). Read original hashed files and pinned membership;
+require 16 consecutive completed bars for every member. Include
+direction-normalized 5/15-minute momentum, breadth, dispersion, signed
+relative volume against at least five earlier same-time observations,
+and HDFCBANK/ICICIBANK/SBIN momentum when they were members. Weighted
+features require an earlier verified weight snapshot; unweighted breadth
+is never described as official index attribution. A missing member
+blocks that context scope, not the original technical baseline.
+
+Global: use the shared market-context store and existing availability
+timeline. S&P/Nasdaq/US bank, Asian equities, GIFT NIFTY, USD/INR,
+VIX, oil, yields, and available participant inputs are represented by
+observed changes, age, appropriate stable levels and missing indicators.
+Require evidence from all three global-equity/Asia/macro groups. No
+same-day US close or later report can be used before its documented
+availability; ambiguous sources are excluded. Context-rule comparators
+require positive directional bank breadth (at least one-third net),
+5/15-minute momentum and weighted confirmation if weights are verified;
+global rules require aligned mean observed equity and Asian returns.
+These rules are hypotheses, not causal estimates of market influence.
+
+For each of technical, constituent, global and combined scopes, compare
+matched technical and augmented ML models on the same available
+observations; also compare context rules against the same matched
+fixed-stop benchmark. Training is earlier-only. Candidate models,
+temperature, prior-shift shrinkage and entry probability thresholds
+are all tuned on the development validation split; this is not an
+independent calibration experiment. Compare predictive Brier score
+against a smoothed training class prior on matched nearest-contract
+evaluation observations. Threshold selection uses sequential validation
+accounts: at least five completed trades over three days, no unresolved
+entries or exits, and positive modeled net P&L. If none passes, abstain.
+Candidate ranking is by expected net position return derived from
+calibrated class probabilities and train-only class-average returns,
+with target probability and moneyness as deterministic ties. Select
+from signal-time affordable single lots without filtering on future
+fill/exit availability. If the chosen entry/exit is missing, censor it;
+never replace it using hindsight. A later remaining-budget rejection
+does not re-rank against the smaller budget. Compare fixed, trailing
+and the existing frozen technical Q exit policy. Global/constituent
+inputs affect entry decisions; the Q state itself is not augmented.
+Prediction labels still correspond to fixed-stop net outcomes, not
+trailing or Q policy outcomes.
+
+The regime_scan mode adds exploratory completed-bar CPR rejection
+inside the band when EMA separation is <=5 bps; ambiguous both-edge
+touches abstain. The volatility-trailing comparator uses the standard
+3% activation and a 2–6 percentage-point gap based on twice the
+dispersion of the five most recent completed mark changes, defaulting
+to 3 points until enough marks are available. Its stop floor can only
+ratchet upward. Every strategy remains subject to execution delay,
+position exposure, time cap, and sequential-account restrictions.
+No parameter is approved for live orders. Prior evaluation dates
+have already been inspected; fresh forward dates are needed before
+claiming any improvement. Report stores context source metadata,
+timestamped factor evidence, coverage, validation gates and scoped
+results. Context missingness or absent usable training labels is an
+explicit blocker, not synthesized evidence.
