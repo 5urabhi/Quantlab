@@ -19,12 +19,13 @@ preceding weekday's complete 375-minute index session. Missing weekdays block
 the signal, including unverified exchange holidays; special weekend sessions
 are excluded. This is deliberately conservative, not an authoritative exchange
 calendar. The prior session warms the EMA; a missing
-current index minute stops the later session signal clock. All comparisons share
-the same fixed, nonoverlapping signal reservations, at most three per session.
+current index minute stops the later session signal clock. All account comparisons share
+the same fixed, nonoverlapping crossover reservations, at most three per session.
 This is a specific proposed rule, not a reconstruction of every discretionary
 entry or CPR rejection used by the trader. Previous-day O/H/L/C distances,
 CPR distances and width, direction-normalized EMA gap, time, moneyness, premium
-and funding are the initial ML inputs. No invented historical OI, IV, Greeks,
+funding normalized to a fixed INR 17,000 reference (independent of account budget),
+and a fresh-crossover flag are the initial ML inputs. No invented historical OI, IV, Greeks,
 constituent weights, global signals or order-book prices are used.
 
 ## Explicit assumptions
@@ -44,12 +45,35 @@ constituent weights, global signals or order-book prices are used.
   stop or time cap. Default maximum holding period 60 minutes; no overnight.
   No-stop is only a research comparator, with the same full-premium exposure
   budget and same time cap, not a proposed deployment policy.
-- Missing or conflicting bars are never interpolated. Unobserved entries or
+- Missing or conflicting bars are never interpolated. Missing hypothetical exit
+  prices do not prevent holding; a chosen exit without an observed delayed
+  open censors the position. Missing mark bars truncate the path. Unobserved entries or
   unresolved exits halt that day's virtual account. Rejected modeled entries
   above budget are treated as hypothetical limit misses, not actual orders.
-  Missing hypothetical exit observations conservatively truncate paths, so
+  Full-path Q training requires all hypothetical exits to be observable, so
   conditional results can be affected by missingness. Aggregate conditional
   P&L across independent day accounts is not compounded performance.
+
+## Separate learning data from the trading account
+
+The earlier 30 training sessions reserve the original crossovers plus a fixed
+nonoverlapping grid of CPR/EMA-aligned continuation windows. A crossover and
+grid window at the same timestamp are deduplicated; the two calendars can
+otherwise overlap. At each learning anchor, use at most five nearest qualifying
+strikes with one hypothetical lot, **regardless of account affordability**.
+The 10 validation sessions use only the original crossover signals, but may
+also include up to five strikes. No holdout rows enter fitting or selection.
+ML uses anchor-balanced weights; Q averages within strike trajectory then
+within anchor, and support counts distinct anchors and days. Correlated strikes
+and overlapping windows are not independent market sessions. This expansion
+may improve sample support but does not guarantee sufficient usable observations
+or transfer to the original crossover distribution.
+
+For account evaluation, retain the chosen affordable single contract at the
+original crossover, the explicit full-premium exposure allowance, and remaining
+cash and daily loss allowance gates. Distinguish missing observed signal quotes,
+no qualifying observed contract and no affordable qualifying contract.
+The report shows learning support and trading support separately.
 
 ## Methods and holdout
 
@@ -59,8 +83,9 @@ All splits are based on dates rather than outcome quality. The supervised
 labels are realized net target >=10%, loss <=-5%, or other, after the delayed
 fixed-stop exit. A mark crossing is not itself a realized hit. Logistic
 regression and a bounded random forest are fitted only on earlier observations.
-Minimum 40 training labels across 15 sessions, at least five per class, and
-10 validation labels across five sessions. The filter requires predicted target
+Minimum 40 training labels across 20 distinct anchors and 15 sessions, at
+least five distinct anchors per class, and 10 distinct validation anchors across
+five sessions. Model selection uses anchor-weighted validation Brier scores. The filter requires predicted target
 probability >=0.50 and positive train-class-weighted expected return. These
 thresholds are research assumptions, not optimized after looking at test data.
 
@@ -74,8 +99,13 @@ a small price-taking assumption. This is not deep RL, a live exploration agent
 or proof of optimal action. Model selection and action bins are fixed before
 holdout. A Q digest, source digests and split support are retained.
 
-Compare six methods: no-stop, fixed-stop, ML-filtered fixed-stop, offline Q
-exits, ML-filtered offline Q exits, and remain in cash. Missing models are
+Compare eight methods: no-stop, fixed-stop, ML-filtered fixed-stop, offline Q
+exits, ML-filtered offline Q exits, fixed 15% emergency stop, Q exits with the
+same 15% emergency stop, and remain in cash. The wider pair isolates learned
+exits from simply giving positions more room. Both force the 10% net target
+and the time cap. Wider stops are exploratory paper assumptions, not loss caps.
+The previously viewed 60-session window is now exploratory; reserve later
+unseen sessions for independent confirmation. Missing models are
 reported as insufficient support, not silently replaced with profitable
 outcomes. Holdout metrics include observable ML Brier score, conditional net
 P&L, costs, target hits, wins, daily drawdown and unresolved entries/exits.
