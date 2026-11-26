@@ -49,7 +49,16 @@ app = FastAPI(title="Local Quantitative Research Workstation", version="0.1.0",
               docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
 
 RUNNER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="research")
-MAX_ACTIVE_LOCAL_JOBS = 6  # Single worker, bounded queue, never parallel vendor/source writes
+# The spread speed diagnostic reads original SQLite depth through mode=ro.
+# It never downloads data, alters market receipts, or calls the broker.
+# Give this explicitly allowlisted operation an independent bounded lane.
+SPREAD_REPLAY_RUNNER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="spread-replay")
+MAX_ACTIVE_LOCAL_JOBS = 6  # Shared admission bound; general writes remain serialized.
+
+
+def _job_lane(kind):
+    return "spread_replay" if kind == "spread_speed_study" else "research"
+
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
@@ -117,7 +126,12 @@ def bad(exc: Exception):
 
 def _spawn(kind: str, action, *args, **kwargs):
     task_id = uuid.uuid4().hex[:16]
+    lane = _job_lane(kind)
     with JOBS_LOCK:
+        if lane == "spread_replay" and any(
+                _job_lane(task["kind"]) == lane and task["status"] in {"queued", "running"}
+                for task in JOBS.values()):
+            raise HTTPException(409, "A spread speed study is already running; see Jobs.")
         active_count = sum(task["status"] in {"queued", "running"} for task in JOBS.values())
         if active_count >= MAX_ACTIVE_LOCAL_JOBS:
             raise HTTPException(409,
@@ -126,7 +140,9 @@ def _spawn(kind: str, action, *args, **kwargs):
         JOBS[task_id] = {
             "id": task_id, "kind": kind, "status": "queued",
             "created_utc": datetime.now(timezone.utc).isoformat(),
-            "stage": "Waiting for compute worker", "percent": 0,
+            "stage": ("Waiting for independent spread replay worker" if lane == "spread_replay"
+                      else "Waiting for compute worker"), "percent": 0,
+            "worker_lane": lane,
             "cancellable": kind in CANCELLABLE_TASKS,
         }
         JOB_STOP_SIGNALS[task_id] = Event()
@@ -202,7 +218,7 @@ def _spawn(kind: str, action, *args, **kwargs):
                                      stage="Output saved", cancellable=False)
                 success_snapshot = dict(JOBS[task_id])
             _persist_job(success_snapshot)
-    future = RUNNER.submit(work)
+    future = (SPREAD_REPLAY_RUNNER if lane == "spread_replay" else RUNNER).submit(work)
     with JOBS_LOCK:
         JOB_FUTURES[task_id] = future
     return {"job_id": task_id, "status": "queued"}
@@ -1766,9 +1782,6 @@ class SpreadSpeedRequest(BaseModel):
 @app.post("/api/trading-cockpit/spreads/speed-study")
 def start_spread_speed_study(body:SpreadSpeedRequest):
     from . import spread_speed
-    with JOBS_LOCK:
-        if any(j.get("kind")=="spread_speed_study" and j.get("status") in ("queued","running") for j in JOBS.values()):
-            raise HTTPException(409,"A spread speed study is already running; see Jobs.")
     return _spawn("spread_speed_study",spread_speed.run,**body.model_dump())
 
 
@@ -2972,7 +2985,9 @@ def trash_verified_duplicate(dataset_id: str, body: DuplicateTrashRequest):
 def _job_next_action(job: dict) -> str:
     status = job.get("status")
     if status == "queued":
-        return "This job will start automatically in queue order when the local compute worker is free."
+        return ("This read-only job runs in the independent spread replay worker; historical downloads do not block it."
+                if _job_lane(job.get("kind")) == "spread_replay" else
+                "This job will start automatically in queue order when the local compute worker is free.")
     if status == "running":
         return ("Request cancellation at the next safe checkpoint."
                 if job.get("cancellable") else
@@ -3004,7 +3019,10 @@ def _job_next_action(job: dict) -> str:
 def workspace_jobs():
     with JOBS_LOCK:
         live = [dict(row) for row in list(JOBS.values())[-75:][::-1]]
-        queued_ids = [id for id, row in JOBS.items() if row["status"] == "queued"]
+        queued_ids = {"research": [], "spread_replay": []}
+        for jid, row in JOBS.items():
+            if row["status"] == "queued":
+                queued_ids[_job_lane(row["kind"])].append(jid)
         retry_ids = set(JOB_RETRY_SPECS)
     seen = {row["id"] for row in live}
     historical = [row for row in research_library.list_job_history(100)
@@ -3013,11 +3031,14 @@ def workspace_jobs():
     for row in all_jobs:
         row["retryable"] = row.get("status") in {"error", "cancelled", "interrupted"} and (
             row["id"] in retry_ids or job_recovery.available(row["id"]))
+        row["worker_lane"] = _job_lane(row.get("kind"))
+        lane_ids = queued_ids[row["worker_lane"]]
         row["queue_position"] = (
-            queued_ids.index(row["id"]) + 1 if row["id"] in queued_ids else None)
+            lane_ids.index(row["id"]) + 1 if row["id"] in lane_ids else None)
         row["next_action"] = _job_next_action(row)
     return {"jobs": all_jobs, "max_pending_or_running": MAX_ACTIVE_LOCAL_JOBS,
-            "worker_concurrency": 1}
+            "worker_concurrency": 2, "research_worker_concurrency": 1,
+            "spread_replay_worker_concurrency": 1}
 
 
 @app.post("/api/workspace/jobs/{job_id}/cancel")

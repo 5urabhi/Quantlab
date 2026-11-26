@@ -27,7 +27,7 @@ type IndexRun={id:string;name:string;dataset_id?:string;created_utc?:string}
 type RunOption={key:string;kind:'model_run'|'research_run';id:string;label:string;model?:string;figures:number}
 type Job={id:string;kind:string;status:string;result?:Raw;error?:string;
   created_utc?:string;stage?:string;percent?:number;cancellable?:boolean;
-  retryable?:boolean;queue_position?:number|null;next_action?:string}
+  retryable?:boolean;queue_position?:number|null;next_action?:string;worker_lane?:string}
 type ModelSpec={id:string;title:string;group:string;mode:string;parameters:{
   key:string;default:number|string;type:string;min?:number;max?:number}[]}
 type NotebookCell={id:string;type:'markdown'|'run'|'chart'|'table';content?:string;run_id?:string;chart_id?:string;previous_run_ids?:string[]}
@@ -1481,12 +1481,12 @@ function JobsPanel({jobs,busy,perform,onPage}:{
   return <div className="rw-stack">
     <Box title="Local computation queue" side={<span className="rw-pill">
       {jobs.filter(j=>['running','queued'].includes(j.status)).length} active</span>}>
-      <p className="rw-help">QuantLab runs computations in the local Python engine. Supported model sweeps and chronological validation can be cancelled safely between finished numerical steps; queued jobs can be cancelled before starting. Unsupportable mid-solver interruptions are not promised.</p>
+      <p className="rw-help">Historical acquisition and numerical research share a serial worker. Read-only spread replay has an independent worker and does not wait behind a download. Supported model sweeps and chronological validation can be cancelled safely between finished numerical steps; queued jobs can be cancelled before starting. Unsupportable mid-solver interruptions are not promised.</p>
       <div className="rw-list">{jobs.map(j=><div className={'rw-list-item '+(j.id===item?.id?'active':'')}
         key={j.id}><button className="rw-plain" onClick={()=>setSelected(j.id)}>
           <strong>{j.kind.replaceAll('_',' ')}</strong><small>{j.id} · {j.created_utc?.slice(0,16)||''}</small></button>
         <span className={'rw-pill '+j.status}>{j.status}</span>
-        {j.queue_position!=null&&<small>Queue #{j.queue_position}</small>}
+        {j.queue_position!=null&&<small>{j.worker_lane==='spread_replay'?'Spread replay':'Research'} queue #{j.queue_position}</small>}
         {(j.status==='queued'||(j.status==='running'&&j.cancellable))&&
           <button disabled={busy} onClick={()=>cancel(j)}><X size={14}/>
             {j.status==='running'?'Request safe cancellation':'Cancel queued'}</button>}
@@ -1510,7 +1510,7 @@ function JobsPanel({jobs,busy,perform,onPage}:{
       {item.next_action&&<p className={item.status==='error'?'rw-caution':'rw-help'}>
         <strong>Next:</strong> {item.next_action}</p>}
       {item.queue_position!=null&&<p className="rw-help">Waiting in local queue,
-        position {item.queue_position}. One numerical/data job runs at a time.</p>}
+        position {item.queue_position} in the {item.worker_lane==='spread_replay'?'independent spread replay':'serial research and acquisition'} worker.</p>}
       {item.status==='interrupted'&&<p className="rw-caution">
         The previous Python process exited before completion. When available, Recheck inputs & retry verifies saved source hashes and code before explicitly restarting. Otherwise reopen the original configuration; no result was completed.</p>}
       {item.result&&<><div className="rw-button-group">
