@@ -106,7 +106,7 @@ const todayIST=()=>new Intl.DateTimeFormat('sv-SE',{
 const tabs:{id:PageTab;name:string;caption:string;icon:typeof Activity}[]=[
   {id:'live',name:'Live Spread Monitor',caption:'Bid–ask capture & automatic ranking',icon:Activity},
   {id:'multileg',name:'Multi-Leg Option Spreads',caption:'Auto discover, build, payoff',icon:Layers3},
-  {id:'speed',name:'Speed & Viability',caption:'5s–5m saved-depth replay',icon:Activity},
+  {id:'speed',name:'Speed & Viability',caption:'1s–5m saved-depth replay',icon:Activity},
   {id:'execution',name:'Execution Simulator',caption:'Depth-weighted cost estimates',icon:SlidersHorizontal},
   {id:'history',name:'Historical Spread Analysis',caption:'Original saved book timeline',icon:BarChart3},
   {id:'lab',name:'Spread Strategy Lab',caption:'Unexecuted research bounds',icon:TrendingUp},

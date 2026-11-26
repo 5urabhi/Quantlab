@@ -64,7 +64,7 @@ def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes
     now=now or paper._now()
     lookup=first_book or _first
     if hold_seconds is not None:
-        paper._check(hold_seconds,5,86400,"holding seconds")
+        paper._check(hold_seconds,1,86400,"holding seconds")
         if exit_decision is not None:
             raise ValueError("Choose a fixed hold or an explicit exit decision, not both")
     if strategy not in STRATEGIES or broker_profile not in fees.BROKER_PROFILES:

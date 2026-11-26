@@ -160,6 +160,11 @@ class PaperExecutionTests(TestCase):
         self.assertTrue(x["exit_complete"])
         self.assertEqual(x["entries"][0]["original_best_bid"],99)
         self.assertEqual(x["exits"][0]["vwap"],110)
+        y=replay.replay(strategy="LONG_OPTION",identities=[CE],decision_utc=paper._iso(NOW),
+            hold_seconds=1,window_seconds=5,participation_pct=100,slippage_bps=0,
+            now=NOW+timedelta(minutes=1))
+        self.assertTrue(y["exit_complete"])
+        self.assertEqual(y["exits"][0]["vwap"],110)
 
     def test_multi_leg_replay_requires_synchronized_terms_and_full_exit(self):
         self.save(NOW+timedelta(seconds=2),CE,bid=99,ask=100)

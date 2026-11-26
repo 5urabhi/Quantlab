@@ -29,6 +29,10 @@ MAX_CONNECTIONS = 4
 PER_CONNECTION = 50
 MAX_CONTRACTS = MAX_CONNECTIONS * PER_CONNECTION
 NEAR_ATM_FAST_SECONDS = 3
+SCALP_FAST_SECONDS = 1
+SCALP_FAST_PER_SIDE = 6
+SCALP_RESEARCH_CAPITAL = 17000.
+SCALP_RESEARCH_PREMIUM = 180.
 # Keep the nearest 120 genuine contracts continuously subscribed. Rotate the
 # remaining 80 slots across EVERY OTHER verified contract of the active expiry.
 # No combination of sockets can observe all instruments continuously.
@@ -232,6 +236,42 @@ def select_full_chain_rotation(chain: dict, cfg: dict,
                 else "rotating"),
         })
     return result
+
+
+def _assign_scalp_sampling(selected, cfg):
+    """Bounded fast sampling INSIDE already subscribed identities.
+
+    The chain is genuine but not a guarantee of available fills. Favor
+    stable subscribed contracts with two-sided prices and observed volume;
+    use a 17k research budget, 180 premium preference, and the recorder's
+    configured quantity. Never change the 200-slot subscription plan.
+    """
+    for item in selected:
+        item["scalp_fast_depth"]=False
+    lots=cfg["lots"]
+    for side in ("CE","PE"):
+        ranked=[]
+        for item in selected:
+            if item["side"]!=side or item.get("coverage_role") not in ("core","opportunity","active"):
+                continue
+            bid,ask=item.get("bid"),item.get("ask")
+            if (not isinstance(bid,(int,float)) or not isinstance(ask,(int,float))
+                    or not math.isfinite(bid) or not math.isfinite(ask)
+                    or not 0<bid<=ask or item.get("volume",0)<=0
+                    or ask*item["lot_size"]*lots+100>SCALP_RESEARCH_CAPITAL):
+                continue
+            # Premium preference first, then normalized spread and volume.
+            ranked.append((abs((bid+ask)/2-SCALP_RESEARCH_PREMIUM),
+                           (ask-bid)/((bid+ask)/2),-item["volume"],item["identity"],item))
+        for *_,item in sorted(ranked)[:SCALP_FAST_PER_SIDE]:
+            item["scalp_fast_depth"]=True
+    return selected
+
+
+def _sample_interval(candidate, broad_seconds):
+    if candidate.get("scalp_fast_depth"):
+        return SCALP_FAST_SECONDS
+    return NEAR_ATM_FAST_SECONDS if candidate.get("priority_depth") else broad_seconds
 
 
 def _full_chain_coverage(chain: dict, selected: list[dict]) -> dict:
@@ -471,13 +511,13 @@ def _read_socket(index: int, group: list[dict], url: str,
                 _record_original_pairs(index, books, now)
                 stamp = time.monotonic()
                 for book, candidate in books:
-                    interval = (NEAR_ATM_FAST_SECONDS if candidate["priority_depth"]
-                                else sample_seconds)
+                    interval = _sample_interval(candidate, sample_seconds)
                     key = candidate["identity"]
                     if stamp - last_emitted.get(key, 0) < interval:
                         continue
                     try:
-                        inbox.put_nowait((book, candidate))
+                        # Freeze per-receipt terms and cadence before the next chain update.
+                        inbox.put_nowait((book, {**candidate, "requested_sample_seconds": interval}))
                         last_emitted[key] = stamp
                     except Full:
                         with auto.LOCK:
@@ -524,7 +564,9 @@ def _select(cfg: dict, previous_ids=(), rotation_step: int = 0,
                  and item["expiry"] == chain["expiry"] for item in ranked)
     if hold_if_safe and not urgent:
         selected = _retain_if_market_inside_core(chain, previous_contracts) or selected
+    selected = _assign_scalp_sampling(selected, cfg)
     coverage = _full_chain_coverage(chain, selected)
+    coverage["scalp_fast_contracts"] = sum(bool(row.get("scalp_fast_depth")) for row in selected)
     diagnostic = _coverage_diagnostics(chain, selected)
     counts = {"above": 0, "below": 0, "atm": 0}
     for c in selected:
@@ -696,6 +738,7 @@ def run(stop: Event) -> None:
                         continue
                     last_seen = time.monotonic()
                     feature = auto._features(book, candidate, cfg["lots"])
+                    feature["requested_sample_seconds"] = candidate["requested_sample_seconds"]
                     if auto._store_book(session_id, book, feature):
                         daily_saved += 1
                         with auto.LOCK:

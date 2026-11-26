@@ -5,14 +5,17 @@ identical decision anchors across fixed horizons, never choose best future
 quotes or treat censored paths as zero P&L.
 """
 from collections import Counter
+from contextlib import closing
+import sqlite3
 from datetime import date,datetime,time,timedelta,timezone
 from math import ceil,isfinite
 from statistics import mean,median
 
 from . import depth_replay as replay, liquidity_spreads as fees, paper_execution as paper
 
-HORIZONS=(5,15,30,60,120,300)
-STEP_MINUTES=15
+HORIZONS=(1,2,5,15,30,60,120,300)
+MAX_COVERAGE_ROWS=50000
+STEP_MINUTES=5
 
 
 def _stats(values):
@@ -27,7 +30,7 @@ def _delta(a,b):
     return (datetime.fromisoformat(b)-datetime.fromisoformat(a)).total_seconds()
 
 
-def _anchors(day,now,latency_ms,window_seconds):
+def _anchors(day,now,latency_ms,window_seconds,step_minutes=STEP_MINUTES):
     start=datetime.combine(day,time(9,20),paper.IST).astimezone(timezone.utc)
     close=datetime.combine(day,time(15,30),paper.IST).astimezone(timezone.utc)
     # Same eligible decisions for every horizon. Reserve both latency and
@@ -38,14 +41,65 @@ def _anchors(day,now,latency_ms,window_seconds):
     out=[]
     while start+reserve<close and start+reserve<=now:
         out.append(start)
-        start+=timedelta(minutes=STEP_MINUTES)
+        start+=timedelta(minutes=step_minutes)
     return out
 
 
+def _coverage(day, identities, now):
+    """Timestamp inventory, not a validation of every original book.
+
+    Every elapsed regular-session second is in the denominator. Unsubscribed,
+    quiet, dropped or missing seconds remain absent; no forward filling.
+    Replay itself independently verifies the selected original book pair.
+    """
+    start=datetime.combine(day,time(9,15),paper.IST).astimezone(timezone.utc)
+    end=min(now,datetime.combine(day,time(15,30),paper.IST).astimezone(timezone.utc))
+    total=max(0,int((end-start).total_seconds()))
+    output=[]
+    sets=[]
+    for identity in identities:
+        bins=set()
+        stamps=[]
+        count=0
+        limited=False
+        state="available"
+        try:
+            if total:
+                with closing(replay.ao._read_database()) as db:
+                    cursor=db.execute("""SELECT received_utc FROM live_depth_books
+                        WHERE identity=? AND received_utc>=? AND received_utc<?
+                        ORDER BY received_utc LIMIT ?""",
+                        (identity,paper._iso(start),paper._iso(start+timedelta(seconds=total)),MAX_COVERAGE_ROWS+1))
+                    for (stamp,) in cursor:
+                        count+=1
+                        if count>MAX_COVERAGE_ROWS:
+                            limited=True
+                            break
+                        t=(datetime.fromisoformat(stamp)-start).total_seconds()
+                        if 0<=t<total:
+                            bins.add(int(t))
+                            stamps.append(t)
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc) and "unable to open database file" not in str(exc):
+                raise
+            state="source_unavailable"
+        gaps=[b-a for a,b in zip(stamps,stamps[1:])]
+        sets.append(bins)
+        output.append({"identity":identity,"saved_receipts":len(stamps),"seconds_observed":len(bins),
+                       "elapsed_seconds":total,"coverage_pct":round(100*len(bins)/total,2) if total else None,
+                       "median_gap_seconds":_stats(gaps)["median"],"p90_gap_seconds":_stats(gaps)["p90"],
+                       "largest_internal_gap_seconds":round(max(gaps),3) if gaps else None,
+                       "scan_limited":limited,"state":state})
+    overlap=len(set.intersection(*sets)) if sets else 0
+    return {"contracts":output,"common_observed_seconds":overlap,"elapsed_seconds":total,
+            "common_coverage_pct":round(100*overlap/total,2) if total else None,
+            "note":"Saved timestamp inventory only; includes every elapsed session second, not just subscribed time. Same-second receipts are not simultaneous executions. No gaps are filled."}
+
+
 def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
-        latency_ms=1000,window_seconds=5,max_skew_seconds=2.,
+        latency_ms=1000,window_seconds=1,max_skew_seconds=2.,
         participation_pct=25.,slippage_bps=5.,broker_profile="zerodha",
-        progress=None,now=None):
+        progress=None,now=None,step_minutes=STEP_MINUTES):
     now=now or paper._now()
     chosen=date.fromisoformat(day)
     if chosen>now.astimezone(paper.IST).date():
@@ -62,7 +116,10 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
         (max_skew_seconds,0,30,"leg skew"),(participation_pct,1,100,"participation"),
         (slippage_bps,0,500,"slippage")):
         paper._check(value,lo,hi,label)
-    anchors=_anchors(chosen,now,latency_ms,window_seconds)
+    if step_minutes not in (1,5,15):
+        raise ValueError("Choose 1, 5 or 15 minute decision spacing")
+    coverage=_coverage(chosen,identities,now)
+    anchors=_anchors(chosen,now,latency_ms,window_seconds,step_minutes)
     by_horizon={h:[] for h in HORIZONS}
     # All horizons use the same immutable first-book lookup for a decision.
     cache={}
@@ -128,6 +185,7 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
             "participation_pct":participation_pct,"slippage_bps":slippage_bps,
             "max_skew_seconds":max_skew_seconds,"broker_profile":broker_profile,
             "decision_count":len(anchors),"matched_decisions":len(matched),"rows":summaries,
+            "coverage":coverage,"step_minutes":step_minutes,
             "actual_fills_observed":False,"broker_margin_verified":False,
             "warning":"Fixed clock diagnostic for selected exact contracts, not an entry strategy or unbiased backtest. "
             "First received original books after assumed reaction delay; observed quote delays are not broker execution times. "

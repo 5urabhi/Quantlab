@@ -1728,7 +1728,8 @@ class SpreadSpeedRequest(BaseModel):
     capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
     target_net: float=Field(default=100,ge=0,le=1e6,allow_inf_nan=False)
     latency_ms: int=Field(default=1000,ge=0,le=60000)
-    window_seconds: int=Field(default=5,ge=1,le=30)
+    window_seconds: int=Field(default=1,ge=1,le=30)
+    step_minutes: Literal[1,5,15]=5
     max_skew_seconds: float=Field(default=2,ge=0,le=30,allow_inf_nan=False)
     participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
     slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
