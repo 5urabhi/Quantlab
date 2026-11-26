@@ -4903,3 +4903,37 @@ def import_archived_constituent_weights(body:ArchivedConstituentWeightRequest):
         return banknifty_constituents.import_archived_weights(**body.model_dump())
     except (ValueError,TypeError,KeyError,OSError,AttributeError) as exc:
         raise HTTPException(400,"Reviewed original weight intake could not be imported: "+job_safety.scrub(exc)[:250]) from exc
+
+
+from . import constituent_derivatives
+
+class ConstituentDerivativeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    option_ids: list[str] = Field(default_factory=list,max_length=50)
+    confirm_shared_feed: bool = False
+
+@app.get("/api/trading-cockpit/constituents/derivatives/status")
+def constituent_derivative_status():
+    return constituent_derivatives.status()
+
+@app.get("/api/trading-cockpit/constituents/derivatives/catalog")
+def constituent_derivative_catalog(symbol:str="",offset:int=0,limit:int=100):
+    try:
+        return constituent_derivatives.catalog(symbol,offset,limit)
+    except (ValueError,OSError,KeyError,TypeError) as exc:
+        raise HTTPException(400,job_safety.scrub(exc)[:300]) from exc
+
+@app.post("/api/trading-cockpit/constituents/derivatives/configure")
+def configure_constituent_derivatives(body:ConstituentDerivativeRequest):
+    try:
+        return constituent_derivatives.configure(body.enabled,body.option_ids,body.confirm_shared_feed)
+    except (ValueError,OSError,KeyError,TypeError) as exc:
+        raise HTTPException(400,job_safety.scrub(exc)[:300]) from exc
+
+@app.get("/api/trading-cockpit/constituents/derivatives/analysis")
+def constituent_derivative_analysis(horizon:int=5,as_of:str=""):
+    try:
+        return constituent_derivatives.analysis(horizon,as_of)
+    except (ValueError,OSError,TypeError,OverflowError,sqlite3.Error) as exc:
+        raise HTTPException(400,"Stored derivative analysis unavailable; inspect source and selected time") from exc
