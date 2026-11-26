@@ -764,6 +764,8 @@ function ProjectsPanel({records,runs,busy,perform,onMessage,startJob,onOpenCompa
   const notebooks=records.filter(r=>r.kind==='notebook'&&!r.trashed)
   const charts=records.filter(r=>r.kind==='chart'&&!r.trashed)
   const [name,setName]=useState('')
+  const [projectSearch,setProjectSearch]=useState('')
+  const visibleProjects=projects.filter(p=>[p.title,String(p.payload.goal||''),String(p.payload.description||'')].join(' ').toLowerCase().includes(projectSearch.trim().toLowerCase()))
   const [creationKind,setCreationKind]=useState<'project'|'notebook'>('project')
   const [projectId,setProjectId]=useState('')
   const [notebookId,setNotebookId]=useState('')
@@ -912,7 +914,7 @@ function ProjectsPanel({records,runs,busy,perform,onMessage,startJob,onOpenCompa
           Market data stays in the shared library.</p>
       </div>
       <div className="rw-projects-counts"><strong>{projects.length}</strong> projects
-        <strong>{notebooks.length}</strong> notebooks</div>
+        <strong>{notebooks.length}</strong> notebooks <strong>{charts.length}</strong> saved charts</div>
     </header>
     <div className="rw-two rw-projects-columns">
       <Box title="Projects">
@@ -940,7 +942,9 @@ function ProjectsPanel({records,runs,busy,perform,onMessage,startJob,onOpenCompa
             <p className="rw-help">Choose a project below before creating a notebook.</p>}
         </div>
         <p className="rw-help">Select a project to inspect its notebooks and editable research question.</p>
-        {projects.map(p=><button key={p.id} className={'rw-row '+(p.id===projectId?'active':'')}
+        <label className="rw-field"><span>Search projects</span><input type="search" aria-label="Search research projects" value={projectSearch} onChange={e=>setProjectSearch(e.target.value)} placeholder="Name, research goal or scope"/></label>
+        {projects.length>0&&!visibleProjects.length&&<p className="rw-help">No matching projects.</p>}
+        {visibleProjects.map(p=><button key={p.id} className={'rw-row '+(p.id===projectId?'active':'')}
           onClick={()=>{setProjectId(p.id);setNotebookId('');initialized.current=true}}>
           <Folder size={17}/><span><strong>{p.title}</strong><small>{p.id}</small></span></button>)}
         {!projects.length&&<Empty title="No projects yet">Create a project for a research question or thesis chapter.</Empty>}
