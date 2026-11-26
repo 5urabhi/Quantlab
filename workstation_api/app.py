@@ -4783,3 +4783,47 @@ def bank_constituent_analysis(horizon: int = 5, as_of: str = ""):
         return banknifty_constituents.analyze(horizon,as_of)
     except (ValueError,OverflowError,OSError,TypeError) as exc:
         bad(exc)
+
+
+# Reconciled local backup and incremental cost stress workspaces.
+from . import metadata_backup, execution_stress
+
+class LocalMetadataBackupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm_authorized: bool = False
+
+class ExecutionStressRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    extra_fee_bps: float = Field(default=0,ge=0,le=250)
+    extra_half_spread_bps: float = Field(default=5,ge=0,le=250)
+    impact_coefficient_bps: float = Field(default=40,ge=0,le=500)
+    assumed_participation: float = Field(default=.02,ge=0,le=.20)
+
+@app.get("/api/workspace/metadata-backups")
+def local_metadata_backup_inventory():
+    try:
+        return {"preview":metadata_backup.preview(),**metadata_backup.list_snapshots()}
+    except (ValueError,OSError,KeyError,TypeError) as exc:
+        raise HTTPException(400,"Local metadata backup inventory unavailable") from exc
+
+@app.post("/api/workspace/metadata-backups")
+def create_local_metadata_backup(body:LocalMetadataBackupRequest):
+    if not body.confirm_authorized:
+        raise HTTPException(400,"Explicit backup consent is required")
+    return _spawn("metadata_backup",metadata_backup.create,confirm_authorized=True)
+
+@app.post("/api/workspace/metadata-backups/{snapshot_id}/verify")
+def verify_local_metadata_backup(snapshot_id:str):
+    try:
+        return metadata_backup.verify(snapshot_id)
+    except (ValueError,OSError,KeyError,TypeError) as exc:
+        raise HTTPException(400,"Local metadata snapshot verification failed") from exc
+    except Exception as exc:
+        raise HTTPException(400,"Metadata SQLite integrity could not be verified") from exc
+
+@app.post("/api/workspace/execution-stress/{run_id}")
+def index_execution_stress(run_id:str,body:ExecutionStressRequest):
+    try:
+        return execution_stress.calculate(run_id,**body.model_dump())
+    except (ValueError,FileNotFoundError,KeyError,TypeError,OverflowError) as exc:
+        raise HTTPException(400,"Saved monthly evidence or execution assumptions are invalid: "+job_safety.scrub(exc)[:300]) from exc
