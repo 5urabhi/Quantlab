@@ -4937,3 +4937,13 @@ def constituent_derivative_analysis(horizon:int=5,as_of:str=""):
         return constituent_derivatives.analysis(horizon,as_of)
     except (ValueError,OSError,TypeError,OverflowError,sqlite3.Error) as exc:
         raise HTTPException(400,"Stored derivative analysis unavailable; inspect source and selected time") from exc
+
+
+from . import constituent_calibration
+
+@app.get("/api/trading-cockpit/constituents/prospective/calibration")
+def constituent_probability_assessment(horizon:int=5):
+    try:
+        return constituent_calibration.report(horizon)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(400,"Frozen probability assessment unavailable; inspect local ledger") from exc
