@@ -75,22 +75,22 @@ def _horizon(h):
         raise ValueError("Use 5, 10, 30 or 60 minutes recorded by the existing protocol")
 
 
-def _days(db,horizon,today):
+def _days(db,horizon,today,start_session=None):
     if not replay_storage.fetchone(db,"SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(p.TABLE,)):
         return []
     return [r[0] for r in replay_storage.fetchall(db,"""SELECT DISTINCT session_ist FROM banknifty_paired_signals
-        WHERE protocol_hash=? AND horizon_minutes=? AND session_ist<? ORDER BY session_ist LIMIT ?""",
-        (p.PROTOCOL_HASH,horizon,today,REQUIRED))]
+        WHERE protocol_hash=? AND horizon_minutes=? AND session_ist<? AND session_ist>=? ORDER BY session_ist LIMIT ?""",
+        (p.PROTOCOL_HASH,horizon,today,start_session or "0000-00-00",REQUIRED))]
 
 
-def readiness(horizon=30,*,now=None):
+def readiness(horizon=30,*,now=None,start_session=None):
     _horizon(horizon)
     now=now or p._now()
     today=p._session(now).date().isoformat()
     days=[]
     if shared_market_data.database_path().is_file():
         with closing(_read()) as db:
-            days=_days(db,horizon,today)
+            days=_days(db,horizon,today,start_session)
     return {"version":VERSION,"policy_sha256":POLICY_HASH,"source_protocol_sha256":p.PROTOCOL_HASH,
             "horizon_minutes":horizon,"supported_horizons":list(HORIZONS),
             "required_sessions":REQUIRED,"recorded_sessions":len(days),"training_dates":days[:TRAIN],
