@@ -41,12 +41,18 @@ SOURCES = {
     "sector_history": ("Dated sector classifications", "classifications", "Effective date", "Canonical SQLite", "Effective-dated source classifications"),
     "active_option_history": ("Contract-specific option history", "returned timestamp rows", "Observation time (UTC)", "Original Dhan intraday receipts", "Exact NSE_FNO security IDs captured while listed; strike, expiry and lot require archived instrument evidence; receipt ranges may overlap"),
     "expired_options": ("Expired option history", "returned timestamp rows", "Observation time (UTC)", "Original rolling-option receipts", "Rolling strike-offset responses; may overlap and include unusable prices"),
+    "market_context": ("Cross-market factor observations", "observations", "Source availability time (UTC)", "Canonical SQLite", "Reviewed imports and automatic provider receipts; revisions may coexist"),
+    "market_event_receipts": ("Macro calendar & news receipts", "source snapshots", "Receipt time (UTC)", "Canonical SQLite", "Official feed snapshots, not individual independent news events"),
+    "market_news": ("Official announcement observations", "headlines", "First receipt time (UTC)", "Canonical SQLite", "First observed official announcement identities, not a complete news universe"),
     "archives": ("Saved session archives", "archive receipts", "Session date", "Session archives", "Copies of canonical data, not extra observations"),
 }
 
 # SQL is fixed and internal. Payload columns (book_json, normalized_json,
 # feature_json) are never read by inventory SQL.
 SQL = {
+    "market_context": ("market_context_observations", "factor", "available_utc", "", ""),
+    "market_event_receipts": ("market_event_receipts", "source", "received_utc", "", ""),
+    "market_news": ("market_news_observations", "source", "first_received_utc", "", ""),
     "constituent_derivative_quote": ("constituent_derivative_events", "identity", "received_utc", "WHERE kind='quote'", ""),
     "constituent_derivative_oi": ("constituent_derivative_events", "identity", "received_utc", "WHERE kind='oi'", ""),
     "prospective_signals": ("banknifty_paired_signals", "identity", "decided_utc", "", "horizon_minutes"),
@@ -432,6 +438,9 @@ def inventory(source="all",query="",page=1,per_page=50,refresh=False):
 # Fixed, small scalar record previews. No credentials, original JSON payloads
 # or raw file paths. Full depth and chain payloads remain in Trading / Replay.
 RECORD_COLUMNS = {
+    "market_context": ("available_utc","factor","event_utc","value","receipt_sha256"),
+    "market_event_receipts": ("received_utc","source","sha256"),
+    "market_news": ("first_received_utc","source","published_utc","event_id","title","topic","link"),
     "constituent_derivative_quote": ("received_utc","exchange_trade_utc","identity","underlying","instrument","expiry","strike","option_type","lot_size","price","volume","packet_sha256","membership_sha256"),
     "constituent_derivative_oi": ("received_utc","identity","underlying","instrument","expiry","strike","option_type","open_interest","packet_sha256","membership_sha256"),
     "prospective_signals": ("decided_utc","identity","protocol_hash","slot_utc","cutoff_utc","target_utc","horizon_minutes","reference_price","pressure","volume_pressure","ema_rsi","outcome","observed_price","observed_received_utc","reference_sha256","observed_sha256"),
