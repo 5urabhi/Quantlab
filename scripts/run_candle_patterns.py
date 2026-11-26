@@ -16,7 +16,9 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from-date",default=None)
     parser.add_argument("--sessions",type=int,choices=tuple(SESSION_SPLITS),default=60)
-    parser.add_argument("--first-passage",action="store_true",help="Study longer completed sequences and index movement barriers")
+    modes=parser.add_mutually_exclusive_group()
+    modes.add_argument("--first-passage",action="store_true",help="Study longer completed sequences and fixed index movement barriers")
+    modes.add_argument("--regimes",action="store_true",help="Volatility expansion, conditional patterns and normalized first passage")
     parser.add_argument("--context-mode",choices=("off","receipt","archive"),default="off")
     parser.add_argument("--context-batch",default="auto")
     parser.add_argument("--fixed-panel",action="store_true")
@@ -25,8 +27,8 @@ def main():
     try:
         stop=date.fromisoformat(a.to_date)
         start=date.fromisoformat(a.from_date) if a.from_date else stop-timedelta(days={60:100,90:150,120:200}[a.sessions])
-        if not a.first_passage and (a.fixed_panel or a.context_mode!="off"):
-            raise ValueError("Context ablations require --first-passage")
+        if not (a.first_passage or a.regimes) and (a.fixed_panel or a.context_mode!="off"):
+            raise ValueError("Context ablations require --first-passage or --regimes")
         if not 0<(stop-start).days<=MAX_STUDY_DAYS or stop>today or not alpha_retraining.safe_window(datetime.now(timezone.utc)):
             raise ValueError("Use a completed range up to 200 days, outside Indian market priority hours")
         index,hashes,failures=h.shared_index_sources(start,stop,[h.MAX_TOTAL])
@@ -35,7 +37,11 @@ def main():
             raise ValueError(f"Need {a.sessions} observed sessions, have {len(dates)}; choose fewer or acquire older data")
         ntrain,nval,ntest=SESSION_SPLITS[a.sessions]
         splits=(dates[:ntrain],dates[ntrain:ntrain+nval],dates[ntrain+nval:ntrain+nval+ntest])
-        if a.first_passage:
+        if a.regimes:
+            from workstation_api import cpr_regime_research as regimes
+            report=regimes.assess(index,splits,context_mode=a.context_mode,fixed_panel=a.fixed_panel,
+                                  context_batch=a.context_batch,progress=lambda pct,msg:print(f"{pct}% {msg}",flush=True))
+        elif a.first_passage:
             report=barrier.assess(index,splits,context_mode=a.context_mode,fixed_panel=a.fixed_panel,
                                   context_batch=a.context_batch,progress=lambda pct,msg:print(f"{pct}% {msg}",flush=True))
         else:
@@ -43,7 +49,7 @@ def main():
         report.update(training_dates=splits[0],validation_dates=splits[1],holdout_dates=splits[2],
                       source_hashes=hashes,source_failures=failures)
         root=Path("results");root.mkdir(exist_ok=True)
-        dest=root/(("candle_barriers_" if a.first_passage else "candle_patterns_")+uuid.uuid4().hex+".json")
+        dest=root/(("candle_regimes_" if a.regimes else "candle_barriers_" if a.first_passage else "candle_patterns_")+uuid.uuid4().hex+".json")
         temp=dest.with_suffix(".tmp")
         try:
             with temp.open("x",encoding="utf-8") as file:
@@ -52,7 +58,24 @@ def main():
         finally:
             temp.unlink(missing_ok=True)
         for horizon,item in report["horizons"].items():
-            if a.first_passage:
+            if a.regimes:
+                print("Regime horizon:",horizon,"coverage:",json.dumps(item["coverage"]))
+                lanes={"index_only":item["index_only"]}
+                if "matched_panel" in item:
+                    lanes.update(matched_index=item["matched_panel"]["baseline"],matched_panel=item["matched_panel"]["augmented"])
+                for name,lane in lanes.items():
+                    print("Regime lane:",name,json.dumps({k:v for k,v in lane.items() if k!="tasks"}))
+                    for task,result in lane["tasks"].items():
+                        chosen=result["selected_on_validation"];metric=result["holdout"][chosen]
+                        print(task,json.dumps({"selected":chosen,"brier":metric["brier"],"accuracy":metric["accuracy"],
+                            "predicted":metric["predicted"],"observed":metric["observed"],
+                            "selected_minus_prior":result["selected_minus_prior"]}))
+                if "matched_panel" in item:
+                    print("Matched panel differences:",json.dumps(item["matched_panel"]["comparisons"]))
+                    lead=item["hdfc_icici_lead_lag"]
+                    print("HDFC/ICICI lead-lag:",json.dumps({**lead,"models":{n:{**v,**{s:{k:x for k,x in v[s].items() if k!="daily_mse"} for s in ("validation","holdout")}} for n,v in lead.get("models",{}).items()}}))
+                print("Volatility ratio and scale quantiles:",json.dumps({k:v for k,v in item.items() if k.endswith("_quantiles")}))
+            elif a.first_passage:
                 print("Horizon:",horizon,"coverage:",json.dumps(item["coverage"]))
                 for name,scope in item["scopes"].items():
                     print("Scope:",name,json.dumps(scope["matched_coverage"]))
