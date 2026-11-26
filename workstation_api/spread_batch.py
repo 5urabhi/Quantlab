@@ -15,7 +15,7 @@ import re
 import uuid
 
 from . import depth_replay as replay, paper_execution as paper, service
-from . import spread_batch_core as core, spread_speed as speed, execution_realism as realism
+from . import spread_batch_core as core, spread_speed as speed, execution_realism as realism, replay_storage
 
 VERSION="batch_depth_research_v2"
 TOP_PER_COHORT=25
@@ -186,7 +186,12 @@ def _execute(tasks,cfg,day,now,progress,*,validation=False):
         progress(9,"Reconstructing causal index signals from original received ticks")
     anchors=speed._anchors(day,now,max(speed.LATENCIES_MS),cfg["window_seconds"],cfg["step_minutes"])
     directions,signal=core.signal_cohorts(day,anchors,now)
+    storage_mode=replay_storage.journal_mode()
     workers=speed._worker_count(len(tasks)) if tasks else 0
+    if storage_mode!="wal" and workers>1:
+        workers=1
+    if progress and storage_mode!="wal":
+        progress(9,"Legacy database journal: using one replay worker to reduce recorder contention")
     # No nested pools; original-book lookups are reused across sizes and holds.
     counts={family:{cohort:{"rows":0,"rankable":0,"positive_robust":0} for cohort in COHORTS} for family in FAMILIES}
     top={family:{cohort:[] for cohort in COHORTS} for family in FAMILIES}
@@ -228,7 +233,7 @@ def _execute(tasks,cfg,day,now,progress,*,validation=False):
     finally:
         temp.unlink(missing_ok=True)
     result={"run_id":run_id,"day_ist":day.isoformat(),"cutoff_utc":paper._iso(now),
-        "settings":cfg,"worker_count":workers,"anchor_count":len(anchors),"signal":signal,
+        "settings":cfg,"storage_journal_mode":storage_mode,"worker_count":workers,"anchor_count":len(anchors),"signal":signal,
         "structures":len(tasks),"configuration_count":sum(len(t[1]) for t in tasks),
         "attempted_paths":len(anchors)*sum(len(t[1]) for t in tasks),
         "summary_rows":rows_written,"counts":counts,"rankings":top,
