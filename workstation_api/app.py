@@ -1167,6 +1167,22 @@ def zerodha_virtual_note(body: ZerodhaVirtualNoteRequest):
         bad(exc)
 
 
+class ZerodhaBasketMarginRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    decision_id: int=Field(ge=1,strict=True)
+    product: Literal["MIS","NRML"]="MIS"
+    confirm_readonly: bool=Field(default=False,strict=True)
+
+
+@app.post("/api/trading-cockpit/options/zerodha/basket-margin")
+def zerodha_basket_margin(body:ZerodhaBasketMarginRequest):
+    from . import zerodha_basket_margin as margin
+    try:
+        return margin.preview(**body.model_dump())
+    except (ValueError,OSError,sqlite3.Error,KeyError,TypeError) as exc:
+        raise HTTPException(400,"Read-only Kite margin calculation unavailable: "+job_safety.scrub(exc)[:200]) from exc
+
+
 @app.get("/api/trading-cockpit/options/zerodha/net-positions")
 def zerodha_net_positions():
     from . import zerodha_execution_costs
