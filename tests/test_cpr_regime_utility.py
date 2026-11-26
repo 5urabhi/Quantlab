@@ -1,5 +1,5 @@
 """Synthetic tests for causal regime research and strict utility accounting."""
-from datetime import date,timedelta
+from datetime import date,timedelta,datetime,timezone
 from unittest import TestCase
 from unittest.mock import patch
 import numpy as np
@@ -139,11 +139,52 @@ class RegimeUtilityTests(TestCase):
         before=u._predict(model,[rows[0]])
         changed={**rows[0],"state":"missing_entry","path":[]}
         self.assertEqual(u._predict(model,[changed]),before)
+        from workstation_api import cpr_forward_utility as forward
+        frozen=forward.export_bundle(model)
+        predicted=forward.predict(frozen,[rows[0],rows[-1]])
+        original=u._predict(model,[rows[0],rows[-1]])
+        for x,y in zip(predicted,original):
+            for k in x:
+                if k=="trigger_probabilities":
+                    for label in x[k]:self.assertAlmostEqual(x[k][label],y[k][label],places=10)
+                else:self.assertAlmostEqual(x[k],y[k],places=10)
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        import json
+        with TemporaryDirectory() as tmp:
+            self.assertEqual(forward.freeze({},tmp)["state"],"blocked_no_eligible_regime_utility_policy")
+            gate={"state":"validation_selected","selected_threshold":.005}
+            report={"utility_research":{"frozen_candidate":{"threshold":.005,"bundle":frozen},
+                         "models":{"regime_execution":{"gate":gate}}},
+                    "training_dates":["2026-07-01"],"validation_dates":["2026-08-01"],"holdout_dates":["2026-10-01"],
+                    "source_sha256":"a"*64,"settings":{"entry_mode":"regime_scan","timeframe":5,"hold_minutes":None,
+                        "capital_inr":17000.,"full_premium_and_fee_budget_inr":12000.,"historical_lot_size_assumed":30,
+                        "max_lots":1,"strike_wings":5,"primary_adverse_penalty_bps_per_side":35.}}
+            now=datetime(2026,11,26,20,tzinfo=timezone.utc)
+            meta=forward.freeze(report,tmp,now=now)
+            self.assertEqual(meta["start_inclusive"],"2026-11-28")
+            policy,digest=forward.load(meta["file"])
+            self.assertEqual(digest,meta["sha256"])
+            with self.assertRaises(ValueError):forward.replay(meta["file"],now=now)
+            path=Path(meta["file"]);raw=json.loads(path.read_text());raw["policy"]["threshold"]=.01
+            path.write_text(json.dumps(raw))
+            with self.assertRaises(ValueError):forward.load(path)
 
     def test_gate_requires_many_timely_days_and_positive_stress(self):
         valid={"scored_trades":10,"daily_coverage":{"days_with_scored_trade":5},"unresolved_trades":0,
-               "exits_after_1520":0,"max_exit_delay_minutes":2,"stress_utility_inr":1.}
+               "exits_after_1520":0,"max_exit_delay_minutes":2,"stress_utility_inr":1.,"stress_failed_attempts":0}
         self.assertTrue(u._gate(valid))
         self.assertFalse(u._gate({**valid,"max_exit_delay_minutes":3}))
         self.assertFalse(u._gate({**valid,"stress_utility_inr":0.}))
         self.assertFalse(u._gate({**valid,"scored_trades":9}))
+        self.assertFalse(u._gate({**valid,"stress_failed_attempts":1}))
+
+    def test_prompt_monitoring_gap_still_fails_strict_observation_gate(self):
+        ep=episode(DAY,[])
+        ep["gap_exit_request_utc"]=r._stamp(DAY,3)
+        ep["gap_recovery"]={"exit_net":50.,"exit_fees":70.,"exit_utc":r._stamp(DAY,3),"exit_delay_minutes":0}
+        self.assertEqual(u.target(r,ep)["trigger"],"unverified_or_delayed")
+        metrics,_=r._evaluate([ep],method="fixed_stop",capital=17000.,risk_budget=12000.,strict_execution=True)
+        self.assertEqual(metrics["conditional_net_inr"],50.)
+        self.assertEqual(metrics["stress_utility_inr"],-1000.)
+        self.assertEqual(metrics["stress_failed_attempts"],1)
