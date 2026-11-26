@@ -151,3 +151,39 @@ adds exit-reason counts and sampled open-position minimum/maximum returns
 and peak-to-mark drawdown through each exit decision, including censored
 paths. Closed-account drawdown alone can hide large temporary losses.
 These are completed-mark diagnostics, not intrabar or fill-time extrema.
+
+
+## Daily opportunity scanner (v4)
+
+The original crossover mode remains the default, so existing reports and
+comparisons can be reproduced. Run the expanded mode separately:
+
+```bash
+bash run.sh cpr-research --entry-mode daily_scan --frame 5 --hold 60 --risk-budget 12000
+```
+
+This is a paper-only sensitivity with a larger full-premium exposure allowance;
+it is not a recommendation to risk INR 12,000. Scan fresh confirmed crossovers
+and scheduled 15-minute checkpoints using completed index candles. At a
+checkpoint, an aligned EMA direction outside CPR qualifies for further
+evaluation; classify the opportunity using the following precedence:
+fresh crossover, previous-day high/low breakout, CPR retest, CPR breakout,
+opening-range breakout (first 15 minutes, observed only after completion), or
+trend continuation. These are deterministic candidate labels, not proven edges.
+No trade is forced inside CPR, without appropriate quotes, or when risk or
+model gates reject the candidate.
+
+Earlier training uses the same original nonoverlapping crossover and fixed
+continuation learning grid as v3. The daily scanner uses its own validation
+candidate distribution; multiple strikes and overlapping windows are correlated.
+Account evaluation processes opportunities chronologically, skips decisions
+while a previous position is open through the delayed exit timestamp, limits
+attempted entries to three per session, and halts the day on unresolved entry
+or exit evidence. Daily coverage distinguishes reserved days, opportunities,
+affordable observed candidate paths, attempted entries, modeled entered
+positions and scored exits. A candidate path may be affordable yet never
+entered by the actual policy; a censored position is not a scored trade.
+The full JSON includes per-session counts even on zero-opportunity days.
+This is not a guarantee of daily trades or profitability. The previous
+evaluation dates have already been viewed, so compare exploratory outcomes
+and reserve fresh independent sessions for confirmation.
