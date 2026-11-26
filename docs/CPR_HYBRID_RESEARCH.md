@@ -15,9 +15,10 @@ coverage. A shorter range runs only descriptive rule-based comparisons.
 
 The default is a five-minute EMA 9/21 crossover with price above the upper CPR
 for calls or below the lower CPR for puts. CPR and OHLC are calculated from the
-preceding observed complete 375-minute index session; gap over four calendar
-days or incomplete prior session blocks the signal. This is not an authoritative
-exchange-calendar reconstruction. The prior session warms the EMA; a missing
+preceding weekday's complete 375-minute index session. Missing weekdays block
+the signal, including unverified exchange holidays; special weekend sessions
+are excluded. This is deliberately conservative, not an authoritative exchange
+calendar. The prior session warms the EMA; a missing
 current index minute stops the later session signal clock. All comparisons share
 the same fixed, nonoverlapping signal reservations, at most three per session.
 This is a specific proposed rule, not a reconstruction of every discretionary
