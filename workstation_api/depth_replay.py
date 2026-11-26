@@ -192,12 +192,17 @@ def _bars(day,now):
     return out
 
 
+from . import range_research
+
+
 def rule_signals(rows,rule,fast,slow,lookback,threshold):
     if rule=="EMA_CROSSOVER":
         return strategy_lab.crossover_events(rows,fast,slow)[0]
-    if rule not in ("MOMENTUM","MEAN_REVERSION") or not isinstance(lookback,int) or not 2<=lookback<=150:
+    if rule not in ("MOMENTUM","MEAN_REVERSION","RANGE_REVERSION") or not isinstance(lookback,int) or not 2<=lookback<=150:
         raise ValueError("Choose supported rule and lookback 2–150")
-    paper._check(threshold,.001,100,"rule threshold")
+    paper._check(threshold,.001,.49 if rule=="RANGE_REVERSION" else 100,"rule threshold")
+    if rule=="RANGE_REVERSION":
+        lookback=range_research.LOOKBACK+1
     signals=["HOLD"]*len(rows)
     segment=[]
     last="HOLD"
@@ -208,7 +213,9 @@ def rule_signals(rows,rule,fast,slow,lookback,threshold):
         value=r["close"]
         if len(segment)>=lookback:
             recent=segment[-lookback:]
-            if rule=="MOMENTUM":
+            if rule=="RANGE_REVERSION":
+                state=range_research.reversion_signal(recent,value,threshold)
+            elif rule=="MOMENTUM":
                 metric=100*(value/recent[0]-1)
                 state="UP" if metric>=threshold else "DOWN" if metric<=-threshold else "HOLD"
             else:

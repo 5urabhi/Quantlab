@@ -45,8 +45,13 @@ async function top(name){
   await page.locator('.ws-titlebar h1').waitFor()
 }
 async function sub(name){
-  await page.getByRole('navigation',{name:'Modules within selected research destination'})
-    .getByRole('button',{name,exact:true}).click()
+  const nav=page.getByRole('navigation',{name:'Modules within selected research destination'})
+  const target=nav.getByRole('button',{name,exact:true})
+  if(!await target.isVisible()){
+    const more=nav.locator('details.ws-context-more')
+    if(await more.count()&&!await more.getAttribute('open'))await more.locator('summary').click()
+  }
+  await target.click()
   await page.locator('.ws-titlebar h1',{hasText:name}).waitFor()
 }
 async function shot(name){
