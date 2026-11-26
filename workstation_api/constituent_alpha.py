@@ -22,7 +22,8 @@ from . import constituent_prospective as p, shared_market_data, service
 from . import advanced_options as ao, replay_storage
 
 VERSION="constituent_alpha_v1"
-HORIZONS=(5,10,30,60)
+ORIGINAL_HORIZONS=(5,10,30,60)
+HORIZONS=ORIGINAL_HORIZONS+(15,0)
 TRAIN=30
 CALIBRATION=10
 HOLDOUT=20
@@ -36,7 +37,7 @@ BANK_FEATURES=("weighted_return_bps","breadth_pct","weighted_dispersion_bps",
                "signed_rvol","rvol_missing","weighted_atp_deviation_bps","atp_missing",
                "weighted_displayed_imbalance","imbalance_missing")
 MODELS=("index_logistic","constituent_logistic","constituent_boosting")
-POLICY={"version":VERSION,"source_protocol_hash":p.PROTOCOL_HASH,"horizons":HORIZONS,
+POLICY={"version":VERSION,"source_protocol_hash":p.PROTOCOL_HASH,"horizons":ORIGINAL_HORIZONS,
         "split_sessions":[TRAIN,CALIBRATION,HOLDOUT],"deadband_bps":DEADBAND_BPS,
         "roundtrip_index_cost_proxy_bps":COST_BPS,"call_probability":CALL_PROB,
         "index_features":INDEX_FEATURES,"bank_features":BANK_FEATURES,
@@ -45,6 +46,14 @@ POLICY={"version":VERSION,"source_protocol_hash":p.PROTOCOL_HASH,"horizons":HORI
         "model_settings":"standardized L2 logistic C=1; histogram gradient boosting max_iter=100 max_leaf_nodes=7 min_samples_leaf=20 L2=1; temperature grid fixed; three quantile regressors",
         "development_walk_forward":[[20,5],[25,5]]}
 POLICY_HASH=sha256(json.dumps(POLICY,sort_keys=True).encode()).hexdigest()
+
+def policy_for(horizon):
+    if horizon in ORIGINAL_HORIZONS:
+        return POLICY_HASH
+    return sha256(json.dumps([POLICY_HASH,p.protocol_for(horizon),horizon,split_sizes(horizon)],sort_keys=True).encode()).hexdigest()
+
+def split_sizes(horizon):
+    return (60,20,40) if horizon==0 else (TRAIN,CALIBRATION,HOLDOUT)
 
 
 def _stamp(value):
@@ -72,7 +81,7 @@ def _read():
 
 def _horizon(h):
     if h not in HORIZONS:
-        raise ValueError("Use 5, 10, 30 or 60 minutes recorded by the existing protocol")
+        raise ValueError("Use 5, 10, 15, 30, 60 minutes or the near-session-close protocol")
 
 
 def _days(db,horizon,today,start_session=None):
@@ -80,7 +89,7 @@ def _days(db,horizon,today,start_session=None):
         return []
     return [r[0] for r in replay_storage.fetchall(db,"""SELECT DISTINCT session_ist FROM banknifty_paired_signals
         WHERE protocol_hash=? AND horizon_minutes=? AND session_ist<? AND session_ist>=? ORDER BY session_ist LIMIT ?""",
-        (p.PROTOCOL_HASH,horizon,today,start_session or "0000-00-00",REQUIRED))]
+        (p.protocol_for(horizon),horizon,today,start_session or "0000-00-00",sum(split_sizes(horizon))))]
 
 
 def readiness(horizon=30,*,now=None,start_session=None):
@@ -91,18 +100,19 @@ def readiness(horizon=30,*,now=None,start_session=None):
     if shared_market_data.database_path().is_file():
         with closing(_read()) as db:
             days=_days(db,horizon,today,start_session)
-    return {"version":VERSION,"policy_sha256":POLICY_HASH,"source_protocol_sha256":p.PROTOCOL_HASH,
+    nt,nc,nh=split_sizes(horizon);required=nt+nc+nh
+    return {"version":VERSION,"policy_sha256":policy_for(horizon),"source_protocol_sha256":p.protocol_for(horizon),
             "horizon_minutes":horizon,"supported_horizons":list(HORIZONS),
-            "required_sessions":REQUIRED,"recorded_sessions":len(days),"training_dates":days[:TRAIN],
-            "calibration_dates":days[TRAIN:TRAIN+CALIBRATION],"holdout_dates":days[TRAIN+CALIBRATION:],
-            "state":"ready_for_evidence_audit" if len(days)==REQUIRED else "awaiting_recorded_sessions",
+            "required_sessions":required,"recorded_sessions":len(days),"training_dates":days[:nt],
+            "calibration_dates":days[nt:nt+nc],"holdout_dates":days[nt+nc:],
+            "state":"ready_for_evidence_audit" if len(days)==required else "awaiting_recorded_sessions",
             "prospective_enabled":p.enabled(),"constituent_capture_enabled":p.bank.enabled(),
-            "note":"Counts are completed recorded sessions, not proof of usable data. The first 60 are retained even if coverage is poor. The existing ledger has 5/10/30/60 minute labels, not 15 minutes. No fabricated historical weights or signals."}
+            "note":"Counts are completed recorded sessions, not proof of usable data. The first required sessions are retained even if coverage is poor. Near-session-close targets are original ticks from 15:29:20 to 15:29:50 IST, not an official closing price. No fabricated historical weights or signals."}
 
 
 def _reference(row,e):
     cutoff,decided,target=(_stamp(row[k]) for k in ("cutoff_utc","decided_utc","target_utc"))
-    if not 0<=(decided-cutoff).total_seconds()<=5 or target!=decided+timedelta(minutes=row["horizon_minutes"]):
+    if not 0<=(decided-cutoff).total_seconds()<=5 or target!=p.target_for(decided,row["horizon_minutes"]) or (row["horizon_minutes"]==0 and target-decided<timedelta(minutes=5)):
         raise ValueError("Decision clock mismatch")
     if p._session(cutoff).date().isoformat()!=row["session_ist"]:
         raise ValueError("Session mismatch")
@@ -284,7 +294,7 @@ def _rows(db,day,horizon):
              "outcome","observed_price","observed_exchange_utc","observed_received_utc","observed_sha256")
     data=replay_storage.fetchall(db,"SELECT "+",".join(columns)+""" FROM banknifty_paired_signals
         WHERE protocol_hash=? AND horizon_minutes=? AND slot_utc>=? AND slot_utc<? AND session_ist=?
-        ORDER BY slot_utc LIMIT 401""",(p.PROTOCOL_HASH,horizon,start,stop,day))
+        ORDER BY slot_utc LIMIT 401""",(p.protocol_for(horizon),horizon,start,stop,day))
     if len(data)>400:
         raise ValueError("Recorded session exceeds bounded minute ledger")
     return [dict(zip(columns,row)) for row in data]
@@ -553,13 +563,13 @@ def run(*,horizon=30,progress=None,now=None):
         support={"training":support(train),"calibration":support(cal),"holdout":support(test)},
         methods={},regimes={},quantiles=None,walk_forward=[],run_id=None,
         broker_orders_enabled=False,live_model_promoted=False,
-        warning="Frozen chronological research on the first 60 recorded sessions, not external preregistration. "
+        warning="Frozen chronological research on the first required recorded sessions, not external preregistration. "
         "The 5 bps round-trip underlying index cost is a fixed hypothetical proxy, not option P&L, broker charges, or a tradable BANKNIFTY spot fill. "
         "All methods share matched constituent and index evidence; missing observations remain excluded and counted. "
         "No overlapping selected forecast windows; within-day returns may still be dependent. "
         "A descriptive gate is not a significance test, proof of alpha, or permission to trade. "
         "No model is connected to the paper order selector.")
-    if len(dates)<REQUIRED:
+    if len(dates)<status.get("required_sessions",REQUIRED):
         status["state"]="awaiting_recorded_sessions"
     elif not (_supported(train,60,20,train=True) and _supported(cal,20,7) and _supported(test,40,12)):
         status["state"]="insufficient_matched_evidence"
@@ -571,11 +581,11 @@ def run(*,horizon=30,progress=None,now=None):
     # The coverage artifact is useful even when model fitting is blocked.
     audit_records=[{"day":"RUN_SUMMARY","state":status["state"],"counts_json":json.dumps(dict(counts),sort_keys=True),
                     "support_json":json.dumps(status["support"],sort_keys=True),
-                    "policy_sha256":POLICY_HASH}]
+                    "policy_sha256":policy_for(horizon)}]
     for item in audit:
         audit_records.append({"day":item["day"],"state":"recorded_session",
             "counts_json":json.dumps({k:v for k,v in item.items() if k!="day"},sort_keys=True),
-            "support_json":"","policy_sha256":POLICY_HASH})
+            "support_json":"","policy_sha256":policy_for(horizon)})
     status["audit_id"]=_save(audit_records,audit=True)
     if progress:
         progress(100,"Constituent alpha research report saved")
