@@ -9,8 +9,6 @@ from datetime import date, datetime, time, timedelta, timezone
 from hashlib import sha256
 import csv
 import io
-import math
-import re
 import sqlite3
 import time as clock
 from . import live_market, market_inventory as inv, shared_market_data
@@ -23,7 +21,7 @@ def audit(source,identity,start,end,calendar_csv,source_label,confirm_reviewed,e
     if confirm_reviewed is not True or not isinstance(source_label,str) or not 3<=len(source_label.strip())<=300 or not isinstance(calendar_csv,str) or len(calendar_csv)>20000:
         raise ValueError("Provide reviewed calendar CSV and its source reference")
     first,last=date.fromisoformat(start),date.fromisoformat(end)
-    if not 0<=(last-first).days<90:
+    if not 0<=(last-first).days<90 or last==date.max:
         raise ValueError("Choose an inclusive 1–90 day window")
     reader=csv.DictReader(io.StringIO(calendar_csv.strip()))
     if reader.fieldnames!=["session_date","state"]:
@@ -62,8 +60,8 @@ def audit(source,identity,start,end,calendar_csv,source_label,confirm_reviewed,e
                         if source=="daily_closes":
                             lo,hi=day.isoformat(),nxt.isoformat()
                         else:
-                            lo=datetime.combine(day,time.min,tzinfo=live_market.IST).astimezone(timezone.utc).isoformat(timespec="microseconds")
-                            hi=datetime.combine(nxt,time.min,tzinfo=live_market.IST).astimezone(timezone.utc).isoformat(timespec="microseconds")
+                            lo=datetime.combine(day,time.min,tzinfo=live_market.IST).astimezone(timezone.utc).isoformat(timespec="seconds")
+                            hi=datetime.combine(nxt,time.min,tzinfo=live_market.IST).astimezone(timezone.utc).isoformat(timespec="seconds")
                         # ISO writers use UTC offsets; whole calendar-day comparisons
                         # include any fractional second formatting at the boundary.
                         predicates=[ident+"=?",stamp+">=?",stamp+"<?"]
