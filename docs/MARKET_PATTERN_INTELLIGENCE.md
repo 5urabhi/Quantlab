@@ -109,3 +109,25 @@ Historical option candle replay UI now defaults to the current Zerodha tariff in
 
 ## Full-year saved-only scalping grid
 Market Intelligence → Full-year Scalping Research Lab runs 66 fixed configurations per selected lot count (up to 198), reusing original SHA-checked near-monthly rolling receipts and complete index sessions in 30-day blocks. It compares EMA 9/21, ordinary 30-close mean reversion (1.5 z), range-gated reversal (20% edge), fixed minute holds and capped completed-close point targets/stops. No new download, depth fabrication or broker order. Daily research capital resets; historical lot size is a user assumption. Development/validation use common scored sessions; final 20% only tests the development-selected candidate. Coverage and censored days remain visible, and repeated runs are exploratory rather than fresh independent tests. Saved derived reports are under trading_cockpit/scalping_studies. Original depth replay remains separate. Sub-minute research still requires original sub-minute records.
+
+
+## Standalone Zerodha basket-margin preview
+
+In Trading economics, open Zerodha standalone basket-margin preview, load
+saved paper baskets, select a candidate and MIS/NRML, and explicitly authorize
+one calculation. QuantLab retrieves the current NFO master via the existing
+local authenticated Kite session and requires a unique BANKNIFTY match by
+expiry, strike, CE/PE and lot size. Expired or ambiguous terms are rejected.
+It calls only Kite's documented margin calculation endpoint
+`POST /margins/basket?consider_positions=false`, with a hypothetical
+buy-before-sell sequence; no order endpoint is enabled.
+
+The response displays initial and final broker margin, the conservative maximum
+of the two, individual estimated margin/charges and the comparison to the
+candidate's configured paper capital. This is a standalone current calculation,
+not historical margin, available cash, order approval, an execution, or a
+guarantee of affordability. Existing account positions are deliberately excluded.
+The paper strategy and loss budget are not modified by the preview. Current
+credentials and live API responses must be verified locally.
+
+Offline tests: `python -m unittest discover -s tests -p 'test_zerodha_basket_margin.py' -v`.
