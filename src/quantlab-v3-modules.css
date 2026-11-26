@@ -138,3 +138,29 @@
 .ws-v2.ql-v3 :is(.mdw-choice-icon,.ml-kicker,.mdw-eyebrow,.mdw-kicker,.qm-eyebrow){color:var(--ql-accent,#f5c542)}.ws-v2.ql-v3 :is(.mdw-steps button,.ml-groups button,.ml-actions button,.qm-toolbar button,.qm-pager button,.rw-segments button,.rw-button-group button:not(.rw-primary)){background:var(--ql-raised,#1c1c20);border-color:var(--ql-border,#343438);color:var(--ql-text,#f1f1f3)}.ws-v2.ql-v3 .mdw-steps button.active{background:var(--ql-accent-soft,#332b17);color:var(--ql-accent,#f5c542);border-color:#8d7132}
 @media(max-width:1200px){.ql-model-tools,.ql-automation-choices{grid-template-columns:repeat(2,minmax(0,1fr))}.ql-v3-model-catalog .ql-catalog-hero{flex-wrap:wrap}.ql-model-catalog-stats{flex:1 1 100%}}
 @media(max-width:700px){.ql-v3-model-catalog .ql-catalog-categories{grid-template-columns:repeat(2,minmax(0,1fr))}.ql-model-catalog-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.ql-model-catalog-stats>div{padding:8px}.ql-model-catalog-stats strong{font-size:19px}.ql-model-workflow{grid-template-columns:minmax(0,1fr)}.ql-model-tools,.ql-automation-choices{grid-template-columns:repeat(2,minmax(0,1fr))}.ql-catalog-sourcebar label{flex-basis:100%}.ql-v3-model-catalog .ql-catalog-hero{padding:15px}.ql-model-focus-head-row>div{min-width:0}.ql-v3-model-detail .ql-focus-status{min-width:0}.ql-v3-model-detail .ql-focus-actions{min-width:0}.ql-v3-model-detail .ql-param-grid{min-width:0}}
+
+
+/* A single minmax track prevents wide intrinsic children (custom model
+   headers, source labels and filter controls) from expanding the page. */
+.ws-v2.ql-v3 .ql-v3-model-catalog{grid-template-columns:minmax(0,1fr);max-width:100%}
+.ws-v2.ql-v3 .ql-v3-model-catalog > *{min-width:0;max-width:100%}
+.ws-v2.ql-v3 .ql-v3-model-catalog :is(.ql-catalog-hero>div,.ql-catalog-sourcebar>div>span,.ql-catalog-toolbar>*,.ql-catalog-categories button,.ql-catalog-categories button span,.ql-catalog-recent-items,.ql-catalog-recent-items button,.ql-saved-runner-head>div,.ql-catalog-family-section>header>*){
+  min-width:0;max-width:100%;overflow-wrap:anywhere
+}
+.ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-recent[aria-label="Registered custom Python models"]{display:grid;grid-template-columns:minmax(0,1fr)}
+.ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-recent .ql-saved-runner-head{align-items:flex-start;flex-wrap:wrap;min-width:0}
+.ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-recent .ql-saved-runner-head .ws-actions{min-width:0;flex-wrap:wrap}
+@media(max-width:700px){
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-hero{align-items:stretch}
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-model-catalog-stats{flex:0 1 auto;width:100%}
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-search{flex:1 1 100%;width:100%}
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-type-toggle{width:100%;justify-content:flex-start}
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-categories button{gap:6px}
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-categories button small{flex-shrink:0}
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-recent .ql-saved-runner-head{display:grid;grid-template-columns:minmax(0,1fr);width:100%}
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-recent .ql-saved-runner-head .ws-actions{width:100%;justify-content:flex-start}
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-recent .ws-button{white-space:normal;text-align:left;max-width:100%}
+}
+@media(max-width:420px){
+  .ws-v2.ql-v3 .ql-v3-model-catalog .ql-catalog-categories{grid-template-columns:minmax(0,1fr)}
+}
