@@ -344,6 +344,7 @@ def _summarize(data: dict) -> dict:
         status = "interrupted"
     return {
         "id": data["id"], "status": status, "created_utc": data["created_utc"],
+        "maintenance_owned": bool(data.get("maintenance_owned")),
         "updated_utc": data.get("updated_utc"), "selection": data["selection"],
         "exchange": data.get("exchange", "NSE"), "interval": data["interval"],
         "from_date": data["from_date"], "to_date": data["to_date"],
@@ -441,7 +442,7 @@ def list_batches() -> list[dict]:
             result.append(_summarize(_load_batch(sub.name)))
         except (ValueError, OSError, KeyError, json.JSONDecodeError):
             continue
-    return result[:100]
+    return sorted(result,key=lambda x:(x.get("created_utc") or "",x["id"]),reverse=True)[:100]
 
 
 def batch_details(batch_id: str, page: int = 1, per_page: int = 60,
