@@ -19,7 +19,9 @@ import re
 import sqlite3
 import time
 
-import httpx
+from urllib.parse import urlencode
+from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
+from urllib.error import HTTPError, URLError
 
 from . import service, market_context as m, context_events as events, advanced_options as ao
 from . import shared_market_data, recorder_storage
@@ -116,21 +118,33 @@ def status():
                 "note":"Actual provider responses and entitlements remain unverified until collected. The worker runs only while QuantLab is open. Local receipt times are not exchange publication times."}
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _http(url,params=None):
-    # Fixed hosts only; no redirects, no retries, no credentials in exceptions.
+    # Fixed endpoints; do not log credential-bearing URLs or follow redirects.
+    if url not in {FRED_URL+"series/observations",FRED_URL+"releases/dates",TWELVE_URL,*events.SOURCES.values()}:
+        raise ValueError("Unsupported provider endpoint")
+    query=url+("?" + urlencode(params) if params else "")
     try:
-        with httpx.Client(timeout=httpx.Timeout(10.,connect=5.),follow_redirects=False,trust_env=False) as client:
-            with client.stream("GET",url,params=params or {},headers={"User-Agent":"QuantLab-local-research/1.0","Accept":"application/json, application/rss+xml, text/xml, application/xml"}) as response:
-                if response.status_code!=200:
-                    raise ValueError("Provider HTTP "+str(response.status_code))
-                chunks=[];size=0
-                for chunk in response.iter_bytes():
-                    size+=len(chunk)
-                    if size>MAX_BODY:
-                        raise ValueError("Provider payload exceeded size limit")
-                    chunks.append(chunk)
-                return b"".join(chunks)
-    except httpx.HTTPError:
+        opener=build_opener(ProxyHandler({}),_NoRedirect())
+        req=Request(query,headers={"User-Agent":"QuantLab-local-research/1.0","Accept":"application/json, application/rss+xml, text/xml, application/xml"})
+        with opener.open(req,timeout=10) as response:
+            if response.status!=200:
+                raise ValueError("Provider HTTP "+str(response.status))
+            body=response.read(MAX_BODY+1)
+            if len(body)>MAX_BODY:
+                raise ValueError("Provider payload exceeded size limit")
+            for key in ("api_key","apikey"):
+                secret=(params or {}).get(key)
+                if secret and str(secret).encode() in body:
+                    raise ValueError("Credential echoed by provider; response discarded")
+            return body
+    except HTTPError as exc:
+        raise ValueError("Provider HTTP "+str(exc.code)) from None
+    except (URLError,TimeoutError,OSError):
         raise ValueError("Provider network unavailable") from None
 
 
