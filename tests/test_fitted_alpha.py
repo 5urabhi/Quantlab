@@ -41,7 +41,7 @@ class FittedAlphaTests(TestCase):
     def test_matched_advanced_comparisons(self):
         rows=samples()
         baseline={name:{"brier":1.} for name in ("training_class_prior","index_logistic","constituent_logistic")}
-        with patch.object(f.importlib.util,"find_spec",return_value=None):
+        with patch.object(f,"_optional_fit",return_value=(None,"optional_dependency_missing")):
             methods,states,records=f.assess(rows[:160],rows[160:200],rows[200:],5,baseline)
         self.assertEqual(states["constituent_xgboost"],"optional_dependency_missing")
         self.assertIn("constituent_hmm_logistic",methods)
