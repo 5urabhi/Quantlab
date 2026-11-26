@@ -1035,6 +1035,31 @@ def compare_option_expiries(body: OptionsComparisonRequest):
         bad(exc)
 
 
+class ZerodhaCostEstimateRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    buy_premium: float = Field(ge=.05,le=20000,allow_inf_nan=False)
+    sell_premium: float = Field(ge=.05,le=20000,allow_inf_nan=False)
+    quantity: int = Field(ge=1,le=100000,strict=True)
+    buy_orders: int = Field(default=1,ge=1,le=20,strict=True)
+    sell_orders: int = Field(default=1,ge=1,le=20,strict=True)
+    broker_profile: Literal["zerodha","zerodha_debit_balance"]="zerodha"
+    target_net_inr: float = Field(default=100,ge=0,le=1e8,allow_inf_nan=False)
+    extra_spread_points: float = Field(default=0,ge=0,le=20000,allow_inf_nan=False)
+    extra_slippage_points: float = Field(default=0,ge=0,le=20000,allow_inf_nan=False)
+    gross_winner_inr: float = Field(default=200,ge=0,le=1e8,allow_inf_nan=False)
+    gross_loser_inr: float = Field(default=150,ge=0,le=1e8,allow_inf_nan=False)
+    win_rate_pct: float = Field(default=70,ge=0,le=100,allow_inf_nan=False)
+
+
+@app.post("/api/trading-cockpit/options/zerodha/cost-estimate")
+def zerodha_cost_estimate(body: ZerodhaCostEstimateRequest):
+    from . import zerodha_execution_costs
+    try:
+        return zerodha_execution_costs.estimate(**body.model_dump())
+    except (ValueError,OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/options/positions")
 def option_position_marks(target_pct: float = 5, stop_pct: float = 2.5,
         horizon_minutes: int = 5, iv_change_points: float = 0,
@@ -1177,7 +1202,7 @@ class ScalpingValidationRequest(BaseModel):
     participation_pct: float = Field(default=25,ge=1,le=100,allow_inf_nan=False)
     slippage_bps: float = Field(default=5,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","dhan","zerodha_debit_balance"]="zerodha"
-    fee_floor_per_side: float = Field(default=50,ge=0,le=1000,allow_inf_nan=False)
+    fee_floor_per_side: float = Field(default=0,ge=0,le=1000,allow_inf_nan=False)
     daily_loss_limit_pct: float = Field(default=10,ge=1,le=100,allow_inf_nan=False)
 
 

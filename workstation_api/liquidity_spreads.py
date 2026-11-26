@@ -27,7 +27,7 @@ STT_SELL_RATE = 0.0015             # NSE effective 2026-04-01
 NSE_OPTION_EXCHANGE_RATE = 0.0003553  # Indicative 2026; verify contract note
 SEBI_RATE = 0.000001
 STAMP_BUY_RATE = 0.00003
-FEE_VERSION = "research_illustration_nse_options_2026_11"
+FEE_VERSION = "nse_options_tariff_reviewed_2026_11_26"
 BROKER_PROFILES = {
     "dhan": {"name": "Dhan regular retail", "brokerage": 20.0,
              "source": "https://dhan.co/pricing/"},
@@ -47,8 +47,9 @@ WARN_FEES = (
     "note: brokerage depends on selected Dhan/Zerodha tariff; sell-side STT 0.15% "
     "effective 1 Apr 2026; indicative NSE option exchange 0.03553%, SEBI "
     "0.0001%, buy-side stamp 0.003%, GST 18% on brokerage/transaction/SEBI. "
-    "IPFT, additional levies, clearing/physical delivery, expiry exercise, "
-    "partial-fill order counts and actual broker rounding may differ."
+    "Zerodha reports NSE IPFT is included in the transaction rate; do not add it twice. "
+    "Additional levies, clearing/physical delivery, expiry exercise, "
+    "actual executed-order counts and contract-note rounding may differ."
 )
 
 
@@ -299,7 +300,8 @@ def _walk(levels: list[dict], units: int) -> dict:
 def fee_schedule(buy_turnover: float, sell_turnover: float,
                  *, executed_orders_per_side: int = 1,
                  brokerage_inr: float | None = None,
-                 broker_profile: str = "dhan") -> dict:
+                 broker_profile: str = "dhan",
+                 buy_orders: int | None = None, sell_orders: int | None = None) -> dict:
     if broker_profile not in BROKER_PROFILES:
         raise ValueError("Broker profile must be Dhan or a listed Zerodha tariff")
     if brokerage_inr is None:
@@ -311,8 +313,12 @@ def fee_schedule(buy_turnover: float, sell_turnover: float,
         raise ValueError("Executed-order count must be between 1 and 20")
     if not isfinite(brokerage_inr) or not 0 <= brokerage_inr <= 1000:
         raise ValueError("Unsupported brokerage cost assumption")
+    buy_count = executed_orders_per_side if buy_orders is None else buy_orders
+    sell_count = executed_orders_per_side if sell_orders is None else sell_orders
+    if any(type(n) is not int or not 1 <= n <= 20 for n in (buy_count,sell_count)):
+        raise ValueError("Executed buy/sell order counts must be 1–20")
     turnover = buy_turnover + sell_turnover
-    brokerage = _money(2 * executed_orders_per_side * brokerage_inr)
+    brokerage = _money((buy_count + sell_count) * brokerage_inr)
     exchange = _money(turnover * NSE_OPTION_EXCHANGE_RATE)
     sebi = _money(turnover * SEBI_RATE)
     gst = _money((brokerage + exchange + sebi) * GST_RATE)
@@ -327,7 +333,7 @@ def fee_schedule(buy_turnover: float, sell_turnover: float,
     # Split already-rounded combined charges across two hypothetical order
     # sides. The final sell-side remainder preserves the original fee total
     # even if rounding each side independently would move one paisa.
-    per_order_brokerage = _money(executed_orders_per_side * brokerage_inr)
+    per_order_brokerage = _money(buy_count * brokerage_inr)
     buy_exch = _money(buy_turnover * NSE_OPTION_EXCHANGE_RATE)
     buy_sebi = _money(buy_turnover * SEBI_RATE)
     buy_gst = _money((per_order_brokerage + buy_exch + buy_sebi)*GST_RATE)
@@ -350,6 +356,7 @@ def fee_schedule(buy_turnover: float, sell_turnover: float,
         "broker_profile": broker_profile,
         "broker_profile_name": BROKER_PROFILES[broker_profile]["name"],
         "brokerage_inr_per_executed_order": brokerage_inr,
+        "buy_orders": buy_count, "sell_orders": sell_count,
         "buy_leg": {
             **buy_fees, "premium_turnover": _money(buy_turnover),
             "fees_total": buy_total,

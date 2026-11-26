@@ -90,3 +90,15 @@ broker fee, floor) on executed turnover, not their sum. A daily loss
 budget blocks new entries only after completed trades; it cannot guarantee
 a loss bound. No provider calls or live orders. Test with
 python -m unittest discover -s tests -p 'test_scalping_validation.py' -v.
+
+## Current Zerodha costs (reviewed 26 Nov 2026 IST)
+Official sources: https://zerodha.com/charges/ and
+https://zerodha.com/marketintel/bulletin/445377/revision-in-stt-securities-transaction-tax-from-1st-april-2026 .
+NSE IPFT is included in the transaction charge (Zerodha transaction-charge
+support page). The common fee engine now supports asymmetric executed-order
+counts. Market Intelligence → Scalping economics automatically calculates
+all-in local estimates from actual hypothetical entry/exit premiums, target
+exit price, and separate winning and losing payoffs. Replay uses the current
+Zerodha tariff by default (optional per-side floor = non-additive stress).
+These are current-tariff estimates, not historic contract-note reconstruction
+or actual Kite execution costs. Do not double count spread in fill-based P&L.

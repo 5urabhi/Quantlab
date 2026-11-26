@@ -210,7 +210,7 @@ def _aggregate(days):
 
 def run(*,start_date,end_date,capital=17000.,lots=3,target_premium=180.,tolerance=60.,
         max_spread_bps=150.,hold_minutes=5,latency_ms=1000,window_seconds=30,
-        participation_pct=25.,slippage_bps=5.,broker_profile="zerodha",fee_floor_per_side=50.,
+        participation_pct=25.,slippage_bps=5.,broker_profile="zerodha",fee_floor_per_side=0.,
         daily_loss_limit_pct=10.,progress=None,now=None,save=True):
     now=now or paper._now()
     first,last=_day(start_date),_day(end_date)
