@@ -238,17 +238,23 @@ def select_full_chain_rotation(chain: dict, cfg: dict,
     return result
 
 
-def _assign_scalp_sampling(selected, cfg):
-    """Bounded fast sampling INSIDE already subscribed identities.
+def _assign_scalp_sampling(selected, cfg, previous_fast=()):
+    """Keep the fast lane inside the existing 200 subscribed identities.
 
-    The chain is genuine but not a guarantee of available fills. Favor
-    stable subscribed contracts with two-sided prices and observed volume;
-    use a 17k research budget, 180 premium preference, and the recorder's
-    configured quantity. Never change the 200-slot subscription plan.
+    Prioritize stable, traded, affordable two-sided options by entry cost,
+    normalized spread and recent genuine paired receipts. If the preferred
+    size is unaffordable, fall back to smaller whole-lot research sizes.
+    Chain-based estimates are NOT depth-verified execution or margin.
     """
+    from . import paper_execution as paper
+    previous_fast=set(previous_fast)|{item["identity"] for item in selected if item.get("scalp_fast_depth")}
+    with auto.LOCK:
+        observed=dict(auto.STATE.get("observed_by_contract",{}))
+    now=auto._now()
+    lots=cfg["lots"]
     for item in selected:
         item["scalp_fast_depth"]=False
-    lots=cfg["lots"]
+        item["scalp_affordable_lots"]=0
     for side in ("CE","PE"):
         ranked=[]
         for item in selected:
@@ -257,12 +263,26 @@ def _assign_scalp_sampling(selected, cfg):
             bid,ask=item.get("bid"),item.get("ask")
             if (not isinstance(bid,(int,float)) or not isinstance(ask,(int,float))
                     or not math.isfinite(bid) or not math.isfinite(ask)
-                    or not 0<bid<=ask or item.get("volume",0)<=0
-                    or ask*item["lot_size"]*lots+100>SCALP_RESEARCH_CAPITAL):
+                    or not 0<bid<=ask or item.get("volume",0)<=0):
                 continue
-            # Premium preference first, then normalized spread and volume.
-            ranked.append((abs((bid+ask)/2-SCALP_RESEARCH_PREMIUM),
-                           (ask-bid)/((bid+ask)/2),-item["volume"],item["identity"],item))
+            affordable=0
+            for n in range(lots,0,-1):
+                turnover=ask*item["lot_size"]*n*1.0005
+                if turnover+paper._fees("BUY",turnover,"zerodha")<=SCALP_RESEARCH_CAPITAL:
+                    affordable=n
+                    break
+            if not affordable:
+                continue
+            item["scalp_affordable_lots"]=affordable
+            try:
+                recent=(now-datetime.fromisoformat(observed[item["identity"]])).total_seconds()<=10
+            except (KeyError,ValueError,TypeError):
+                recent=False
+            mid=(bid+ask)/2
+            ranked.append((affordable<lots,item.get("coverage_role")!="core",
+                           not recent,(ask-bid)/mid,
+                           item["identity"] not in previous_fast,-item["volume"],
+                           abs(mid-SCALP_RESEARCH_PREMIUM),item["identity"],item))
         for *_,item in sorted(ranked)[:SCALP_FAST_PER_SIDE]:
             item["scalp_fast_depth"]=True
     return selected
@@ -564,7 +584,8 @@ def _select(cfg: dict, previous_ids=(), rotation_step: int = 0,
                  and item["expiry"] == chain["expiry"] for item in ranked)
     if hold_if_safe and not urgent:
         selected = _retain_if_market_inside_core(chain, previous_contracts) or selected
-    selected = _assign_scalp_sampling(selected, cfg)
+    selected = _assign_scalp_sampling(selected, cfg,
+        previous_fast=[c["identity"] for c in previous_contracts if c.get("scalp_fast_depth")])
     coverage = _full_chain_coverage(chain, selected)
     coverage["scalp_fast_contracts"] = sum(bool(row.get("scalp_fast_depth")) for row in selected)
     diagnostic = _coverage_diagnostics(chain, selected)
