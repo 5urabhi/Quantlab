@@ -1858,6 +1858,16 @@ def download_dynamic_strategy_research(run_id:str):
     return FileResponse(path,filename="quantlab_strategy_"+run_id+".csv",media_type="text/csv")
 
 
+@app.get("/api/trading-cockpit/strategy-research/results/{run_id}/diagnostics")
+def download_dynamic_strategy_diagnostics(run_id:str):
+    from . import dynamic_strategy_research
+    try:
+        path=dynamic_strategy_research.result_path(run_id,diagnostics=True)
+    except (ValueError,FileNotFoundError) as exc:
+        raise HTTPException(404,str(exc)) from exc
+    return FileResponse(path,filename="quantlab_strategy_"+run_id+"_diagnostics.csv",media_type="text/csv")
+
+
 class SpreadReadinessRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
     day: str=Field(min_length=10,max_length=10)
