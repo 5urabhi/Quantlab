@@ -13,13 +13,13 @@ import json
 from . import historical_alpha as h, predictive_option_research as p
 from . import alpha_retraining, liquidity_spreads as fees
 
-VERSION = "cpr_ml_offline_q_v4"
-ENTRY_MODES = ("crossover", "daily_scan")
+VERSION = "cpr_ml_offline_q_v5"
+ENTRY_MODES = ("crossover", "daily_scan", "regime_scan")
 SCAN_MINUTES = 15
 MAX_DAILY_ATTEMPTS = 3
 TRAIL_ACTIVATION = .03
 TRAIL_GAP = .03
-MAX_LEARNING_STRIKES = 5
+MAX_LEARNING_STRIKES = 11
 FEATURE_FUNDING_SCALE = 17000.
 EMERGENCY_STOP = -.15
 SOURCE_STATES = ("missing_signal_quotes", "no_qualified_observed_contract",
@@ -30,7 +30,7 @@ STOP = -.05
 CLASSES = ("target", "stop", "other")
 METHODS = ("no_stop", "fixed_stop", "ml_fixed", "offline_q", "ml_offline_q",
            "fixed_emergency_stop", "offline_q_emergency_stop",
-           "trailing_stop", "trailing_emergency_stop", "no_trade")
+           "trailing_stop", "trailing_emergency_stop", "volatility_trailing_stop", "no_trade")
 FRAMES = (1, 3, 5, 15)
 HOLDS = (15, 30, 60, 120)
 MIN_STATE_EPISODES = 5
@@ -48,6 +48,7 @@ WARNING = (
     "Learning uses earlier unleveraged counterfactual single-lot trajectories independently of account funding; "
     "multiple strikes at the same signal are correlated and are grouped in support and training weights. "
     "Daily scan opportunities can overlap, but positions cannot; skip signals while holding, halt on unresolved positions, "
+    "Ranked entry, global and constituent variants are development-selected retrospective studies; no independently validated live policy. "
     "and cap attempted entries at three per day. Daily trade coverage is not guaranteed. "
     "Previously viewed evaluation dates are exploratory, not a new untouched confirmation set. "
     "Trailing floors use completed net marks only; delayed exits can realize losses beyond those floors. "
@@ -100,7 +101,7 @@ def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learnin
     stride=((max(hold+3,60)+frame-1)//frame)*frame
     first=((30+frame-1)//frame)*frame-1
     grid=set(range(first,375,stride)) if learning_grid else set()
-    daily=entry_mode=="daily_scan" and not learning_grid
+    daily=entry_mode in ("daily_scan","regime_scan") and not learning_grid
     scan_stride=((SCAN_MINUTES+frame-1)//frame)*frame
     opening_complete=False
     opening_hi=opening_lo=None
@@ -136,10 +137,23 @@ def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learnin
             side=cross
             if scheduled and opening_complete and side is None:
                 side="CALL" if gap>0 and price>top else "PUT" if gap<0 and price<bottom else None
+            # Separate exploratory sideways regime: completed-bar rejection
+            # inside CPR, small EMA separation, no ambiguous both-edge touch.
+            if entry_mode=="regime_scan" and scheduled and opening_complete and side is None and bottom<price<top and top>bottom and abs(gap)/price*10000<=5:
+                width=top-bottom
+                low=min(bars[k][2] for k in range(m-frame+1,m+1))
+                high=max(bars[k][1] for k in range(m-frame+1,m+1))
+                bull=bottom<=prev_close<=top and low<=bottom and high<top and price>=bottom+.2*width and price>prev_close
+                bear=bottom<=prev_close<=top and high>=top and low>bottom and price<=top-.2*width and price<prev_close
+                if bull!=bear:
+                    side="CALL" if bull else "PUT"
+                    entry_type="sideways_cpr_rejection"
             if side is not None:
                 bar_lo=min(bars[k][2] for k in range(m-frame+1,m+1))
                 bar_hi=max(bars[k][1] for k in range(m-frame+1,m+1))
-                if side==cross:
+                if entry_type=="sideways_cpr_rejection":
+                    pass
+                elif side==cross:
                     entry_type="crossover"
                 elif (side=="CALL" and prev_close<=hi<price) or (side=="PUT" and price<lo<=prev_close):
                     entry_type="previous_day_breakout"
@@ -301,6 +315,7 @@ def _exit(ep, policy, q=None, *, stop_mark=STOP):
     low=high=None
     drawdown=0.
     floor=None
+    observed_marks=[]
     diagnostics={"min_observed_mark_return":None,"max_observed_mark_return":None,
                  "max_observed_peak_to_mark_drawdown":None,"trailing_floor_return":None}
     for step in ep["path"]:
@@ -308,8 +323,15 @@ def _exit(ep, policy, q=None, *, stop_mark=STOP):
         low=mark if low is None else min(low,mark)
         high=mark if high is None else max(high,mark)
         drawdown=max(drawdown,high-mark)
-        if policy=="trailing" and high>=TRAIL_ACTIVATION-1e-12:
-            floor=max(stop_mark,high-TRAIL_GAP)
+        observed_marks.append(mark)
+        if policy in ("trailing","volatility_trailing") and high>=TRAIL_ACTIVATION-1e-12:
+            gap=TRAIL_GAP
+            if policy=="volatility_trailing" and len(observed_marks)>=6:
+                from statistics import pstdev
+                recent=observed_marks[-6:]
+                gap=min(.06,max(.02,2*pstdev([b-a for a,b in zip(recent,recent[1:])])))
+            candidate=max(stop_mark,high-gap)
+            floor=candidate if floor is None else max(floor,candidate)
         diagnostics={"min_observed_mark_return":low,"max_observed_mark_return":high,
                      "max_observed_peak_to_mark_drawdown":drawdown,
                      "trailing_floor_return":floor}
@@ -471,7 +493,7 @@ def _ml_accept(model,means,ep):
         return False
     pr=dict(zip(model.classes_,model.predict_proba([ep["features"]])[0]))
     ev=sum(float(pr[c])*means[c] for c in CLASSES)
-    return float(pr["target"])>=.50 and ev>0
+    return float(pr["target"])>=getattr(model,"target_threshold",.50) and ev>0
 
 
 def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None,dates=None,max_attempts=MAX_DAILY_ATTEMPTS):
@@ -517,7 +539,7 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             else:
                 learned=method in ("offline_q","ml_offline_q","offline_q_emergency_stop")
                 wide=method in ("fixed_emergency_stop","offline_q_emergency_stop","trailing_emergency_stop")
-                policy="offline_q" if learned else "trailing" if method in ("trailing_stop","trailing_emergency_stop") else method if method=="no_stop" else "fixed_stop"
+                policy="offline_q" if learned else "volatility_trailing" if method=="volatility_trailing_stop" else "trailing" if method in ("trailing_stop","trailing_emergency_stop","ml_trailing_stop") else method if method=="no_stop" else "fixed_stop"
                 result=_exit(ep,policy,q,stop_mark=EMERGENCY_STOP if wide else STOP)
         state=result["state"]
         counts[state]+=1
@@ -543,7 +565,10 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
                         "side":ep["side"],"entry_type":ep.get("entry_type"),"strike":ep.get("strike"),
                         "minimum_funding_inr":ep.get("minimum_funding_inr"),
                         "observed_side_quotes":ep.get("observed_side_quotes"),
-                        "qualified_contracts":ep.get("qualified_contracts"),**result})
+                        "qualified_contracts":ep.get("qualified_contracts"),
+                        "ranked_expected_return":ep.get("ranked_expected_return"),
+                        "ranked_target_probability":ep.get("ranked_target_probability"),
+                        "ranked_candidate_count":ep.get("ranked_candidate_count"),**result})
     scored=counts["complete"]
     unresolved=counts["missing_entry"]+counts["exit_censored"]
     return {"states":dict(counts),"signals":len(episodes),"scored_trades":scored,
@@ -564,16 +589,19 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
 
 
 def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
-        lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",progress=None):
+        lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
+        context_mode="off",context_batch="auto",rank_entries=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
         raise ValueError("Run CPR research outside Indian market priority hours")
     if not 0<(stop-start).days<=120 or stop>now.astimezone(h.IST).date():
         raise ValueError("Select up to 120 calendar days, completed sessions, end exclusive")
+    if context_mode not in ("off","receipt","archive"):
+        raise ValueError("Unsupported context availability mode")
     if entry_mode not in ENTRY_MODES:
         raise ValueError("Unsupported entry mode")
-    if frame not in FRAMES or hold not in HOLDS or type(lot_size) is not int or not 1<=lot_size<=1000 or type(max_lots) is not int or not 1<=max_lots<=3 or type(wings) is not int or not 0<=wings<=3:
+    if frame not in FRAMES or hold not in HOLDS or type(lot_size) is not int or not 1<=lot_size<=1000 or type(max_lots) is not int or not 1<=max_lots<=3 or type(wings) is not int or not 0<=wings<=5:
         raise ValueError("Unsupported timeframe, hold, historical lot assumption or wings")
     if not all(type(v) in (int,float) and isfinite(v) for v in (capital,risk_budget,premium_penalty_bps)) or not 1000<=capital<=1e7 or not 0<risk_budget<=capital or not 0<=premium_penalty_bps<=200:
         raise ValueError("Invalid research capital, premium exposure or cost assumption")
@@ -590,13 +618,20 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             continue
         prior=ordered[i-1]
         rows,status=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,
-                             max_signals=375 if entry_mode=="daily_scan" else 3,entry_mode=entry_mode)
+                             max_signals=375 if entry_mode!="crossover" else 3,entry_mode=entry_mode)
         signals.extend(rows)
         if day in splits[0]:
             extra,_=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,max_signals=5,learning_grid=True)
             learning_grid.extend(extra)
             base,_=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,max_signals=3)
             train_crossovers.extend(base)
+            if entry_mode=="regime_scan":
+                # Earlier regime candidates only, selected on signal type and
+                # timestamp, not observed returns. Bounded one per hold window.
+                last_rejection=-hold-3
+                for s in rows:
+                    if s["entry_type"]=="sideways_cpr_rejection" and s["minute"]>=last_rejection+hold+3:
+                        train_crossovers.append(s);last_rejection=s["minute"]
         counts[status]+=1
         day_audit[day]={"state":status,"signals":len(rows),"prior_session":prior,
                         "entry_types":dict(Counter(s["entry_type"] for s in rows))}
@@ -606,6 +641,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     train_signals=sorted(by_anchor.values(),key=lambda s:(s["session"],s["minute"]))
     val_signals=[s for s in signals if s["session"] in splits[1]]
     all_signals=signals+train_signals
+    from . import cpr_context_features as cx
+    context_audit=cx.attach(all_signals,mode=context_mode,batch_id=context_batch)
     needed={_stamp(s["session"],m) for s in all_signals
             for m in range(s["minute"],s["minute"]+hold+3)}
     table,meta=p._load_options(all_signals,wings,progress,needed_stamps=needed)
@@ -620,11 +657,13 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     broad_val=_learning_episodes(val_signals,table,index,hold=hold,lot_size=lot_size,bps=bps)
     report={"version":VERSION,"settings":{"from_date":from_date,"to_exclusive":to_date,"timeframe":frame,
              "hold_minutes":hold,"entry_mode":entry_mode,"scan_interval_minutes":SCAN_MINUTES,
-             "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,"full_premium_and_fee_budget_inr":risk_budget,
+             "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,
+             "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,"full_premium_and_fee_budget_inr":risk_budget,
              "historical_lot_size_assumed":lot_size,"max_lots":max_lots,"strike_wings":wings,
              "primary_adverse_penalty_bps_per_side":bps,"target_net_return":TARGET,"fixed_stop_mark":STOP,
              "experimental_emergency_stop_mark":EMERGENCY_STOP,"max_learning_strikes_per_anchor":MAX_LEARNING_STRIKES,
-             "trailing_activation_net_return":TRAIL_ACTIVATION,"trailing_gap_return_points":TRAIL_GAP},
+             "trailing_activation_net_return":TRAIL_ACTIVATION,"trailing_gap_return_points":TRAIL_GAP,
+             "volatility_trailing_gap_range":[.02,.06]},
              "recorded_index_sessions":len(dates),"required_sessions":sum(SPLITS),
              "training_dates":splits[0],"validation_dates":splits[1],"holdout_dates":splits[2],
              "signal_counts":dict(counts),"day_audit":day_audit,"episode_states":dict(Counter(e["state"] for e in episodes)),
@@ -639,6 +678,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
                      "signal_types":dict(Counter(s["entry_type"] for s in ss))}
                      for name,ss,es in (("train",train_signals,broad_train),("validation",val_signals,broad_val))},
              "index_source_failures":failures,"option_coverage":{k:v for k,v in meta.items() if k!="source_hashes"},
+             "context_coverage":{k:v for k,v in context_audit.items() if k!="anchors"},
+             "ranked_entry_research":{},
              "methods":{},"state":"descriptive_only_insufficient_sessions","broker_orders_enabled":False,
              "live_model_promoted":False,"warning":WARNING}
     journal=[]
@@ -661,12 +702,22 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             metrics,rows=_evaluate(test,method=method,capital=capital,risk_budget=risk_budget,
                                    model=model,means=means,q=wide_q if method=="offline_q_emergency_stop" else q,dates=splits[2])
             report["methods"][method]=metrics;journal.extend(rows)
+        if rank_entries or context_mode!="off":
+            from . import cpr_ranked_entries as ranked
+            ranked_results,ranked_rows=ranked.assess(
+                __import__(__name__,fromlist=["run"]),signals=signals,table=table,index=index,
+                train=broad_train,val=broad_val,test=test,dates=(splits[1],splits[2]),
+                hold=hold,lot_size=lot_size,bps=bps,capital=capital,risk_budget=risk_budget,
+                context_audit=context_audit,progress=progress)
+            report["ranked_entry_research"]=ranked_results
+            journal.extend(ranked_rows)
     else:
         # Always useful mathematical diagnostic; never labeled independent holdout.
-        for method in ("no_stop","fixed_stop","fixed_emergency_stop","trailing_stop","trailing_emergency_stop","no_trade"):
+        for method in ("no_stop","fixed_stop","fixed_emergency_stop","trailing_stop","trailing_emergency_stop","volatility_trailing_stop","no_trade"):
             metrics,rows=_evaluate(episodes,method=method,capital=capital,risk_budget=risk_budget,dates=dates)
             report["methods"][method]=metrics;journal.extend(rows)
-    evidence={"index_sources":index_hashes,"option_sources":meta["source_hashes"]}
+    evidence={"index_sources":index_hashes,"option_sources":meta["source_hashes"],
+              "context_evidence":context_audit}
     report["source_sha256"]=sha256(json.dumps(evidence,sort_keys=True).encode()).hexdigest()
     if progress:progress(100,"CPR strategy comparison complete")
     return report,journal,evidence
