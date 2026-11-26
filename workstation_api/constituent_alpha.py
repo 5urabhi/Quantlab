@@ -302,3 +302,257 @@ def support(samples):
 def _supported(samples,n,days,*,train=False):
     s=support(samples)
     return s["samples"]>=n and s["sessions"]>=days and (not train or min(s["classes"].values())>=10)
+
+
+def _fit(model, rows):
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from threadpoolctl import threadpool_limits
+    key="index" if model=="index_logistic" else "full"
+    estimator=(HistGradientBoostingClassifier(max_iter=100,max_leaf_nodes=7,
+        min_samples_leaf=20,l2_regularization=1.,random_state=419,early_stopping=False)
+        if model=="constituent_boosting" else
+        make_pipeline(StandardScaler(),LogisticRegression(C=1.,max_iter=1000,random_state=419)))
+    with threadpool_limits(limits=1):
+        estimator.fit(np.asarray([r[key] for r in rows]),np.asarray([r["class"] for r in rows]))
+    if tuple(estimator.classes_)!=CLASSES:
+        raise ValueError("Model requires all three direction classes")
+    return key,estimator
+
+
+def _predict(fitted, rows):
+    from threadpoolctl import threadpool_limits
+    key,estimator=fitted
+    with threadpool_limits(limits=1):
+        return estimator.predict_proba(np.asarray([r[key] for r in rows]))
+
+
+def _temperature(probs,t):
+    log=np.log(np.clip(probs,1e-12,1.))/t
+    exp=np.exp(log-np.max(log,axis=1,keepdims=True))
+    return exp/exp.sum(axis=1,keepdims=True)
+
+
+def _targets(rows):
+    return np.asarray([r["class"]+1 for r in rows],dtype=int)
+
+
+def _calibrate(probs,rows):
+    labels=_targets(rows)
+    one=np.eye(3)[labels]
+    grid=(.5,.75,1.,1.25,1.5,2.,3.)
+    return min(grid,key=lambda t:(float(np.mean(np.sum((_temperature(probs,t)-one)**2,axis=1))),abs(t-1)))
+
+
+def _call(probs):
+    # A flat class or a tie is abstention. Predeclared threshold never tuned
+    # on the holdout or adjusted until a favorable result is obtained.
+    top=int(np.argmax(probs))
+    if top==1 or probs[top]<CALL_PROB or sum(v==probs[top] for v in probs)>1:
+        return 0
+    return CLASSES[top]
+
+
+def _rule(value):
+    return 1 if value=="UP" else -1 if value=="DOWN" else None if value=="UNAVAILABLE" else 0
+
+
+def _directional_stats(rows,calls,probs=None):
+    target=_targets(rows)
+    verified=[(r,c) for r,c in zip(rows,calls) if c is not None]
+    traded=[(r,c) for r,c in verified if c!=0]
+    pnl=[c*r["return_bps"]-COST_BPS for r,c in traded]
+    day_pnl={}
+    for r,c in traded:
+        day_pnl[r["session"]]=day_pnl.get(r["session"],0.)+c*r["return_bps"]-COST_BPS
+    n=len(rows)
+    result={"eligible_samples":n,"available_calls":len(verified),"unavailable":n-len(verified),
+        "directional_calls":len(traded),"abstentions":len(verified)-len(traded),
+        "call_rate_pct":100*len(traded)/n if n else None,
+        "directional_hit_pct":100*sum(c==r["class"] for r,c in traded)/len(traded) if traded else None,
+        "mean_signed_index_return_bps":float(np.mean([c*r["return_bps"] for r,c in traded])) if traded else None,
+        "mean_net_index_proxy_bps":float(np.mean(pnl)) if pnl else None,
+        "sum_net_index_proxy_bps":float(sum(pnl)),
+        "worst_net_index_proxy_bps":float(min(pnl)) if pnl else None,
+        "positive_proxy_calls":sum(v>0 for v in pnl),"call_sessions":len(day_pnl),
+        "positive_proxy_sessions":sum(v>0 for v in day_pnl.values()),
+        "accuracy_pct":None,"brier":None,"log_loss":None,"reliability":[]}
+    if probs is not None:
+        one=np.eye(3)[target]
+        result["accuracy_pct"]=100*float(np.mean(np.argmax(probs,axis=1)==target))
+        result["brier"]=float(np.mean(np.sum((probs-one)**2,axis=1)))
+        result["log_loss"]=-float(np.mean(np.log(np.clip(probs[np.arange(n),target],1e-12,1.))))
+        # Top-label reliability is descriptive; not a calibrated guarantee.
+        conf=np.max(probs,axis=1)
+        correct=np.argmax(probs,axis=1)==target
+        for low,high in ((0.,.4),(.4,.6),(.6,.8),(.8,1.000001)):
+            mask=(conf>=low)&(conf<high)
+            if np.any(mask):
+                result["reliability"].append({"low":low,"high":min(high,1.),"count":int(mask.sum()),
+                    "mean_confidence":float(conf[mask].mean()),"observed_accuracy":float(correct[mask].mean())})
+    return result
+
+
+def _quantiles(train,test):
+    from sklearn.ensemble import GradientBoostingRegressor
+    from threadpoolctl import threadpool_limits
+    x=np.asarray([r["full"] for r in train]);y=np.asarray([r["return_bps"] for r in train])
+    xt=np.asarray([r["full"] for r in test]);yt=np.asarray([r["return_bps"] for r in test])
+    q=(.1,.5,.9)
+    preds=[]
+    with threadpool_limits(limits=1):
+        for level in q:
+            model=GradientBoostingRegressor(loss="quantile",alpha=level,n_estimators=100,
+                max_depth=2,min_samples_leaf=20,random_state=419)
+            model.fit(x,y);preds.append(model.predict(xt))
+    values=np.column_stack(preds)
+    empirical=np.tile(np.quantile(y,q),(len(test),1))
+    def pinball(v):
+        err=yt[:,None]-v
+        return [float(x) for x in np.mean(np.maximum(np.asarray(q)*err,(np.asarray(q)-1)*err),axis=0)]
+    crossed=(values[:,0]>values[:,1])|(values[:,1]>values[:,2])
+    valid=~crossed
+    coverage=float(np.mean((yt[valid]>=values[valid,0])&(yt[valid]<=values[valid,2]))) if np.any(valid) else None
+    return values,{"quantiles":list(q),"pinball_loss_bps":pinball(values),
+        "historical_unconditional_pinball_loss_bps":pinball(empirical),
+        "crossed_rows":int(crossed.sum()),"valid_interval_rows":int(valid.sum()),
+        "observed_interval_coverage":coverage,"nominal_interval_coverage":.8,
+        "note":"Quantile forecasts are scored as fitted; crossed intervals are flagged, not silently repaired."}
+
+
+def _compare(train,cal,test,progress=None):
+    records=[];methods={}
+    # Empirical class frequency is frozen from development training only.
+    base=np.asarray([(1+sum(r["class"]==c for r in train))/(len(train)+3) for c in CLASSES])
+    probabilities={"training_class_prior":np.tile(base,(len(test),1))}
+    calls={"no_trade":[0]*len(test),
+           "index_momentum":[1 if r["index"][2]>DEADBAND_BPS else -1 if r["index"][2]<-DEADBAND_BPS else 0 for r in test],
+           "regime_momentum":[1 if r["regime"]=="trend_up" else -1 if r["regime"]=="trend_down" else 0 for r in test]}
+    for rule in ("ema_rsi","pressure","volume_pressure"):
+        calls[rule]=[_rule(r[rule]) for r in test]
+    for i,model in enumerate(MODELS):
+        if progress:
+            progress(65+5*i,"Training frozen "+model)
+        fitted=_fit(model,train)
+        temp=_calibrate(_predict(fitted,cal),cal)
+        probabilities[model]=_temperature(_predict(fitted,test),temp)
+        methods[model]={"temperature":temp}
+    for model,probs in probabilities.items():
+        calls[model]=[_call(v) for v in probs]
+    for model,pred in calls.items():
+        probs=probabilities.get(model)
+        result=_directional_stats(test,pred,probs)
+        methods.setdefault(model,{}).update(result)
+        for i,(r,call) in enumerate(zip(test,pred)):
+            v=probs[i] if probs is not None else (None,None,None)
+            records.append({"method":model,"session":r["session"],"decision_utc":r["decision_utc"],
+                "target_utc":r["target_utc"],"regime":r["regime"],"reference_price":r["reference_price"],
+                "actual_return_bps":r["return_bps"],"actual_class":r["class"],
+                "call":call,"p_down":v[0],"p_flat":v[1],"p_up":v[2],
+                "net_index_proxy_bps":call*r["return_bps"]-COST_BPS if call else 0. if call==0 else None,
+                "q10_bps":None,"q50_bps":None,"q90_bps":None})
+    prior=methods["training_class_prior"]["brier"]
+    index=methods["index_logistic"]["brier"]
+    for model in MODELS:
+        item=methods[model]
+        item["brier_skill_vs_prior"]=1-item["brier"]/prior if prior>0 else None
+        item["brier_skill_vs_index_logistic"]=1-item["brier"]/index if index>0 else None
+        item["descriptive_gate_passed"]=bool(item["brier"]<prior and
+            (model=="index_logistic" or item["brier"]<index) and item["directional_calls"]>=20
+            and item["call_sessions"]>=10 and item["mean_net_index_proxy_bps"] is not None
+            and item["mean_net_index_proxy_bps"]>0)
+    regimes={}
+    for regime in ("trend_up","trend_down","compression","range"):
+        idx=[i for i,r in enumerate(test) if r["regime"]==regime]
+        regimes[regime]={"samples":len(idx),"methods":{}}
+        if idx:
+            for model in MODELS:
+                regimes[regime]["methods"][model]=_directional_stats(
+                    [test[i] for i in idx],[calls[model][i] for i in idx],probabilities[model][idx])
+    if progress:
+        progress(82,"Estimating conditional return quantiles")
+    quantile_values,quantile_report=_quantiles(train,test)
+    for r,v in zip(test,quantile_values):
+        records.append({"method":"constituent_quantile","session":r["session"],"decision_utc":r["decision_utc"],
+            "target_utc":r["target_utc"],"regime":r["regime"],"reference_price":r["reference_price"],
+            "actual_return_bps":r["return_bps"],"actual_class":r["class"],
+            "call":None,"p_down":None,"p_flat":None,"p_up":None,"net_index_proxy_bps":None,
+            "q10_bps":v[0],"q50_bps":v[1],"q90_bps":v[2]})
+    return methods,regimes,quantile_report,records
+
+
+def _walk_forward(train,dates,progress=None):
+    output=[]
+    for size,width in POLICY["development_walk_forward"]:
+        a=[r for r in train if r["session"] in set(dates[:size])]
+        b=[r for r in train if r["session"] in set(dates[size:size+width])]
+        item={"train_dates":dates[:size],"test_dates":dates[size:size+width],
+              "train_support":support(a),"test_support":support(b),"methods":{},"state":"insufficient_support"}
+        if _supported(a,40,12,train=True) and _supported(b,10,3):
+            item["state"]="available"
+            for model in MODELS:
+                if progress:
+                    progress(61,"Development walk-forward: "+model)
+                probs=_predict(_fit(model,a),b)
+                item["methods"][model]=_directional_stats(b,[_call(v) for v in probs],probs)
+        output.append(item)
+    return output
+
+
+def _save(records):
+    run_id=uuid.uuid4().hex
+    path=_root()/("run-"+run_id+".csv")
+    tmp=path.with_suffix(".tmp")
+    try:
+        with tmp.open("x",newline="",encoding="utf-8") as f:
+            writer=csv.DictWriter(f,fieldnames=list(records[0]))
+            writer.writeheader()
+            writer.writerows(records)
+        os.replace(tmp,path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return run_id
+
+
+def run(*,horizon=30,progress=None,now=None):
+    now=now or p._now()
+    status=readiness(horizon,now=now)
+    dates=status["training_dates"]+status["calibration_dates"]+status["holdout_dates"]
+    samples=[];audit=[];counts=Counter()
+    if progress:
+        progress(1,"Auditing the existing constituent observation ledger")
+    if dates:
+        with closing(_read()) as db:
+            for i,day in enumerate(dates):
+                if progress:
+                    progress(2+55*i/len(dates),"Auditing recorded session "+day)
+                day_samples,day_counts=sample_day(_rows(db,day,horizon))
+                samples.extend(day_samples)
+                counts.update(day_counts)
+                audit.append({"day":day,**day_counts})
+    split=[status[k] for k in ("training_dates","calibration_dates","holdout_dates")]
+    train,cal,test=([r for r in samples if r["session"] in set(part)] for part in split)
+    status.update(evidence_counts=dict(counts),session_audit=audit,
+        support={"training":support(train),"calibration":support(cal),"holdout":support(test)},
+        methods={},regimes={},quantiles=None,walk_forward=[],run_id=None,
+        broker_orders_enabled=False,live_model_promoted=False,
+        warning="Frozen chronological research on the first 60 recorded sessions, not external preregistration. "
+        "The 5 bps round-trip underlying index cost is a fixed hypothetical proxy, not option P&L, broker charges, or a tradable BANKNIFTY spot fill. "
+        "All methods share matched constituent and index evidence; missing observations remain excluded and counted. "
+        "No overlapping selected forecast windows; within-day returns may still be dependent. "
+        "A descriptive gate is not a significance test, proof of alpha, or permission to trade. "
+        "No model is connected to the paper order selector.")
+    if len(dates)<REQUIRED:
+        status["state"]="awaiting_recorded_sessions"
+    elif not (_supported(train,60,20,train=True) and _supported(cal,20,7) and _supported(test,40,12)):
+        status["state"]="insufficient_matched_evidence"
+    else:
+        status["walk_forward"]=_walk_forward(train,split[0],progress)
+        methods,regimes,quantiles,records=_compare(train,cal,test,progress)
+        status.update(state="holdout_assessment_available",methods=methods,regimes=regimes,quantiles=quantiles,
+                      run_id=_save(records),prediction_rows=len(records))
+    if progress:
+        progress(100,"Constituent alpha research report saved")
+    return status
