@@ -1779,6 +1779,38 @@ class SpreadSpeedRequest(BaseModel):
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
 
 
+class AutomaticPaperRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    enabled: bool=Field(strict=True)
+    capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
+    max_loss: float=Field(default=4250,ge=1,le=1e7,allow_inf_nan=False)
+    target_net: float=Field(default=100,ge=1,le=1e6,allow_inf_nan=False)
+    max_lots: int=Field(default=3,ge=1,le=10,strict=True)
+    hold_seconds: Literal[60,120,300,600]=300
+    broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
+
+
+@app.get("/api/trading-cockpit/automatic-paper")
+def automatic_paper_status():
+    from . import auto_paper_engine
+    return auto_paper_engine.status()
+
+
+@app.post("/api/trading-cockpit/automatic-paper/configure")
+def configure_automatic_paper(body:AutomaticPaperRequest):
+    from . import auto_paper_engine
+    try:
+        return auto_paper_engine.configure(body.model_dump())
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/automatic-paper/pause")
+def pause_automatic_paper():
+    from . import auto_paper_engine
+    return auto_paper_engine.pause()
+
+
 class SpreadReadinessRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
     day: str=Field(min_length=10,max_length=10)
@@ -4629,11 +4661,14 @@ def start_manual_options_monitor():
     manual_options_workflow.start()
     from . import paper_execution
     paper_execution.start()
+    from . import auto_paper_engine
+    auto_paper_engine.start()
 
 
 @app.on_event("shutdown")
 def stop_manual_options_monitor():
-    from . import manual_options_workflow, paper_execution
+    from . import manual_options_workflow, paper_execution, auto_paper_engine
+    auto_paper_engine.stop()
     paper_execution.stop()
     manual_options_workflow.stop()
 
