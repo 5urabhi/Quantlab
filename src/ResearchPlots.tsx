@@ -383,7 +383,7 @@ function downloadFile(name:string,contents:string,mime:string){
 function safeName(name:string){
   return name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,70)||'plot'
 }
-export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowApply=true,syncGroup}:{plot:ResearchPlotData;provenance?:string;formatX?:(x:string|number)=>string;formatY?:(y:number)=>string;allowApply?:boolean;syncGroup?:string}){
+export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowApply=true,syncGroup,compact=false}:{plot:ResearchPlotData;provenance?:string;formatX?:(x:string|number)=>string;formatY?:(y:number)=>string;allowApply?:boolean;syncGroup?:string;compact?:boolean}){
   const displayX=formatX||((x:string|number)=>typeof x==='number'?fmt(x):String(x))
   const targetId=useId()
   const [attached,setAttached]=useState<PythonApplied|null>(null)
@@ -501,7 +501,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
       else setExpandError('Full screen is not supported by this browser.')
     }catch{setExpandError('Unable to expand this chart in the current browser.')}
   }
-  return <section className="ql-chart-card" ref={chart}>
+  return <section className={"ql-chart-card"+(compact?" ql-chart-compact":"")} ref={chart}>
     <div className="ql-chart-title-row"><h4>{plot.title}</h4>
       <div className="ql-chart-export">
         <button type="button" onClick={()=>void expand()}>Full screen / exit</button>
@@ -516,7 +516,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
       </div>
     </div>
     {expandError&&<p role="alert">{expandError}</p>}
-    <div className="ql-chart-export"><button type="button" onClick={saveView}>Save chart view</button><button type="button" onClick={restoreView}>Restore chart view</button>{viewNotice&&<small role="status">{viewNotice}</small>}</div>
+    <details className={compact?"ql-compact-controls":"ql-expanded-controls"} open={compact?undefined:true}><summary>Chart navigation &amp; saved views</summary><div className="ql-chart-export"><button type="button" onClick={saveView}>Save chart view</button><button type="button" onClick={restoreView}>Restore chart view</button>{viewNotice&&<small role="status">{viewNotice}</small>}</div>
     <p className="ql-muted">X: {plot.x_label||'Not specified by model'} · Y: {plot.y_label||'Not specified by model'}{plot.z_label?' · Z: '+plot.z_label:''}</p>
     {zoomable&&<div className="ql-chart-viewport" role="group"
       aria-label={'Chart zoom and synchronized pointer for '+plot.title}>
@@ -537,6 +537,7 @@ export default function ResearchPlot({plot,provenance,formatX,formatY=fmt,allowA
         {syncGroup?'Link zoom/pan on exact observations':'Link zoom/pan on exact dates'}</label>}
       <span>{right-left} of {n} observations visible · full-series CSV export</span>
     </div>}
+    </details>
     {!!plot.traces?.length&&plot.kind!=='surface3d'&&plot.kind!=='heatmap2d'&&<div className="ql-series-controls" aria-label="Visible chart series">{plot.traces.map((t,i)=><button type="button" key={t.name} aria-pressed={!hidden.includes(t.name)} disabled={!hidden.includes(t.name)&&plot.traces!.length-hidden.length<=1} onClick={()=>setHidden(h=>h.includes(t.name)?h.filter(x=>x!==t.name):[...h,t.name])}><i style={{background:t.color||COLORS[i%COLORS.length]}}/>{t.name}</button>)}</div>}
     {plot.kind==='surface3d'?<Surface3D plot={plot}/>:
      plot.kind==='heatmap2d'?<Heatmap plot={plot}/>:

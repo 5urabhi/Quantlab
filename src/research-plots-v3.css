@@ -32,3 +32,5 @@
 .ql-chart-card .ql-legend{flex-wrap:wrap}
 .ql-chart-card:fullscreen .ql-svg-chart{min-width:0}
 @media(max-width:700px){.ql-chart-card{padding:10px}.ql-chart-card .ql-svg-chart{min-width:600px}.ql-chart-card button{min-height:34px}}
+
+.ql-chart-compact{padding:9px}.ql-chart-compact .ql-chart-title-row h4{font-size:13px;min-width:130px}.ql-chart-compact .ql-chart-export{gap:4px}.ql-chart-compact button{padding:5px 7px}.ql-compact-controls>summary,.ql-expanded-controls>summary{cursor:pointer;font-size:11px;color:#b5b5bc;padding:4px 0}.ql-expanded-controls>summary{display:none}.ql-chart-compact .ql-svg-chart{min-width:0;max-height:350px}.ql-chart-compact .ql-plot-hover-help{font-size:10px;margin:3px 0}.ql-chart-compact .ql-legend{margin:3px 0}.ql-chart-compact:fullscreen .ql-svg-chart{max-height:70vh}.ql-chart-compact .ql-chart-data{margin-top:4px}

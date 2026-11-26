@@ -4974,6 +4974,21 @@ def bank_constituent_capture(body: BankConstituentCaptureRequest):
     except (ValueError,OSError) as exc:
         bad(exc)
 
+class CurrentBankMembershipRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    confirm_current_source: bool=False
+
+
+@app.post("/api/trading-cockpit/constituents/membership/refresh")
+def refresh_bank_constituent_membership(body:CurrentBankMembershipRequest):
+    if not body.confirm_current_source:
+        raise HTTPException(400,"Confirm the official current constituent list download")
+    try:
+        return banknifty_constituents.refresh_current_membership()
+    except (ValueError,OSError,UnicodeError) as exc:
+        bad(exc)
+
+
 @app.post("/api/trading-cockpit/constituents/weights")
 def bank_constituent_weights(body: BankConstituentWeightRequest):
     try:

@@ -83,6 +83,7 @@ export default function LiveFeedPanel({
   const [signal,setSignal]=useState<Signal|null>(null)
   const [replayHorizon,setReplayHorizon]=useState<'3'|'6'>('6')
   const [configOpen,setConfigOpen]=useState(false)
+  const [chartView,setChartView]=useState<'index'|'receipts'|'python'>('index')
   const [now,setNow]=useState(()=>Date.now())
 
   const refresh=useCallback(async()=>{
@@ -192,7 +193,7 @@ export default function LiveFeedPanel({
     </div>
     <div className="lf-meta"><span>Local UI stream <b>{connectedToLocal?'Connected':'Reconnecting'}</b></span>
       <span>Index ticker <b>{feed?.active?feed.ticker_connection||'Starting':sharedIndex?.state?.replaceAll('_',' ')||'Not started'}</b></span>
-      <span>20-level feed <b>{feed?.depth_connection||'Not started'}</b></span>
+      <span>20-level options <b>{automatic?.armed?automatic.state.replaceAll('_',' '):feed?.depth_connection||'Not started'}</b></span>
       <span>Stored in <b>dhan_shared</b></span><span>Automatic recorder <b>{automatic?automatic.armed?automatic.state.replaceAll('_',' '):'Off':'Checking'}</b></span></div>
     {error&&<p role="alert" className="tc-error">{error}</p>}
     {notice&&<p role="status" className="tc-confirm">{notice}</p>}
@@ -222,27 +223,25 @@ export default function LiveFeedPanel({
       Broker index packet not supported by the published binary layout · {feed.unsupported_index_packets} observed.
       {' '}{feed.index_packet_note}</p>}
     {view==='signals'&&<>
-      <div className="mi-live-grid">
-        <div className="mi-live-main"><ObservedIndexChartV2 rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'}
-          sourceWarning={signal?.source_warning||''}/>
-          {automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'&&<RecordedChainSpot/>}
-          {watchedIndex!=='INDEX:NIFTY50'&&<details className="mi-card"><summary>Running Python research results</summary><LivePythonResults mode="index"/></details>}
+      <div className="lf-cards lf-top-stats" aria-label="Live market summary">
+        <div className="lf-stat"><span>{watchedIndex.replace('INDEX:','')} · index level</span><strong>{livePrice?fmt(quote?.price)+' pts':signal?.latest_close!=null?fmt(signal.latest_close)+' pts':'—'}</strong><small>{livePrice?'Live · '+timeIST(quote?.exchange_utc)+' IST':signal?.latest_close!=null?'Last saved completed minute · not live':'Awaiting original index observations'}</small></div>
+        <div className="lf-stat"><span>Index source age</span><strong>{quoteAge===null?'—':fmt(quoteAge,1)+' s'}</strong><small>{livePrice?'Fresh Dhan ticker':'Stale / unavailable'}</small></div>
+        <div className="lf-stat"><span>EMA / RSI rule · {replayHorizon}m horizon</span><strong className={hasSignal?'lf-good':'lf-neutral'}>{hasSignal?(signal?.direction==='UP'?'UP':signal?.direction==='DOWN'?'DOWN':'NO TRADE'):'NOT READY'}</strong><small>{signal?.contiguous_session_bars??0}/30 minimum consecutive minutes · not a calibrated forecast</small></div>
+        <div className="lf-stat"><span>EMA 9 / EMA 21</span><strong>{hasSignal?fmt(signal?.ema9,1)+' / '+fmt(signal?.ema21,1):'—'}</strong><small>RSI 14 · {hasSignal?fmt(signal?.rsi14,1):'Unavailable until fresh'}</small></div>
+      </div>
+      <div className="mi-live-grid mi-live-compact">
+        <div className="mi-live-main">
+          <div className="lf-chart-switch"><nav className="lf-view-tabs" aria-label="Live chart selection">
+            <button type="button" aria-pressed={chartView==='index'} onClick={()=>setChartView('index')}>Index & EMA</button>
+            {automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'&&<button type="button" aria-pressed={chartView==='receipts'} onClick={()=>setChartView('receipts')}>Chain spot receipts</button>}
+            {watchedIndex==='INDEX:BANKNIFTY'&&<button type="button" aria-pressed={chartView==='python'} onClick={()=>setChartView('python')}>Python results</button>}
+          </nav><label>Index <select aria-label="Shared index to inspect" value={index} disabled={!!feed?.active} onChange={e=>{setIndex(e.target.value as typeof index);setChartView('index')}}><option value="INDEX:BANKNIFTY">BANKNIFTY</option><option value="INDEX:NIFTY50">NIFTY 50</option></select></label></div>
+          {chartView==='receipts'&&automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'?<RecordedChainSpot/>:chartView==='python'&&watchedIndex==='INDEX:BANKNIFTY'?<LivePythonResults mode="index"/>:<ObservedIndexChartV2 compact rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'} sourceWarning={signal?.source_warning||''}/>}
+          <div className="lf-signal-actions lf-compact-call"><div><strong>Record prospective rule outcome</strong><small>Fresh, 30 consecutive recorded minutes required.</small></div><label>Horizon <select value={replayHorizon} onChange={e=>setReplayHorizon(e.target.value as '3'|'6')}><option value="3">3 minutes</option><option value="6">6 minutes</option></select></label><button type="button" onClick={()=>void record()} disabled={!hasSignal||busy}>Record {replayHorizon}m prediction</button></div>
         </div>
         <aside className="mi-live-side"><MarketPatternIntelligence compact identity={watchedIndex}/>{watchedIndex==='INDEX:BANKNIFTY'&&<BankHeatmap/>}<PositionsRisk compact/></aside>
       </div>
-      <div className="lf-cards">
-      <div className="lf-stat"><span>Live index level</span><strong>{livePrice?fmt(quote?.price)+' pts':'—'}</strong>
-        <small>{livePrice?'Last observed '+timeIST(quote?.exchange_utc)+' IST':
-          'Waiting for fresh Dhan ticker data'}</small></div>
-      <div className="lf-stat"><span>Source age</span><strong>{quoteAge===null?'—':fmt(quoteAge,1)+' s'}</strong>
-        <small>{livePrice?'Received from authenticated Dhan feed':'Stale or unverified'}</small></div>
-      <div className="lf-stat"><span>Next {replayHorizon} min index direction</span><strong className={hasSignal?'lf-good':'lf-neutral'}>
-        {hasSignal?(signal?.direction==='UP'?'UP':signal?.direction==='DOWN'?'DOWN':'NO TRADE'):'NOT READY'}</strong>
-        <small>{signal?.contiguous_session_bars??0} consecutive completed observed one-minute bars · minimum 30</small></div>
-      <div className="lf-stat"><span>Depth best bid / ask</span><strong>{bookFresh?
-        '₹'+fmt(liveBook?.best_bid)+' / ₹'+fmt(liveBook?.best_ask):'—'}</strong>
-        <small>{bookFresh?'Original paired 20-level book':'No fresh NSE depth snapshot'}</small></div>
-    </div></>}
+    </>}
 
     {!feed?.active&&!automatic?.armed&&<div className="lf-connect-block">
       <div><strong>Real-time feed is stopped</strong><p>Index signals and 20-level depth require original broker packets. Historical analysis remains separate and available at any time.</p></div>
@@ -293,7 +292,7 @@ export default function LiveFeedPanel({
       <button type="button" onClick={()=>void stop()} disabled={busy}><Square size={15}/> Stop streams</button>
       <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Check connection</button>
     </div>}
-    {automatic?.armed&&!feed?.active&&<div className="lf-connect-block"><div><strong>Automatic BANKNIFTY recording is armed</strong><p>Original CE/PE capture runs independently using the reserved Dhan sockets. {automatic.last_chain_utc?'Last recorded chain spot: '+fmt(automatic.chain_spot)+' points · '+timeIST(automatic.last_chain_utc)+' IST. ':''}The automatic collector requests documented index tickers on the same option socket only if there is spare instrument capacity. A chain receipt is not a live directional signal. </p>{sharedIndex&&<><p>Shared index: {sharedIndex.state.replaceAll('_',' ')} · {sharedIndex.saved_ticks} saved · {sharedIndex.dropped_ticks} dropped · {sharedIndex.unsupported_packets} unsupported.</p>{sharedIndex.error&&<p role="status">{sharedIndex.error}</p>}{view==='signals'&&<label>Index to inspect<select aria-label="Shared index to inspect" value={index} onChange={e=>setIndex(e.target.value as typeof index)}><option value="INDEX:BANKNIFTY">BANKNIFTY</option><option value="INDEX:NIFTY50">NIFTY 50</option></select></label>}</>}</div>{onOpenSaved&&<button type="button" onClick={onOpenSaved}>View recorded market</button>}</div>}
+    {automatic?.armed&&!feed?.active&&<details className="lf-recorder-details"><summary>Recorder diagnostics &amp; saved data</summary><div className="lf-connect-block"><div><strong>Automatic BANKNIFTY recording is armed</strong><p>Original CE/PE capture runs independently using the reserved Dhan sockets. {automatic.last_chain_utc?'Last recorded chain spot: '+fmt(automatic.chain_spot)+' points · '+timeIST(automatic.last_chain_utc)+' IST. ':''}The automatic collector requests documented index tickers on the same option socket only if there is spare instrument capacity. A chain receipt is not a live directional signal. </p>{sharedIndex&&<><p>Shared index: {sharedIndex.state.replaceAll('_',' ')} · {sharedIndex.saved_ticks} saved · {sharedIndex.dropped_ticks} dropped · {sharedIndex.unsupported_packets} unsupported.</p>{sharedIndex.error&&<p role="status">{sharedIndex.error}</p>}</>}</div>{onOpenSaved&&<button type="button" onClick={onOpenSaved}>View recorded market</button>}</div></details>}
     {(view==='depth'||(view==='options'&&!hideNavigation))&&
       <div className="lf-depth-summary">
       <div className="tc-panel-title"><strong>20-level market depth · {configuredDepth||'select a stock / option'}</strong>
@@ -317,12 +316,6 @@ export default function LiveFeedPanel({
           You may need full-market-depth entitlement and an active NSE_EQ or NSE_FNO contract.</p>}
       {liveBook&&<><ResearchPlot plot={{kind:'step2d',title:'Displayed cumulative depth by price',x_label:'Option / stock price (₹ per unit)',y_label:'Cumulative displayed quantity (units)',x:[...liveBook.bid,...liveBook.ask].map(v=>v.price).filter((v,i,all)=>all.indexOf(v)===i).sort((a,b)=>a-b),traces:(()=>{const levels=[...liveBook.bid,...liveBook.ask].map(v=>v.price).filter((v,i,all)=>all.indexOf(v)===i).sort((a,b)=>a-b);return [{name:'Bids at or above price',color:'#70e1ad',y:levels.map(p=>p<=liveBook.best_bid?liveBook.bid.filter(v=>v.price>=p).reduce((sum,v)=>sum+v.quantity,0):null)},{name:'Asks at or below price',color:'#ff8192',y:levels.map(p=>p>=liveBook.best_ask?liveBook.ask.filter(v=>v.price<=p).reduce((sum,v)=>sum+v.quantity,0):null)}]})()}} provenance="original-depth-snapshot"/><button type="button" className="ws-button secondary" onClick={()=>openSnapshotInPython({title:'Original order book '+liveBook.identity,provenance:'Saved or streaming original book · '+liveBook.received_utc,columns:['Level','Bid price (₹)','Bid qty','Ask price (₹)','Ask qty'],rows:bookRows.map(r=>[r.position,r.bid?.price??null,r.bid?.quantity??null,r.ask?.price??null,r.ask?.quantity??null])})}>Analyze depth in Python</button></>}
       <p className="tc-muted">20-level depth is NOT available on IDX_I itself. Depth is sampled for storage at up to one observed pair per second, while the live screen uses the newest observed packet. No historical book is inferred from candles.</p>
-    </div>}
-    {view==='signals'&&<div className="lf-signal-actions">
-      <div><strong>Record prospective index call</strong><p>Only available after genuine fresh Dhan index packets and at least 30 consecutive completed one-minute candles. Results are evaluated against observed future candles.</p></div>
-      <label>Horizon <select value={replayHorizon} onChange={e=>setReplayHorizon(e.target.value as '3'|'6')}>
-        <option value="3">3 minutes</option><option value="6">6 minutes</option></select></label>
-      <button type="button" onClick={()=>void record()} disabled={!hasSignal||busy}>Record {replayHorizon}m prediction</button>
     </div>}
     <div className="tc-warning"><ShieldCheck size={14}/> Read-only research. Real-time data requires valid Dhan Data API plus live market/depth permissions. A connected socket is not proof of fresh trades. Any stale feed, absent market data or missing completed candles disables live directional claims. Closing this tab does not stop the local streaming session; clicking Stop or shutting down QuantLab does.</div>
   </section>
