@@ -5427,6 +5427,7 @@ class ConstituentAlphaRequest(BaseModel):
     horizon: Literal[5,10,30,60]=30
     scope: Literal["none","options","global","participants","events","combined","all"]="none"
     mode: Literal["receipt","archive"]="receipt"
+    cohort: Literal["original","registered"]="original"
 
 
 @app.get("/api/trading-cockpit/constituents/alpha/readiness")
@@ -5556,6 +5557,31 @@ def sync_market_context_feeds(body:ContextFeedSyncRequest):
     try:
         return context_feeds.request_sync(body.confirm_reviewed)
     except (ValueError,TypeError,OSError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+class ContextCohortRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    scope: Literal["options","global","participants","events","combined","all"]
+    horizon: Literal[5,10,30,60]=30
+    confirm: bool=False
+
+
+@app.get("/api/market-intelligence/context-cohort")
+def context_cohort_status(scope:str="all",horizon:int=30):
+    from . import context_cohort
+    try:
+        return {"registration":context_cohort.get(scope,horizon)}
+    except (ValueError,TypeError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.post("/api/market-intelligence/context-cohort")
+def context_cohort_register(body:ContextCohortRequest):
+    from . import context_cohort
+    try:
+        return {"registration":context_cohort.register(**body.model_dump())}
+    except (ValueError,TypeError,OSError,sqlite3.Error) as exc:
         raise HTTPException(400,str(exc)) from exc
 
 
