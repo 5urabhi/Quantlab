@@ -5,7 +5,6 @@ of previously inspected later dates for economic model selection.
 """
 from collections import Counter, defaultdict
 from datetime import date,datetime,timedelta,timezone
-from math import isfinite
 from . import cpr_hybrid_research as r, historical_alpha as h
 from . import predictive_option_research as p, expired_options_backtest as exp
 from . import alpha_retraining, cpr_direct_utility as utility
@@ -51,6 +50,30 @@ def quote_status(table,evidence,day,minute,side,strike):
     if strike<min(same) or strike>max(same):
         return "outside_observed_strike_range"
     return "strike_absent_inside_observed_range"
+
+
+def observed_coverage(table,day,side):
+    counts=Counter()
+    for minute in range(375):
+        rows=table.get(r._stamp(day,minute),{})
+        same=[(k,v) for (s,k),v in rows.items() if s==side]
+        if not same:
+            counts["minutes_no_side_bars"]+=1
+            continue
+        counts["minutes_with_any_side_bar"]+=1
+        usable=0
+        for strike,row in same:
+            if r._observed(table,day,minute,side,strike) is not None:
+                usable+=1;counts["positive_volume_strike_bars"]+=1
+            elif row.get("volume") is None:
+                counts["unknown_volume_strike_bars"]+=1
+            elif row.get("volume")==0:
+                counts["zero_volume_strike_bars"]+=1
+            else:
+                counts["other_unusable_strike_bars"]+=1
+        if usable:
+            counts["minutes_with_positive_volume"]+=1
+    return dict(counts)
 
 
 def _minute(day,stamp):
@@ -133,12 +156,17 @@ def assess(index,splits,signals,table,evidence,*,today,progress=None):
     if not days or days!=sorted(set(days)):
         raise ValueError("Unique chronological sessions required")
     part_for={d:name for name,part in zip(("train","validation","recent_audit_only"),splits) for d in part}
-    windows={d:{s:window_status(evidence,d,s,today) for s in ("CALL","PUT")} for d in days}
+    windows={d:{s:{**window_status(evidence,d,s,today),**observed_coverage(table,d,s)} for s in ("CALL","PUT")} for d in days}
+    observed=Counter()
+    for sides in windows.values():
+        for value in sides.values():
+            observed.update({k:v for k,v in value.items() if k.startswith("minutes_") or k.endswith("_strike_bars")})
     report={"version":VERSION,"settings":{"capital_inr":CAPITAL,"budget_inr":BUDGET,"assumed_lot":LOT,"wings":WINGS,
             "hold_minutes":HOLDS,"cost_bps_per_side":COSTS},
             "request_windows":windows,"repairable_missing_offset_session_pairs":sum(
                 len(v["missing_offsets"]) for sides in windows.values() for v in sides.values() if v["expired_eligible"]),
             "window_state_counts":dict(Counter(v["state"] for sides in windows.values() for v in sides.values())),
+            "observed_quote_coverage":dict(observed),
             "parts":{},"warning":"Checked requests do not certify continuous prices. Absent strikes outside the observed range may be rolling-window limitations, not proof. Positive volume is not executable liquidity. Recent dates audited for data quality only; no new return selection on those dates."}
     if progress:progress(55,"Tracing fixed-strike entry and chosen-exit evidence")
     for name,ds in zip(("train","validation","recent_audit_only"),splits):
