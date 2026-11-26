@@ -270,6 +270,9 @@ def ingest_tick(identity: str, packet: dict, *, received: datetime | None = None
         recorder_storage.failure("live_ticks", "sqlite_write_failed", dropped=1)
         raise
     recorder_storage.saved("live_ticks", receive_utc)
+    if identity=="INDEX:BANKNIFTY":
+        from . import market_observations
+        market_observations.publish()
     return True
 
 
