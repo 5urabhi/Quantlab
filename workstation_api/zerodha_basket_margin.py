@@ -8,6 +8,7 @@ import csv
 import gzip
 import io
 import json
+import re
 from datetime import datetime, date, time, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -31,7 +32,7 @@ def _terms(candidate, now):
         if (not strike.is_finite() or strike<=0 or side not in ("CE","PE")
                 or leg["action"] not in ("BUY","SELL")
                 or expiry<local.date() or (expiry==local.date() and local.time()>=time(15,30))
-                or not str(leg["identity"]).startswith("NSE_FNO:")):
+                or not re.fullmatch(r"NSE_FNO:[0-9]+",str(leg["identity"]))):
             raise ValueError("Saved BANKNIFTY leg is invalid or expired")
         keys.append((expiry,strike,side,lot_size))
     if len(set(keys)) != len(keys):
@@ -63,7 +64,10 @@ def _map_master(raw,keys):
         if row.get("exchange")!="NFO" or row.get("segment")!="NFO-OPT" or row.get("name")!="BANKNIFTY":
             continue
         try:
-            key=(date.fromisoformat(row["expiry"]),Decimal(row["strike"]),row["instrument_type"],int(row["lot_size"]))
+            strike=Decimal(row["strike"])
+            if not strike.is_finite():
+                continue
+            key=(date.fromisoformat(row["expiry"]),strike,row["instrument_type"],int(row["lot_size"]))
         except (ValueError,TypeError,InvalidOperation):
             continue
         if key not in matches:
@@ -75,7 +79,10 @@ def _map_master(raw,keys):
         matches[key].append({"tradingsymbol":symbol,"exchange_token":token})
     if any(len(rows)!=1 for rows in matches.values()):
         raise ValueError("Exact current Kite option terms are missing or ambiguous; margin not calculated")
-    return [matches[key][0] for key in keys]
+    mapped=[matches[key][0] for key in keys]
+    if len({r["tradingsymbol"] for r in mapped})!=len(mapped):
+        raise ValueError("Ambiguous Kite option symbols")
+    return mapped
 
 
 def _decision(decision_id):
@@ -139,7 +146,7 @@ def preview(*, decision_id, product="MIS", confirm_readonly=False, now=None):
         details.append({"tradingsymbol":req["tradingsymbol"],"side":req["transaction_type"],
                         "quantity":req["quantity"],"dhan_identity":leg["identity"],
                         "kite_exchange_token":m["exchange_token"],"margin_inr":_numeric(result.get("total")),
-                        "estimated_charges_inr":_numeric(result["charges"]["total"]) if isinstance(result.get("charges"),dict) else None})
+                        "estimated_charges_inr":_numeric(result["charges"].get("total")) if isinstance(result.get("charges"),dict) else None})
     required=max(initial,final)
     return {"decision_id":decision_id,"decision_utc":row["decision_utc"],"product":product,
             "received_utc":datetime.now(timezone.utc).isoformat(),
