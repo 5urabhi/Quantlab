@@ -7,6 +7,9 @@ continuous observed contract/session coverage.
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from threading import Lock
+from contextlib import contextmanager
+import fcntl
+import os
 import json
 import re
 import time
@@ -16,6 +19,7 @@ from . import expired_options_backtest as exp, market_patterns, service, dhan_au
 MAX_DAYS=366
 MAX_RECEIPTS=20000
 MAX_REQUESTS=8200
+MAX_NEAR_WINGS=10
 MAX_CONSECUTIVE_REJECTIONS=66
 MAX_REJECTIONS=132
 LOCK=Lock()
@@ -44,8 +48,8 @@ def _scope(start_date,end_date,wings,today):
         raise ValueError("Enter exact ISO dates")
     if not start<=end<today or (end-start).days>=MAX_DAYS:
         raise ValueError("Choose at most 366 calendar days ending before today's IST date")
-    if type(wings) is not int or not 0<=wings<=5:
-        raise ValueError("Choose zero to five near-expiry rolling strike wings")
+    if type(wings) is not int or not 0<=wings<=MAX_NEAR_WINGS:
+        raise ValueError("Choose zero to ten near-expiry rolling strike wings")
     stop=end+timedelta(days=1)
     return start,stop,_intervals(start,stop,today)
 
@@ -143,6 +147,29 @@ def _prioritize(requests,offset_rank,priority_sessions):
     return sorted(requests,key=key)
 
 
+@contextmanager
+def acquisition_lock():
+    """One canonical history writer across the backend and local CLI."""
+    if not LOCK.acquire(blocking=False):
+        raise ValueError("An expired-option history acquisition is already running")
+    fd=None
+    try:
+        root=service.DATA/"dhan_expired_options"
+        root.mkdir(parents=True,exist_ok=True)
+        if root.is_symlink():
+            raise ValueError("Unsafe expired-option cache location")
+        fd=os.open(root/".acquisition.lock",os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+        try:
+            fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("Another local expired-option acquisition is running") from None
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+        LOCK.release()
+
+
 def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,request_limit=None,should_stop=None,
         priority_sessions=None):
     today=today or exp._ist_today()
@@ -150,9 +177,7 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
     priority_sessions=tuple(priority_sessions or ())
     if len(priority_sessions)>MAX_DAYS or any(not isinstance(d,str) or date.fromisoformat(d).isoformat()!=d for d in priority_sessions):
         raise ValueError("Invalid observed session priority dates")
-    if not LOCK.acquire(blocking=False):
-        raise ValueError("An expired-option history acquisition is already running")
-    try:
+    with acquisition_lock():
         if progress:
             progress(1,"Verifying existing expired-option receipt windows")
         observed={};statistics={"empty_verified_receipts":0}
@@ -243,5 +268,3 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
                 "usable_rows_in_processed_receipts":usable,
                 "state":"partial_requests" if rejected_requests or attempted<len(requests) else "request_windows_checked","continuous_coverage_certified":False,
                 "note":"Counts describe processed receipts, not deduplicated contracts. Both inclusive dates are retained during the regular session. Verified windows are reused; rejected or unattempted windows remain eligible on resume. No original historical depth has been downloaded."}
-    finally:
-        LOCK.release()
