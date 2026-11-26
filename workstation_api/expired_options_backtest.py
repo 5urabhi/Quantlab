@@ -714,7 +714,7 @@ def _same_day_close(at: datetime) -> datetime:
 def _exit_decision(policy: str, *, entry_at: datetime, entry_premium: float,
                    side: str, strike: float, day: str, signals: dict,
                    candles: dict, hold: int, cap: int, stop_pct: float,
-                   target_pct: float) -> tuple[datetime, str]:
+                   target_pct: float, target_points=None, stop_points=None) -> tuple[datetime, str]:
     """Compute causal NEXT-OPEN exit; stop/target checks use completed closes."""
     last = _same_day_close(entry_at)
     fixed = entry_at + timedelta(minutes=hold)
@@ -736,15 +736,17 @@ def _exit_decision(policy: str, *, entry_at: datetime, entry_premium: float,
             opposite = "DOWN" if side == "CALL" else "UP"
             if decision == opposite and exit_at <= deadline:
                 return exit_at, "opposite_signal"
-        if policy in ("premium_target_stop", "hybrid"):
+        if policy in ("premium_target_stop", "hybrid") or target_points is not None or stop_points is not None:
             quote = candles.get((observed.isoformat(), side), {}).get(strike)
             if quote is None or quote["session_ist"] != day:
                 continue
             # A close crossing stop/target produces a NEXT OPEN proxy exit,
             # not a guaranteed trigger fill at the threshold.
-            if quote["close"] <= entry_premium * (1 - stop_pct / 100) and exit_at <= deadline:
+            stop_level = entry_premium-stop_points if stop_points is not None else entry_premium*(1-stop_pct/100)
+            target_level = entry_premium+target_points if target_points is not None else entry_premium*(1+target_pct/100)
+            if quote["close"] <= stop_level and exit_at <= deadline:
                 return exit_at, "stop_close_next_open"
-            if quote["close"] >= entry_premium * (1 + target_pct / 100) and exit_at <= deadline:
+            if quote["close"] >= target_level and exit_at <= deadline:
                 return exit_at, "target_close_next_open"
     return deadline, reason
 
@@ -756,7 +758,8 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
                      starting_capital: float = 50_000,
                      stop_pct: float = 2.5, target_pct: float = 5,
                      slippage_bps: float = 5, fee_per_side: float = 20,
-                     fee_mode: str = "flat") -> dict:
+                     fee_mode: str = "flat", target_points=None, stop_points=None,
+                     retain_all_trades: bool = False) -> dict:
     """Select a contract at completed SIGNAL candle close; trade next open.
 
     One position at a time. On a confirmed opposite BANKNIFTY signal,
@@ -767,6 +770,9 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
     """
     if policy not in VALID_POLICIES:
         raise ValueError("Unsupported option exit policy")
+    if (target_points is None) != (stop_points is None) or any(
+            not math.isfinite(v) or v <= 0 for v in (target_points,stop_points) if v is not None):
+        raise ValueError("Choose positive paired premium point target and stop")
     spot_map = {_stamp(r["timestamp_utc"]): r for r in
                 trading_cockpit._validated(spot_rows)}
     signals_by_stamp = {_stamp(ev["bar_utc"]).isoformat(): ev["direction"]
@@ -855,7 +861,7 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             policy, entry_at=entry_at, entry_premium=entry_premium,
             side=side, strike=strike, day=session, signals=signals_by_stamp,
             candles=option_rows, hold=hold, cap=cap, stop_pct=stop_pct,
-            target_pct=target_pct)
+            target_pct=target_pct,target_points=target_points,stop_points=stop_points)
         if exit_at <= entry_at or exit_at > _same_day_close(entry_at):
             note_skip("invalid_exit_time", flip=same_open_flip)
             busy_until = _same_day_close(entry_at)
@@ -962,7 +968,7 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             sum(t["hold_minutes"] for t in trades) / len(trades), 2) if trades else None,
         "total_assumed_fees_inr": round(sum(t["assumed_fees_inr"] for t in trades), 2),
         "unscored": dict(missing), "equity_curve": equity[-101:],
-        "trades": trades[-100:],
+        "trades": trades if retain_all_trades else trades[-100:],
     }
 
 

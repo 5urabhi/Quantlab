@@ -55,7 +55,7 @@ JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -826,6 +826,42 @@ class HistoricalOptionsBacktestRequest(BaseModel):
     hold_minutes: Literal[1, 3, 5, 6, 10, 30, 60] = 5
     reversal_cap_minutes: int = Field(default=10, ge=1, le=120)
     confirm_readonly: bool = False
+
+
+class YearScalpingRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    start_date: str = Field(min_length=10,max_length=10)
+    end_date: str = Field(min_length=10,max_length=10)
+    capital: float = Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
+    max_lots: int = Field(default=3,ge=1,le=3,strict=True)
+    compare_lots: bool = False
+    lot_size: int = Field(default=30,ge=1,le=100,strict=True)
+    target_premium: float = Field(default=180,ge=10,le=20000,allow_inf_nan=False)
+    tolerance: float = Field(default=60,ge=0,le=5000,allow_inf_nan=False)
+    wings: int = Field(default=3,ge=0,le=5,strict=True)
+    slippage_bps: float = Field(default=5,ge=0,le=500,allow_inf_nan=False)
+
+
+@app.post("/api/trading-cockpit/options/year-scalping")
+def start_year_scalping(body:YearScalpingRequest):
+    from . import year_scalping
+    try:
+        year_scalping._scope(body.start_date,body.end_date,expired_options_backtest._ist_today())
+        with JOBS_LOCK:
+            if any(j.get("kind")=="year_scalping_grid" and j.get("status") in ("queued","running") for j in JOBS.values()):
+                raise HTTPException(409,"A year scalping study is already running")
+        return _spawn("year_scalping_grid",year_scalping.run,**body.model_dump())
+    except (ValueError,OSError) as exc:
+        bad(exc)
+
+
+@app.get("/api/trading-cockpit/options/year-scalping/latest")
+def latest_year_scalping():
+    from . import year_scalping
+    try:
+        return year_scalping.latest()
+    except (ValueError,OSError) as exc:
+        bad(exc)
 
 
 @app.post("/api/trading-cockpit/options/backtest")
