@@ -236,7 +236,10 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
             item={"decision_utc":paper._iso(decision),"state":result["state"],
                   "net_pnl_inr":result["net_pnl_inr"],"fees_inr":result.get("total_fees_inr"),
                   "entry_delay_seconds":None,"exit_delay_seconds":None,"elapsed_seconds":None,
-                  "passive_bid_entry_markout_inr":None}
+                  "passive_bid_entry_markout_inr":None,
+                  "entry_risk_proxy":result.get("entry_risk_proxy"),
+                  "missing_reasons":[str(m.get("stage","unknown"))+":"+str(m.get("reason","unknown"))
+                                     for m in result.get("missing",[])]}
             if result["entry_complete"]:
                 item["entry_delay_seconds"]=_delta(item["decision_utc"],result["entry_received_utc"])
             if result["exit_complete"]:
@@ -298,6 +301,9 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
             "passive_bid_entry_markout":_stats(passive),
             "passive_target_hits":sum(v>=target_net for v in passive) if passive else None,
             "states":dict(Counter(r["state"] for r in rows)),
+            "missing_receipt_reasons":dict(Counter(reason for r in rows for reason in r["missing_reasons"])),
+            "observed_entry_budget_inr":_stats([r["entry_risk_proxy"] for r in rows if r["entry_risk_proxy"] is not None]),
+            "minimum_observed_entry_budget_inr":min((r["entry_risk_proxy"] for r in rows if r["entry_risk_proxy"] is not None),default=None),
             # A batch has at most ~17k paths. Return summaries rather than
             # duplicating thousands of licensed quote-derived rows in jobs.
             "observations":rows if not compare_delays else []})
