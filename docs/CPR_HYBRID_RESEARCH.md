@@ -99,9 +99,9 @@ a small price-taking assumption. This is not deep RL, a live exploration agent
 or proof of optimal action. Model selection and action bins are fixed before
 holdout. A Q digest, source digests and split support are retained.
 
-Compare eight methods: no-stop, fixed-stop, ML-filtered fixed-stop, offline Q
+Compare ten methods: no-stop, fixed-stop, ML-filtered fixed-stop, offline Q
 exits, ML-filtered offline Q exits, fixed 15% emergency stop, Q exits with the
-same 15% emergency stop, and remain in cash. The wider pair isolates learned
+same 15% emergency stop, two profit-activated trailing-stop comparators (5% and 15% initial stops), and remain in cash. The wider pair isolates learned
 exits from simply giving positions more room. Both force the 10% net target
 and the time cap. Wider stops are exploratory paper assumptions, not loss caps.
 The previously viewed 60-session window is now exploratory; reserve later
@@ -128,3 +128,26 @@ When data are insufficient, use the existing Data Manager to inspect and
 complete historical coverage. Future work: verified constituent/context
 features, exact-contract receipt execution, prospective frozen-model tests,
 and a separate entry/exit MDP. No changes to existing scalping/spread engines.
+
+
+## Profit-activated trailing comparators (v3)
+
+Both trailing comparators retain the 10% net target, identical entry
+selection, account exposure, execution delay and time cap. Before a
+completed net return mark reaches +3%, retain the initial -5% or -15%
+stop mark, respectively. Once activated, the floor is the greater of
+the initial stop mark and the highest completed net mark minus three
+percentage points. The floor never decreases. The fixed target, initial
+stop and timeout take precedence; otherwise an observed mark at or
+below the floor triggers a delayed exit. Example: a peak net mark of
++8% produces a +5% floor. This is not a promised fill or profit:
+missing exit evidence censors the trade, and a delayed observed open can
+realize less than the floor, including a loss.
+
+The activation and distance are fixed illustrative research assumptions,
+not selected from test outcomes. Trailing is a rule-based comparator, not
+a newly trained RL policy. Existing RL policies are unchanged. The report
+adds exit-reason counts and sampled open-position minimum/maximum returns
+and peak-to-mark drawdown through each exit decision, including censored
+paths. Closed-account drawdown alone can hide large temporary losses.
+These are completed-mark diagnostics, not intrabar or fill-time extrema.
