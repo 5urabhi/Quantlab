@@ -122,7 +122,7 @@ def universe(day, cfg, now, progress=None):
         "screen_rejections":scan["rejections"]}
 
 
-def signal_cohorts(day, anchors, now):
+def signal_cohorts(day, anchors, now, *, snapshot_sink=None):
     """Rebuild causal observed minute candles from exchange/receipt clocks.
 
     An index minute bar saved later can contain a late revision; using only
@@ -183,6 +183,8 @@ def signal_cohorts(day, anchors, now):
         signal=trend.snapshot("INDEX:BANKNIFTY",complete[-120:],now=anchor,include_chart=False)
         if signal["quote_mode"]=="RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE" and signal["contiguous_session_bars"]>=30:
             directions[i]=signal["direction"]
+            if snapshot_sink is not None:
+                snapshot_sink[i]=signal
     counts=Counter(directions.values())
     return directions,{"state":"available" if directions else "insufficient_contiguous_received_ticks",
         "valid":len(directions),"up":counts["UP"],"down":counts["DOWN"],
