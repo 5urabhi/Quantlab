@@ -1833,6 +1833,28 @@ def spread_study_readiness(body:SpreadReadinessRequest):
         bad(exc)
 
 
+class AutomaticSpreadReadinessRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    day: str=Field(min_length=10,max_length=10)
+    capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
+    lots: int=Field(default=3,ge=1,le=10,strict=True)
+    participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
+    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
+    expiry: str=Field(default="",max_length=10)
+    side: Literal["ALL","CE","PE"]="ALL"
+    search: str=Field(default="",max_length=80)
+
+
+@app.post("/api/trading-cockpit/spreads/readiness/auto")
+def automatic_spread_study_readiness(body:AutomaticSpreadReadinessRequest):
+    from . import spread_readiness
+    try:
+        return spread_readiness.automatic(**body.model_dump())
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.post("/api/trading-cockpit/spreads/speed-study")
 def start_spread_speed_study(body:SpreadSpeedRequest):
     from . import spread_speed
