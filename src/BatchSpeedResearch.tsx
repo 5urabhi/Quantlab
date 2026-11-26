@@ -1,0 +1,75 @@
+import {useEffect,useState} from 'react'
+import {marketApi,marketPost,readableError} from './tradingCockpitApi'
+import type {BrokerProfile} from './SpreadOpportunityScanner'
+import './spread-speed.css'
+
+type Family='directional'|'spread'
+type Cohort='fixed'|'signal'
+type Leg={identity:string;strike:number;option_type:string;expiry:string;lot_size:number}
+type Metrics={attempted:number;scored:number;unscored:number;completion_pct:number;entry_complete:number;profitable:number;losing:number;target_hits:number;mean_net:number|null;total_net:number|null;worst_net:number|null;mean_fees:number|null;scored_blocks:number;lower_block_mean:number|null;robust_score:number|null;rankable:boolean;states:Record<string,number>}
+type Row=Metrics&{family:Family;strategy:string;cohort:Cohort;legs:Leg[];identities:string[];direction:string;lots:number;latency_ms:number;hold_seconds:number;selection_coverage_pct:number|null;random_control?:Metrics;signal_minus_random_mean?:number|null;random_overlap_attempts?:number}
+type Counts={rows:number;rankable:number;positive_robust:number}
+type Plan={plan_id:string;discovery_day:string;frozen_utc:string;configuration_count:number;earliest_expiry:string}
+type Result={run_id:string;mode:'exploration'|'validation';day_ist:string;cutoff_utc:string;worker_count:number;anchor_count:number;structures:number;configuration_count:number;attempted_paths:number;summary_rows:number;signal:{state:string;valid:number;up:number;down:number;neutral:number;ticks:number};counts:Record<Family,Record<Cohort,Counts>>;rankings:Record<Family,Record<Cohort,Row[]>>;thresholds:{min_scored:number;min_completion_pct:number;min_scored_blocks:number;block_minutes:number};validation_rows:Row[];universe?:{scanned_contracts:number;affordable_contracts:number;directional_contracts:number;vertical_baskets:number;vertical_candidates_enumerated:number;vertical_candidates_screened:number;scan_truncated:boolean;vertical_screen_limited:boolean;scan_scope:string};plan_id:string|null;frozen_configurations:unknown[];frozen_utc?:string;warning:string}
+type Job={status:string;stage?:string;percent?:number;error?:string;result?:Result}
+const base='/api/trading-cockpit/spreads/batch'
+const storageKey='quantlab-batch-research-job'
+const n=(v:number|null|undefined,d=2)=>v==null?'—':v.toLocaleString('en-IN',{maximumFractionDigits:d})
+const money=(v:number|null|undefined)=>v==null?'—':'₹'+n(v)
+const title=(v:string)=>v.replaceAll('_',' ')
+const restore=()=>{try{return sessionStorage.getItem(storageKey)||''}catch{return ''}}
+const remember=(v:string)=>{try{if(v)sessionStorage.setItem(storageKey,v);else sessionStorage.removeItem(storageKey)}catch{/* optional local persistence */}}
+const netClass=(v:number|null|undefined)=>v==null?'':v<0?'mi-negative':'mi-positive'
+const dayIST=(v:string)=>new Date(v).toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'})
+
+function Ranking({rows,validation=false}:{rows:Row[];validation?:boolean}){
+ if(!rows.length)return <p className="mi-muted">No configurations in this view. No profit is inferred from missing data.</p>
+ return <div className="ss-scroll"><table aria-label={validation?'Frozen validation results':'Batch research rankings'}><thead><tr><th>Contract / strategy</th><th>Lots</th><th>Delay / hold</th><th>Scored / attempted</th><th>Completion</th><th>Positive / target</th><th>Mean net</th><th>Worst net</th><th>Mean fees</th><th>Robust rank score</th><th>Random mean (scored)</th><th>Signal − random</th><th>Evidence</th></tr></thead><tbody>{rows.map((r,i)=><tr key={r.strategy+r.identities.join()+r.lots+r.latency_ms+r.hold_seconds+r.cohort+i}>
+ <td><strong>{r.legs.map(l=>n(l.strike,0)+' '+l.option_type).join(' / ')}</strong><br/><small>{title(r.strategy)} · {r.legs[0]?.expiry} · {r.cohort}</small></td><td>{r.lots}</td><td>{r.latency_ms}ms / {r.hold_seconds}s</td><td>{n(r.scored,0)} / {n(r.attempted,0)}</td><td>{n(r.completion_pct)}%</td><td>{r.scored?r.profitable+' / '+r.target_hits:'—'}</td><td className={netClass(r.mean_net)}>{money(r.mean_net)}</td><td className={netClass(r.worst_net)}>{money(r.worst_net)}</td><td>{money(r.mean_fees)}</td><td className={netClass(r.robust_score)}>{money(r.robust_score)}</td><td>{r.random_control?money(r.random_control.mean_net)+' ('+r.random_control.scored+'/'+r.random_control.attempted+')':'—'}</td><td className={netClass(r.signal_minus_random_mean)}>{money(r.signal_minus_random_mean)}</td><td><strong>{r.rankable?'Minimum met':'Insufficient'}</strong><br/><small>{r.scored_blocks} blocks</small>{!r.rankable&&<details><summary>Reasons</summary>{Object.entries(r.states).map(([k,v])=><div key={k}>{title(k)}: {v}</div>)}</details>}</td></tr>)}</tbody></table></div>
+}
+
+export default function BatchSpeedResearch({day,expiry='',side='ALL',search='',brokerProfile}:{day:string;expiry?:string;side?:'ALL'|'CE'|'PE';search?:string;brokerProfile:BrokerProfile}){
+ const [capital,setCapital]=useState(17000),[maxLots,setMaxLots]=useState(3),[target,setTarget]=useState(100)
+ const [step,setStep]=useState(5),[windowSec,setWindow]=useState(1),[participation,setParticipation]=useState(25),[slip,setSlip]=useState(5),[spreads,setSpreads]=useState(true)
+ const [job,setJob]=useState(restore),[busy,setBusy]=useState(false),[stage,setStage]=useState(''),[percent,setPercent]=useState(0),[error,setError]=useState('')
+ const [result,setResult]=useState<Result|null>(null),[csvId,setCsvId]=useState(''),[family,setFamily]=useState<Family>('directional'),[cohort,setCohort]=useState<Cohort>('fixed')
+ const [plans,setPlans]=useState<Plan[]>([]),[plan,setPlan]=useState(''),[validationDay,setValidationDay]=useState(day)
+ const refreshPlans=async()=>{try{const x=await marketApi<{plans:Plan[]}>(base+'/plans');setPlans(x.plans);setPlan(v=>v||x.plans[0]?.plan_id||'')}catch(e){setError(readableError(e))}}
+ useEffect(()=>{void refreshPlans()},[])
+ useEffect(()=>{if(!job)return;let alive=true,polling=false
+ const poll=async()=>{if(polling)return;polling=true
+ try{const r=await marketApi<Job>('/api/jobs/'+encodeURIComponent(job));if(!alive)return
+   setStage(r.stage||r.status);setPercent(r.percent??0)
+   if(r.status==='complete'){setCsvId(r.result?.run_id||'');if(r.result?.rankings)setResult(r.result);else setStage('Completed result restored from job history; full summary CSV is available.');setJob('');remember('');void refreshPlans()}
+   else if(['error','cancelled','interrupted'].includes(r.status)){setError(r.error||r.stage||r.status);setJob('');remember('')}
+ }catch(e){if(alive)setError(readableError(e))}finally{polling=false}}
+ void poll();const timer=window.setInterval(()=>void poll(),1800);return()=>{alive=false;window.clearInterval(timer)}},[job])
+ const start=async(validation=false)=>{if(busy||job)return;setBusy(true);setError('');setResult(null);setCsvId('');setPercent(0);setStage('Submitting local research job')
+ try{const x=await marketPost<{job_id:string}>(base+(validation?'/validate':''),validation?{plan_id:plan,day:validationDay}:{day,capital,max_lots:maxLots,target_net:target,window_seconds:windowSec,step_minutes:step,participation_pct:participation,slippage_bps:slip,broker_profile:brokerProfile,expiry,side,search,include_spreads:spreads})
+ setJob(x.job_id);remember(x.job_id);setStage('Queued')}
+ catch(e){setError(readableError(e))}finally{setBusy(false)}}
+ const cancel=async()=>{if(!job)return;try{await marketPost('/api/workspace/jobs/'+encodeURIComponent(job)+'/cancel',{});setStage('Cancellation requested')}catch(e){setError(readableError(e))}}
+ const active=busy||!!job
+ const selectedPlan=plans.find(p=>p.plan_id===plan)
+ return <section className="ss-study mi-card" aria-label="All-contract batch research">
+ <header className="mi-heading"><div><span className="mi-kicker">AUTOMATIC · ORIGINAL DEPTH · PAPER ONLY</span><h3>Batch contract &amp; spread research</h3><p className="mi-muted">Compare every eligible recorded single option, affordable whole-lot sizes, and bounded defined-risk vertical baskets. No manual strike selection.</p></div><a href="#/workspacejobs">Job history →</a></header>
+ <p className="mi-muted">{day} IST · {expiry||'All selected expiries'} · {side==='ALL'?'CE + PE':side}{search?' · filter '+search:''} · {title(brokerProfile)}</p>
+ <div className="ss-controls"><label>Capital ₹<input type="number" min={1000} max={1e7} value={capital} disabled={active} onChange={e=>setCapital(Number(e.target.value))}/></label><label>Maximum lots<select value={maxLots} disabled={active} onChange={e=>setMaxLots(Number(e.target.value))}>{[1,2,3].map(x=><option key={x} value={x}>{x}</option>)}</select></label><label>Target net ₹<input type="number" min={0} max={1e6} value={target} disabled={active} onChange={e=>setTarget(Number(e.target.value))}/></label><label>Decision spacing<select value={step} disabled={active} onChange={e=>setStep(Number(e.target.value))}>{[1,5,15].map(x=><option key={x} value={x}>{x} minute{x!==1?'s':''}</option>)}</select></label><label><span>Include vertical spreads</span><input type="checkbox" checked={spreads} disabled={active} onChange={e=>setSpreads(e.target.checked)}/></label><button type="button" className="ws-button primary" disabled={active} onClick={()=>void start()}>{active?'Batch research running…':'Run all eligible configurations'}</button></div>
+ <details><summary>Execution assumptions</summary><div className="ss-controls"><label>Receipt window (s)<input type="number" min={1} max={30} step={1} value={windowSec} disabled={active} onChange={e=>setWindow(Number(e.target.value))}/></label><label>Displayed participation (%)<input type="number" min={1} max={100} value={participation} disabled={active} onChange={e=>setParticipation(Number(e.target.value))}/></label><label>Slippage (bps / leg)<input type="number" min={0} max={500} value={slip} disabled={active} onChange={e=>setSlip(Number(e.target.value))}/></label></div><p className="mi-muted">48 delay / hold cells per affordable lot size: 100, 250, 500ms, 1, 3, 5s × 1, 2, 5, 15, 30, 60, 120, 300s. Adaptive worker pool is shared across structures, not multiplied by each configuration. Vertical shortlist is limited to 12 eligible baskets per type.</p></details>
+ {stage&&<div role="status" className="mi-card"><strong>{stage}</strong>{active&&<><progress value={percent} max={100} aria-label="Batch job progress" style={{width:'100%'}}/><p className="mi-muted">{n(percent)}% · Runs independently of data acquisition.</p>{job&&<button type="button" className="ws-button" onClick={()=>void cancel()}>Cancel batch</button>}</>}</div>}
+ {error&&<p role="alert" className="tc-error">{error}</p>}
+ {result&&<><div className="ss-summary"><div><small>Recorded structures</small><strong>{n(result.structures,0)}</strong></div><div><small>Configurations evaluated</small><strong>{n(result.configuration_count,0)}</strong></div><div><small>Attempted replay paths</small><strong>{n(result.attempted_paths,0)}</strong></div><div><small>Adaptive workers</small><strong>{result.worker_count}</strong></div><div><small>Decision anchors</small><strong>{result.anchor_count}</strong></div><div><small>Source-valid signal anchors</small><strong>{result.signal.valid} / {result.anchor_count}</strong></div></div>
+ <p className="mi-muted">{result.mode==='validation'?'Frozen later-session validation':'In-sample exploration'} · {result.day_ist} · signal evidence {title(result.signal.state)} · UP {result.signal.up}, DOWN {result.signal.down}, neutral {result.signal.neutral}.</p>
+ {result.universe&&<p className="mi-muted">{result.universe.scanned_contracts} identities screened; {result.universe.affordable_contracts} affordable singles; {result.universe.vertical_baskets} vertical baskets included ({result.universe.vertical_candidates_screened} screened). {result.universe.scan_truncated?'Recorded universe scan was incomplete. ':''}{result.universe.vertical_screen_limited?'Vertical search is bounded, not exhaustive.':''}</p>}
+ {result.mode==='exploration'?<>
+ <div className="ss-controls"><label>Structure<select value={family} onChange={e=>setFamily(e.target.value as Family)}><option value="directional">Single CE / PE</option><option value="spread">Defined-risk vertical spreads</option></select></label><label>Entry cohort<select value={cohort} onChange={e=>setCohort(e.target.value as Cohort)}><option value="fixed">Fixed-clock baseline</option><option value="signal">EMA/RSI-aligned vs random-time</option></select></label></div>
+ <p className="mi-muted">Ranking requires ≥{result.thresholds.min_scored} scored paths, ≥{result.thresholds.min_completion_pct}% completion and ≥{result.thresholds.min_scored_blocks} distinct {result.thresholds.block_minutes}-minute blocks. {result.counts[family][cohort].rankable} / {result.counts[family][cohort].rows} configurations pass; {result.counts[family][cohort].positive_robust} have positive descriptive robust scores. Top 25 displayed; all summary rows in CSV.</p>
+ <Ranking rows={result.rankings[family][cohort]}/>
+ <div className="mi-card"><strong>{result.plan_id?'Qualifying configurations frozen for later-session validation':'No qualifying positive configuration frozen'}</strong><p className="mi-muted">{result.plan_id?result.frozen_configurations.length+' exact configurations saved before future validation; no retuning allowed.':'Negative or insufficient evidence does not become a trading recommendation.'}</p></div>
+ </>:<Ranking rows={result.validation_rows} validation/>}
+ <p className="mi-muted">{result.warning}</p></>}
+ {csvId&&<a className="ws-button" href={base+'/results/'+encodeURIComponent(csvId)} download>Download all batch summary rows (CSV)</a>}
+ <details className="mi-card"><summary>Later-session validation · {plans.length} frozen plan(s)</summary><p className="mi-muted">A plan is frozen automatically only if enough scored evidence and positive robust net results qualify. Signal plans must also beat the equal-attempt random control. Validation uses the same contracts, lots, delays, holds, costs and entry cohort on a completed session strictly after the freeze date. Expired or missing contracts stay unscored.</p>
+ <div className="ss-controls"><label>Frozen research plan<select value={plan} disabled={active} onChange={e=>setPlan(e.target.value)}><option value="">No plan selected</option>{plans.map(p=><option key={p.plan_id} value={p.plan_id}>{p.discovery_day} · {p.configuration_count} configurations · {p.plan_id.slice(0,8)}</option>)}</select></label><label>Completed later session<input type="date" value={validationDay} disabled={active} onChange={e=>setValidationDay(e.target.value)}/></label><button type="button" className="ws-button" disabled={active||!selectedPlan||validationDay<=selectedPlan.discovery_day||validationDay<=dayIST(selectedPlan.frozen_utc)} onClick={()=>void start(true)}>Validate frozen plan</button><button type="button" className="ws-button" disabled={active} onClick={()=>void refreshPlans()}>Refresh plans</button></div>{selectedPlan&&<p className="mi-muted">Frozen {selectedPlan.frozen_utc} · earliest selected expiry {selectedPlan.earliest_expiry}.</p>}</details>
+ </section>
+}
