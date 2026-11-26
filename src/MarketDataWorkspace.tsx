@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import './market-data-workspace.css'
 
+const MarketInventory = lazy(() => import('./MarketInventory'))
 const MarketLibraryPanel = lazy(() => import('./MarketLibraryPanel'))
 const DhanDataManager = lazy(() => import('./DhanDataManager'))
 const DataManager = lazy(() => import('./DataManager'))
@@ -56,7 +57,7 @@ type KiteStatus = {api_key_configured:boolean;api_secret_configured:boolean;
 type Props = {initialPage?:Page;activePage?:Page;integrated?:boolean;
   datasets:Datum[];onDataChanged:()=>void;
   onSelectDataset:(id:string)=>void;onOpenModels:()=>void;
-  onRequestDelete:(datasetId:string)=>void}
+  onRequestDelete:(datasetId:string)=>void;onNavigate?:(page:Page)=>void;onReplay?:()=>void}
 
 const modeNames:Record<Selection,string>={
   nifty50_pit:'NIFTY 50',banknifty_pit:'BANK NIFTY',watchlist:'My stocks',
@@ -146,9 +147,10 @@ const fault=(batch:Batch)=>{
 }
 
 export default function MarketDataWorkspace({initialPage='get',activePage,integrated=false,
-  datasets,onDataChanged,onSelectDataset,onOpenModels,onRequestDelete}:Props){
+  datasets,onDataChanged,onSelectDataset,onOpenModels,onRequestDelete,onNavigate,onReplay}:Props){
   const [page,setPage]=useState<Page>(activePage||initialPage)
   useEffect(()=>{if(activePage)setPage(activePage)},[activePage])
+  const goPage=(next:Page)=>{setPage(next);onNavigate?.(next)}
   const [stage,setStage]=useState<0|1|2>(0)
   const [advanced,setAdvanced]=useState<Advanced>(null)
   const [selection,setSelection]=useState<Selection>('nifty50_pit')
@@ -371,7 +373,7 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
       }),result=>{
         setJob({id:result.job_id,status:result.status})
         setSelectedBatch(result.batch.id)
-        setPage('downloads')
+        goPage('downloads')
         setMessage('Download approved. Existing verified candles will be reused; preparation runs automatically if all instruments succeed.')
         void refresh()
       })
@@ -435,14 +437,14 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
   const summary = batch?fault(batch):null
 
   return <div className="mdw-root">
-    <div className="mdw-hero">
+    {(!integrated||page!=='datasets')&&<div className="mdw-hero">
       <div><span className="mdw-eyebrow"><Database size={15}/> MARKET DATA WORKSPACE</span>
         <h2>Get the data. QuantLab handles the preparation.</h2>
         <p>Choose an index, stock universe or research model. We check original sources,
           reuse cached observations and show exactly what is missing.</p>
       </div>
       <div className="mdw-safety"><ShieldCheck size={17}/> Read-only market data · No orders</div>
-    </div>
+    </div>}
     {!integrated&&<div className="mdw-tabs" role="tablist" aria-label="Market data views">
       {([['get','Get Data',Download],['datasets','Market Library',Database],
         ['downloads','Download History',Activity]] as const).map(([key,label,Icon])=>
@@ -757,8 +759,8 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
           <Suspense fallback={<p>Loading model-specific acquisition…</p>}>
             <DataAcquisitionPanel datasets={availableDatasets}
               initialModelId={modelId} initialDatasetId={selected.id}
-              onCompleted={id=>{onSelectDataset(id);onDataChanged();setPage('datasets')}}
-              onOpenDhan={()=>setPage('get')} onOpenModels={onOpenModels}/>
+              onCompleted={id=>{onSelectDataset(id);onDataChanged();goPage('datasets')}}
+              onOpenDhan={()=>goPage('get')} onOpenModels={onOpenModels}/>
           </Suspense>
         </div>}
         <div className="mdw-step-actions">
@@ -768,17 +770,19 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
         </div>
       </section>}
     </div>}
-    {page==='datasets'&&<section className="mdw-card">
+    {page==='datasets'&&<>
+      {integrated&&<Suspense fallback={<p role="status">Loading saved market coverage…</p>}><MarketInventory onAcquire={()=>{setStage(0);goPage('get')}} onReplay={onReplay} onModels={()=>{onSelectDataset('dhan_shared');onOpenModels()}}/></Suspense>}
+      <section className="mdw-card">
       <div className="mdw-section-top"><div><span className="mdw-kicker">ONE MARKET LIBRARY</span>
-        <h3>Everything you've collected</h3>
+        <h3>{integrated?'Equity universes and sectors':"Everything you've collected"}</h3>
         <p>Your original sources remain available for audit. One shared price
           library organizes downloaded stocks by exchange, dated index membership,
           and original sector classification.</p></div>
-        <button className="mdw-button" onClick={()=>setPage('get')}>
+        <button className="mdw-button" onClick={()=>goPage('get')}>
           <Download size={16}/> Get more data</button></div>
       <Suspense fallback={<p className="mdw-empty">Loading one Market Data Library…</p>}>
         <MarketLibraryPanel
-          onOpenDownloads={()=>{setPage('get');setStage(0)}}
+          onOpenDownloads={()=>{goPage('get');setStage(0)}}
           onChooseModel={onOpenModels}
           onChanged={()=>{onDataChanged();void refresh()}}/>
       </Suspense>
@@ -804,7 +808,7 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
               Open in models <ArrowRight size={15}/></button>
             <button type="button" onClick={()=>{
               setModelDataset(d.id);setModelId(v=>v||'min_variance')
-              setPage('get');setStage(2)
+              goPage('get');setStage(2)
             }}>Extend / complete</button>
             <button type="button" className="mdw-delete" onClick={()=>onRequestDelete(d.id)}>
               <Trash2 size={15}/> Delete</button>
@@ -812,7 +816,7 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
         </article>)}
         </div>
       </details>
-    </section>}
+    </section></>}
     {page==='downloads'&&<section className="mdw-card">
       <div className="mdw-section-top"><div><span className="mdw-kicker">DOWNLOADS & JOBS</span>
         <h3>See exactly what's happening</h3>
@@ -850,7 +854,7 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
         </div>}
       {!batches.length&&<div className="mdw-empty"><Clock3 size={27}/>
         <strong>No downloads yet</strong><p>Data acquisition jobs appear here immediately after authorization.</p>
-        <button className="mdw-button" onClick={()=>setPage('get')}>Get data</button>
+        <button className="mdw-button" onClick={()=>goPage('get')}>Get data</button>
       </div>}
       {batches.length>0&&<div className="mdw-batch-layout">
         <div className="mdw-batch-list">{batches.slice(0,100).map(b=><button type="button"
@@ -896,7 +900,7 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
               not another market dataset. Historical membership, TRI and corporate-action
               evidence remain distinct where needed by a model.</span>
             <button type="button" onClick={()=>{onSelectDataset('dhan_shared');
-              onDataChanged();setPage('datasets')}}>Open one library <ArrowRight size={14}/></button>
+              onDataChanged();goPage('datasets')}}>Open one library <ArrowRight size={14}/></button>
           </div>}
           {batch.preparation_error&&<div className="mdw-callout warn">
             <AlertCircle size={17}/> Preparation needs attention: {batch.preparation_error}</div>}
@@ -985,7 +989,7 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
       {advanced==='manual'&&<DhanDataManager onDataChanged={()=>{
         void refresh();onDataChanged();setRevision(v=>v+1)}}/>}
       {advanced==='database'&&<DataManager onSelectDataset={onSelectDataset}
-        onChanged={onDataChanged} onOpenDhan={()=>{setPage('get');setAdvanced(null)}}
+        onChanged={onDataChanged} onOpenDhan={()=>{goPage('get');setAdvanced(null)}}
         onOpenModels={onOpenModels}/>}
     </Suspense>}
     <p className="mdw-last-note"><CircleHelp size={14}/> This workspace runs locally. Data API access,

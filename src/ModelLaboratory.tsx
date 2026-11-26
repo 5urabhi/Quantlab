@@ -807,6 +807,8 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
   if(catalogScreen==='custom')return <CustomModelWorkspace datasets={datasets} selectedDataset={selectedDataset} initialScriptId={customScript} onBack={()=>setCatalogScreen('catalog')}/>
   if(catalogScreen==='catalog')return <ModelCatalogLanding
     models={catalog} readiness={matrix?.models||[]} recent={savedRuns}
+    sourceId={selectedDataset} sources={datasets.filter(d=>d.has_prices||d.id==='dhan_shared')} onSource={onSelectDataset}
+    readinessLoading={matrixLoading} error={catalogError||matrixError} onRefresh={()=>void refreshMatrix()}
     sourceLabel={matrix?.dataset_label||datasets.find(d=>d.id===selectedDataset)?.label||''}
     onOpen={changeModel} onOpenCustom={enableCustomModels?id=>{setCustomScript(id||'');setCatalogScreen('custom')}:undefined}
     onReopen={id=>{
@@ -815,7 +817,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
       else if(saved)void reopen(saved)
     }} onOpenResults={onOpenResults?()=>onOpenResults():undefined}/>
 
-  return <div className={'ql-workbench ql-model-focused'+
+  return <div className={'ql-workbench ql-model-focused ql-v3-model-detail'+
     (inputsOpen?' show-input-details':'')+(presetsOpen?' show-presets':'')}>
     <header className="ql-model-focus-head">
       <div className="ql-model-focus-topline">
@@ -848,6 +850,7 @@ export default function ModelLaboratory({section,datasets,selectedDataset,onSele
             'Use saved option quote':'Use market history'}</button>
       </div>}
     </header>
+    <div className="ql-model-workflow" aria-label="Model calculation workflow"><span className={!resultReady&&!working&&!pendingData?'current':''}><b>01</b> Inputs & assumptions</span><span className={working||pendingData?'current':''}><b>02</b> Prepare & calculate</span><span className={resultReady?'current':''}><b>03</b> Results & evidence</span></div>
     <div className="ql-focus-actionbar">
       <div className="ql-focus-status">
         {resultReady?<CheckCircle2 size={17}/>:

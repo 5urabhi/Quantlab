@@ -580,6 +580,11 @@ try{
    await page.getByRole('heading',{name:'What would you like to explore?'}).waitFor()
    // The layout has five mathematical families, not a 3D rendering family.
    assert.equal(await page.getByRole('button',{name:/3D Visual Laboratory/}).count(),0)
+   await page.getByRole('combobox',{name:'Catalog research source'}).waitFor()
+   await page.getByRole('region',{name:'Stochastic Processes models'}).waitFor()
+   await page.getByRole('checkbox',{name:'Ready / available only'}).check()
+   await page.getByRole('button',{name:'Open Geometric Brownian Motion'}).waitFor()
+   await page.getByRole('checkbox',{name:'Ready / available only'}).uncheck()
    await shot('04-model-catalog')
    await page.getByRole('button',{name:'Open Geometric Brownian Motion'}).click()
    await page.locator('.ql-model-focus-head').getByRole('heading',{
@@ -621,6 +626,12 @@ try{
  await step('Data Center unified market library acquisition explorer quality and downloads',async()=>{
    await top('Data Center')
    await page.getByRole('heading',{name:'Market Library',exact:true}).waitFor()
+   const inventory=page.getByRole('region',{name:'Unified saved market data inventory'})
+   await inventory.getByRole('heading',{name:'Coverage by data type'}).waitFor({timeout:30000})
+   await inventory.getByRole('button',{name:'View Live option quotes coverage'}).click()
+   assert.equal(await inventory.getByRole('combobox',{name:'Inventory data type'}).inputValue(),'option_quote')
+   await inventory.getByRole('combobox',{name:'Inventory data type'}).selectOption('all')
+   await inventory.getByRole('table',{name:'Saved market coverage by instrument'}).waitFor()
    await shot('05-data-library')
    await sub('Get Market Data')
    await page.getByRole('heading',{name:/Get the data/}).waitFor()
