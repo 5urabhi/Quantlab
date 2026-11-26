@@ -29,7 +29,7 @@ def _valid_entry(strategy,entries,capital):
     return valid,cash,risk
 
 
-def _components(orders,profile):
+def _components(orders,profile,bps):
     breakdown={key:0. for key in FEE_KEYS}
     mid=spread=depth=residual=0.
     for o in orders:
@@ -41,7 +41,7 @@ def _components(orders,profile):
         mid+=sign*midpoint*units
         spread+=sign*(midpoint-top)*units
         depth+=sign*(top*units-observed)
-        residual+=sign*(observed-o["turnover"])
+        residual+=observed*bps/10000
         leg=fees.fee_schedule(o["turnover"] if buy else 0.,
                               0. if buy else o["turnover"],broker_profile=profile)
         leg=leg["buy_leg" if buy else "sell_leg"]
@@ -64,7 +64,7 @@ def analyze(result, cfg):
         return None
     entries=result["entries"];exits=result["exits"]
     profile=cfg["broker_profile"];base=cfg["slippage_bps"]
-    audit=_components(entries+exits,profile)
+    audit=_components(entries+exits,profile,base)
     stress={}
     for increment in STRESS_BPS:
         bps=base+increment
@@ -81,12 +81,13 @@ def analyze(result, cfg):
     return audit
 
 
-def sample_trade(result,audit):
+def sample_trade(result,audit,cfg):
     def order(o):
         return {k:o[k] for k in ("identity","action","strike","option_type","expiry","requested_units",
             "original_best_bid","original_best_ask","received_utc","vwap","turnover","fees","cashflow")}
     return {**audit,"entries":[order(o) for o in result["entries"]],"exits":[order(o) for o in result["exits"]],
-            "actual_fills_observed":False,"broker_margin_verified":False}
+            "actual_fills_observed":False,"broker_margin_verified":False,
+            "long_option_exit_thresholds":target_exit_vwap(result,cfg)}
 
 
 def aggregate(audits):
@@ -104,3 +105,78 @@ def aggregate(audits):
             "rejected":len(audits)-len(values),"mean_net":round(mean(values),2) if values else None,
             "worst_net":min(values) if values else None}
     return output
+
+
+def sequential(records,indices,anchors,capital):
+    """Conditional single-position account, not a live execution guarantee.
+
+    Reject overlapping anchors and entries exceeding remaining capital.
+    Missing entry books do not establish that a real order would not fill.
+    An observed incomplete basket or missing exit halts reuse of capital.
+    """
+    cash=peak=capital
+    available=None
+    completed=positive=skipped_overlap=skipped_budget=unknown_entries=0
+    drawdown=0.
+    halted=None
+    for i in indices:
+        r=records[i]
+        if available is not None and anchors[i]<=available:
+            skipped_overlap+=1
+            continue
+        audit=r[4] if len(r)>4 else None
+        state=r[1]
+        if r[0] is None:
+            if r[2] or state in ("entry_partial_or_insufficient_depth","entry_leg_skew_exceeded"):
+                halted=state
+                break
+            if state!="insufficient_hypothetical_risk_budget":
+                unknown_entries+=1
+            else:
+                skipped_budget+=1
+            continue
+        if not audit:
+            halted="missing_cost_audit"
+            break
+        if audit["entry_risk_inr"]>cash:
+            skipped_budget+=1
+            continue
+        cash=fees._money(cash+r[0])
+        available=datetime.fromisoformat(audit["exit_utc"])
+        completed+=1;positive+=int(r[0]>0)
+        peak=max(peak,cash)
+        drawdown=max(drawdown,peak-cash)
+        if cash<1000:
+            halted="remaining_capital_below_research_minimum"
+            break
+    return {"completed":completed,"positive":positive,"overlap_skipped":skipped_overlap,
+        "budget_skipped":skipped_budget,"entry_unobserved":unknown_entries,"halted_reason":halted,
+        "conditional_completed_net_inr":fees._money(cash-capital) if completed else None,
+        "conditional_cash_inr":cash if completed else None,
+        "closed_trade_drawdown_inr":fees._money(drawdown) if completed else None,
+        "fully_observed_account_net_inr":fees._money(cash-capital) if completed and not halted and not unknown_entries else None,
+        "actual_fills_observed":False}
+
+
+def target_exit_vwap(result,cfg):
+    """Continuous hypothetical SELL VWAP for a long option; not a tick limit."""
+    if result["strategy"]!="LONG_OPTION" or len(result["entries"])!=1:
+        return None
+    entry=result["entries"][0]
+    units=entry["requested_units"]
+    need=-entry["cashflow"]
+    profile=cfg["broker_profile"]
+    def threshold(target):
+        lo=0.;hi=max(1.,(need+target+100)/units*2)
+        for _ in range(48):
+            mid=(lo+hi)/2
+            turnover=fees._money(mid*units)
+            if turnover-paper._fees("SELL",turnover,profile)>=need+target:
+                hi=mid
+            else:
+                lo=mid
+        # Round UP to a display precision, not the exchange price tick.
+        import math
+        return math.ceil(hi*10000)/10000
+    return {"break_even_exit_vwap":threshold(0.),"target_exit_vwap":threshold(cfg["target_net"]),
+            "note":"Modeled average sell fill price before tick rounding; not a guaranteed exit price."}
