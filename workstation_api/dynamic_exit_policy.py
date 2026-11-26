@@ -3,8 +3,8 @@ from datetime import timedelta
 from . import paper_execution as paper, advanced_options as ao, trading_cockpit as trend
 from . import replay_storage
 
-VERSION="dynamic_exit_v1"
-MODES=("fixed","target_stop","trailing","signal_reversal","adaptive")
+VERSION="dynamic_exit_v2"
+MODES=("fixed","target_stop","trailing","signal_reversal","adaptive","forecast_adaptive")
 HOLDS=(60,120,300,600,900,1800)
 DEFAULTS={"exit_mode":"adaptive","stop_net":250.,"trail_net":50.,
           "liquidity_grace_seconds":20,"slippage_bps":0.}
@@ -70,7 +70,7 @@ def evaluate(row,now,mark,signal=None):
             return "loss_mark",updates
         if mode=="target_stop" and value>=cfg["target_net"]:
             return "target_mark",updates
-        if mode in ("trailing","adaptive"):
+        if mode in ("trailing","adaptive","forecast_adaptive"):
             armed=row.get("trail_armed",False) or peak>=cfg["target_net"]
             updates["trail_armed"]=armed
             if armed:
@@ -85,7 +85,7 @@ def evaluate(row,now,mark,signal=None):
         entry=row.get("source",{}).get("direction")
         if current in ("UP","DOWN") and entry in ("UP","DOWN") and current!=entry:
             return "signal_reversal",updates
-    if mode=="adaptive":
+    if mode in ("adaptive","forecast_adaptive"):
         bad=value is None or bool(mark.get("liquidity_bad",False))
         if bad:
             since=row.get("liquidity_bad_since_utc") or paper._iso(now)
