@@ -824,8 +824,12 @@ def _run(stop: Event) -> None:
                     constituent_message,member_info,member_state=banknifty_constituents.subscription_plan(
                         len(contracts)+len(shared_index_requested),capture_allowed=constituent_enabled and banknifty_constituents.enabled())
                     equity_count=constituent_message["InstrumentCount"] if constituent_message else 0
-                    derivative_messages,derivative_map,derivative_state=constituent_derivatives.plan(
-                        len(contracts)+len(shared_index_requested)+equity_count,allowed=derivative_enabled)
+                    try:
+                        derivative_messages,derivative_map,derivative_state=constituent_derivatives.plan(
+                            len(contracts)+len(shared_index_requested)+equity_count,allowed=derivative_enabled)
+                    except Exception:
+                        # A malformed optional local source must never prevent the original feed.
+                        derivative_messages,derivative_map,derivative_state=[],{},"optional_derivative_plan_unavailable"
                     if set(derivative_map)&set(selected):
                         derivative_messages,derivative_map,derivative_state=[],{},"identity_collision_with_index_options"
                     with connect(url,open_timeout=12,close_timeout=3,
