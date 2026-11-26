@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from hashlib import sha256
 from urllib.request import Request, urlopen
 from urllib.error import URLError
+from urllib.parse import urlparse
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import RLock
@@ -119,21 +120,26 @@ def _parse_current_csv(text):
 
 def refresh_current_membership(opener=urlopen,now=None):
     """Download the public official list; no extrapolation or historical backdate."""
-    now=now or _now()
-    day=_local_day(now)
     request=Request(CURRENT_MEMBERS_URL,headers={"Accept":"text/csv,application/octet-stream,*/*",
                                                 "User-Agent":"QuantLab/1.0 read-only research"})
     try:
         with opener(request,timeout=15) as response:
-            if hasattr(response,"geturl") and response.geturl().split("?",1)[0].lower()!=CURRENT_MEMBERS_URL.lower():
-                raise ValueError("Official constituent download redirected unexpectedly")
+            if hasattr(response,"geturl"):
+                source=urlparse(response.geturl())
+                if (source.scheme!="https" or source.hostname not in ("www.niftyindices.com","niftyindices.com")
+                        or source.path.lstrip("/").lower()!="indexconstituent/ind_niftybanklist.csv"):
+                    raise ValueError("Official constituent download redirected unexpectedly")
             raw=response.read(MAX_CURRENT_CSV+1)
     except (OSError,URLError,TimeoutError):
         raise ValueError("Official NSE Indices constituent CSV unavailable; use the dated membership source or retry.") from None
     if not raw or len(raw)>MAX_CURRENT_CSV:
         raise ValueError("Official constituent CSV is empty or oversized")
+    # The source is known only after retrieval and validation, not when
+    # the network request began. Explicit now is for offline test fixtures.
     text=raw.decode("utf-8-sig")
     members=_parse_current_csv(text)
+    now=now or _now()
+    day=_local_day(now)
     # Store the original decoded CSV, including any UTF-8 BOM on the wire.
     original=raw.decode("utf-8")
     receipt={"date":day.isoformat(),"retrieved_utc":_iso(now),"source":CURRENT_MEMBERS_URL,
@@ -160,7 +166,7 @@ def maybe_refresh_current_membership():
                 return
             CURRENT_REFRESH_LAST.clear()
             CURRENT_REFRESH_LAST[key]=time.monotonic()
-        refresh_current_membership(now=now)
+        refresh_current_membership()
     except (OSError,ValueError,TypeError,KeyError):
         # Public source can be unavailable; no guessed members or retry storm.
         return
