@@ -5,7 +5,7 @@ broker orders, or synthetic depth. Receipt request windows do not certify
 continuous observed contract/session coverage.
 """
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from threading import Lock
 import json
 import re
@@ -67,7 +67,22 @@ def _key(body):
     return {k:v for k,v in body.items() if k not in ("fromDate","toDate")}
 
 
-def _saved_windows(start,stop,wings):
+def _record_observed(audit,rows,start,stop):
+    if audit is None:
+        return
+    left,right=start.isoformat(),stop.isoformat()
+    for row in rows:
+        day=row["session_ist"]
+        if not left<=day<right:
+            continue
+        stamp=datetime.fromisoformat(row["timestamp_utc"]).astimezone(exp.IST)
+        minute=stamp.hour*60+stamp.minute-555
+        if 0<=minute<375:
+            key=(row["side"],row["origin_offset"],day)
+            audit[key]=audit.get(key,0)|(1<<minute)
+
+
+def _saved_windows(start,stop,wings,*,observed=None,statistics=None):
     root=service.DATA/"dhan_expired_options"
     coverage=defaultdict(list)
     reused=0
@@ -104,7 +119,10 @@ def _saved_windows(start,stop,wings):
                 raise ValueError("Receipt disappeared")
             # A valid empty response is still request evidence, not proof
             # of observed price coverage. Never silently replace it.
-            exp._normalize(payload,body)
+            rows=exp._normalize(payload,body)
+            _record_observed(observed,rows,start,stop)
+            if statistics is not None:
+                statistics["empty_verified_receipts"]+=int(not rows)
             coverage[key].append((a,b))
             reused+=1
         except (ValueError,TypeError,KeyError,OSError,AttributeError,UnicodeError):
@@ -112,7 +130,7 @@ def _saved_windows(start,stop,wings):
     return coverage,reused,rejected
 
 
-def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
+def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,request_limit=None,should_stop=None):
     today=today or exp._ist_today()
     start,stop,eligible=_scope(start_date,end_date,wings,today)
     if not LOCK.acquire(blocking=False):
@@ -120,7 +138,8 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
     try:
         if progress:
             progress(1,"Verifying existing expired-option receipt windows")
-        coverage,reused,rejected=_saved_windows(start,stop,wings)
+        observed={};statistics={"empty_verified_receipts":0}
+        coverage,reused,rejected=_saved_windows(start,stop,wings,observed=observed,statistics=statistics)
         requests=[]
         for side in ("CALL","PUT"):
             for offset in exp._offsets(wings):
@@ -139,6 +158,8 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
             profile=dhan_auth.check_profile()
             if not profile.get("ok"):
                 raise ValueError("Verify Dhan historical-data access in Connections before downloading")
+        if request_limit is not None and (type(request_limit) is not int or not 1<=request_limit<=MAX_REQUESTS):
+            raise ValueError("Invalid bounded automatic request limit")
         downloaded=0
         exact_reused=0
         empty=0
@@ -149,6 +170,9 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
         completed=0
         stopped_early=False
         for body in requests:
+            if (request_limit is not None and attempted>=request_limit) or (should_stop is not None and should_stop()):
+                stopped_early=True
+                break
             if progress:
                 progress(min(95,5+90*attempted/max(1,len(requests))),
                          f"Option history {attempted}/{len(requests)}; {body['fromDate']}..{body['toDate']} {body['drvOptionType']} {body['strike']}")
@@ -182,20 +206,25 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
                 rows=exp._normalize(payload,body)
                 exp._save_cache(body,payload)
                 downloaded+=1
+            _record_observed(observed,rows,start,stop)
             consecutive=0
             completed+=1
             empty+=not bool(rows)
             usable+=sum(start_date<=r["session_ist"]<=end_date for r in rows)
         if progress:
-            progress(100,"Saved original receipts; some request windows remain" if rejected_requests else "Saved original receipts; inspect observed coverage")
+            progress(100,"Saved original receipts; some request windows remain" if rejected_requests or attempted<len(requests) else "Saved original receipts; inspect observed coverage")
         return {**preview(start_date,end_date,wings,today),
                 "existing_verified_receipts":reused,"unreadable_receipts_encountered":rejected,
+                "empty_verified_receipts":statistics["empty_verified_receipts"],
+                "observed_rolling_minute_slots":sum(v.bit_count() for v in observed.values()),
+                "observed_offset_session_pairs":len(observed),
+                "observed_session_dates":len({k[2] for k in observed}),
                 "planned_missing_requests":len(requests),"new_receipts":downloaded,
                 "processed_windows":completed,"rejected_requests":rejected_requests,
                 "unattempted_requests":len(requests)-attempted,"stopped_early":stopped_early,
                 "exact_cache_reuses":exact_reused,"empty_processed_receipts":empty,
                 "usable_rows_in_processed_receipts":usable,
-                "state":"partial_requests" if rejected_requests else "request_windows_checked","continuous_coverage_certified":False,
+                "state":"partial_requests" if rejected_requests or attempted<len(requests) else "request_windows_checked","continuous_coverage_certified":False,
                 "note":"Counts describe processed receipts, not deduplicated contracts. Both inclusive dates are retained during the regular session. Verified windows are reused; rejected or unattempted windows remain eligible on resume. No original historical depth has been downloaded."}
     finally:
         LOCK.release()

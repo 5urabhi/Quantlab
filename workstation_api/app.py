@@ -64,7 +64,7 @@ JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","market_library_maintenance","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -4866,7 +4866,7 @@ def reconcile_interrupted_research():
     if os.getenv("DHAN_ACCESS_TOKEN"):
         try:
             for batch in dhan_workspace.list_batches():
-                if batch["status"] != "interrupted":
+                if batch["status"] != "interrupted" or batch.get("maintenance_owned"):
                     continue
                 original_id = batch["id"]
                 with JOBS_LOCK:
@@ -5157,6 +5157,70 @@ def unified_market_inventory(source: str = "all", query: str = "", page: int = 1
     try:
         return market_inventory.inventory(source, query, page, per_page, refresh)
     except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+from . import data_maintenance
+
+
+class MarketMaintenanceRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    enabled: bool=False
+    index: bool=True
+    constituents: bool=True
+    options: bool=True
+    index_days: int=Field(default=365,ge=30,le=365,strict=True)
+    constituent_days: int=Field(default=240,ge=30,le=240,strict=True)
+    option_days: int=Field(default=365,ge=30,le=365,strict=True)
+    wings: int=Field(default=3,ge=0,le=5,strict=True)
+    confirm_readonly: bool=False
+
+
+def _submit_market_maintenance():
+    # Use the existing serial write/download lane; yield to user work.
+    with JOBS_LOCK:
+        if any(j.get("status") in {"queued","running"} and
+               _job_lane(j["kind"])=="research" for j in JOBS.values()):
+            return None
+    try:
+        return _spawn("market_library_maintenance",data_maintenance.run)
+    except HTTPException:
+        return None
+
+
+@app.on_event("startup")
+def start_market_library_maintenance():
+    data_maintenance.start(_submit_market_maintenance)
+
+
+@app.on_event("shutdown")
+def stop_market_library_maintenance():
+    data_maintenance.shutdown()
+
+
+@app.get("/api/data-manager/maintenance")
+def market_library_maintenance_status():
+    result=data_maintenance.status()
+    with JOBS_LOCK:
+        jobs=[{k:v for k,v in j.items() if k in ("id","status","stage","percent","error")}
+              for j in JOBS.values() if j["kind"]=="market_library_maintenance"]
+    result["job"]=jobs[-1] if jobs else None
+    return result
+
+
+@app.post("/api/data-manager/maintenance")
+def configure_market_library_maintenance(body:MarketMaintenanceRequest):
+    try:
+        return data_maintenance.configure(body.model_dump(exclude={"confirm_readonly"}),body.confirm_readonly)
+    except (ValueError,OSError,TypeError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.post("/api/data-manager/maintenance/check")
+def check_market_library_maintenance():
+    try:
+        return data_maintenance.request_check()
+    except (ValueError,OSError,TypeError) as exc:
         raise HTTPException(400,str(exc)) from exc
 
 

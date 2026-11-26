@@ -344,6 +344,7 @@ def _summarize(data: dict) -> dict:
         status = "interrupted"
     return {
         "id": data["id"], "status": status, "created_utc": data["created_utc"],
+        "maintenance_owned": bool(data.get("maintenance_owned")),
         "updated_utc": data.get("updated_utc"), "selection": data["selection"],
         "exchange": data.get("exchange", "NSE"), "interval": data["interval"],
         "from_date": data["from_date"], "to_date": data["to_date"],
@@ -441,7 +442,7 @@ def list_batches() -> list[dict]:
             result.append(_summarize(_load_batch(sub.name)))
         except (ValueError, OSError, KeyError, json.JSONDecodeError):
             continue
-    return result[:100]
+    return sorted(result,key=lambda x:(x.get("created_utc") or "",x["id"]),reverse=True)[:100]
 
 
 def batch_details(batch_id: str, page: int = 1, per_page: int = 60,
@@ -572,7 +573,7 @@ def _ensure_checkpoint_space(target: Path, *, rows_in_window: int = 0):
 
 
 def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
-                   on_progress=None, should_stop=None) -> dict:
+                   on_progress=None, should_stop=None, repair_dates=()) -> dict:
     """Fetch/cache each Dhan date window independently and resumably.
 
     Dhan allows at most 90 calendar days per intraday request. The original
@@ -610,6 +611,16 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
     window_days = 90 if interval is not None else 365
     windows = [window for left, right in gaps
                for window in date_windows(left, right, window_days)]
+    # Revisit only explicitly audited observed-session gaps. Keep the
+    # original coverage and checksum until a new provider reply commits.
+    if len(repair_dates)>3:
+        raise ValueError("At most three audited session repairs per instrument per pass")
+    for day in sorted(set(repair_dates)):
+        d=date.fromisoformat(day)
+        if not date.fromisoformat(start)<=d<date.fromisoformat(stop):
+            raise ValueError("Repair date outside authorized history range")
+        if not any(a<=d<b for a,b in windows):
+            windows.append((d,d+timedelta(days=1)))
     total = len(windows)
     if not windows:
         if on_progress:
@@ -758,7 +769,7 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
         "recovered_checkpoints": int(recovered),
     }
 
-def run_batch(batch_id: str, cancel_event: threading.Event | None = None) -> dict:
+def run_batch(batch_id: str, cancel_event: threading.Event | None = None, *, repair_dates_by_identity=None) -> dict:
     data = _load_batch(batch_id)
     with ACTIVE_LOCK:
         if batch_id in ACTIVE_BATCHES:
@@ -771,7 +782,8 @@ def run_batch(batch_id: str, cancel_event: threading.Event | None = None) -> dic
              batch_id, len(data["items"]), data["interval"], data["from_date"], data["to_date"])
     try:
         for item in data["items"]:
-            if item["status"] in ("complete", "cached"):
+            repair_dates=(repair_dates_by_identity or {}).get(item["id"],())
+            if item["status"] in ("complete", "cached") and not repair_dates:
                 continue
             if cancel_event is not None and cancel_event.is_set():
                 data["status"] = "cancelled"
@@ -795,6 +807,7 @@ def run_batch(batch_id: str, cancel_event: threading.Event | None = None) -> dic
                     item, data["from_date"], data["to_date"], data["interval"],
                     on_progress=window_progress,
                     should_stop=(cancel_event.is_set if cancel_event is not None else None),
+                    **({"repair_dates":repair_dates} if repair_dates else {}),
                 )
                 item.update(**result, error=None)
                 LOG.info("Dhan instrument completed: batch_id=%s symbol=%s status=%s rows=%s",

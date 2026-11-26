@@ -32,6 +32,7 @@ WINDOWS = (10, 20, 60, 252)
 LOCK = RLock()
 CACHE = {}
 SYNC_LOCK = RLock()
+HISTORY_WRITE_LOCK = RLock()
 SYNC_STOP = Event()
 SYNC_WAKE = Event()
 SYNC_THREAD = None
@@ -507,6 +508,10 @@ def _enabled():
 
 
 def sync_status():
+    from . import data_maintenance
+    if data_maintenance.enabled():
+        return {"enabled":True,"managed_by_maintenance":True,"state":"managed",
+                "last_attempt_utc":None,"message":"Managed by automatic Market Library maintenance."}
     with SYNC_LOCK:
         return {"enabled": _enabled(), **SYNC_STATE}
 
@@ -593,7 +598,10 @@ def _sync_once():
 
 def _sync_worker():
     while not SYNC_STOP.is_set():
-        _sync_once()
+        from . import data_maintenance
+        with HISTORY_WRITE_LOCK:
+            if not data_maintenance.enabled():
+                _sync_once()
         # Optional constituent preparation runs off the receiver thread.
         # Existing recording consent controls the bounded public CSV refresh.
         from . import banknifty_constituents

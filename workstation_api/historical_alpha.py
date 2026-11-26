@@ -19,7 +19,7 @@ import numpy as np
 from . import constituent_alpha as a, cockpit_sources, intraday_parquet as pq
 from . import dhan_workspace as dw, banknifty_constituents as bank, service
 
-VERSION="historical_minute_alpha_v2"
+VERSION="historical_minute_alpha_v3"
 IST=ZoneInfo("Asia/Kolkata")
 HORIZONS=(5,10,15,30,60,0)
 MAX_DAYS=240
@@ -30,7 +30,7 @@ POLICY={"version":VERSION,"horizons":HORIZONS,"splits":[30,10,20],"session_close
         "sampling":"first 60 observed completed index dates (120 for session-close); reserve predetermined windows before source or label gates; no substitutions",
         "weight_modes":["unweighted","verified_weights"],
         "target":"close of completed decision bar to close of future bar; 0 = session close",
-        "source":"pinned Dhan batch membership and original historical minute candles",
+        "source":"pinned Dhan batch membership and newest verified shared original index minute receipts",
         "features":"index returns 5/15/30m, realized volatility, EMA gap, RSI, time, EWMA volatility, rolling ADX-like proxy, causal CUSUM, opening range; constituent returns, breadth, dispersion and past-only relative volume",
         "advanced_models":"training-only 3-state GMM and diagonal Gaussian HMM; forward-only held-out filter; optional LightGBM/XGBoost; same matched chronological windows"}
 POLICY_HASH=sha256(json.dumps(POLICY,sort_keys=True).encode()).hexdigest()
@@ -41,7 +41,9 @@ def _batch(batch_id):
     if raw.get("selection")!="banknifty_pit" or raw.get("interval")!=1:
         raise ValueError("Select a BANKNIFTY dated-membership one-minute batch")
     start,stop=map(date.fromisoformat,(raw["from_date"],raw["to_date"]))
-    if not 0<(stop-start).days<=MAX_DAYS or stop>datetime.now(IST).date():
+    local=datetime.now(IST)
+    max_stop=local.date()+timedelta(days=int(local.hour>=16))
+    if not 0<(stop-start).days<=MAX_DAYS or stop>max_stop:
         raise ValueError("Use a completed historical range up to 240 calendar days, end exclusive")
     info=raw.get("historical_index",{})
     intervals=info.get("intervals",[])
@@ -105,14 +107,48 @@ def _read_file(path,digest,start,stop,budget,expected_rows=None):
     return data
 
 
+def shared_index_sources(start,stop,budget):
+    """Union original verified spot receipts; newest verified minute wins.
+    No extra market download or reconstructed index is required by a batch.
+    """
+    candidates=[]
+    for path,_,meta in cockpit_sources._candidates("INDEX:BANKNIFTY"):
+        try:
+            if date.fromisoformat(meta["to_exclusive"])<=start or date.fromisoformat(meta["from_inclusive"])>=stop:
+                continue
+            received=a._stamp(meta["retrieved_utc"])
+            candidates.append((path,meta,received))
+        except (ValueError,KeyError,TypeError):
+            continue
+    candidates.sort(key=lambda x:(x[2],str(x[0])),reverse=True)
+    if len(candidates)>512:
+        raise ValueError("Too many original index receipts for bounded study")
+    index=defaultdict(dict);digests={};failures={}
+    for path,meta,received in candidates:
+        try:
+            rows=_read_file(path,meta["sha256"],start,stop,budget,meta["row_count"])
+            # Match the source baseline's conservative completed-bar rule.
+            latest=(received-timedelta(minutes=1)).astimezone(IST)
+            used=False
+            for day,minutes in rows.items():
+                session=datetime.combine(date.fromisoformat(day),datetime.min.time(),IST)+timedelta(minutes=555)
+                for minute,bar in minutes.items():
+                    if session+timedelta(minutes=minute)<latest and minute not in index[day]:
+                        index[day][minute]=bar;used=True
+            if used:
+                digests["INDEX:BANKNIFTY:"+path.parent.name]=meta["sha256"]
+        except (ValueError,OSError,KeyError,TypeError,OverflowError,csv.Error) as exc:
+            failures["INDEX:BANKNIFTY:"+path.parent.name]=str(exc)[:160]
+    index={day:bars for day,bars in index.items() if bars}
+    if not index:
+        raise ValueError("No usable original BANKNIFTY minute receipts in selected date range")
+    return index,digests,failures
+
+
 def _sources(batch_id,raw,start,stop,resolved,progress):
-    candidates=[(path,meta) for path,_,meta in cockpit_sources._candidates("INDEX:BANKNIFTY") if path.parent.name==batch_id]
-    if len(candidates)!=1:
-        raise ValueError("Download BANKNIFTY spot index in the same historical batch first")
-    path,meta=candidates[0]
     budget=[MAX_TOTAL]
-    index=_read_file(path,meta["sha256"],start,stop,budget,meta["row_count"])
-    sources={"INDEX:BANKNIFTY":meta["sha256"]};stocks={};failures={}
+    index,sources,failures=shared_index_sources(start,stop,budget)
+    stocks={}
     for i,(symbol,identity) in enumerate(sorted(resolved.items())):
         if progress:
             progress(5+35*i/max(1,len(resolved)),"Verifying original minute candles: "+symbol)

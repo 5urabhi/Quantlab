@@ -4,6 +4,7 @@ import {marketApi,readableError} from './tradingCockpitApi'
 import ContextDrawer from './ContextDrawer'
 import MarketInventoryCharts from './MarketInventoryCharts'
 import TradingDataRepair from './TradingDataRepair'
+import MarketMaintenance from './MarketMaintenance'
 import {openSnapshotInPython} from './pythonBridge'
 import './market-inventory.css'
 
@@ -62,7 +63,8 @@ export default function MarketInventory({compact=false,onAcquire,onReplay,onMode
  const active=report?.sources.filter(s=>s.count!==null&&s.count>0).length||0
  const unresolved=report?.sources.filter(s=>['partial','not_verified'].includes(s.state)).length||0
  return <section className="mi-shell" aria-label="Unified saved market data inventory">
-   <header className="mi-head"><div><small><Database size={15}/> UNIFIED DATA INVENTORY</small><h2>{compact?'Stored observation coverage':'Your complete market data library'}</h2><p>See what is actually stored across historical downloads and the automatic recorder. No new download or duplicate dataset is created by this view.</p></div><div className="mi-head-actions"><button className="ws-button" type="button" disabled={busy} onClick={()=>setRefresh(v=>v+1)}><RefreshCw size={15}/>{busy?'Inspecting…':'Refresh inventory'}</button><button type="button" className="ws-button primary" aria-expanded={repair} onClick={()=>setRepair(v=>!v)}>{repair?'Close data repair':'Get missing data'} <ArrowRight size={15}/></button></div></header>
+   <header className="mi-head"><div><small><Database size={15}/> UNIFIED DATA INVENTORY</small><h2>{compact?'Stored observation coverage':'Your complete market data library'}</h2><p>See what is actually stored across historical downloads and the automatic recorder. No new download or duplicate dataset is created by this view.</p></div><div className="mi-head-actions"><button className="ws-button" type="button" disabled={busy} onClick={()=>setRefresh(v=>v+1)}><RefreshCw size={15}/>{busy?'Inspecting…':'Refresh inventory'}</button><button type="button" className="ws-button primary" aria-expanded={repair} onClick={()=>setRepair(v=>!v)}>{repair?'Close manual repair':'Manual repair & inspection'} <ArrowRight size={15}/></button></div></header>
+   {!compact&&<MarketMaintenance onDone={()=>setRefresh(v=>v+1)}/>}
    {repair&&<TradingDataRepair sources={report?.sources||[]} onOpenStocks={onAcquire} onInspect={id=>{choose(id);setRepair(false)}} onDone={()=>setRefresh(v=>v+1)}/>}
    <div className="mi-kpis">
      <div><span><HardDrive size={15}/> Logical library</span><strong>dhan_shared</strong><small>Original records + source receipts</small></div>
