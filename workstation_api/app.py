@@ -1756,6 +1756,7 @@ class SpreadSpeedRequest(BaseModel):
     latency_ms: int=Field(default=1000,ge=0,le=60000)
     window_seconds: int=Field(default=1,ge=1,le=30)
     step_minutes: Literal[1,5,15]=5
+    compare_delays: bool=False
     max_skew_seconds: float=Field(default=2,ge=0,le=30,allow_inf_nan=False)
     participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
     slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
@@ -1765,6 +1766,9 @@ class SpreadSpeedRequest(BaseModel):
 @app.post("/api/trading-cockpit/spreads/speed-study")
 def start_spread_speed_study(body:SpreadSpeedRequest):
     from . import spread_speed
+    with JOBS_LOCK:
+        if any(j.get("kind")=="spread_speed_study" and j.get("status") in ("queued","running") for j in JOBS.values()):
+            raise HTTPException(409,"A spread speed study is already running; see Jobs.")
     return _spawn("spread_speed_study",spread_speed.run,**body.model_dump())
 
 

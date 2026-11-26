@@ -34,6 +34,41 @@ class SpreadSpeedTests(TestCase):
         self.assertEqual(row["net"]["mean"],20.)
         self.assertFalse(result["actual_fills_observed"])
 
+    def test_latency_grid_identical_anchors_and_matched_samples(self):
+        now=datetime(2026,11,26,4,30,tzinfo=timezone.utc)
+        calls={}
+        def simulate(**kwargs):
+            h=kwargs["hold_seconds"];d=kwargs["latency_ms"];stamp=kwargs["decision_utc"]
+            calls.setdefault((d,h),[]).append(stamp)
+            decision=datetime.fromisoformat(stamp)
+            out={"state":"entry_unobservable","entry_complete":False,"exit_complete":False,"net_pnl_inr":None}
+            # One missing path in one cell must be excluded from all same-hold
+            # comparisons, but not from unrelated holds.
+            if d==5000 and h==1 and len(calls[d,h])==1:
+                return out
+            return {"state":"complete_conditional_quote_replay","entry_complete":True,"exit_complete":True,
+                    "net_pnl_inr":float(h-d/1000),"total_fees_inr":50.,
+                    "entry_received_utc":p._iso(decision+timedelta(milliseconds=d)),
+                    "exit_decision_utc":p._iso(decision+timedelta(milliseconds=d,seconds=h)),
+                    "exit_received_utc":p._iso(decision+timedelta(milliseconds=2*d,seconds=h)),
+                    "entries":[{"requested_units":30,"original_best_bid":99.,"cashflow":-3030.}]}
+        with patch.object(s.replay,"replay",side_effect=simulate),patch.object(s,"_coverage",return_value={}):
+            result=s.run(day="2026-11-26",strategy="LONG_OPTION",identities=["NSE_FNO:123"],now=now,compare_delays=True)
+        n=result["decision_count"]
+        self.assertGreater(n,1)
+        self.assertEqual(result["configuration_count"],48)
+        self.assertEqual(len(calls),48)
+        self.assertTrue(all(v==calls[100,1] for v in calls.values()))
+        self.assertEqual(result["matched_decisions"],n-1)
+        for row in result["rows"]:
+            self.assertEqual(row["matched_same_hold_count"],n-1 if row["hold_seconds"]==1 else n)
+            self.assertEqual(row["matched_same_delay_count"],n-1 if row["latency_ms"]==5000 else n)
+            self.assertEqual(row["observations"],[])
+        cell=next(r for r in result["rows"] if r["latency_ms"]==5000 and r["hold_seconds"]==1)
+        self.assertEqual(cell["scored"],n-1)
+        self.assertEqual(cell["net"]["mean"],-4)
+        self.assertEqual(cell["roundtrip"]["p90"],11)
+
     def test_timestamp_coverage_does_not_fill_missing_seconds(self):
         import sqlite3
         db=sqlite3.connect(":memory:")
