@@ -1779,6 +1779,28 @@ class SpreadSpeedRequest(BaseModel):
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
 
 
+class SpreadReadinessRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    day: str=Field(min_length=10,max_length=10)
+    strategy: Literal["LONG_OPTION","bull_call_debit","bear_put_debit","bull_put_credit","bear_call_credit","iron_condor","iron_butterfly"]="LONG_OPTION"
+    identities: list[str]=Field(min_length=1,max_length=4)
+    lots: int=Field(default=3,ge=1,le=10,strict=True)
+    capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
+    max_skew_seconds: float=Field(default=2,ge=0,le=30,allow_inf_nan=False)
+    participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
+    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
+
+
+@app.post("/api/trading-cockpit/spreads/readiness")
+def spread_study_readiness(body:SpreadReadinessRequest):
+    from . import spread_readiness
+    try:
+        return spread_readiness.inspect(**body.model_dump())
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.post("/api/trading-cockpit/spreads/speed-study")
 def start_spread_speed_study(body:SpreadSpeedRequest):
     from . import spread_speed

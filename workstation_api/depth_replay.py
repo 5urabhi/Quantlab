@@ -57,6 +57,20 @@ def _execute(row,action,units,participation_pct,slippage_bps,profile,fee_floor_p
        "cashflow":fees._money((1 if action=="SELL" else -1)*result["turnover"]-cost)}
 
 
+def _entry_risk(strategy,entry,actions,entries,units):
+    """Identical modeled risk budget for replay and readiness screens."""
+    entry_cash=fees._money(sum(r["cashflow"] for r in entries))
+    gross_buys=sum(-r["cashflow"] for r in entries if r["action"]=="BUY")
+    if strategy=="LONG_OPTION":
+        max_loss=-entry_cash
+    else:
+        legs=[{**r,"action":a} for r,a in zip(entry,actions)]
+        gross=sum((1 if r["action"]=="SELL" else -1)*r["turnover"] for r in entries)
+        max_loss=studio._terminal_payoff(legs,gross,sum(r["fees"] for r in entries),units)["max_loss_before_expiry_settlement_inr"]
+    risk=fees._money(max(max_loss,gross_buys))
+    return entry_cash,max_loss,risk
+
+
 def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes=5,
            latency_ms=1000,window_seconds=60,max_skew_seconds=2.,
            participation_pct=25.,slippage_bps=5.,broker_profile="zerodha",
@@ -125,15 +139,7 @@ def replay(*,strategy,identities,decision_utc,lots=1,capital=50000.,hold_minutes
     if any(r["displayed_fill_units"]!=units for r in result["entries"]):
         result["state"]="entry_partial_or_insufficient_depth"
         return result
-    entry_cash=fees._money(sum(r["cashflow"] for r in result["entries"]))
-    gross_buys=sum(-r["cashflow"] for r in result["entries"] if r["action"]=="BUY")
-    if strategy=="LONG_OPTION":
-        max_loss=-entry_cash
-    else:
-        legs=[{**r,"action":a} for r,a in zip(entry,actions)]
-        gross=sum((1 if r["action"]=="SELL" else -1)*r["turnover"] for r in result["entries"])
-        max_loss=studio._terminal_payoff(legs,gross,sum(r["fees"] for r in result["entries"]),units)["max_loss_before_expiry_settlement_inr"]
-    risk=fees._money(max(max_loss,gross_buys))
+    entry_cash,max_loss,risk=_entry_risk(strategy,entry,actions,result["entries"],units)
     result["entry_risk_proxy"]=risk
     result["entry_cashflow"]=entry_cash
     result["theoretical_max_loss_before_settlement"]=max_loss

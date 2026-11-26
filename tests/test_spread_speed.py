@@ -151,3 +151,22 @@ class SpreadSpeedTests(TestCase):
         with self.assertRaisesRegex(RuntimeError,"cancelled"):
             s._parallel_anchors(list(range(50)),evaluate,3,cancel)
         self.assertLessEqual(len(started),3)
+
+
+    def test_unscored_paths_report_budget_and_exact_missing_reasons(self):
+        now=datetime(2026,11,26,4,30,tzinfo=timezone.utc)
+        def simulate(**kwargs):
+            if kwargs["hold_seconds"]==1:
+                return {"state":"insufficient_hypothetical_risk_budget","entry_complete":False,
+                        "exit_complete":False,"net_pnl_inr":None,"entry_risk_proxy":19000.}
+            return {"state":"entry_unobservable","entry_complete":False,"exit_complete":False,
+                    "net_pnl_inr":None,"missing":[{"stage":"entry","reason":"no_book_in_fixed_window"}]}
+        with patch.object(s.replay,"replay",side_effect=simulate),patch.object(s,"_coverage",return_value={}),patch.object(s,"_worker_count",return_value=1):
+            result=s.run(day="2026-11-26",strategy="LONG_OPTION",identities=["NSE_FNO:123"],now=now)
+        budget=result["rows"][0]
+        missing=result["rows"][1]
+        self.assertEqual(budget["minimum_observed_entry_budget_inr"],19000.)
+        self.assertEqual(budget["scored"],0)
+        self.assertIsNone(budget["net"]["mean"])
+        self.assertEqual(missing["missing_receipt_reasons"],{"entry:no_book_in_fixed_window":result["decision_count"]})
+        self.assertIsNone(missing["minimum_observed_entry_budget_inr"])
