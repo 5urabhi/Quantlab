@@ -57,14 +57,14 @@ MAX_ACTIVE_LOCAL_JOBS = 6  # Shared admission bound; general writes remain seria
 
 
 def _job_lane(kind):
-    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research"} else "research"
+    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research"} else "research"
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -5557,6 +5557,30 @@ def sync_market_context_feeds(body:ContextFeedSyncRequest):
         return context_feeds.request_sync(body.confirm_reviewed)
     except (ValueError,TypeError,OSError) as exc:
         raise HTTPException(400,str(exc)) from exc
+
+
+class HistoricalAlphaRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    batch_id: str=Field(pattern=r"^batch_[0-9a-f]{16}$")
+    horizon: Literal[0,5,10,15,30,60]=30
+    weight_mode: Literal["unweighted","verified_weights"]="unweighted"
+
+
+@app.get("/api/market-intelligence/historical-alpha/batches")
+def historical_alpha_batches():
+    from . import historical_alpha
+    return {"batches":historical_alpha.batches(),"max_calendar_days":historical_alpha.MAX_DAYS,
+            "read_only":True}
+
+
+@app.post("/api/market-intelligence/historical-alpha")
+def run_historical_alpha(body:HistoricalAlphaRequest):
+    from . import historical_alpha
+    try:
+        historical_alpha._batch(body.batch_id)
+    except (ValueError,OSError,TypeError,KeyError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+    return _spawn("historical_alpha_research",historical_alpha.run,**body.model_dump())
 
 
 class ParticipantInboxRequest(BaseModel):
