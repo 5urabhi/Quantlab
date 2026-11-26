@@ -62,7 +62,8 @@ def evaluate(row,now,mark,signal=None):
     value=mark.get("mark_net_inr") if mark else None
     if value is not None:
         updates.update(mark)
-        peak=max(value,row.get("peak_net_inr",value))
+        previous=row.get("peak_net_inr")
+        peak=max(value,previous) if previous is not None else value
         updates["peak_net_inr"]=peak
         stop=min(row["risk_budget_inr"],cfg.get("stop_net",row["risk_budget_inr"]))
         if value<=-stop:
