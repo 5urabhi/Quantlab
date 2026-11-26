@@ -135,3 +135,52 @@ class CprHybridTests(TestCase):
         self.assertEqual(set(info["validation_brier"]),{"logistic","random_forest"})
         self.assertEqual(set(means),set(r.CLASSES))
         self.assertEqual(r._holdout_ml(model,val)["scored"],12)
+
+    def test_learning_budget_is_independent_and_source_states_are_distinct(self):
+        s={"session":DAY,"minute":4,"side":"CALL","spot":100.,
+           "features":[0.]*11,"decision_utc":r._stamp(DAY,5)}
+        kwargs=dict(hold=15,lot_size=30,max_lots=1,risk_budget=4250,bps=35)
+        self.assertEqual(r._episode(s,{},index(100),**kwargs)["state"],"missing_signal_quotes")
+        table={r._stamp(DAY,4):{("CALL",110):bar(200,strike=110)}}
+        self.assertEqual(r._episode(s,table,index(100),**kwargs)["state"],"no_qualified_observed_contract")
+        table[r._stamp(DAY,4)][("CALL",100)]=bar(200)
+        table[r._stamp(DAY,6)]={("CALL",100):bar(200)}
+        self.assertEqual(r._episode(s,table,index(100),**kwargs)["state"],"no_affordable_observed_contract")
+        learning=r._learning_episodes([s],table,{DAY:index(100)},hold=15,lot_size=30,bps=35)
+        self.assertEqual(len(learning),1)
+        self.assertEqual(learning[0]["state"],"entered")
+        funded=r._episode(s,table,index(100),**{**kwargs,"risk_budget":12000})
+        self.assertEqual(learning[0]["features"],funded["features"])
+        self.assertGreater(learning[0]["funding"],4250)
+
+    def test_missing_counterfactual_exit_does_not_prevent_holding(self):
+        ep=episode(DAY,[step(0,.01,None),step(1,.12,120,True)])
+        self.assertFalse(r._full_path(ep))
+        self.assertEqual(r._exit(ep,"fixed_stop")["net"],120)
+        ep["path"][0]["mark_return"]=-.06
+        self.assertEqual(r._exit(ep,"fixed_stop")["state"],"exit_censored")
+
+    def test_wider_stop_compares_recovery_but_retains_emergency_exit(self):
+        ep=episode(DAY,[step(0,-.08,-80),step(1,.12,120,True)])
+        self.assertEqual(r._exit(ep,"fixed_stop")["net"],-80)
+        self.assertEqual(r._exit(ep,"fixed_stop",stop_mark=r.EMERGENCY_STOP)["net"],120)
+        ep["path"][0]["mark_return"]=-.17
+        self.assertEqual(r._exit(ep,"offline_q",{},stop_mark=r.EMERGENCY_STOP)["reason"],"stop")
+
+    def test_correlated_strikes_do_not_create_independent_q_support(self):
+        rows=[]
+        for n in range(12):
+            ep=episode(DAY,[step(0,.01,10),step(1,-.07,-90,True)])
+            ep["strike"]=100+n
+            rows.append(ep)
+        self.assertEqual(r._fit_q(rows)[0],{})
+        self.assertAlmostEqual(sum(r._anchor_weights([(e, {}) for e in rows])),1.)
+
+    def test_training_grid_is_fixed_and_does_not_change_crossover_baseline(self):
+        prev=index(100);current=index(105)
+        base,_=r._signals(DAY,current,PREV,prev,frame=5,hold=60,max_signals=3)
+        grid,_=r._signals(DAY,current,PREV,prev,frame=5,hold=60,max_signals=5,learning_grid=True)
+        self.assertEqual(len(base),1)
+        self.assertGreater(len(grid),1)
+        self.assertTrue(all(x["entry_type"]=="scheduled_continuation" for x in grid))
+        self.assertTrue(all(b["minute"]-a["minute"]>=63 for a,b in zip(grid,grid[1:])))
