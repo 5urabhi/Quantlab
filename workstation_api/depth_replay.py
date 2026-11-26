@@ -69,7 +69,7 @@ def _entry_risk(strategy,entry,actions,entries,units):
     else:
         legs=[{**r,"action":a} for r,a in zip(entry,actions)]
         gross=sum((1 if r["action"]=="SELL" else -1)*r["turnover"] for r in entries)
-        max_loss=studio._terminal_payoff(legs,gross,sum(r["fees"] for r in entries),units)["max_loss_before_expiry_settlement_inr"]
+        max_loss=studio._terminal_payoff(legs,gross,sum(r["fees"] for r in entries),units,include_chart=False)["max_loss_before_expiry_settlement_inr"]
     risk=fees._money(max(max_loss,gross_buys))
     return entry_cash,max_loss,risk
 
