@@ -573,7 +573,7 @@ def _ensure_checkpoint_space(target: Path, *, rows_in_window: int = 0):
 
 
 def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
-                   on_progress=None, should_stop=None, repair_dates=()) -> dict:
+                   on_progress=None, should_stop=None, repair_dates=(), on_request=None) -> dict:
     """Fetch/cache each Dhan date window independently and resumably.
 
     Dhan allows at most 90 calendar days per intraday request. The original
@@ -650,6 +650,8 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
         if should_stop is not None and should_stop():
             # Preserve already cached windows and stop before the next call.
             raise InterruptedError("Batch pause requested after last completed date window")
+        if on_request is not None:
+            on_request(first,last)
         frame: pd.DataFrame | None = None
         try:
             frame = download_candles(inst, first.isoformat(), last.isoformat(),
@@ -769,7 +771,7 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
         "recovered_checkpoints": int(recovered),
     }
 
-def run_batch(batch_id: str, cancel_event: threading.Event | None = None, *, repair_dates_by_identity=None) -> dict:
+def run_batch(batch_id: str, cancel_event: threading.Event | None = None, *, repair_dates_by_identity=None,on_request=None) -> dict:
     data = _load_batch(batch_id)
     with ACTIVE_LOCK:
         if batch_id in ACTIVE_BATCHES:
@@ -808,6 +810,7 @@ def run_batch(batch_id: str, cancel_event: threading.Event | None = None, *, rep
                     on_progress=window_progress,
                     should_stop=(cancel_event.is_set if cancel_event is not None else None),
                     **({"repair_dates":repair_dates} if repair_dates else {}),
+                    **({"on_request":lambda first,last:on_request(item["id"],first,last)} if on_request is not None else {}),
                 )
                 item.update(**result, error=None)
                 LOG.info("Dhan instrument completed: batch_id=%s symbol=%s status=%s rows=%s",
@@ -830,9 +833,8 @@ def run_batch(batch_id: str, cancel_event: threading.Event | None = None, *, rep
                 LOG.error("Dhan instrument failed: batch_id=%s symbol=%s security_id=%s detail=%s",
                           batch_id, item["symbol"], item["security_id"], error[:220])
                 item.update(status="failed", rows_added=0, error=error[:220])
-                if "HTTP 401" in error or "HTTP 403" in error:
-                    LOG.warning("Dhan batch paused due to authentication/entitlement error: batch_id=%s status=%s",
-                                batch_id, "401" if "HTTP 401" in error else "403")
+                if any("HTTP "+code in error for code in ("401","403","429")) or "rate-limited" in error.lower():
+                    LOG.warning("Dhan batch paused due to authentication/entitlement/rate-limit error: batch_id=%s",batch_id)
                     data["status"] = "paused"
                     _save_batch(data)
                     return _summarize(data)
