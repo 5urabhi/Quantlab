@@ -56,6 +56,18 @@ case "${1:-workstation}" in
     # Execute as a module: the repo root must be on sys.path for workstation_api.
     exec nice -n 10 .venv/bin/python -m scripts.audit_all_models "$@"
     ;;
+  cpr-repair)
+    if [ ! -x .venv/bin/python ]; then
+      printf 'Python environment missing. First run: bash run.sh setup\n' >&2
+      exit 2
+    fi
+    shift
+    for case_file in 'test_cpr*.py' test_options_history_sync.py test_data_maintenance.py test_full_option_feed.py
+    do
+      nice -n 10 .venv/bin/python -m unittest discover -s tests -p "$case_file" -q
+    done
+    exec nice -n 10 .venv/bin/python -m scripts.run_cpr_option_repair "$@"
+    ;;
   cpr-next)
     if [ ! -x .venv/bin/python ]; then
       printf 'Python environment missing. First run: bash run.sh setup\n' >&2
@@ -128,7 +140,7 @@ bash run.sh research         Same as default
 bash run.sh web              Same as default; NOT the old public showcase
 bash run.sh both             Same workstation (API + React)
 bash run.sh setup            Install local Python and Node dependencies
-bash run.sh candle-research    Next-candle pattern library and chronological direction forecasts\nbash run.sh cpr-next          Run CPR regression tests and execution evidence / development horizon screen\nbash run.sh cpr-context-check  Audit historical constituent and global context before option replay\nbash run.sh verify-v3 --scientific  Check isolated execution, scientific imports and local source health without restarting
+bash run.sh candle-research    Next-candle pattern library and chronological direction forecasts\nbash run.sh cpr-repair        Test, repair expired option receipts, probe wider strikes and audit saved evidence\nbash run.sh cpr-next          Run CPR regression tests and execution evidence / development horizon screen\nbash run.sh cpr-context-check  Audit historical constituent and global context before option replay\nbash run.sh verify-v3 --scientific  Check isolated execution, scientific imports and local source health without restarting
 bash run.sh python-packages check   Inspect approved scientific packages
 bash run.sh python-packages install Install missing approved packages with local approval; no app restart
 bash run.sh check            Existing research acceptance checks
