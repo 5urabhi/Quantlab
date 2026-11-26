@@ -465,6 +465,33 @@ def _training_rows(episodes):
     return out
 
 
+def _dense_q_iteration(supported,sweeps):
+    """Preaggregate identical weighted Bellman contributions once.
+
+    Weight sessions, anchors, strikes and steps in that order, exactly
+    as the dense research estimator. No change to the action set.
+    """
+    stats={}
+    for key,rows in supported.items():
+        counts=Counter((day,minute,strike) for day,minute,strike,*_ in rows)
+        per_anchor=Counter((day,minute) for day,minute,_ in counts)
+        per_day=Counter(day for day,_ in per_anchor)
+        immediate=0.;fallback=0.;next_weights=defaultdict(float)
+        for day,minute,strike,exit_r,nk,next_r,terminal in rows:
+            weight=1./(len(per_day)*per_day[day]*per_anchor[(day,minute)]*counts[(day,minute,strike)])
+            immediate+=weight*exit_r
+            if terminal or nk not in supported:
+                fallback+=weight*next_r
+            else:
+                next_weights[nk]+=weight
+        stats[key]=(immediate,fallback,next_weights)
+    q={key:(0.,0.) for key in supported}
+    for _ in range(sweeps):
+        q={key:(exit_r,fallback+sum(weight*max(q[nk]) for nk,weight in weights.items()))
+           for key,(exit_r,fallback,weights) in stats.items()}
+    return q
+
+
 def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
     """Batch fitted tabular Q iteration on earlier, fully observed paths.
 
@@ -507,8 +534,8 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
     supported={k:v for k,v in transitions.items()
                if len({(x[0],x[1]) for x in v})>=MIN_STATE_EPISODES
                and len({x[0] for x in v})>=MIN_STATE_DAYS}
-    q={k:(0.,0.) for k in supported}
-    for _ in range(sweeps):
+    q=_dense_q_iteration(supported,sweeps) if day_balance else {k:(0.,0.) for k in supported}
+    for _ in range(0 if day_balance else sweeps):
         new={}
         for k,rows in supported.items():
             # Average within each episode first, so long paths cannot dominate.
@@ -743,6 +770,20 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             "exits_after_1520":late_squareoffs,"full_account_pnl_certified":False},journal
 
 
+def _funding_diagnostic(episodes,budget,capital):
+    # Signal-time minimum candidate funding only. This is not achieved
+    # fill coverage and does not imply that allocating more is appropriate.
+    levels=sorted({4250.,6000.,9000.,12000.,float(budget),float(capital)})
+    observed=[e for e in episodes if e.get("minimum_funding_inr") is not None]
+    return {"signals":len(episodes),"observed_qualified":len(observed),
+            "missing_or_unqualified":len(episodes)-len(observed),
+            "signal_time_funding_sensitivity":[{"budget_inr":level,
+                "anchors":sum(e["minimum_funding_inr"]<=level for e in observed),
+                "sessions":len({e["session"] for e in observed if e["minimum_funding_inr"]<=level})}
+                for level in levels],
+            "warning":"Hypothetical signal-time funding only, not broker margin, fills, a capital recommendation or performance."}
+
+
 def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
         context_mode="off",context_batch="auto",rank_entries=False,
@@ -880,6 +921,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "recorded_index_sessions":len(dates),"required_sessions":sessions,
              "training_dates":splits[0],"validation_dates":splits[1],"holdout_dates":splits[2],
              "signal_counts":dict(counts),"day_audit":day_audit,"episode_states":dict(Counter(e["state"] for e in episodes)),
+             "funding_diagnostic":{name:_funding_diagnostic(rows,risk_budget,capital) for name,rows in zip(("train","validation","holdout"),parts)},
              "split_support":{name:{"signals":len(rows),"entered":sum(e["state"]=="entered" for e in rows),
                           "fully_observed_paths":sum(_full_path(e) for e in rows),
                           "states":dict(Counter(e["state"] for e in rows))}
