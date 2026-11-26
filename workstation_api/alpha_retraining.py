@@ -8,7 +8,9 @@ from datetime import datetime, timedelta, timezone, time
 from threading import Event, RLock, Thread
 from zoneinfo import ZoneInfo
 import json
+import logging
 import os
+import sqlite3
 import uuid
 
 import numpy as np
@@ -24,6 +26,7 @@ STOP = Event()
 WAKE = Event()
 THREAD = None
 IST = ZoneInfo("Asia/Kolkata")
+LOG = logging.getLogger(__name__)
 
 
 def _now():
@@ -120,6 +123,9 @@ def _record(horizon, report):
 def _due(days, previous, required):
     if len(days) != required:
         return False
+    retry = previous.get("retry_after_utc")
+    if retry and datetime.fromisoformat(retry) > _now():
+        return False
     last = previous.get("window_end")
     return last is None or sum(day > last for day in days) >= CADENCE
 
@@ -128,7 +134,9 @@ def status(*, now=None):
     now = now or _now()
     cfg = config()
     previous = _previous(cfg["horizon"])
-    return {"config": cfg, "cadence_sessions": CADENCE, "last_run": previous or None,
+    return {"config": cfg, "cadence_sessions": CADENCE, "last_run": previous if previous.get("state") else None,
+            "last_error": previous.get("last_error"),
+            "retry_after_utc": previous.get("retry_after_utc"),
             "safe_window": safe_window(now),
             "worker_running": bool(THREAD and THREAD.is_alive()),
             "required_sessions": sum(a.split_sizes(cfg["horizon"])),
@@ -163,15 +171,18 @@ def run(*, progress=None, now=None):
         if STOP.is_set() or config() != cfg or not safe_window(_now()):
             raise InterruptedError("Rolling retraining paused at a safe boundary")
     rows = []
+    coverage = {}
     try:
         with closing(a._read()) as db:
             for i, day in enumerate(days):
                 check()
                 if progress:
                     progress(5 + 70 * i / len(days), "Reading completed session " + day)
-                selected, _ = a.sample_day(a._rows(db, day, horizon))
+                selected, counts = a.sample_day(a._rows(db, day, horizon))
+                coverage[day] = counts
                 rows.extend(selected)
         train, cal, test = ([r for r in rows if r["session"] in set(part)] for part in dates)
+        report["coverage"] = coverage
         report["support"] = {k: a.support(v) for k, v in
                              zip(("training", "calibration", "holdout"), (train, cal, test))}
         if not (a._supported(train, 60, 20, train=True) and a._supported(cal, 20, 7)
@@ -201,13 +212,23 @@ def run(*, progress=None, now=None):
         check()
         report["finished_utc"] = _now().isoformat()
         if progress:
-            progress(100, "Rolling research assessment saved")
+            progress(99, "Saving rolling research evidence")
+        report["audit_id"] = a._save([{"day": "RUN_SUMMARY", "evidence_json": json.dumps(report, sort_keys=True, allow_nan=False)}], audit=True)
         _record(horizon, report)
+        if progress:
+            progress(100, "Rolling research assessment saved")
         return report
     except InterruptedError:
         # Leave the old completed-attempt watermark untouched so a later safe
         # window can retry. Any fully written candidate is immutable/deduplicated.
         return {"state": "paused", "reason": "Configuration or safe window changed"}
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error) as exc:
+        # Avoid retry storms on corrupt evidence, unavailable storage or schema.
+        failed = dict(previous)
+        failed.update(retry_after_utc=(_now() + timedelta(hours=4)).isoformat(),
+                      last_error=type(exc).__name__)
+        _record(horizon, failed)
+        raise
 
 
 def _worker(submit):
@@ -219,8 +240,8 @@ def _worker(submit):
                 days = _latest(cfg["horizon"], now)
                 if _due(days, _previous(cfg["horizon"]), sum(a.split_sizes(cfg["horizon"]))):
                     submit()
-        except (OSError, ValueError, TypeError, RuntimeError):
-            pass
+        except (OSError, ValueError, TypeError, RuntimeError, sqlite3.Error) as exc:
+            LOG.warning("Rolling retraining scheduling deferred: %s", type(exc).__name__)
         WAKE.wait(60)
         WAKE.clear()
 
