@@ -31,9 +31,11 @@ def _profiles(compare):
 
 
 def _variants(cfg):
+    # The historical comparison has no pinned pre-session forecast candidate.
+    # Do not silently add a forecast policy or consult today\u2019s model registry.
     return [(f"fixed_{h//60}m",{**cfg,"exit_mode":"fixed","hold_seconds":h})
             for h in policy.HOLDS if h<=cfg["hold_seconds"]]+[
-            (mode,{**cfg,"exit_mode":mode}) for mode in policy.MODES if mode!="fixed"]
+            (mode,{**cfg,"exit_mode":mode}) for mode in policy.MODES if mode not in ("fixed","forecast_adaptive")]
 
 
 def _root():

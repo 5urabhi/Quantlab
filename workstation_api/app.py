@@ -1813,7 +1813,8 @@ class AutomaticPaperRequest(BaseModel):
     target_net: float=Field(default=100,ge=1,le=1e6,allow_inf_nan=False)
     max_lots: int=Field(default=3,ge=1,le=10,strict=True)
     hold_seconds: Literal[60,120,300,600,900,1800]=900
-    exit_mode: Literal["fixed","target_stop","trailing","signal_reversal","adaptive"]="adaptive"
+    exit_mode: Literal["fixed","target_stop","trailing","signal_reversal","adaptive","forecast_adaptive"]="adaptive"
+    forecast_model_id: str | None=Field(default=None,pattern=r"^[0-9a-f]{64}$")
     stop_net: float=Field(default=250,ge=1,le=1e7,allow_inf_nan=False)
     trail_net: float=Field(default=50,ge=1,le=1e7,allow_inf_nan=False)
     liquidity_grace_seconds: int=Field(default=20,ge=5,le=120,strict=True)

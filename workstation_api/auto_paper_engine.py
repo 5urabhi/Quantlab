@@ -15,10 +15,10 @@ import sqlite3
 from time import monotonic
 
 from . import auto_paper_selection as select, depth_replay as replay
-from . import paper_execution as paper, service, dynamic_exit_policy as policy, market_observations
+from . import paper_execution as paper, service, dynamic_exit_policy as policy, market_observations, paper_forecast
 
 DEFAULTS={"enabled":False,"capital":17000.,"max_loss":4250.,"target_net":100.,
-          "max_lots":3,"hold_seconds":900,"broker_profile":"zerodha",**policy.DEFAULTS}
+          "max_lots":3,"hold_seconds":900,"broker_profile":"zerodha","forecast_model_id":None,**policy.DEFAULTS}
 LANES=("directional","spread")
 PENDING=("awaiting_entry","paper_open","awaiting_exit")
 BLOCKED=("entry_censored","exit_censored")
@@ -27,7 +27,7 @@ LOCK=Lock()
 STOP=Event()
 WORKER=None
 HEALTH={"state":"idle","last_cycle_utc":None,"last_error":None}
-WARNING=("Paper research only. Each lane has a separate hypothetical budget. Scenario scores "
+WARNING=("Paper research only. Each lane has a separate hypothetical budget. Entry scenario scores "
     "are not forecasts, and original quote-depth replay is not an actual execution. "
     "The modeled session loss allowance is reduced by scored losses and not replenished by wins. Entries are sampled from fresh observations, at most one attempt per lane per minute; monitoring is approximately every five seconds. "
     "Target/stop marks are sampled, exits can be late or unobservable, and actual loss "
@@ -85,7 +85,14 @@ def validate(config):
     policy.validate(config)
     if config.get("broker_profile") not in replay.fees.BROKER_PROFILES:
         raise ValueError("Unknown broker fee profile")
-    return {k:config[k] for k in DEFAULTS}
+    model_id=config.get("forecast_model_id")
+    if config.get("exit_mode")=="forecast_adaptive":
+        if not isinstance(model_id,str):
+            raise ValueError("Select an explicit frozen research candidate for forecast-adaptive exits")
+        paper_forecast.validate_candidate(model_id,paper._now())
+    else:
+        model_id=None
+    return {**{k:config[k] for k in DEFAULTS if k!="forecast_model_id"},"forecast_model_id":model_id}
 
 
 def configure(config):
@@ -170,6 +177,7 @@ def _entry(row,now,*,update=None,first_book=None):
         return
     entry_time=max(stamps)
     update(row,"paper_open",entry_received_utc=paper._iso(entry_time),
+        conditional_entry_receipt_delay_ms=1000*(entry_time-decision).total_seconds(),
         entries=entries,entry_cashflow_inr=cash,observed_entry_risk_inr=risk,
         hold_deadline_utc=paper._iso(min(entry_time+timedelta(seconds=cfg["hold_seconds"]),
             min(paper._close(entry_time,leg["expiry"]) for leg in candidate["legs"])-timedelta(seconds=15))),
@@ -204,7 +212,7 @@ def _mark(row,now,*,book_lookup=None):
             "liquidity_bad":any(b["spread_bps"]>250 for b in books)}
 
 
-def _monitor(row,now,*,update=None,mark_lookup=None,signal_lookup=None,actual_clock=False):
+def _monitor(row,now,*,update=None,mark_lookup=None,signal_lookup=None,forecast_lookup=None,actual_clock=False):
     update=update or _update
     cfg=row["config"]
     entry=replay.ao.timestamp(row["entry_received_utc"])
@@ -226,10 +234,23 @@ def _monitor(row,now,*,update=None,mark_lookup=None,signal_lookup=None,actual_cl
                 if "no such table" not in str(exc) and "unable to open database file" not in str(exc):
                     raise
     reason,changes=policy.evaluate(row,now,mark,signal)
+    if not reason and cfg.get("exit_mode")=="forecast_adaptive":
+        forecast=(forecast_lookup or paper_forecast.forecast)(cfg.get("forecast_model_id"),now)
+        prior=row.get("latest_forecast") or {}
+        if any(forecast.get(k)!=prior.get(k) for k in ("state","reason","decision_utc","model_id")):
+            changes["latest_forecast"]=forecast
+        if paper_forecast.reversal(row.get("source",{}).get("direction"),forecast,now,row["entry_received_utc"]):
+            processed=paper._now() if actual_clock else now
+            if paper_forecast.reversal(row.get("source",{}).get("direction"),forecast,processed,row["entry_received_utc"]):
+                changes["latest_forecast"]=forecast
+                reason="forecast_reversal"
     if reason:
         # Use the actual observation/processing time, never an invented
         # earlier exit after a restart or delayed monitoring cycle.
         decision=paper._now() if actual_clock else now
+        if reason=="forecast_reversal" and not paper_forecast.reversal(row.get("source",{}).get("direction"),changes.get("latest_forecast"),decision,row["entry_received_utc"]):
+            update(row,"paper_open",**changes)
+            return
         if decision>=close:
             update(row,"exit_censored",exit_reason="monitoring_missed_session_close",finished_utc=paper._iso(decision))
             return
@@ -272,6 +293,7 @@ def _exit(row,now,*,update=None,first_book=None):
         return
     pnl=replay.fees._money(row["entry_cashflow_inr"]+sum(e["cashflow"] for e in exits))
     update(row,"complete",exits=exits,exit_received_utc=paper._iso(max(stamps)),
+        conditional_exit_receipt_delay_ms=1000*(max(stamps)-decision).total_seconds(),
         net_pnl_inr=pnl,fees_inr=replay.fees._money(sum(e["fees"] for e in row["entries"]+exits)),
         target_hit=pnl>=cfg["target_net"],loss_limit_exceeded=pnl<-row["risk_budget_inr"],
         finished_utc=paper._iso(now),exit_reason="conditional_original_depth_exit",
@@ -368,6 +390,7 @@ def cycle(now=None,*,allow_entries=True):
                 if state=="awaiting_entry" and db.execute("SELECT 1 FROM decisions WHERE lane=? AND minute_utc=?",(lane,slot)).fetchone():
                     slot=paper._iso(decision+timedelta(microseconds=1))
                 body={**pick,"source":report,"config":cfg,"decision_utc":paper._iso(decision),
+                      "decision_processing_ms":1000*(decision-now).total_seconds(),
                       "policy_version":select.VERSION+"+"+policy.VERSION,"risk_budget_inr":budgets[lane],"broker_orders_enabled":False}
                 db.execute("""INSERT OR IGNORE INTO decisions(lane,minute_utc,session_ist,state,body)
                     VALUES(?,?,?,?,?)""",(lane,slot,day,state,_encode(body)))

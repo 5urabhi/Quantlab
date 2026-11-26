@@ -73,6 +73,21 @@ class AlphaEvidenceTests(TestCase):
         self.assertEqual(original[0]["full"],modified[0]["full"])
         self.assertEqual(modified[0]["class"],-1)
 
+    def test_unlabeled_inference_uses_same_features_and_rejects_future_receipts(self):
+        rows=[row(i) for i in range(35)]
+        scored,_=a.sample_day(rows)
+        cutoff=a._stamp(rows[32]["decided_utc"])
+        for item in rows:
+            for key in ("outcome","observed_price","observed_exchange_utc","observed_received_utc","observed_sha256"):
+                item.pop(key)
+        with patch.object(a,"_label",side_effect=AssertionError("Inference consulted a label")):
+            inferred,counts=a.sample_day(rows,features_only=True,as_of=cutoff)
+        self.assertEqual(len(inferred),3)
+        self.assertEqual(inferred[0]["full"],scored[0]["full"])
+        self.assertEqual(inferred[-1]["decision_utc"],rows[32]["decided_utc"])
+        self.assertEqual(counts["invalid_reference"],2)
+        self.assertNotIn("class",inferred[-1])
+
     def test_missing_rvol_is_explicit_not_a_fake_observation(self):
         e=json.loads(row(30)["evidence_json"])
         e["constituent_receipts"][0]["relative_volume"]=None
