@@ -142,7 +142,15 @@ def _due(cfg,state,now):
     if state.get("target")!=_target(now):
         return True
     try:
-        return not state.get("next_due_utc") or datetime.fromisoformat(state["next_due_utc"])<=now
+        due=state.get("next_due_utc")
+        # Upgrade an old productive checkpoint without requiring the user
+        # to press Check or wait for its previous four-hour schedule.
+        last=state.get("last_run") or {}
+        if due and not state.get("next_due_reason") and last.get("finished_utc") and last.get("state")=="partial":
+            delay,_=_next_schedule(last)
+            if delay==PRODUCTIVE_RETRY:
+                due=min(datetime.fromisoformat(due),datetime.fromisoformat(last["finished_utc"])+delay).isoformat()
+        return not due or datetime.fromisoformat(due)<=now
     except (ValueError,TypeError):
         return True
 
