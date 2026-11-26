@@ -680,3 +680,55 @@ limitations. This is a fixed later-date replay of frozen parameters,
 not a genuine recorded live paper order stream. No strategy is
 automatically promoted, and no execution permission is granted. These
 research updates do not modify the React workstation layout.
+
+
+## Execution evidence and matched horizon screen (v1)
+
+One local command runs the CPR regression suite followed by the new
+saved-source audit and development study:
+
+```bash
+bash run.sh cpr-next --sessions 90
+```
+
+An exact 60, 90 or 120 observed-session split is required. It does not
+rerun the already inspected later dates for new strategy selection.
+Results are saved under results/cpr_execution_evidence_*.json. The
+request audit checks all observed dates (including no-signal sessions)
+and both sides. A checked receipt may be empty; it establishes only
+request coverage. A separate quote inventory reports observed minute
+slots, positive, zero and missing volume. For chosen fixed-strike
+entry/exit failures report conflicts, missing side or strike rows,
+observed strike range, zero/unknown volume, receipt-window status,
+and whether the index bar was observed. The training probe uses the
+earlier dense anchors and up to eleven one-lot candidates; validation
+and recent data-quality probes use account-affordable nearest
+candidates. These are not actual order fills or independent trades.
+Missing bars outside the observed strike range may reflect rolling
+window truncation, not proof of a particular cause. No synthetic
+quotes, forward filling or deletion of verified receipts.
+
+Existing authorized automatic data maintenance prioritizes missing
+expired option request windows intersecting saved observed BANKNIFTY
+sessions. Other dates remain in scope; no inference of holidays from
+absent data. Checked/empty receipts are not automatically overwritten.
+The audit command itself makes no provider requests and does not
+start, stop or change the recorder or maintenance settings.
+
+On training and validation dates only, compare five predetermined
+holding limits (5/15/30/60 minutes and mandatory 15:20 IST square-off)
+using a common signal clock with at least 60 minutes remaining.
+Use the same selected strike and one assumed 30-unit lot at 35 and
+75 bps adverse premium penalty per side, selecting affordable
+candidates under the higher cost assumption. Actual delayed price
+proxies and modeled fees still vary with the cost lane. Retain the
+existing fixed 10% target/5% stop and strict session halt after
+unresolved or unacceptable execution observations. Keep realized
+proxy P&L and deliberately adverse full-funding stress separate.
+Same capital 17,000 INR, exposure and gross-loss budget 12,000 INR;
+not a recommendation to increase capital or risk. A development
+hypothesis requires positive earlier stress with no stress failures
+and the previous strict validation gate at both costs. No selection
+on already examined recent dates, no new policy freeze or promotion.
+Positive minute volume is not proof of fill, exact listed contract,
+or historical bid/ask. Results do not guarantee live returns.

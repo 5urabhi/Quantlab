@@ -437,8 +437,19 @@ def run(*,progress=None,now=None):
         if cfg["options"] and not should_stop():
             if progress:progress(55,"Checking saved expired-option request windows")
             try:
-                opt=options.run(start_date=(_local(now).date()-timedelta(days=cfg["option_days"])).isoformat(),
+                option_start=_local(now).date()-timedelta(days=cfg["option_days"])
+                # Original observed dates establish download priority, not
+                # a complete holiday calendar. Unknown dates remain in scope.
+                priority=[]
+                try:
+                    ix=mp._history("INDEX:BANKNIFTY",_local(now).date())
+                    priority=sorted(d for d,bars in ix["days"].items()
+                                    if bars and option_start.isoformat()<=d<=option_end.isoformat())
+                except (ValueError,OSError,RuntimeError,KeyError,TypeError):
+                    pass
+                opt=options.run(start_date=option_start.isoformat(),
                     end_date=option_end.isoformat(),wings=cfg["wings"],request_limit=MAX_OPTION_REQUESTS,
+                    priority_sessions=priority,
                     should_stop=should_stop,progress=(lambda pct,msg:progress(55+.44*pct,msg)) if progress else None)
                 report["sources"]["options"]={k:opt[k] for k in ("state","existing_verified_receipts","new_receipts",
                     "planned_missing_requests","unattempted_requests","empty_processed_receipts","usable_rows_in_processed_receipts",
