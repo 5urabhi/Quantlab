@@ -488,3 +488,92 @@ No additional data source, price, or result is synthesized. These are
 experimental policies, not live deployment approval. Freeze policy and
 reserve new prospective sessions before making an independent claim;
 the existing rolling historical results are exploratory.
+
+
+## Expanded sequence and first-passage research (v8)
+
+Start with the index-only statistical study; no option replay or provider
+downloads are required. The default 60 sessions remain reproducible.
+Choose 90 or 120 only if that many original observed sessions are saved.
+
+```bash
+bash run.sh candle-research --sessions 90 --first-passage \
+    --context-mode archive --fixed-panel
+```
+
+Chronological splits are 30/10/20, 45/15/30 or 60/20/40, over at most
+200 calendar days. Missing dates are never synthesized. A fixed clock
+reserves nonoverlapping 5/15/30-minute outcome windows within each session.
+The feature set includes trailing 3/5/10/20 completed five-minute candles,
+signed returns, sequence efficiency, range expansion, prior-high/low
+distance, momentum acceleration/deceleration and volatility. Short
+histories use explicit masks. Inputs are computed before future labels;
+no missing bar is forward-filled. Long windows are warmup-limited.
+
+For symmetric index barriers 25/50/100/200 points, first touch has four
+classes: upper first, lower first, neither, ambiguous. If a minute opens
+outside a barrier, its open establishes the observed first touch. Both
+touches inside a single minute with open between the barriers are
+ambiguous. Missing path bars censor the full outcome. The terminal
+movement target is distinct (down at least the threshold, within band,
+up at least the threshold). Class priors and shallow multi-output random
+forests are trained on earlier sessions; choose each forecast using
+validation Brier, report later Brier and accuracy. Compare shorter
+pattern features with sequences, then sequences with global changes
+and ages, all five banks' completed 5/15/30m returns, relative volume
+and index divergence, or both. Exact matched rows for each ablation.
+Individual bank targets are next 5/15/30m direction and relative
+performance against BANKNIFTY, using a fixed +/-1bp band and complete
+same-identity future paths. If the panel source hash changes during the
+run, do not compare those targets. The bank panel is not official index
+membership. Report session-block bootstrap differences, not independent
+minute-level confidence or multiplicity-adjusted significance.
+
+The CLI saves results/candle_barriers_*.json; open Market Intelligence >
+Market Overview > Saved candle sequences & first-passage research to
+view the latest saved study. This is a collapsed read-only results panel
+in the existing React UI, not a live forecast or new application.
+
+Then compare the expanded option inputs, keeping existing paper-only
+budget and delayed-open rules:
+
+```bash
+bash run.sh cpr-research --entry-mode regime_scan --hold 0 --frame 5 \
+    --sessions 90 --dense-training --risk-budget 12000 --wings 5 \
+    --context-mode archive --rank-entries --patterns --fixed-panel \
+    --sequences --derivatives --context-q --dynamic-q
+```
+
+With insufficient data, use --sessions 60 rather than silently claiming
+the larger experiment. The dense sampler takes the earliest qualifying
+earlier scanner opportunity in each 15-minute bin (no future
+availability or outcome selection). It permits overlapping training
+trajectories; weight by session, then anchor, then strike; Q aggregation
+also weights by step within each trajectory. Preaggregate dense Q
+Bellman contributions to avoid repeating the transition scan. Validation
+and holdout trading still enforce the same nonoverlapping account
+positions and risk controls. Do not interpret more correlated anchors
+or strikes as more independent days.
+
+Sequences and original rolling option OI, raw provider IV and relative
+volume are separate matched ML ablations. Optional values missing or
+inconsistent across duplicate source receipts remain masked. Five-minute
+OI and IV changes compare the same observed side/strike/family; raw IV
+units are not assumed to be decimals or percentages. No new option
+provider calls. The dynamic Q comparator uses neutral fixed-bank and
+as-of global state combined with the most recently completed five-minute
+index move, aligned to option direction. It refreshes at each completed
+five-minute clock, never backdates a later state; missing or unsupported
+states fall back to the fixed target/stop. This is a retrospective
+contextual Q ablation on the same earlier learning trajectories, not a
+live controller. The ordinary Q comparator and frozen-entry context Q
+are retained. Funding sensitivity is a descriptive count of observed
+signal-time minimum funding versus hypothetical budgets, not a
+recommendation to increase risk, verified broker margin or fill coverage.
+
+The 60-session rolling study has already been inspected. Larger
+historical windows do not create independent confirmation of repeatedly
+examined dates. Reserve new sessions before any policy promotion. No
+changes to current order permissions, no synthetic missing prices,
+and no guarantees of profitability. Debit spreads remain optional
+and are omitted from the example due to their negative earlier results.

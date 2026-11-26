@@ -374,7 +374,18 @@ def _normalize(payload: dict, body: dict) -> list[dict]:
                       and volume_field[index] is not None else None)
             if volume is not None and (not math.isfinite(volume) or volume < 0):
                 volume = None
+            # Optional aligned vendor observations; invalid optional fields
+            # never invalidate an otherwise original OHLC price observation.
+            optional={}
+            for name in ("oi","iv"):
+                values=segment.get(name)
+                try:
+                    value=float(values[index]) if isinstance(values,list) and len(values)==len(stamps) and values[index] is not None else None
+                    optional[name]=value if value is not None and math.isfinite(value) and value>=0 else None
+                except (TypeError,ValueError,OverflowError):
+                    optional[name]=None
             rows.append({
+                **optional,
                 "timestamp_utc": timestamp.isoformat(),
                 "session_ist": local.date().isoformat(),
                 "strike": strike,

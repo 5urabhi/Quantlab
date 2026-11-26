@@ -13,7 +13,9 @@ from workstation_api.historical_alpha import IST
 def main():
     today=datetime.now(IST).date()
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--from-date",default=(today-timedelta(days=100)).isoformat())
+    parser.add_argument("--from-date",default=None,help="Start inclusive; default expands with requested sessions")
+    parser.add_argument("--sessions",type=int,choices=tuple(research.SESSION_SPLITS),default=60)
+    parser.add_argument("--dense-training",action="store_true",help="Earlier scanner anchors every 15-minute bin; session-balanced ML and Q")
     parser.add_argument("--to-date",default=today.isoformat(),help="End exclusive; completed sessions only")
     parser.add_argument("--entry-mode",choices=research.ENTRY_MODES,default="crossover",
                         help="Original crossover baseline or daily scheduled CPR/EMA opportunity scan")
@@ -21,7 +23,10 @@ def main():
                         help="Receipt-as-of context, or explicitly reviewed historical archive availability")
     parser.add_argument("--context-batch",default="auto",help="Dated BANKNIFTY membership batch ID; auto selects by date overlap")
     parser.add_argument("--debit-spreads",action="store_true",help="Compare paired debit spread gross-funding and net-debit paper lanes")
+    parser.add_argument("--dynamic-q",action="store_true",help="Compare five-minute in-position bank/global context Q with static and technical exits")
     parser.add_argument("--context-q",action="store_true",help="Compare matched technical and contextual offline-Q exits")
+    parser.add_argument("--sequences",action="store_true",help="Add longer completed candle sequences and detailed bank features to matched ML")
+    parser.add_argument("--derivatives",action="store_true",help="Add observed same-strike OI/raw IV/relative volume to matched ML")
     parser.add_argument("--patterns",action="store_true",help="Study and compare completed-candle pattern models")
     parser.add_argument("--fixed-panel",action="store_true",help="Add separate major-bank panel research, not historical index membership")
     parser.add_argument("--rank-entries",action="store_true",help="Compare validation-calibrated probability and affordable contract ranking")
@@ -36,11 +41,14 @@ def main():
     parser.add_argument("--wings",type=int,default=3)
     parser.add_argument("--penalty-bps",type=float,default=25,help="Base adverse premium penalty per side; primary study adds 10bps")
     a=parser.parse_args()
+    if a.from_date is None:
+        a.from_date=(datetime.fromisoformat(a.to_date).date()-timedelta(days={60:100,90:150,120:200}[a.sessions])).isoformat()
     try:
         report,journal,sources=research.run(from_date=a.from_date,to_date=a.to_date,
             frame=a.frame,hold=a.hold,capital=a.capital,risk_budget=a.risk_budget,entry_mode=a.entry_mode,
             context_mode=a.context_mode,context_batch=a.context_batch,rank_entries=a.rank_entries,
             pattern_research=a.patterns,fixed_panel=a.fixed_panel,context_q=a.context_q,debit_spreads=a.debit_spreads,
+            sessions=a.sessions,dense_training=a.dense_training,sequence_research=a.sequences,derivative_research=a.derivatives,dynamic_q=a.dynamic_q,
             lot_size=a.lot_size,max_lots=a.max_lots,wings=a.wings,premium_penalty_bps=a.penalty_bps,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
@@ -64,6 +72,7 @@ def main():
     print("Entry mode:",report["settings"]["entry_mode"])
     print("Sessions:",report["recorded_index_sessions"],"/",report["required_sessions"])
     print("Episode states:",report["episode_states"])
+    print("Signal-time funding coverage:",json.dumps(report["funding_diagnostic"]))
     print("Account-constrained split support:",json.dumps(report["split_support"]))
     print("Capital-independent learning support:",json.dumps(report["learning_support"]))
     context=report["context_coverage"]
@@ -75,6 +84,9 @@ def main():
         print("ML holdout:",json.dumps(report["ml_holdout"]))
         print("Offline Q (5% stop):",json.dumps(report["offline_q"]))
         print("Offline Q (15% emergency stop):",json.dumps(report["offline_q_emergency_stop"]))
+        if a.dynamic_q:
+            print("Dynamic context:",json.dumps({k:v for k,v in report["dynamic_context"].items() if k!="source_audit"}))
+            print("Dynamic Q:",json.dumps(report.get("dynamic_q_training",{})))
     for name,result in report["methods"].items():
         summary={k:v for k,v in result.items() if k not in ("daily","daily_coverage")}
         if "daily_coverage" in result:

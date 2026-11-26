@@ -102,6 +102,12 @@ def _load_options(rows,wings,progress=None,*,needed_stamps=None):
                 if old is not None:
                     if any(abs(old[k]-item[k])>.011 for k in ("open","high","low","close")) or old["volume"]!=item["volume"]:
                         conflicts.add(key);table.pop(key,None)
+                    else:
+                        # Optional fields are not price identity. Conflicting
+                        # or absent optional values become unavailable.
+                        for field in ("oi","iv"):
+                            if old.get(field)!=item.get(field):
+                                old[field]=None
                     continue
                 table[key]=item
         except (ValueError,OSError,KeyError,TypeError,OverflowError,AttributeError):

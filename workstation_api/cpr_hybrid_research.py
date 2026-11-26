@@ -13,7 +13,7 @@ import json
 from . import historical_alpha as h, predictive_option_research as p
 from . import alpha_retraining, liquidity_spreads as fees
 
-VERSION = "cpr_ml_offline_q_v7"
+VERSION = "cpr_ml_offline_q_v8"
 SQUAREOFF_MINUTE = 365  # 15:20 IST, minutes from 09:15
 LAST_SESSION_MINUTE = 374  # last regular minute open, 15:29 IST
 ENTRY_MODES = ("crossover", "daily_scan", "regime_scan")
@@ -27,6 +27,9 @@ EMERGENCY_STOP = -.15
 SOURCE_STATES = ("missing_signal_quotes", "no_qualified_observed_contract",
                  "no_affordable_observed_contract")
 SPLITS = (30, 10, 20)
+SESSION_SPLITS = {60:SPLITS,90:(45,15,30),120:(60,20,40)}
+MAX_STUDY_DAYS = 200
+DENSE_TRAIN_INTERVAL = 15
 TARGET = .10
 STOP = -.05
 CLASSES = ("target", "stop", "other")
@@ -241,6 +244,39 @@ def _next_open_exit(table,day,side,strike,earliest,entry,units,bps):
     return None
 
 
+DERIVATIVE_NAMES=("log_volume","log_oi","oi_missing","oi_5m_change_fraction","oi_change_missing",
+                  "iv_raw","iv_missing","iv_5m_change_raw","iv_change_missing","relative_volume","volume_baseline_missing")
+
+
+def _derivative_vector(signal,table,strike):
+    day,m,side=signal["session"],signal["minute"],signal["side"]
+    now=_observed(table,day,m,side,strike)
+    if now is None:
+        return None
+    old=_observed(table,day,m-5,side,strike) if m>=5 else None
+    def value(row,key):
+        v=row.get(key) if row else None
+        return float(v) if type(v) in (int,float) and isfinite(v) and v>=0 else None
+    oi,iv=value(now,"oi"),value(now,"iv")
+    oldoi,oldiv=value(old,"oi"),value(old,"iv")
+    oichg=(oi/oldoi-1) if oi is not None and oldoi is not None and oldoi>0 else None
+    ivchg=iv-oldiv if iv is not None and oldiv is not None else None
+    rel=None
+    if m>=24:
+        rows=[_observed(table,day,k,side,strike) for k in range(m-24,m+1)]
+        if all(row is not None for row in rows):
+            ref=sum(row["volume"] for row in rows[:20])/20
+            if ref>0:
+                rel=min(20.,sum(row["volume"] for row in rows[20:])/5/ref)
+    if oi is None and iv is None and rel is None:
+        return None
+    from math import log1p
+    vector=[log1p(now["volume"]),log1p(oi) if oi is not None else 0.,float(oi is None),
+            oichg if oichg is not None else 0.,float(oichg is None),iv if iv is not None else 0.,float(iv is None),
+            ivchg if ivchg is not None else 0.,float(ivchg is None),rel if rel is not None else 0.,float(rel is None)]
+    return vector if all(isfinite(v) for v in vector) else None
+
+
 def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
              candidate=None,learning=False):
     day,m,side,spot=(signal[k] for k in ("session","minute","side","spot"))
@@ -260,6 +296,10 @@ def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
         "features":signal["features"]+[(strike/spot-1)*10000,signal_premium/spot*10000,
                                       planned/FEATURE_FUNDING_SCALE],
         "state":"missing_entry","path":[]}
+    if signal.get("derivative_research"):
+        vector=_derivative_vector(signal,table,strike)
+        if vector is not None:
+            ep["context_vectors"]={**ep.get("context_vectors",{}),"derivatives":vector}
     first=m+2
     entry=_observed(table,day,first,side,strike)
     if entry is None:
@@ -293,7 +333,12 @@ def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
         recovery=_next_open_exit(table,day,side,strike,j+3,ep["entry"],units,bps) if future is None else None
         if recovery is not None:
             recovery["exit_delay_minutes"]+=1
+        dynamic=None
+        if "_dynamic_states" in signal:
+            from .cpr_dynamic_context import state_at
+            dynamic=state_at(signal,j)
         ep["path"].append({"minute":j,"elapsed":j-first+1,"mark_return":r,
+                           "dynamic_regime":dynamic,
                            "drawdown":peak-r,"trend":trend,
                            "exit_net":net,"exit_fees":charges,
                            "exit_utc":_stamp(day,j+2),"terminal":j==deadline-2,
@@ -323,6 +368,16 @@ def _key(step):
     return (pnl,elapsed,int(step["trend"]>=0),int(step["drawdown"]>=.03))
 
 
+DYNAMIC_SCOPE="dynamic_panel_global"
+
+
+def _q_key(step,scope,entry_context):
+    if scope is None:
+        return _key(step)
+    context=step.get("dynamic_regime") if scope==DYNAMIC_SCOPE else entry_context
+    return _key(step)+(context,) if context is not None else None
+
+
 def _forced(step, *, stop, stop_mark=STOP):
     if step["mark_return"]>=TARGET:
         return "target"
@@ -337,7 +392,7 @@ def _exit(ep, policy, q=None, *, stop_mark=STOP,context_scope=None):
     if ep["state"]!="entered":
         return {"state":ep["state"]}
     context=None
-    if context_scope is not None:
+    if context_scope is not None and context_scope!=DYNAMIC_SCOPE:
         from .cpr_context_features import context_state
         context=context_state(ep,context_scope)
     low=high=None
@@ -367,8 +422,8 @@ def _exit(ep, policy, q=None, *, stop_mark=STOP,context_scope=None):
         if reason is None and floor is not None and mark<=floor+1e-12:
             reason="trailing_stop"
         if reason is None and policy=="offline_q":
-            key=_key(step) if context_scope is None else _key(step)+(context,)
-            values=(q or {}).get(key) if context_scope is None or context is not None else None
+            key=_q_key(step,context_scope,context)
+            values=(q or {}).get(key) if key is not None else None
             # Unknown or tied states use the fixed target/stop baseline.
             if values is not None and values[0]>values[1]:
                 reason="learned_exit"
@@ -410,6 +465,33 @@ def _training_rows(episodes):
     return out
 
 
+def _dense_q_iteration(supported,sweeps):
+    """Preaggregate identical weighted Bellman contributions once.
+
+    Weight sessions, anchors, strikes and steps in that order, exactly
+    as the dense research estimator. No change to the action set.
+    """
+    stats={}
+    for key,rows in supported.items():
+        counts=Counter((day,minute,strike) for day,minute,strike,*_ in rows)
+        per_anchor=Counter((day,minute) for day,minute,_ in counts)
+        per_day=Counter(day for day,_ in per_anchor)
+        immediate=0.;fallback=0.;next_weights=defaultdict(float)
+        for day,minute,strike,exit_r,nk,next_r,terminal in rows:
+            weight=1./(len(per_day)*per_day[day]*per_anchor[(day,minute)]*counts[(day,minute,strike)])
+            immediate+=weight*exit_r
+            if terminal or nk not in supported:
+                fallback+=weight*next_r
+            else:
+                next_weights[nk]+=weight
+        stats[key]=(immediate,fallback,next_weights)
+    q={key:(0.,0.) for key in supported}
+    for _ in range(sweeps):
+        q={key:(exit_r,fallback+sum(weight*max(q[nk]) for nk,weight in weights.items()))
+           for key,(exit_r,fallback,weights) in stats.items()}
+    return q
+
+
 def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
     """Batch fitted tabular Q iteration on earlier, fully observed paths.
 
@@ -418,17 +500,18 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
     supplies counterfactual hold/exit marks under the same price proxy.
     """
     transitions=defaultdict(list)
+    day_balance=any(ep.get("learning_day_balance",False) for ep in episodes)
     for ep in episodes:
         if ep["state"]!="entered" or not _full_path(ep):
             continue
         context=None
-        if context_scope is not None:
+        if context_scope is not None and context_scope!=DYNAMIC_SCOPE:
             from .cpr_context_features import context_state
             context=context_state(ep,context_scope)
             if context is None:
                 continue
         def key_for(step):
-            return _key(step) if context_scope is None else _key(step)+(context,)
+            return _q_key(step,context_scope,context)
         # Value of following the fixed rule from each next state, used when
         # the learned state has insufficient support.
         fallback={}
@@ -442,14 +525,17 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
             if _forced(step,stop=True,stop_mark=stop_mark):
                 break
             nxt=ep["path"][i+1]
-            transitions[key_for(step)].append((ep["session"],ep["minute"],ep.get("strike"),
+            key=key_for(step)
+            if key is None:
+                continue
+            transitions[key].append((ep["session"],ep["minute"],ep.get("strike"),
                 step["exit_net"]/ep["debit"],key_for(nxt),
                 fallback[i+1],bool(_forced(nxt,stop=True,stop_mark=stop_mark))))
     supported={k:v for k,v in transitions.items()
                if len({(x[0],x[1]) for x in v})>=MIN_STATE_EPISODES
                and len({x[0] for x in v})>=MIN_STATE_DAYS}
-    q={k:(0.,0.) for k in supported}
-    for _ in range(sweeps):
+    q=_dense_q_iteration(supported,sweeps) if day_balance else {k:(0.,0.) for k in supported}
+    for _ in range(0 if day_balance else sweeps):
         new={}
         for k,rows in supported.items():
             # Average within each episode first, so long paths cannot dominate.
@@ -460,20 +546,49 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
             by_anchor=defaultdict(list)
             for (day,minute,strike),v in per_episode.items():
                 by_anchor[(day,minute)].append((sum(x[0] for x in v)/len(v),sum(x[1] for x in v)/len(v)))
-            averages=[(sum(x[0] for x in v)/len(v),sum(x[1] for x in v)/len(v))
-                      for v in by_anchor.values()]
+            anchor_values={key:(sum(x[0] for x in v)/len(v),sum(x[1] for x in v)/len(v))
+                           for key,v in by_anchor.items()}
+            if day_balance:
+                by_day=defaultdict(list)
+                for (day,_),value in anchor_values.items():
+                    by_day[day].append(value)
+                averages=[(sum(x[0] for x in v)/len(v),sum(x[1] for x in v)/len(v)) for v in by_day.values()]
+            else:
+                averages=list(anchor_values.values())
             new[k]=(sum(x[0] for x in averages)/len(averages),
                     sum(x[1] for x in averages)/len(averages))
         q=new
     return q,{"supported_states":len(q),"observed_states":len(transitions),
               "training_transitions":sum(len(v) for v in transitions.values()),
               "sweeps":sweeps,"stop_mark":stop_mark,"entry_context_scope":context_scope,
-              "supported_unique_anchors":len({(x[0],x[1]) for rows in supported.values() for x in rows})}
+              "supported_unique_anchors":len({(x[0],x[1]) for rows in supported.values() for x in rows}),
+              "day_balanced":day_balance}
 
 
 def _anchor_weights(rows):
     counts=Counter((e["session"],e["minute"]) for e,_ in rows)
-    return [1./counts[(e["session"],e["minute"])] for e,_ in rows]
+    if not rows:
+        return []
+    balanced=any(e.get("learning_day_balance",False) for e,_ in rows)
+    if not balanced:
+        return [1./counts[(e["session"],e["minute"])] for e,_ in rows]
+    # Equal total weight per session, then per anchor, then per candidate.
+    # Preserve total anchor mass for comparability of regularization and
+    # prior pseudo-counts. This weighting does NOT make observations independent.
+    daily=Counter(day for day,_ in counts)
+    scale=len(counts)/len(daily)
+    return [scale/(daily[e["session"]]*counts[(e["session"],e["minute"])]) for e,_ in rows]
+
+
+def _dense_anchors(rows):
+    """At most one earliest scanner opportunity per fixed 15-minute bin.
+    Training only; overlapping EOD trajectories remain clustered by day.
+    No future labels, prices or availability used in sampling.
+    """
+    bins={}
+    for s in sorted(rows,key=lambda v:(v["session"],v["minute"],v["side"])):
+        bins.setdefault((s["session"],s["minute"]//DENSE_TRAIN_INTERVAL),s)
+    return list(bins.values())
 
 
 def _fit_ml(train,validation):
@@ -655,18 +770,40 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             "exits_after_1520":late_squareoffs,"full_account_pnl_certified":False},journal
 
 
+def _funding_diagnostic(episodes,budget,capital):
+    # Signal-time minimum candidate funding only. This is not achieved
+    # fill coverage and does not imply that allocating more is appropriate.
+    levels=sorted({4250.,6000.,9000.,12000.,float(budget),float(capital)})
+    observed=[e for e in episodes if e.get("minimum_funding_inr") is not None]
+    return {"signals":len(episodes),"observed_qualified":len(observed),
+            "missing_or_unqualified":len(episodes)-len(observed),
+            "signal_time_funding_sensitivity":[{"budget_inr":level,
+                "anchors":sum(e["minimum_funding_inr"]<=level for e in observed),
+                "sessions":len({e["session"] for e in observed if e["minimum_funding_inr"]<=level})}
+                for level in levels],
+            "warning":"Hypothetical signal-time funding only, not broker margin, fills, a capital recommendation or performance."}
+
+
 def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
         context_mode="off",context_batch="auto",rank_entries=False,
-        pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,progress=None):
+        pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,
+        sessions=60,dense_training=False,sequence_research=False,derivative_research=False,dynamic_q=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
         raise ValueError("Run CPR research outside Indian market priority hours")
-    if not 0<(stop-start).days<=120 or stop>now.astimezone(h.IST).date():
-        raise ValueError("Select up to 120 calendar days, completed sessions, end exclusive")
+    if not 0<(stop-start).days<=MAX_STUDY_DAYS or stop>now.astimezone(h.IST).date():
+        raise ValueError("Select up to 200 calendar days, completed sessions, end exclusive")
+    if type(sessions) is not int or sessions not in SESSION_SPLITS:
+        raise ValueError("Select 60, 90 or 120 observed sessions")
+    if dense_training and entry_mode not in ("daily_scan","regime_scan"):
+        raise ValueError("Dense training requires daily_scan or regime_scan")
+    ntrain,nval,ntest=SESSION_SPLITS[sessions]
     if context_mode not in ("off","receipt","archive"):
         raise ValueError("Unsupported context availability mode")
+    if dynamic_q and (not fixed_panel or context_mode=="off"):
+        raise ValueError("Dynamic Q requires fixed-panel and archive or receipt context")
     if fixed_panel and context_mode=="off":
         raise ValueError("Fixed-panel research requires receipt or archive context mode")
     if context_q and context_mode=="off" and not pattern_research:
@@ -680,8 +817,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     if progress:progress(1,"Verifying original BANKNIFTY minute receipts")
     index,index_hashes,failures=h.shared_index_sources(start-timedelta(days=7),stop,[h.MAX_TOTAL])
     ordered=sorted(index)
-    dates=[d for d in ordered if from_date<=d<to_date and date.fromisoformat(d).weekday()<5][-sum(SPLITS):]
-    splits=[dates[:30],dates[30:40],dates[40:60]]
+    dates=[d for d in ordered if from_date<=d<to_date and date.fromisoformat(d).weekday()<5][-sessions:]
+    splits=[dates[:ntrain],dates[ntrain:ntrain+nval],dates[ntrain+nval:ntrain+nval+ntest]]
     signals=[];learning_grid=[];train_crossovers=[];counts=Counter();day_audit={}
     for day in dates:
         i=ordered.index(day)
@@ -691,8 +828,13 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         prior=ordered[i-1]
         rows,status=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,
                              max_signals=375 if entry_mode!="crossover" else 3,entry_mode=entry_mode)
+        if dense_training:
+            for row in rows:
+                row["learning_day_balance"]=True
         signals.extend(rows)
-        if day in splits[0]:
+        if day in splits[0] and dense_training:
+            train_crossovers.extend(_dense_anchors(rows))
+        elif day in splits[0]:
             extra,_=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,max_signals=5,learning_grid=True)
             learning_grid.extend(extra)
             base,_=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,max_signals=3)
@@ -715,7 +857,31 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     val_signals=[s for s in signals if s["session"] in splits[1]]
     all_signals=signals+train_signals
     from . import cpr_context_features as cx
-    context_audit=cx.attach(all_signals,mode=context_mode,batch_id=context_batch,fixed_panel=fixed_panel)
+    sequence_cache={}
+    if sequence_research:
+        from . import candle_barrier_research as barrier
+        for s in all_signals:
+            key=(s["session"],s["minute"])
+            if key not in sequence_cache:
+                sequence_cache[key]=barrier.sequence_features(index[key[0]],key[1])
+            desc=sequence_cache[key]
+            if desc is not None:
+                s["index_return_5m_bps"]=desc["index_return_5m_bps"]
+    context_audit=cx.attach(all_signals,mode=context_mode,batch_id=context_batch,fixed_panel=fixed_panel,
+                            panel_detail=sequence_research and fixed_panel)
+    for s in all_signals:
+        desc=sequence_cache.get((s["session"],s["minute"]))
+        if desc is not None:
+            s.setdefault("context_vectors",{})["sequence"]=desc["short"]+desc["sequence"]
+        if derivative_research:
+            s["derivative_research"]=True
+    dynamic_report={};dynamic_states={}
+    if dynamic_q:
+        from . import cpr_dynamic_context as dynamic
+        if progress:progress(20,"Preparing causal five-minute bank/global snapshots")
+        dynamic_states,dynamic_report=dynamic.snapshots(index,dates,_stamp,mode=context_mode,batch_id=context_batch)
+        for s in all_signals:
+            s["_dynamic_states"]=dynamic_states.get(s["session"],{})
     pattern_report={}
     if pattern_research:
         from . import candle_pattern_research as patterns
@@ -723,7 +889,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     # Read each relevant session through 15:29, for pending exit retries.
     earliest={}
     for s in all_signals:
-        d=s["session"];earliest[d]=min(earliest.get(d,375),s["minute"])
+        d=s["session"];earliest[d]=min(earliest.get(d,375),max(0,s["minute"]-(24 if derivative_research else 0)))
     needed={_stamp(d,m) for d,first in earliest.items()
             for m in range(first,LAST_SESSION_MINUTE+1)}
     table,meta=p._load_options(all_signals,wings,progress,needed_stamps=needed)
@@ -740,6 +906,11 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "hold_minutes":hold if hold else None,"hold_until_squareoff":hold==0,
              "squareoff_ist":"15:20","last_retry_ist":"15:29","entry_mode":entry_mode,"scan_interval_minutes":SCAN_MINUTES,
              "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,
+             "requested_sessions":sessions,"split_sizes":SESSION_SPLITS[sessions],
+             "dense_training":dense_training,"learning_day_balance":dense_training,
+             "sequence_research":sequence_research,"derivative_research":derivative_research,"dynamic_q":dynamic_q,
+             "derivative_feature_names":DERIVATIVE_NAMES if derivative_research else (),
+             "dense_train_interval_minutes":DENSE_TRAIN_INTERVAL if dense_training else None,
              "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,
              "pattern_research":pattern_research,"fixed_panel":fixed_panel,"context_q":context_q,"debit_spreads":debit_spreads,"full_premium_and_fee_budget_inr":risk_budget,
              "historical_lot_size_assumed":lot_size,"max_lots":max_lots,"strike_wings":wings,
@@ -747,9 +918,10 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "experimental_emergency_stop_mark":EMERGENCY_STOP,"max_learning_strikes_per_anchor":MAX_LEARNING_STRIKES,
              "trailing_activation_net_return":TRAIL_ACTIVATION,"trailing_gap_return_points":TRAIL_GAP,
              "volatility_trailing_gap_range":[.02,.06]},
-             "recorded_index_sessions":len(dates),"required_sessions":sum(SPLITS),
+             "recorded_index_sessions":len(dates),"required_sessions":sessions,
              "training_dates":splits[0],"validation_dates":splits[1],"holdout_dates":splits[2],
              "signal_counts":dict(counts),"day_audit":day_audit,"episode_states":dict(Counter(e["state"] for e in episodes)),
+             "funding_diagnostic":{name:_funding_diagnostic(rows,risk_budget,capital) for name,rows in zip(("train","validation","holdout"),parts)},
              "split_support":{name:{"signals":len(rows),"entered":sum(e["state"]=="entered" for e in rows),
                           "fully_observed_paths":sum(_full_path(e) for e in rows),
                           "states":dict(Counter(e["state"] for e in rows))}
@@ -763,10 +935,12 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "index_source_failures":failures,"option_coverage":{k:v for k,v in meta.items() if k!="source_hashes"},
              "context_coverage":{k:v for k,v in context_audit.items() if k!="anchors"},
              "ranked_entry_research":{},"candle_patterns":pattern_report,"debit_spread_research":{},
+             "dynamic_context":dynamic_report,
              "methods":{},"state":"descriptive_only_insufficient_sessions","broker_orders_enabled":False,
-             "live_model_promoted":False,"warning":WARNING}
+             "live_model_promoted":False,"warning":WARNING,
+             "learning_warning":"Overlapping candidate paths are not independent. Dense mode balances sessions; previously inspected dates remain exploratory."}
     journal=[]
-    if len(dates)==sum(SPLITS):
+    if len(dates)==sessions:
         train,val,test=parts
         if progress:progress(65,"Fitting train-only ML and offline Q values; validation chooses ML")
         model,means,ml_info=_fit_ml(broad_train,broad_val)
@@ -785,14 +959,25 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             metrics,rows=_evaluate(test,method=method,capital=capital,risk_budget=risk_budget,
                                    model=model,means=means,q=wide_q if method=="offline_q_emergency_stop" else q,dates=splits[2])
             report["methods"][method]=metrics;journal.extend(rows)
-        if rank_entries or context_mode!="off" or pattern_research:
+        if dynamic_q:
+            dq,di=_fit_q(broad_train,context_scope=DYNAMIC_SCOPE)
+            report["dynamic_q_training"]=di
+            if dq:
+                metrics,rows=_evaluate(test,method="contextual_q",capital=capital,risk_budget=risk_budget,
+                                       q=dq,context_scope=DYNAMIC_SCOPE,dates=splits[2])
+                report["methods"]["dynamic_panel_global_q"]=metrics
+                journal.extend({**row,"method":"dynamic_panel_global_q"} for row in rows)
+            else:
+                report["methods"]["dynamic_panel_global_q"]={"state":"insufficient_training_support"}
+        if rank_entries or context_mode!="off" or pattern_research or sequence_research or derivative_research:
             from . import cpr_ranked_entries as ranked
             ranked_results,ranked_rows=ranked.assess(
                 __import__(__name__,fromlist=["run"]),signals=signals,table=table,index=index,
                 train=broad_train,val=broad_val,test=test,dates=(splits[1],splits[2]),
                 hold=hold,lot_size=lot_size,bps=bps,capital=capital,risk_budget=risk_budget,
                 context_audit=context_audit,q=q,pattern_research=pattern_research,
-                fixed_panel=fixed_panel,context_q=context_q,progress=progress)
+                fixed_panel=fixed_panel,context_q=context_q,sequence_research=sequence_research,
+                derivative_research=derivative_research,progress=progress)
             report["ranked_entry_research"]=ranked_results
             journal.extend(ranked_rows)
         if debit_spreads:
@@ -808,7 +993,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             metrics,rows=_evaluate(episodes,method=method,capital=capital,risk_budget=risk_budget,dates=dates)
             report["methods"][method]=metrics;journal.extend(rows)
     evidence={"index_sources":index_hashes,"option_sources":meta["source_hashes"],
-              "context_evidence":context_audit,"candle_pattern_evidence":pattern_report}
+              "context_evidence":context_audit,"candle_pattern_evidence":pattern_report,
+              "dynamic_context_evidence":{"report":dynamic_report,"states":dynamic_states}}
     report["source_sha256"]=sha256(json.dumps(evidence,sort_keys=True).encode()).hexdigest()
     if progress:progress(100,"CPR strategy comparison complete")
     return report,journal,evidence
