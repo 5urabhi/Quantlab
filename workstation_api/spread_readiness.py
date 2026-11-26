@@ -76,6 +76,8 @@ def _inventory(day, identities, now, include_candidates):
                         if item and (not paper._regular(item["stamp"]) or
                             item["stamp"]>=paper._close(item["stamp"],item["expiry"])):
                             item=None
+                        if item:
+                            item={**item,"digest":raw[1]}
                 output.append(dict(identity=identity,received_utc=stamp,
                     saved_receipts=count,observed_seconds=seconds,
                     coverage_pct=round(100*seconds/elapsed,2) if elapsed else None,
