@@ -71,7 +71,14 @@ class WideDepthContractsTests(TestCase):
         self.assertEqual(sum(wide._sample_interval(x,30)==1 for x in selected),12)
         self.assertTrue(all(wide._sample_interval(x,30) in (1,3,30) for x in selected))
         for row in selected:
+            row["bid"]=499.
             row["ask"]=500.
+        wide._assign_scalp_sampling(selected,auto.DEFAULTS)
+        self.assertEqual(sum(x["scalp_fast_depth"] for x in selected),12)
+        self.assertTrue(all(x["scalp_affordable_lots"]==1 for x in selected if x["scalp_fast_depth"]))
+        self.assertEqual([x["identity"] for x in selected],ids)
+        for row in selected:
+            row["ask"]=1000.
         wide._assign_scalp_sampling(selected,auto.DEFAULTS)
         self.assertFalse(any(x["scalp_fast_depth"] for x in selected))
 
