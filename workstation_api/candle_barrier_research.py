@@ -5,6 +5,7 @@ Chronological date splits and matched context ablations. All barriers are
 index POINTS, not option premium returns. Intra-minute ordering is unknown.
 """
 from collections import Counter, defaultdict
+from datetime import date,timedelta
 from math import isfinite
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
@@ -20,6 +21,7 @@ TOUCH_CLASSES=("lower_first","neither","upper_first","ambiguous")
 CLOSE_CLASSES=("down_at_least","within_band","up_at_least")
 TASKS=tuple((kind,d,classes) for kind,classes in (("first_touch",TOUCH_CLASSES),
                                                  ("terminal_move",CLOSE_CLASSES)) for d in DISTANCES)
+BANK_TASKS=tuple((s,kind,p.CLASSES) for kind in ("direction","divergence") for s in cx.PANEL_SYMBOLS)
 SEQUENCE_NAMES=tuple(f"lag_{j}_{name}" for j in range(1,21) for name in ("return_bps","missing"))+tuple(
     f"window_{n}_{name}" for n in WINDOWS for name in (
         "return_bps","up_fraction","path_efficiency","range_bps","close_location",
@@ -166,7 +168,7 @@ def _features(row,model):
     return x
 
 
-def _fit(parts,model):
+def _fit(parts,model,tasks=TASKS):
     tr,va,te=parts
     info={"coverage":[len(x) for x in parts],"sessions":[len({r["session"] for r in x}) for x in parts],
           "state":"insufficient_matched_support","tasks":{}}
@@ -178,7 +180,7 @@ def _fit(parts,model):
     rf.fit([_features(r,model) for r in tr],train_y,sample_weight=w)
     v=rf.predict_proba([_features(r,model) for r in va])
     t=rf.predict_proba([_features(r,model) for r in te])
-    for i,(kind,d,classes) in enumerate(TASKS):
+    for i,(kind,d,classes) in enumerate(tasks):
         n=len(classes);prior=np.ones(n)
         for y,weight in zip(train_y[:,i],w):
             prior[y]+=weight
@@ -201,6 +203,31 @@ def _fit(parts,model):
             "rf_minus_prior":_paired(trf,tp)}
     info["state"]="exploratory_assessment"
     return info
+
+
+def bank_outcomes(index,panel,day,minute,horizon):
+    """Future individual bank directions and relative-to-index moves.
+
+    One-basis-point bands are fixed before fitting. No bank target exists
+    unless all five same-identity future bar paths are observed.
+    """
+    future=p._aggregate(index[day],minute+horizon,horizon)
+    if future is None or minute not in index[day]:
+        return None
+    index_move=10000*(future[3]/index[day][minute][3]-1)
+    moves={}
+    for symbol in cx.PANEL_SYMBOLS:
+        bars=panel.get(symbol,{}).get(day,{})
+        end=p._aggregate(bars,minute+horizon,horizon)
+        if end is None or minute not in bars or bars[minute][3]<=0:
+            return None
+        moves[symbol]=10000*(end[3]/bars[minute][3]-1)
+    labels=[]
+    for symbol,kind,classes in BANK_TASKS:
+        change=moves[symbol]-(index_move if kind=="divergence" else 0.)
+        label="up" if change>p.DEADBAND_BPS else "down" if change<-p.DEADBAND_BPS else "flat"
+        labels.append(classes.index(label))
+    return labels
 
 
 def assess(index,splits,*,context_mode="off",fixed_panel=False,context_batch="auto",progress=None):
@@ -229,6 +256,19 @@ def assess(index,splits,*,context_mode="off",fixed_panel=False,context_batch="au
             "warning":"Previously inspected dates remain exploratory. First-touch OHLC order can be ambiguous; "
                       "session-block intervals are descriptive, not multiplicity-adjusted certification. "
                       "Index points are not option-premium returns; no simulated or actual fills."}
+    panel={}
+    panel_meta=context.get("fixed_panel_sources",{})
+    if fixed_panel and panel_meta.get("state")=="loaded":
+        panel,_,target_meta=cx._load_fixed_panel(date.fromisoformat(days[0]),date.fromisoformat(days[-1])+timedelta(days=1),
+                                 context.get("bank_sources",{}),enabled=True)
+        if target_meta.get("source_hashes")!=panel_meta.get("source_hashes"):
+            # Maintenance may have updated an original file during the run.
+            panel={};report["bank_target_state"]="source_changed_during_research"
+        else:
+            report["bank_target_state"]="observed_fixed_panel" if panel else "unavailable"
+    else:
+        report["bank_target_state"]="unavailable" if fixed_panel else "disabled"
+    report["bank_directions"]={}
     for horizon in HORIZONS:
         if progress:progress(40+HORIZONS.index(horizon)*15,"Estimating "+str(horizon)+"-minute movement and first passage")
         parts=[]
@@ -264,6 +304,25 @@ def assess(index,splits,*,context_mode="off",fixed_panel=False,context_batch="au
                 comparison[task]=_paired(a["holdout"][a["selected_on_validation"]],b["holdout"][b["selected_on_validation"]])
             item["scopes"][name]={"matched_coverage":dict(zip(("train","validation","holdout"),map(len,matched))),
                                  "baseline":base,"augmented":aug,"selected_model_comparison":comparison}
+        if panel:
+            bank_parts=[]
+            for rows in parts:
+                eligible=[]
+                for row in rows:
+                    if "panel_detail" not in row.get("context_vectors",{}):
+                        continue
+                    labels=bank_outcomes(index,panel,row["session"],row["minute"],horizon)
+                    if labels is not None:
+                        eligible.append({**row,"labels":labels})
+                bank_parts.append(eligible)
+            base=_fit(bank_parts,"sequence",BANK_TASKS);aug=_fit(bank_parts,"sequence_panel",BANK_TASKS)
+            comparison={}
+            for task in base["tasks"].keys()&aug["tasks"].keys():
+                aa=aug["tasks"][task];bb=base["tasks"][task]
+                comparison[task]=_paired(aa["holdout"][aa["selected_on_validation"]],bb["holdout"][bb["selected_on_validation"]])
+            report["bank_directions"][str(horizon)]={"matched_coverage":dict(zip(("train","validation","holdout"),map(len,bank_parts))),
+                "baseline":base,"augmented":aug,"selected_model_comparison":comparison,
+                "warning":"Direction is the bank's return; divergence is its return minus BANKNIFTY return. Both use +/-1bp bands, not index weights."}
         if parts[2]:
             item["holdout_movement_distribution"]={key:{str(q):float(np.quantile([r[key] for r in parts[2]],q))
                 for q in (.1,.25,.5,.75,.9)} for key in ("terminal_points","upper_excursion_points","lower_excursion_points")}
