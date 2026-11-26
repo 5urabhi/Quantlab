@@ -3,10 +3,11 @@ import {Database,RefreshCw,Search,ArrowRight,Download,HardDrive,Clock3} from 'lu
 import {marketApi,readableError} from './tradingCockpitApi'
 import ContextDrawer from './ContextDrawer'
 import MarketInventoryCharts from './MarketInventoryCharts'
+import TradingDataRepair from './TradingDataRepair'
 import {openSnapshotInPython} from './pythonBridge'
 import './market-inventory.css'
 
-type Source={id:string;label:string;unit:string;time_basis:string;storage:string;provenance:string;state:string;detail:string;groups:number;instruments:number;count:number|null;first:string|null;last:string|null;inspected_count:number}
+type Source={id:string;label:string;unit:string;time_basis:string;storage:string;provenance:string;state:string;detail:string;groups:number;instruments:number;count:number|null;first:string|null;last:string|null;inspected_count:number;sample_present?:boolean|null}
 type Entry={source:string;identity:string;name:string;resolution:string;count:number;first:string|null;last:string|null;evidence:string;qualifier:string}
 type Report={library_id:string;checked_utc:string;sources:Source[];items:Entry[];total:number;page:number;has_more:boolean;cache_age_seconds:number;note:string}
 type Records={columns:string[];rows:(string|number|null)[][];has_more:boolean;before:string|null;note:string}
@@ -25,6 +26,7 @@ function exportJSON(name:string,value:unknown){
  const u=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)
 }
 export default function MarketInventory({compact=false,onAcquire,onReplay,onModels}:{compact?:boolean;onAcquire?:()=>void;onReplay?:()=>void;onModels?:()=>void}){
+ const [repair,setRepair]=useState(false)
  const [source,setSource]=useState('all')
  const [search,setSearch]=useState('')
  const [query,setQuery]=useState('')
@@ -59,7 +61,8 @@ export default function MarketInventory({compact=false,onAcquire,onReplay,onMode
  const active=report?.sources.filter(s=>s.count!==null&&s.count>0).length||0
  const unresolved=report?.sources.filter(s=>['partial','not_verified'].includes(s.state)).length||0
  return <section className="mi-shell" aria-label="Unified saved market data inventory">
-   <header className="mi-head"><div><small><Database size={15}/> UNIFIED DATA INVENTORY</small><h2>{compact?'Stored observation coverage':'Your complete market data library'}</h2><p>See what is actually stored across historical downloads and the automatic recorder. No new download or duplicate dataset is created by this view.</p></div><div className="mi-head-actions"><button className="ws-button" type="button" disabled={busy} onClick={()=>setRefresh(v=>v+1)}><RefreshCw size={15}/>{busy?'Inspecting…':'Refresh inventory'}</button>{onAcquire&&<button type="button" className="ws-button primary" onClick={onAcquire}>Get missing data <ArrowRight size={15}/></button>}</div></header>
+   <header className="mi-head"><div><small><Database size={15}/> UNIFIED DATA INVENTORY</small><h2>{compact?'Stored observation coverage':'Your complete market data library'}</h2><p>See what is actually stored across historical downloads and the automatic recorder. No new download or duplicate dataset is created by this view.</p></div><div className="mi-head-actions"><button className="ws-button" type="button" disabled={busy} onClick={()=>setRefresh(v=>v+1)}><RefreshCw size={15}/>{busy?'Inspecting…':'Refresh inventory'}</button><button type="button" className="ws-button primary" aria-expanded={repair} onClick={()=>setRepair(v=>!v)}>{repair?'Close data repair':'Get missing data'} <ArrowRight size={15}/></button></div></header>
+   {repair&&<TradingDataRepair sources={report?.sources||[]} onOpenStocks={onAcquire} onInspect={id=>{choose(id);setRepair(false)}} onDone={()=>setRefresh(v=>v+1)}/>}
    <div className="mi-kpis">
      <div><span><HardDrive size={15}/> Logical library</span><strong>dhan_shared</strong><small>Original records + source receipts</small></div>
      <div><span>Data types with saved rows</span><strong>{report?active+' / '+report.sources.length:'—'}</strong><small>Not a sum of overlapping records</small></div>
@@ -71,7 +74,7 @@ export default function MarketInventory({compact=false,onAcquire,onReplay,onMode
    {report&&<>{!compact&&<MarketInventoryCharts sources={report.sources} onChoose={choose}/>}<div className="mi-section-title"><div><h3>Coverage by data type</h3><p>First and last observed values use the stated timestamp basis. Gaps may exist between them.</p></div><button type="button" className="ws-button" onClick={()=>exportJSON('quantlab-market-coverage.json',{checked_utc:report.checked_utc,sources:report.sources,note:report.note})}><Download size={14}/> Export coverage</button></div>
      {categories.map(group=><div key={group.title} className="mi-category"><h4>{group.title}</h4><div className="mi-coverage-grid">
        {group.ids.map(id=>report.sources.find(s=>s.id===id)).filter((s):s is Source=>!!s).map(s=><button type="button" key={s.id} className={'mi-coverage-card '+(source===s.id?'selected':'')} aria-pressed={source===s.id} aria-label={'View '+s.label+' coverage'} onClick={()=>choose(s.id)}>
-         <div className="mi-card-top"><strong>{s.label}</strong><span className={'mi-state '+s.state}>{stateText(s.state)}</span></div><div className="mi-count">{fmt(s.count)} <small>{s.unit}</small></div>
+         <div className="mi-card-top"><strong>{s.label}</strong><span className={'mi-state '+s.state}>{stateText(s.state)}</span></div><div className="mi-count">{s.sample_present&&s.count==null?"Records found":fmt(s.count)} <small>{s.sample_present&&s.count==null?"count unverified":s.unit}</small></div>
          <div className="mi-range"><span>First</span><b>{stamp(s.first)}</b><span>Last</span><b>{stamp(s.last)}</b></div><footer>{s.groups} groups · {s.storage}<ArrowRight size={14}/></footer>
        </button>)}</div></div>)}
      {!compact&&<div className="mi-section-title mi-inspection"><div><h3>Inspect saved instruments and receipts</h3><p>Filter by data type, symbol, security ID, resolution or expiry. Select a row to inspect its saved evidence.</p></div></div>}

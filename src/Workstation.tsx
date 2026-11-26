@@ -670,7 +670,6 @@ function App(){
             onRequestDelete={id=>{const d=datasets.find(item=>item.id===id)
               if(d)inspectDatasetDeletion(d)}}/>}
         {tab==='data'&&<>
-          <details className="ws-tri-advanced ws-data-advanced"><summary>Bank Nifty historical minute coverage &amp; automatic sync</summary><MarketPatternIntelligence coverageOnly/></details>
           <details className="ws-tri-advanced ws-data-advanced"><summary>Advanced datasets · TRI import, ZIPs, archived items and source audits</summary>
           <Card title="Your datasets" className="ws-data-library-card">
             <p className="ws-caption">Choose a dataset to use, or delete an old one.

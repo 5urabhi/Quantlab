@@ -4862,6 +4862,40 @@ def unified_market_inventory(source: str = "all", query: str = "", page: int = 1
         raise HTTPException(400,str(exc)) from exc
 
 
+class ExpiredHistoryAcquisitionRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    start_date: str = Field(min_length=10,max_length=10)
+    end_date: str = Field(min_length=10,max_length=10)
+    wings: int = Field(default=3,ge=0,le=5,strict=True)
+    confirm_readonly: bool = False
+
+
+@app.get("/api/data-manager/options-history/plan")
+def expired_history_plan(start_date:str,end_date:str,wings:int=3):
+    from . import options_history_sync
+    try:
+        return options_history_sync.preview(start_date,end_date,wings)
+    except (ValueError,OSError) as exc:
+        bad(exc)
+
+
+@app.post("/api/data-manager/options-history/start")
+def start_expired_history_acquisition(body:ExpiredHistoryAcquisitionRequest):
+    from . import options_history_sync
+    if not body.confirm_readonly:
+        raise HTTPException(400,"Approve the read-only Dhan history acquisition")
+    try:
+        options_history_sync.preview(body.start_date,body.end_date,body.wings)
+        with JOBS_LOCK:
+            if any(j.get("kind")=="expired_option_history_acquisition" and j.get("status") in ("queued","running")
+                   for j in JOBS.values()):
+                raise HTTPException(409,"An expired-option history acquisition is already queued or running")
+        return _spawn("expired_option_history_acquisition",options_history_sync.run,
+                      start_date=body.start_date,end_date=body.end_date,wings=body.wings)
+    except (ValueError,OSError) as exc:
+        bad(exc)
+
+
 @app.get("/api/data-manager/inventory/records")
 def unified_market_inventory_records(source: str, identity: str, qualifier: str = "",
                                      before: str = "", limit: int = 50):

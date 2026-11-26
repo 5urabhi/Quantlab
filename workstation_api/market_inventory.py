@@ -150,7 +150,22 @@ def _sql_inventory(path):
                         "Exact SQL counts and stored endpoints; payload integrity and missing sessions not audited"))
                     rows.extend(subset)
                 except (sqlite3.Error,ValueError,TypeError):
-                    summaries.append(_summary(key,[],"not_verified","Bounded query did not finish or schema/date evidence needs review"))
+                    # A grouped full-table count can time out even with millions
+                    # of valid records. Make an independent bounded presence
+                    # probe; never turn a failed count into a zero count.
+                    present=None
+                    sample_deadline=time.monotonic()+.25
+                    db.set_progress_handler(lambda: int(time.monotonic()>sample_deadline),500)
+                    try:
+                        present=db.execute("SELECT 1 FROM "+table+" "+where+" LIMIT 1").fetchone() is not None
+                    except sqlite3.Error:
+                        pass
+                    detail="Bounded grouped query did not finish or schema/date evidence needs review"
+                    if present is True:
+                        detail+="; at least one matching stored row confirmed, exact count and dates unavailable"
+                    elif present is False:
+                        detail+="; separate presence probe found no matching rows at inspection time"
+                    summaries.append({**_summary(key,[],"not_verified",detail),"sample_present":present})
                 finally:
                     db.set_progress_handler(None,0)
     except (sqlite3.Error,OSError,ValueError):

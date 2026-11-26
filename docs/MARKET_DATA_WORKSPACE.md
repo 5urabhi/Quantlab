@@ -199,3 +199,19 @@ Offline targeted recovery tests: `python -m unittest tests.test_market_data_comp
 The browser test uses synthetic fixtures and mocked public-source setup, not
 your authenticated Dhan account. Live entitlement and market-data completeness
 must be confirmed on your own workstation.
+
+
+## Gap-aware Bank Nifty scalping data
+Market Library → Get missing data now opens an inline repair workspace rather
+than resetting the generic NIFTY 50 equity wizard. Enable the existing
+rolling-year index history sync, explicitly approve expired near-monthly
+CE/PE history, inspect live quote/OI/depth/constituent receipt coverage, or
+open banking-stock history. Stock acquisition remains a separate scoped
+workflow. The expired history job uses the original rolling-option receipt
+cache, skips matching verified overlapping request intervals, splits missing
+windows at 30 calendar days, excludes potentially active near expiries, and
+preserves partial progress on provider errors. The plan is not a guarantee of
+usable minute observations; empty receipts and incomplete historical contract
+identity remain limitations. The inventory distinguishes a bounded count
+failure with a confirmed sample row from an unknown count. No recorder is
+restarted, historical depth fabricated, or broker order submitted.
