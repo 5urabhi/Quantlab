@@ -27,7 +27,7 @@ LOCK=Lock()
 STOP=Event()
 WORKER=None
 HEALTH={"state":"idle","last_cycle_utc":None,"last_error":None}
-WARNING=("Paper research only. Each lane has a separate hypothetical budget. Scenario scores "
+WARNING=("Paper research only. Each lane has a separate hypothetical budget. Entry scenario scores "
     "are not forecasts, and original quote-depth replay is not an actual execution. "
     "The modeled session loss allowance is reduced by scored losses and not replenished by wins. Entries are sampled from fresh observations, at most one attempt per lane per minute; monitoring is approximately every five seconds. "
     "Target/stop marks are sampled, exits can be late or unobservable, and actual loss "
@@ -248,6 +248,9 @@ def _monitor(row,now,*,update=None,mark_lookup=None,signal_lookup=None,forecast_
         # Use the actual observation/processing time, never an invented
         # earlier exit after a restart or delayed monitoring cycle.
         decision=paper._now() if actual_clock else now
+        if reason=="forecast_reversal" and not paper_forecast.reversal(row.get("source",{}).get("direction"),changes.get("latest_forecast"),decision,row["entry_received_utc"]):
+            update(row,"paper_open",**changes)
+            return
         if decision>=close:
             update(row,"exit_censored",exit_reason="monitoring_missed_session_close",finished_utc=paper._iso(decision))
             return
