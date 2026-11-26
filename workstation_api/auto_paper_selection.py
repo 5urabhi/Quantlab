@@ -260,27 +260,30 @@ def _candidate(strategy,books,config,report,rejections):
     return best
 
 
-def select(now,config):
+def select(now,config,lane_caps=None):
     report,books,reason=_source(now,config)
     output={}
     for lane in ("directional","spread"):
         output[lane]={"action":"NO_TRADE","reason":reason or "no_candidate_passed", "candidates":[], "rejections":{}}
     if reason:
         return report,output
+    caps=lane_caps if lane_caps is not None else {lane:config["max_loss"] for lane in output}
     direction=report["direction"]
     side="CE" if direction=="UP" else "PE"
     candidates=[]; rejects=Counter()
-    for book in books:
+    for book in books if caps.get("directional",0)>0 else []:
         if book["option_type"]==side and .15<=abs(book["greeks"]["delta"])<=.85:
-            c=_candidate("LONG_OPTION",[book],config,report,rejects)
+            c=_candidate("LONG_OPTION",[book],{**config,"max_loss":caps["directional"]},report,rejects)
             if c:candidates.append(c)
     _finish(output["directional"],candidates,rejects)
+    if caps.get("directional",0)<=0:
+        output["directional"]["reason"]="session_loss_budget_exhausted"
     # Compare bounded debit and defined-risk credit verticals on the same
     # observed trend. Passive bid/ask capture has no calibrated fill model.
     candidates=[]; rejects=Counter()
     pairs=[("bull_call_debit","CE",True),("bull_put_credit","PE",True)] if direction=="UP" else [
            ("bear_put_debit","PE",False),("bear_call_credit","CE",False)]
-    for strategy,option_side,ascending in pairs:
+    for strategy,option_side,ascending in pairs if caps.get("spread",0)>0 else []:
         pool=sorted([b for b in books if b["option_type"]==option_side],
             key=lambda b:(b["spread_bps"],-b["activity"]["receipts_120s"],abs(b["strike"]-report["spot"]),b["identity"]))[:MAX_PER_SIDE]
         for first in pool:
@@ -289,9 +292,11 @@ def select(now,config):
                     continue
                 if not (first["strike"]<second["strike"] if ascending else first["strike"]>second["strike"]):
                     continue
-                c=_candidate(strategy,[first,second],config,report,rejects)
+                c=_candidate(strategy,[first,second],{**config,"max_loss":caps["spread"]},report,rejects)
                 if c:candidates.append(c)
     _finish(output["spread"],candidates,rejects)
+    if caps.get("spread",0)<=0:
+        output["spread"]["reason"]="session_loss_budget_exhausted"
     return report,output
 
 
