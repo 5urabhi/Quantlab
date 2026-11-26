@@ -5,11 +5,12 @@ import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import SpreadOpportunityScanner,{type BrokerProfile} from './SpreadOpportunityScanner'
 import MultiLegSpreadStudio from './MultiLegSpreadStudio'
 import SpreadSpeedStudy from './SpreadSpeedStudy'
+import AutomaticPaperPanel from './AutomaticPaperPanel'
 import OptionFeedStorageHealth from './OptionFeedStorageHealth'
 import './liquidity-spreads.css'
 import ResearchPlot from './ResearchPlots'
 
-type PageTab='live'|'multileg'|'speed'|'execution'|'history'|'lab'
+type PageTab='live'|'automatic'|'multileg'|'speed'|'execution'|'history'|'lab'
 type Row={
   identity:string;expiry:string;strike:number;option_type:'CE'|'PE'
   lot_size:number;coverage_role:string;best_bid:number|null
@@ -105,6 +106,7 @@ const todayIST=()=>new Intl.DateTimeFormat('sv-SE',{
 }).format(new Date())
 const tabs:{id:PageTab;name:string;caption:string;icon:typeof Activity}[]=[
   {id:'live',name:'Live Spread Monitor',caption:'Bid–ask capture & automatic ranking',icon:Activity},
+  {id:'automatic',name:'Automatic Paper Decisions',caption:'Auto-select contracts, sizes & outcomes',icon:TrendingUp},
   {id:'multileg',name:'Multi-Leg Option Spreads',caption:'Auto discover, build, payoff',icon:Layers3},
   {id:'speed',name:'Speed & Viability',caption:'1s–5m saved-depth replay',icon:Activity},
   {id:'execution',name:'Execution Simulator',caption:'Depth-weighted cost estimates',icon:SlidersHorizontal},
@@ -321,6 +323,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
       <label>Original trading date (IST)<input type="date" value={day}
         onChange={e=>setDay(e.target.value)}/></label>
     </div>
+    {tab==='automatic'&&<AutomaticPaperPanel/>}
     {tab==='live'&&<div className="lq-section" role="tabpanel" aria-label="Live Spread Monitor">
       <SpreadOpportunityScanner day={day} expiry={expiry} side={side}
         search={search} brokerProfile={brokerProfile}
