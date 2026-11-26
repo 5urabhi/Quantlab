@@ -14,10 +14,11 @@ const fmt=(n:number|null|undefined)=>n==null?'Not verified':n.toLocaleString('en
 const stamp=(s:string|null|undefined)=>!s?'—':s.length===10?s:s.replace('T',' ').replace('+00:00',' UTC').replace(/\.\d{1,6} UTC$/,' UTC')
 const stateText=(s:string)=>(({stored:'Stored rows',receipt:'Saved receipts',empty:'Empty',not_recorded:'Not recorded',partial:'Partial inventory',not_verified:'Needs inspection'} as Record<string,string>)[s]||s)
 const evidenceText=(s:string)=>(({stored_rows:'Stored database rows',receipt_count_csv_edges:'Receipt count + actual file endpoints',receipt_timestamps:'Saved response timestamps',archive_manifest:'Archive manifest'} as Record<string,string>)[s]||s)
-const sqlSources=new Set(['daily_closes','constituent_quotes','live_ticks','live_minute_bars','option_quote','option_oi','option_chain','live_depth_books','depth_features','sector_history'])
+const sqlSources=new Set(['daily_closes','constituent_quotes','constituent_derivative_quote','constituent_derivative_oi','live_ticks','live_minute_bars','option_quote','option_oi','option_chain','live_depth_books','depth_features','sector_history','prospective_signals'])
 const categories=[
  {title:'Historical prices',ids:['daily_closes','raw_daily','raw_intraday','index_history','expired_options']},
  {title:'Recorded market activity',ids:['constituent_quotes','live_ticks','live_minute_bars','option_quote','option_oi','option_chain','live_depth_books','depth_features']},
+ {title:'Derived research evidence',ids:['prospective_signals']},
  {title:'Reference & backups',ids:['sector_history','archives']},
 ]
 function exportJSON(name:string,value:unknown){
