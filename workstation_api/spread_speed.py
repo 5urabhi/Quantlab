@@ -5,8 +5,12 @@ identical decision anchors across fixed horizons, never choose best future
 quotes or treat censored paths as zero P&L.
 """
 from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import closing
+import os
+from pathlib import Path
 import sqlite3
+from threading import Event
 from datetime import date,datetime,time,timedelta,timezone
 from math import ceil,isfinite
 from statistics import mean,median
@@ -17,6 +21,83 @@ HORIZONS=(1,2,5,15,30,60,120,300)
 LATENCIES_MS=(100,250,500,1000,3000,5000)
 MAX_COVERAGE_ROWS=50000
 STEP_MINUTES=5
+MAX_REPLAY_WORKERS=6
+MIB=1024*1024
+
+
+def _available_cpus():
+    try:
+        cpus=len(os.sched_getaffinity(0))
+    except (AttributeError,OSError):
+        cpus=os.cpu_count() or 1
+    try:
+        quota,period=Path('/sys/fs/cgroup/cpu.max').read_text().split()
+        if quota!='max':
+            cpus=min(cpus,max(1,int(quota)//int(period)))
+    except (OSError,ValueError,ZeroDivisionError):
+        pass
+    return max(1,cpus)
+
+
+def _available_memory():
+    try:
+        available=next(int(line.split()[1])*1024 for line in
+            Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:'))
+    except (OSError,ValueError,StopIteration,IndexError):
+        return None
+    try:
+        cap=Path('/sys/fs/cgroup/memory.max').read_text().strip()
+        if cap!='max':
+            used=int(Path('/sys/fs/cgroup/memory.current').read_text())
+            available=min(available,max(0,int(cap)-used))
+    except (OSError,ValueError):
+        pass
+    return available
+
+
+def _worker_count(anchor_count):
+    """Recompute per study; reserve CPU and RAM for recorder/API/general work.
+
+    A small machine or unknown memory falls back to the serial path. These
+    threads overlap independent SQLite reads; they never create vendor calls.
+    """
+    if anchor_count<=0:
+        return 0
+    memory=_available_memory()
+    if memory is None:
+        return 1
+    memory_slots=max(1,(memory-512*MIB)//(256*MIB))
+    return min(anchor_count,MAX_REPLAY_WORKERS,max(1,_available_cpus()-2),memory_slots)
+
+
+def _parallel_anchors(anchors, evaluate, workers, progress):
+    """Bound in-flight anchors; restore chronological order before aggregation.
+
+    Only the coordinator reports progress/cancellation. Running threads stop
+    between cells; already-started read-only SQLite operations may finish.
+    """
+    stop=Event()
+    pool=ThreadPoolExecutor(max_workers=workers,thread_name_prefix='depth-anchor')
+    pending={}
+    results={}
+    next_index=0
+    try:
+        while next_index<len(anchors) or pending:
+            while next_index<len(anchors) and len(pending)<workers:
+                future=pool.submit(evaluate,anchors[next_index],stop)
+                pending[future]=next_index
+                next_index+=1
+            done,_=wait(tuple(pending),timeout=.25,return_when=FIRST_COMPLETED)
+            for future in done:
+                index=pending.pop(future)
+                results[index]=future.result()
+            if progress:
+                progress(95*len(results)/len(anchors),
+                    f'Saved depth: {len(results)}/{len(anchors)} decisions complete; {workers} replay workers')
+        return [results[i] for i in range(len(anchors))]
+    finally:
+        stop.set()
+        pool.shutdown(wait=True,cancel_futures=True)
 
 
 def _stats(values):
@@ -128,19 +209,25 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
     anchors=_anchors(chosen,now,max(delays),window_seconds,step_minutes)
     cells=[(delay,h) for delay in delays for h in HORIZONS]
     by_cell={cell:[] for cell in cells}
-    # All horizons use the same immutable first-book lookup for a decision.
-    cache={}
-    def lookup(identity,eligible,end,cutoff):
-        key=(identity,eligible,end,cutoff)
-        if key not in cache:
-            cache[key]=replay._first(identity,eligible,end,cutoff)
-        return cache[key]
-    for i,decision in enumerate(anchors):
-        cache.clear()
+    workers=_worker_count(len(anchors))
+    if progress:
+        progress(0, f"Saved depth: allocated {workers} replay workers for {len(anchors)} decisions")
+
+    def evaluate(decision, stop, report=None):
+        # One cache per independent decision; each DB lookup opens its own
+        # read-only connection. No shared mutable cache across workers.
+        cache={}
+        def lookup(identity,eligible,end,cutoff):
+            key=(identity,eligible,end,cutoff)
+            if key not in cache:
+                cache[key]=replay._first(identity,eligible,end,cutoff)
+            return cache[key]
+        items=[]
         for j,(delay,h) in enumerate(cells):
-            if progress:
-                progress(95*(i*len(cells)+j)/max(1,len(anchors)*len(cells)),
-                         f"Saved depth: decision {i+1}/{len(anchors)}, delay {delay}ms, hold {h}s")
+            if stop.is_set():
+                return items
+            if report:
+                report(j,delay,h)
             result=replay.replay(strategy=strategy,identities=identities,decision_utc=paper._iso(decision),
                 lots=lots,capital=capital,hold_seconds=h,latency_ms=delay,
                 window_seconds=window_seconds,max_skew_seconds=max_skew_seconds,
@@ -164,7 +251,23 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
                     charge=paper._fees("BUY",turnover,broker_profile)
                     item["passive_bid_entry_markout_inr"]=fees._money(
                         result["net_pnl_inr"]-entry["cashflow"]-turnover-charge)
-            by_cell[delay,h].append(item)
+            items.append(item)
+        return items
+
+    if workers>1:
+        ordered=_parallel_anchors(anchors,evaluate,workers,progress)
+    else:
+        ordered=[]
+        stop=Event()
+        for i,decision in enumerate(anchors):
+            def report(j,delay,h):
+                if progress:
+                    progress(95*(i*len(cells)+j)/max(1,len(anchors)*len(cells)),
+                        f"Saved depth: decision {i+1}/{len(anchors)}, delay {delay}ms, hold {h}s; 1 replay worker")
+            ordered.append(evaluate(decision,stop,report))
+    for items in ordered:
+        for cell,item in zip(cells,items):
+            by_cell[cell].append(item)
     observed={cell:{r["decision_utc"] for r in rows if r["net_pnl_inr"] is not None}
               for cell,rows in by_cell.items()}
     matched=set.intersection(*observed.values())
@@ -208,6 +311,7 @@ def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
             "coverage":coverage,"step_minutes":step_minutes,
             "latencies_ms":list(delays),"hold_seconds":list(HORIZONS),
             "compare_delays":bool(compare_delays),"configuration_count":len(cells),
+            "worker_count":workers,
             "cutoff_utc":paper._iso(now),
             "actual_fills_observed":False,"broker_margin_verified":False,
             "warning":"Fixed clock diagnostic for selected exact contracts, not an entry strategy or unbiased backtest. "
