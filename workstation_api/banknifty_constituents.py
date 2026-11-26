@@ -362,7 +362,7 @@ def _weights_for(day, asof, members):
 def _quote(db, symbol, day, target):
     low = _iso(target-timedelta(seconds=MAX_AGE))
     hi = _iso(target)
-    row = db.execute("""SELECT identity,received_utc,exchange_trade_utc,price,volume,atp,buy_quantity,sell_quantity
+    row = db.execute("""SELECT identity,received_utc,exchange_trade_utc,price,volume,atp,buy_quantity,sell_quantity,packet_sha256,membership_sha256
         FROM banknifty_constituent_quotes
         WHERE session_ist=? AND symbol=? AND received_utc>=? AND received_utc<=?
         ORDER BY received_utc DESC LIMIT 1""",(day.isoformat(),symbol,low,hi)).fetchone()
@@ -371,7 +371,7 @@ def _quote(db, symbol, day, target):
     trade = datetime.fromisoformat(row[2])
     if not 0<=(target-trade).total_seconds()<=MAX_AGE:
         return None
-    return dict(zip(("identity","received_utc","exchange_trade_utc","price","volume","atp","buy_quantity","sell_quantity"),row))
+    return dict(zip(("identity","received_utc","exchange_trade_utc","price","volume","atp","buy_quantity","sell_quantity","packet_sha256","membership_sha256"),row))
 
 
 def calculate_row(current, anchor, baselines, weight, index_anchor):
