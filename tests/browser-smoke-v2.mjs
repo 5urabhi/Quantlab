@@ -564,6 +564,36 @@ try{
    await page.unroute('**/api/trading-cockpit/spreads/batch/plans')
    await page.unroute('**/api/trading-cockpit/spreads/batch')
    await page.unroute('**/api/jobs/fixture-batch')
+   const strategyConfig={capital:17000,max_loss:4250,target_net:100,stop_net:250,trail_net:50,max_lots:3,hold_seconds:1800,liquidity_grace_seconds:20,slippage_bps:0,broker_profile:'zerodha'}
+   const strategyPosts=[]
+   await page.route('**/api/trading-cockpit/strategy-research',route=>{
+     strategyPosts.push(route.request().postDataJSON())
+     return route.fulfill({json:{job_id:'fixture-strategy'}})
+   })
+   const strategyRow={policy:'signal_reversal',lane:'directional',hold_cap_seconds:1800,entry_attempts:8,
+     scored:6,entry_rejected:1,unknown_entry_attempts:1,censored:0,pending:1,profitable:4,losing:2,
+     target_hits:3,conditional_net_inr:150,fully_observed_session_net_inr:null,conditional_ending_cash_inr:17150,
+     closed_drawdown_inr:100,mean_hold_seconds:210,fees_inr:300,exit_reasons:{signal_reversal:6},
+     no_trade_reasons:{missing_fresh_chain:3},halted:false,remaining_modeled_loss_inr:4000}
+   await page.route('**/api/jobs/fixture-strategy',route=>route.fulfill({json:{status:'complete',stage:'Output saved',percent:100,result:{
+     run_id:'b'.repeat(32),day_ist:'2026-11-26',cutoff_utc:'2026-11-26T09:00:00Z',complete_session:false,
+     config:strategyConfig,observation_ticks:3000,signal_evidence:{state:'available',valid:1000,up:100,down:80,neutral:820,ticks:1500},
+     candidate_scans:180,source_reasons:{missing_fresh_chain:3},policies:[strategyRow],recent:[],journal_count:8,warning:'Synthetic browser fixture; no real trades.'
+   }}}))
+   await page.getByRole('tab',{name:/Strategy Research/}).click()
+   const strategyPanel=page.getByRole('region',{name:'Dynamic strategy research'})
+   await strategyPanel.getByRole('button',{name:'Compare all exit policies'}).click()
+   await strategyPanel.getByRole('table',{name:'Exit policy comparison'}).getByText('signal reversal',{exact:true}).first().waitFor()
+   assert.equal(strategyPosts.length,1)
+   assert.equal(strategyPosts[0].capital,17000)
+   assert.equal(strategyPosts[0].hold_seconds,1800)
+   assert.equal(strategyPosts[0].slippage_bps,0)
+   assert.equal('identities' in strategyPosts[0],false)
+   assert.equal('step_minutes' in strategyPosts[0],false)
+   await strategyPanel.getByRole('link',{name:'Download full strategy journal CSV'}).waitFor()
+   await shot('02-dynamic-strategy')
+   await page.unroute('**/api/trading-cockpit/strategy-research')
+   await page.unroute('**/api/jobs/fixture-strategy')
    await page.getByRole('tab',{name:/Live Spread Monitor/}).click()
    await page.getByRole('tabpanel',{name:'Live Spread Monitor'}).waitFor()
    await page.getByRole('button',{name:'Inspect'}).first().waitFor()
