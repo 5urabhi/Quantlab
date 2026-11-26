@@ -20,6 +20,10 @@ def main():
     parser.add_argument("--context-mode",choices=("off","receipt","archive"),default="off",
                         help="Receipt-as-of context, or explicitly reviewed historical archive availability")
     parser.add_argument("--context-batch",default="auto",help="Dated BANKNIFTY membership batch ID; auto selects by date overlap")
+    parser.add_argument("--debit-spreads",action="store_true",help="Compare paired debit spread gross-funding and net-debit paper lanes")
+    parser.add_argument("--context-q",action="store_true",help="Compare matched technical and contextual offline-Q exits")
+    parser.add_argument("--patterns",action="store_true",help="Study and compare completed-candle pattern models")
+    parser.add_argument("--fixed-panel",action="store_true",help="Add separate major-bank panel research, not historical index membership")
     parser.add_argument("--rank-entries",action="store_true",help="Compare validation-calibrated probability and affordable contract ranking")
     parser.add_argument("--frame",type=int,choices=research.FRAMES,default=5)
     parser.add_argument("--hold",type=int,choices=research.HOLDS,default=60,
@@ -36,6 +40,7 @@ def main():
         report,journal,sources=research.run(from_date=a.from_date,to_date=a.to_date,
             frame=a.frame,hold=a.hold,capital=a.capital,risk_budget=a.risk_budget,entry_mode=a.entry_mode,
             context_mode=a.context_mode,context_batch=a.context_batch,rank_entries=a.rank_entries,
+            pattern_research=a.patterns,fixed_panel=a.fixed_panel,context_q=a.context_q,debit_spreads=a.debit_spreads,
             lot_size=a.lot_size,max_lots=a.max_lots,wings=a.wings,premium_penalty_bps=a.penalty_bps,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
@@ -63,6 +68,8 @@ def main():
     print("Capital-independent learning support:",json.dumps(report["learning_support"]))
     context=report["context_coverage"]
     print("Context coverage:",json.dumps({k:v for k,v in context.items() if k not in ("bank_feature_names","global_feature_names","factor_receipt_sha256","warning")}))
+    for width,item in report["candle_patterns"].get("horizons",{}).items():
+        print("Candle horizon:",width,json.dumps({k:v for k,v in item.items() if k!="pattern_library"}))
     if "ml" in report:
         print("ML:",json.dumps(report["ml"]))
         print("ML holdout:",json.dumps(report["ml_holdout"]))
@@ -84,6 +91,10 @@ def main():
             if "daily_coverage" in result:
                 summary["daily_coverage"]={k:v for k,v in result["daily_coverage"].items() if k!="by_session"}
             print(name,json.dumps(summary))
+    for lane,item in report["debit_spread_research"].items():
+        print("Debit spread lane:",lane,json.dumps({k:v for k,v in item.items() if k!="methods"}))
+        for name,result in item["methods"].items():
+            print(name,json.dumps({k:v for k,v in result.items() if k not in ("daily","daily_coverage")} | {"days_with_entry":result["daily_coverage"]["days_with_entry"]}))
     print("Report:",path.resolve())
     print("No actual fills, profitability, or live RL approval certified.")
     return 0

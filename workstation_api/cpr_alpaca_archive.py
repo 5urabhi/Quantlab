@@ -129,3 +129,59 @@ def backfill(start,stop,*,feed="iex",confirmed=False):
             out[factor]={"state":"unavailable","reason":type(exc).__name__}
     return {"state":"alpaca_archive_attempt_finished","feed":feed,"factors":out,
             "warning":"Raw US-listed ETF daily proxies, not index levels, live Asian prices, vintage-certified history or actual historical receipts."}
+
+
+def recent_rows(factor,rows,received,*,intraday):
+    """Completed bars only; true availability is the actual receipt."""
+    seen={}
+    for row in rows:
+        stamp=m._stamp(row["t"])
+        if intraday:
+            if stamp.minute%5 or stamp.second or stamp.microsecond:
+                raise ValueError("Unexpected five-minute Alpaca clock")
+            event=stamp+timedelta(minutes=5)
+            if event>received:
+                continue
+            o,h,l,c,v=(float(row[k]) for k in ("o","h","l","c","v"))
+            if not all(math.isfinite(x) for x in (o,h,l,c,v)) or min(o,h,l,c,v)<=0 or not l<=min(o,c)<=max(o,c)<=h:
+                raise ValueError("Invalid completed Alpaca OHLCV")
+        else:
+            # Reuse exact daily archive semantics and identical event
+            # identity, without reusing its assumed historical availability.
+            local=stamp.astimezone(NY)
+            csv_text,n=normalize(factor,[row],local.date(),local.date()+timedelta(days=1),received)
+            if not n:
+                continue
+            event=stamp
+            c=float(row["c"])
+        if event in seen and seen[event]!=c:
+            raise ValueError("Conflicting Alpaca observations")
+        seen[event]=c
+    return sorted(seen.items())
+
+
+def collect_recent(feed,*,intraday=False,stop=None):
+    if feed not in ("iex","sip"):
+        raise ValueError("Unsupported Alpaca equity feed")
+    auth=credentials()
+    if auth is None:
+        raise ValueError("Alpaca credentials not configured")
+    now=m._now()
+    catalog=m.ALPACA_INTRADAY_PROXIES if intraday else m.ALPACA_PROXIES
+    timeframe="5Min" if intraday else "1Day"
+    left=now-timedelta(hours=2) if intraday else now-timedelta(days=12)
+    params={"symbols":",".join(v[0] for v in catalog.values()),"timeframe":timeframe,
+            "start":left.isoformat(),"end":now.isoformat(),"feed":feed,
+            "adjustment":"raw","asof":"-","limit":1000,"sort":"asc"}
+    raw=_http(params,*auth)
+    payload=json.loads(raw);bars=payload["bars"]
+    if not isinstance(bars,dict) or payload.get("next_page_token") or set(bars)-{v[0] for v in catalog.values()}:
+        raise ValueError("Incomplete or unexpected Alpaca response")
+    received=m._now();count=0
+    for factor,(symbol,_,_) in catalog.items():
+        if stop is not None and stop.is_set():
+            break
+        rows=recent_rows(factor,bars.get(symbol,[]),received,intraday=intraday)
+        if rows:
+            count+=feeds._save_factor(factor,"Alpaca:"+feed+":"+symbol+":"+timeframe+":raw",rows,raw,received)
+    return count

@@ -30,7 +30,8 @@ FRED_URL="https://api.stlouisfed.org/fred/"
 TWELVE_URL="https://api.twelvedata.com/time_series"
 FRED_SERIES={"SP500_CLOSE":"SP500","NASDAQ_CLOSE":"NASDAQCOM","NIKKEI_CLOSE":"NIKKEI225",
              "US_VIX_CLOSE":"VIXCLS","USDINR_CLOSE":"DEXINUS","BRENT_CLOSE":"DCOILBRENTEU","US10Y":"DGS10"}
-DEFAULT={"enabled":False,"fred":True,"news":True,"mappings":[]}
+DEFAULT={"enabled":False,"fred":True,"news":True,"mappings":[],
+         "alpaca":False,"alpaca_feed":"iex","alpaca_intraday":False}
 MAX_MAPPINGS=8
 IST=ZoneInfo("Asia/Kolkata")
 _LOCK=Lock()
@@ -52,10 +53,14 @@ def _path():
 
 
 def _validate(config):
+    if isinstance(config,dict) and set(config)==set(DEFAULT)-{"alpaca","alpaca_feed","alpaca_intraday"}:
+        config={**config,"alpaca":False,"alpaca_feed":"iex","alpaca_intraday":False}
     if not isinstance(config,dict) or set(config)!=set(DEFAULT):
         raise ValueError("Invalid market context feed configuration")
-    if any(type(config[k]) is not bool for k in ("enabled","fred","news")):
+    if any(type(config[k]) is not bool for k in ("enabled","fred","news","alpaca","alpaca_intraday")):
         raise ValueError("Feed enablement must be boolean")
+    if config["alpaca_feed"] not in ("iex","sip") or (config["alpaca_intraday"] and not config["alpaca"]):
+        raise ValueError("Select an authorized Alpaca feed and enable daily collection before intraday")
     rows=config["mappings"]
     if not isinstance(rows,list) or len(rows)>MAX_MAPPINGS:
         raise ValueError("At most eight reviewed Twelve Data instruments per worker")
@@ -68,6 +73,8 @@ def _validate(config):
             raise ValueError("Mapping requires a distinct supported price factor")
         if factor in FRED_SERIES and config["fred"]:
             raise ValueError("Do not map a factor already assigned to FRED")
+        if factor in m.ALPACA_PROXIES or factor in m.ALPACA_INTRADAY_PROXIES:
+            raise ValueError("Alpaca proxy identities are reserved for their defined source")
         if not isinstance(symbol,str) or not re.fullmatch(r"[A-Za-z0-9_.:/=\-]{1,40}",symbol):
             raise ValueError("Enter the exact authorized provider symbol")
         if not isinstance(exchange,str) or not re.fullmatch(r"[A-Za-z0-9_. /&()\-]{1,60}",exchange):
@@ -105,6 +112,7 @@ def configure(config,confirm):
 
 
 def status():
+    from . import cpr_alpaca_archive as alpaca
     try:
         config=_config();error=None
     except (ValueError,OSError,TypeError,KeyError):
@@ -113,6 +121,7 @@ def status():
         return {"config":config,"configuration_error":error,"worker_running":bool(_THREAD and _THREAD.is_alive()),
                 "sync_running":_SYNC_LOCK.locked(),"last_sync_utc":_LAST_SYNC,"sources":dict(_RESULTS),
                 "fred_key_configured":bool(os.getenv("FRED_API_KEY","").strip()),
+                "alpaca_credentials_configured":bool(alpaca.credentials()),
                 "twelve_key_configured":bool(os.getenv("TWELVE_DATA_API_KEY","").strip()),
                 "fred_catalog":dict(FRED_SERIES),"max_mappings":MAX_MAPPINGS,
                 "note":"Actual provider responses and entitlements remain unverified until collected. The worker runs only while QuantLab is open. Local receipt times are not exchange publication times."}
@@ -311,6 +320,14 @@ def sync_once(config,*,force=False,now=None,stop=None):
         # instruments remain hourly. Never label delayed bars realtime.
         local=now.astimezone(IST)
         market_window=local.weekday()<5 and clock(8,30)<=local.time().replace(tzinfo=None)<=clock(15,40)
+        if config["alpaca"] and not stop.is_set():
+            from . import cpr_alpaca_archive as alpaca
+            if alpaca.credentials() is None:
+                _record("alpaca:daily","not_configured","Set local Alpaca key and secret")
+            else:
+                _task("alpaca:daily",3600,lambda:alpaca.collect_recent(config["alpaca_feed"],stop=stop),force)
+                if config["alpaca_intraday"] and (market_window or force) and not stop.is_set():
+                    _task("alpaca:5min",300,lambda:alpaca.collect_recent(config["alpaca_feed"],intraday=True,stop=stop),force)
         for row in config["mappings"]:
             if stop.is_set():return
             factor=row["factor"];intraday=m.FACTORS[factor][0]=="intraday_return"

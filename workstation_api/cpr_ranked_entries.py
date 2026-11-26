@@ -127,9 +127,11 @@ def _threshold(r,model,means,candidates,nearest,dates,capital,risk_budget):
         n=result["scored_trades"];days=result["daily_coverage"]["days_with_scored_trade"]
         net=result["conditional_net_inr"]
         supported=bool(n>=MIN_VAL_TRADES and days>=MIN_VAL_DAYS and not result["unresolved_trades"]
+                       and not result["exits_after_1520"] and (result["max_exit_delay_minutes"] or 0)<=2
                        and net is not None and net>0)
         studies.append({"threshold":threshold,"scored":n,"days":days,"conditional_net_inr":net,
-                        "unresolved":result["unresolved_trades"],"eligible":supported})
+                        "unresolved":result["unresolved_trades"],"max_exit_delay_minutes":result["max_exit_delay_minutes"],
+                        "late_squareoffs":result["exits_after_1520"],"eligible":supported})
         if supported:
             score=(net,days,-threshold)
             if best is None or score>best[0]:
@@ -154,7 +156,7 @@ def _matched(episodes,scope):
 
 
 def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capital,risk_budget,
-           context_audit,q=None,progress=None):
+           context_audit,q=None,pattern_research=False,fixed_panel=False,context_q=False,progress=None):
     val_days,test_days=map(set,dates)
     val_signals=[s for s in signals if s["session"] in val_days]
     test_signals=[s for s in signals if s["session"] in test_days]
@@ -162,7 +164,15 @@ def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capita
     val_pool=[e for e in pools if e["session"] in val_days]
     test_pool=[e for e in pools if e["session"] in test_days]
     results={};journal=[]
-    scopes=("technical",) if context_audit.get("state")=="disabled" else cx.SCOPES
+    scopes=["technical"] if context_audit.get("state")=="disabled" else list(cx.SCOPES)
+    if fixed_panel and context_audit.get("state")!="disabled":
+        scopes.extend(cx.PANEL_SCOPES)
+    if pattern_research:
+        scopes.append("patterns")
+        if context_audit.get("state")!="disabled":
+            scopes.extend(("global_patterns","combined_patterns"))
+            if fixed_panel:
+                scopes.append("panel_global_patterns")
     # 'val' contains capital-independent learning trajectories; nearest actual
     # candidate episodes are built separately to match the trading account.
     nearest_val=[r._episode(s,table,index[s["session"]],hold=hold,lot_size=lot_size,
@@ -226,4 +236,20 @@ def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capita
             name=scope+":context_rule_fixed_stop"
             item["methods"][name]=metrics
             journal.extend({**row,"method":name} for row in rows)
+            if context_q:
+                # Train both Q variants on the same context-supported earlier
+                # trajectories. Do not choose Q on the evaluated P&L.
+                tq,ti=r._fit_q(tr)
+                cq,ci=r._fit_q(tr,context_scope=scope)
+                item["context_q"]={"matched_technical":ti,"contextual":ci}
+                for label,method,policy,info in (("matched_technical_q","offline_q",tq,ti),
+                                                  ("contextual_q","contextual_q",cq,ci)):
+                    name=scope+":"+label
+                    if not policy or not nt:
+                        item["methods"][name]={"state":"insufficient_matched_q_support"}
+                        continue
+                    metrics,rows=r._evaluate(nt,method=method,capital=capital,risk_budget=risk_budget,
+                            q=policy,context_scope=scope,dates=dates[1])
+                    item["methods"][name]=metrics
+                    journal.extend({**row,"method":name} for row in rows)
     return results,journal

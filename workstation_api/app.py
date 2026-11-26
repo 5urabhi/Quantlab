@@ -2422,7 +2422,7 @@ def data_manager_research_resolve_run(body: ResearchResolveRequest):
         bad(exc)
 
 
-@app.post("/api/data-manager/maintenance")
+@app.post("/api/data-manager/maintenance/derived")
 def data_manager_maintenance():
     # Local original candles and evidence are immutable. Only missing
     # derived views are eligible for source-safe automatic reconstruction.
@@ -5186,6 +5186,7 @@ class MarketMaintenanceRequest(BaseModel):
     index: bool=True
     constituents: bool=True
     options: bool=True
+    bank_panel: bool=False
     index_days: int=Field(default=365,ge=30,le=365,strict=True)
     constituent_days: int=Field(default=240,ge=30,le=240,strict=True)
     option_days: int=Field(default=365,ge=30,le=365,strict=True)
@@ -5226,7 +5227,11 @@ def market_library_maintenance_status():
 
 
 @app.post("/api/data-manager/maintenance")
-def configure_market_library_maintenance(body:MarketMaintenanceRequest):
+def configure_market_library_maintenance(body:MarketMaintenanceRequest|None=None):
+    # Preserve bodyless legacy derived-repair requests without shadowing
+    # the automatic history settings handler on the same URL.
+    if body is None or not body.model_fields_set:
+        return data_manager_maintenance()
     try:
         return data_maintenance.configure(body.model_dump(exclude={"confirm_readonly"}),body.confirm_readonly)
     except (ValueError,OSError,TypeError) as exc:
@@ -5608,6 +5613,9 @@ class ContextFeedConfigRequest(BaseModel):
     enabled: bool=False
     fred: bool=True
     news: bool=True
+    alpaca: bool=False
+    alpaca_feed: Literal["iex","sip"]="iex"
+    alpaca_intraday: bool=False
     mappings: list[dict[str,str]]=Field(default_factory=list,max_length=8)
     confirm_reviewed: bool=False
 

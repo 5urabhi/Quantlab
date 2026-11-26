@@ -19,7 +19,7 @@ import sqlite3
 from . import advanced_options as ao, constituent_prospective as p
 from . import replay_storage, shared_market_data
 
-VERSION="market_context_v2"
+VERSION="market_context_v3"
 MAX_IMPORT_BYTES=5_000_000
 MAX_IMPORT_ROWS=50000
 MAX_READ_ROWS=350000
@@ -66,6 +66,15 @@ ALPACA_PROXIES={
 }
 for key,(_,group,description) in ALPACA_PROXIES.items():
     FACTORS[key]=("daily_return",group,description)
+# US ETF five-minute bars are opportunistic prospective evidence; they
+# are neither futures nor a substitute for Asian exchange/GIFT data.
+ALPACA_INTRADAY_PROXIES={
+    "US_SPY_ETF_5M":("SPY","global_equity","US large-cap ETF five-minute price"),
+    "US_QQQ_ETF_5M":("QQQ","global_equity","Nasdaq-100 ETF five-minute price"),
+    "US_KBE_ETF_5M":("KBE","global_equity","US bank ETF five-minute price"),
+}
+for key,(_,group,description) in ALPACA_INTRADAY_PROXIES.items():
+    FACTORS[key]=("intraday_return",group,description)
 for category in ("FII","DII","CLIENT","PRO"):
     for position in ("INDEX_FUT_NET","INDEX_CALL_NET","INDEX_PUT_NET"):
         FACTORS[category+"_"+position]=("daily_position","participants",
