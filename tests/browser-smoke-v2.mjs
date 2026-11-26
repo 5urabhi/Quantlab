@@ -800,7 +800,7 @@ try{
    await page.getByRole('heading',{name:'Database Manager',exact:true}).waitFor()
    const dataTasks=page.getByRole('region',{name:'Choose a data task'})
    await dataTasks.getByRole('button',{name:/Browse market data/}).waitFor()
-   await dataTasks.getByRole('button',{name:/Manual repair & inspection/}).click()
+   await dataTasks.getByRole('button',{name:/Get missing data/}).click()
    await dataTasks.getByRole('button',{name:/Inspect stored records/}).click()
    await page.locator('.qm-panel-title').getByRole('heading',{name:'Data Explorer',exact:true}).waitFor()
    await dataTasks.getByRole('button',{name:/Health & recovery/}).click()
