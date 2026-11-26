@@ -4,7 +4,7 @@ Reuse the existing rolling-option cache; no separate market-price database,
 broker orders, or synthetic depth. Receipt request windows do not certify
 continuous observed contract/session coverage.
 """
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import date, timedelta
 from threading import Lock
 import json
@@ -16,6 +16,7 @@ from . import expired_options_backtest as exp, market_patterns, service, dhan_au
 MAX_DAYS=366
 MAX_RECEIPTS=4096
 MAX_REQUESTS=300
+MAX_REPAIR_WINDOWS=900
 LOCK=Lock()
 SOURCE="Dhan v2 /charts/rollingoption"
 
@@ -135,9 +136,18 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
         exact_reused=0
         empty=0
         usable=0
-        for i,body in enumerate(requests):
+        pending=deque((body,False) for body in requests)
+        wire_state={}
+        attempted=0
+        split_windows=0
+        completed=0
+        while pending:
+            if attempted>=MAX_REPAIR_WINDOWS:
+                raise ValueError("Bounded compatibility retry limit reached; completed receipts retained. Resume to check remaining windows.")
+            body,was_split=pending.popleft()
+            attempted+=1
             if progress:
-                progress(5+90*i/max(1,len(requests)),f"Checking option history {i+1}/{len(requests)}")
+                progress(min(95,5+90*completed/max(1,completed+len(pending)+1)),f"Checking option history: {completed} complete, {len(pending)+1} pending")
             # Recheck exact cache after planning, preserve invalid receipts
             # and stop on corruption rather than overwriting original evidence.
             payload=exp._get_cached(body)
@@ -145,16 +155,29 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
                 exact_reused+=1
                 rows=exp._normalize(payload,body)
             else:
-                if fetcher is None:
-                    time.sleep(.45)
-                    payload=exp._original_response(body)
-                else:
-                    payload=fetcher(body)
+                try:
+                    if fetcher is None:
+                        time.sleep(.45)
+                        payload=exp._original_response(body,wire_state=wire_state)
+                    else:
+                        payload=fetcher(body)
+                except exp.RollingInputError as exc:
+                    lo,hi=date.fromisoformat(body["fromDate"]),date.fromisoformat(body["toDate"])
+                    # One split only, preserving exact original scopes. Never retry
+                    # auth, entitlement, rate-limit or unknown provider errors.
+                    if was_split or (hi-lo).days<=1:
+                        raise ValueError(str(exc)+" Short-window retry also rejected; verify Dhan expired-option access. Saved receipts are retained.") from None
+                    mid=lo+timedelta(days=(hi-lo).days//2)
+                    for x,y in ((mid,hi),(lo,mid)):
+                        pending.appendleft(({**body,"fromDate":x.isoformat(),"toDate":y.isoformat()},True))
+                    split_windows+=1
+                    continue
                 if not isinstance(payload,dict) or not isinstance(payload.get("data"),dict):
                     raise ValueError("Invalid Dhan expired-option history payload")
                 rows=exp._normalize(payload,body)
-                exp._save_cache(body,payload)
+                exp._save_cache(body,payload,wire_request=wire_state.get("wire_request") if fetcher is None else None)
                 downloaded+=1
+            completed+=1
             empty+=not bool(rows)
             usable+=len(rows)
         if progress:
@@ -162,6 +185,7 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None):
         return {**preview(start_date,end_date,wings,today),
                 "existing_verified_receipts":reused,"unreadable_receipts_encountered":rejected,
                 "planned_missing_requests":len(requests),"new_receipts":downloaded,
+                "split_rejected_windows":split_windows,"processed_windows":completed,
                 "exact_cache_reuses":exact_reused,"empty_processed_receipts":empty,
                 "usable_rows_in_processed_receipts":usable,
                 "state":"request_windows_checked","continuous_coverage_certified":False,

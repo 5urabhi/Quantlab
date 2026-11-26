@@ -42,6 +42,26 @@ class OptionsHistorySyncTests(unittest.TestCase):
         self.assertEqual(r["new_receipts"],0)
         self.assertFalse(r["continuous_coverage_certified"])
 
+    def test_rejected_long_window_splits_and_reuses_original_subwindows(self):
+        requests=[]
+        def fetch(body):
+            requests.append(body)
+            days=(date.fromisoformat(body["toDate"])-date.fromisoformat(body["fromDate"])).days
+            if days>15:
+                raise exp.RollingInputError("Dhan DH-905")
+            side="ce" if body["drvOptionType"]=="CALL" else "pe"
+            return {"data":{side:{"timestamp":[]}}}
+        args=dict(start_date="2025-11-26",end_date="2025-12-25",wings=0,fetcher=fetch,today=self.today)
+        r=sync.run(**args)
+        self.assertEqual(r["split_rejected_windows"],2)
+        self.assertEqual(r["new_receipts"],4)
+        self.assertEqual(len(requests),6)
+        self.assertFalse(r["continuous_coverage_certified"])
+        requests.clear()
+        r=sync.run(**args)
+        self.assertEqual(r["existing_verified_receipts"],4)
+        self.assertEqual(requests,[])
+
     def test_failed_request_keeps_prior_completed_receipt(self):
         calls=[]
         def fetch(body):

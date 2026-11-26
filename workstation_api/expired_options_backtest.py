@@ -167,7 +167,43 @@ def _request_body(start: date, end: date, flag: str, code: int,
     }
 
 
-def _original_response(body: dict, *, opener=None) -> dict:
+class RollingInputError(ValueError):
+    """The provider explicitly rejected a rolling-option request (DH-905)."""
+
+
+def _original_response(body: dict, *, opener=None, wire_state=None) -> dict:
+    """Try equivalent documented REST/SDK encodings only on explicit DH-905.
+
+    Canonical cache identity remains unchanged. Do not switch instruments,
+    expiry ordinals, fields or strike semantics to obtain a successful reply.
+    Remember the accepted representation for this acquisition job.
+    """
+    variants = [
+        dict(body),
+        {**body, "interval": int(body["interval"])},
+        {**body, "interval": int(body["interval"]), "securityId": str(body["securityId"])},
+        {**body, "securityId": str(body["securityId"])},
+    ]
+    preferred = wire_state.get("preferred", 0) if wire_state is not None else 0
+    order = [preferred] + [i for i in range(len(variants)) if i != preferred]
+    last = None
+    for attempt, i in enumerate(order):
+        if attempt and opener is None:
+            time.sleep(.45)
+        try:
+            payload = _original_response_once(variants[i], opener=opener)
+        except RollingInputError as exc:
+            last = exc
+            continue
+        if wire_state is not None:
+            wire_state.update(preferred=i, wire_request=variants[i])
+        return payload
+    raise RollingInputError(
+        str(last) + " Equivalent documented numeric/string encodings were rejected."
+    ) from None
+
+
+def _original_response_once(body: dict, *, opener=None) -> dict:
     token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
     if not token or len(token) > 4096:
         raise ValueError("Connect your Dhan Data API token under Trading Copilot > Connections")
@@ -186,6 +222,7 @@ def _original_response(body: dict, *, opener=None) -> dict:
         # Dhan can return DH-905 for an invalid expiry code or another
         # invalid request value, and DH-907 for unavailable source history.
         detail = ""
+        vendor_code = ""
         try:
             failure = json.loads(exc.read(4096))
             if isinstance(failure, dict):
@@ -211,7 +248,8 @@ def _original_response(body: dict, *, opener=None) -> dict:
         context = (f"{body['expiryFlag'].lower()} {body['drvOptionType']} "
                    f"{body['strike']}, expiry={body['expiryCode']}, "
                    f"dates={body['fromDate']}..{body['toDate']}")
-        raise ValueError(
+        error_type = RollingInputError if exc.code == 400 and vendor_code == "DH-905" else ValueError
+        raise error_type(
             f"Dhan expired-options HTTP {exc.code}{detail} for {context}. "
             "This endpoint uses expiryCode 1=near, 2=next, 3=far. "
             "If the expiry is still active, refresh the Dhan instrument master "
@@ -255,7 +293,7 @@ def _get_cached(body: dict) -> dict | None:
         raise ValueError("Cached Dhan expired-options receipt is corrupted; remove the affected receipt in your local data library before retrying") from None
 
 
-def _save_cache(body: dict, payload: dict) -> None:
+def _save_cache(body: dict, payload: dict, *, wire_request=None) -> None:
     path = _cache_path(body)
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -264,6 +302,13 @@ def _save_cache(body: dict, payload: dict) -> None:
     envelope = {"source": "Dhan v2 /charts/rollingoption", "request": body,
                 "sha256": sha256(raw).hexdigest(), "payload": payload,
                 "saved_utc": datetime.now(timezone.utc).isoformat()}
+    if wire_request is not None:
+        # Record the actual accepted encoding without changing semantic cache keys.
+        equivalent = {**wire_request, "interval": str(wire_request["interval"]),
+                      "securityId": int(wire_request["securityId"])}
+        if equivalent != body:
+            raise ValueError("Wire request differs from canonical source scope")
+        envelope["wire_request"] = wire_request
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(envelope, separators=(",", ":")), encoding="utf-8")
     tmp.replace(path)
@@ -343,6 +388,7 @@ def load_option_market(start: date, stop: date, *, expiry_flag: str,
     downloaded = 0
     empty = 0
     invalid = 0
+    wire_state = {}
     for i, body in enumerate(bodies):
         if progress:
             progress(10 + 53 * i / max(1, len(bodies)), "Reading historical option candles and source receipts")
@@ -355,12 +401,12 @@ def load_option_market(start: date, stop: date, *, expiry_flag: str,
                     time.sleep(.45)  # modest spacing; no vendor request flood
                 else:
                     throttle()
-                payload = _original_response(body)
+                payload = _original_response(body, wire_state=wire_state)
             else:
                 payload = fetcher(body)
             if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
                 raise ValueError("Expired-options vendor returned an invalid data payload")
-            _save_cache(body, payload)
+            _save_cache(body, payload, wire_request=wire_state.get("wire_request") if fetcher is None else None)
             downloaded += 1
         rows = _normalize(payload, body)
         if not rows:
