@@ -370,6 +370,19 @@ def _equity_audit(raw,start,stop,index_days,state,now,*,choose_repairs):
                             "missing_or_partial_sessions":None,"state":"original_source_unavailable"}
     return result,repairs
 
+def _repair_request_callback(state,repairs):
+    """A cancelled or not-yet-attempted date must not receive a seven-day
+    cooldown just because it was included in the planned batch."""
+    attempted=set()
+    def on_request(identity,first,last):
+        for day in repairs.get(identity,()):
+            key=identity+"|"+day
+            if first<=date.fromisoformat(day)<last and key not in attempted:
+                _mark(state,key,_now())
+                attempted.add(key)
+    return on_request,attempted
+
+
 class _Stop:
     def __init__(self,check,progress):
         self.check=check;self.progress=progress;self.cancelled=False
@@ -411,12 +424,11 @@ def _equity_pass(cfg,state,now,stop,progress,should_stop):
     _,repairs=_equity_audit(raw,start,eligible_stop,index,state,now,choose_repairs=True)
     # Do not retry entire previously checked windows on every pass. Repair
     # only gaps identified on actual complete index-session dates.
-    for identity,days in repairs.items():
-        for day in days:_mark(state,identity+"|"+day,_now())
+    on_request,attempted=_repair_request_callback(state,repairs)
     stop_event=_Stop(should_stop,progress)
     if should_stop():
         return {"state":"paused","batch_id":raw["id"]}
-    outcome=dw.run_batch(raw["id"],cancel_event=stop_event,repair_dates_by_identity=repairs)
+    outcome=dw.run_batch(raw["id"],cancel_event=stop_event,repair_dates_by_identity=repairs,on_request=on_request)
     if stop_event.cancelled and progress:
         progress(45,"Cancelling automatic maintenance")
     observed,_=_equity_audit(raw,start,eligible_stop,index,state,now,choose_repairs=False)
@@ -426,7 +438,7 @@ def _equity_pass(cfg,state,now,stop,progress,should_stop):
             "batch_id":raw["id"],"documented_through":info["covered_through"],"requested_end_exclusive":stop.isoformat(),
             "actual_end_exclusive":eligible_stop.isoformat(),"unresolved":plan["unresolved"],"batch_status":outcome["status"],
             "batch_counts":outcome["counts"],"observed_member_session_gaps":gaps,"unavailable_sources":unavailable,
-            "members":observed,"repair_dates_attempted":sum(map(len,repairs.values())),
+            "members":observed,"repair_dates_attempted":len(attempted),
             "retryable_member_session_gaps":sum(x.get("retryable_sessions",0) for x in observed.values()),
             "batch_errors":bool(outcome["errors"])}
 
@@ -467,18 +479,17 @@ def _panel_pass(cfg,state,now,stop,progress,should_stop):
                for s,_ in identities]},"items":[{**r,"pit_symbol":r["symbol"]} for r in raw["items"]]}
     index=mp._history("INDEX:BANKNIFTY",_local(now).date())["days"]
     _,repairs=_equity_audit(audit,start,stop,index,state,now,choose_repairs=True)
-    for identity,days in repairs.items():
-        for day in days:_mark(state,identity+"|"+day,_now())
+    on_request,attempted=_repair_request_callback(state,repairs)
     if should_stop():
         return {"state":"paused","batch_id":raw["id"]}
-    outcome=dw.run_batch(raw["id"],cancel_event=_Stop(should_stop,progress),repair_dates_by_identity=repairs)
+    outcome=dw.run_batch(raw["id"],cancel_event=_Stop(should_stop,progress),repair_dates_by_identity=repairs,on_request=on_request)
     observed,_=_equity_audit(audit,start,stop,index,state,now,choose_repairs=False)
     gaps=sum(x["missing_or_partial_sessions"] or 0 for x in observed.values())
     unavailable=sum(x["complete_sessions"] is None for x in observed.values())
     return {"state":"partial" if gaps or unavailable or outcome["status"]!="completed" or outcome["errors"] or not observed else "checked",
             "batch_id":raw["id"],"symbols":list(PANEL_SYMBOLS),"requested_end_exclusive":desired[1],
             "actual_end_exclusive":desired[1],"observed_member_session_gaps":gaps,"unavailable_sources":unavailable,
-            "members":observed,"repair_dates_attempted":sum(map(len,repairs.values())),
+            "members":observed,"repair_dates_attempted":len(attempted),
             "retryable_member_session_gaps":sum(x.get("retryable_sessions",0) for x in observed.values()),
             "batch_status":outcome["status"],"batch_errors":bool(outcome["errors"]),
             "warning":"Fixed research watchlist, not verified BANKNIFTY membership or index attribution."}
