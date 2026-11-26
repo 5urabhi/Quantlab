@@ -3,6 +3,7 @@ import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import HistoricalAlphaResearch from './HistoricalAlphaResearch'
 import VolatilityEvidenceResearch from './VolatilityEvidenceResearch'
 import PredictiveOptionResearch from './PredictiveOptionResearch'
+import AlphaCandidateRegistry from './AlphaCandidateRegistry'
 
 type Cohort={start_session:string;registered_utc:string;cohort_id:string}
 type Scope='none'|'options'|'global'|'participants'|'events'|'combined'|'all'
@@ -72,6 +73,7 @@ export default function ConstituentAlphaResearch({onOpenSetup,onOpenLedger,onOpe
  <HistoricalAlphaResearch/>
  <VolatilityEvidenceResearch/>
  <PredictiveOptionResearch/>
+ <AlphaCandidateRegistry/>
  <p className="bci-note">No prediction is automatically promoted to live paper trading. Predictive option studies below use historical price proxies. Actual receipt-based execution and future model validation remain separate.</p>
  </section>
 }
