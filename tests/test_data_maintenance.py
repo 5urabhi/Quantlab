@@ -107,3 +107,49 @@ class MaintenanceTests(TestCase):
         self.assertEqual(third["new_receipts"],0)
         self.assertEqual(third["observed_rolling_minute_slots"],second["observed_rolling_minute_slots"])
         self.assertFalse(third["continuous_coverage_certified"])
+
+
+    def test_productive_retry_and_backoff(self):
+        option={"state":"partial","new_receipts":112,"unattempted_requests":4324,
+                "rejected_windows":0,"unreadable_receipts_encountered":0}
+        report={"state":"partial","sources":{"options":option}}
+        self.assertEqual(m._next_schedule(report),(m.PRODUCTIVE_RETRY,"more_option_requests"))
+        for changes in ({"new_receipts":0},{"unattempted_requests":0},
+                        {"rejected_windows":1},{"unreadable_receipts_encountered":1},{"state":"blocked"}):
+            self.assertEqual(m._next_schedule({"state":"partial","sources":{"options":{**option,**changes}}})[0],m.RETRY)
+        self.assertEqual(m._next_schedule({"state":"checked"})[0],m.CHECKED_RETRY)
+        self.assertEqual(m._next_schedule({"state":"paused"})[0],m.RETRY)
+        panel={"state":"partial","repair_dates_attempted":10,"retryable_member_session_gaps":395,
+               "batch_status":"completed","batch_errors":False}
+        self.assertEqual(m._next_schedule({"state":"partial","sources":{"bank_panel":panel}})[0],m.PRODUCTIVE_RETRY)
+        self.assertEqual(m._next_schedule({"state":"partial","sources":{"bank_panel":{**panel,"retryable_member_session_gaps":0}}})[0],m.RETRY)
+        self.assertEqual(m._next_schedule({"state":"partial","sources":{"bank_panel":{**panel,"batch_errors":True},"options":option}})[0],m.RETRY)
+        self.assertEqual(m._next_schedule({"state":"partial","sources":{"index":{"INDEX:BANKNIFTY":{"state":"partial","downloaded_windows":5,"uncovered_request_windows":10}}}})[0],m.PRODUCTIVE_RETRY)
+
+    def test_productive_legacy_checkpoint_resumes_without_bypassing_guard(self):
+        cfg={**m.DEFAULT,"enabled":True}
+        state={"target":m._target(self.now),"next_due_utc":(self.now+timedelta(hours=3)).isoformat(),
+               "last_run":{"state":"partial","finished_utc":(self.now-timedelta(minutes=3)).isoformat(),
+                           "sources":{"options":{"state":"partial","new_receipts":112,"unattempted_requests":4324}}}}
+        self.assertTrue(m._due(cfg,state,self.now))
+        self.assertFalse(m._due(cfg,state,datetime(2026,11,26,5,tzinfo=timezone.utc)))
+        state["next_due_reason"]="source_error_backoff"
+        self.assertFalse(m._due(cfg,state,self.now))
+
+    def test_productive_pass_persists_finished_time_schedule(self):
+        cfg={**m.DEFAULT,"enabled":True,"index":False,"constituents":False}
+        m.configure(cfg,True)
+        finish=self.now+timedelta(minutes=4)
+        lane={"state":"partial_requests","existing_verified_receipts":3208,"new_receipts":112,
+              "planned_missing_requests":4436,"unattempted_requests":4324,"empty_processed_receipts":0,
+              "usable_rows_in_processed_receipts":68995,"unreadable_receipts_encountered":0,
+              "excluded_active_calendar_days":2,"continuous_coverage_certified":False,
+              "empty_verified_receipts":486,"observed_rolling_minute_slots":1679528,
+              "observed_offset_session_pairs":4498,"observed_session_dates":245,"rejected_requests":[]}
+        with patch.object(m,"_now",return_value=finish),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value={"ok":True}),patch.object(m.options,"run",return_value=lane) as provider,patch.object(m.mp,"_history",return_value={"days":{}}):
+            result=m.run(now=self.now)
+        self.assertEqual(result["state"],"partial")
+        self.assertEqual(provider.call_args.kwargs["request_limit"],m.MAX_OPTION_REQUESTS)
+        saved=m._state()
+        self.assertEqual(saved["next_due_utc"],(finish+m.PRODUCTIVE_RETRY).isoformat())
+        self.assertEqual(saved["next_due_reason"],"more_option_requests")
