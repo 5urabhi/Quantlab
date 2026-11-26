@@ -476,6 +476,21 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertEqual(trade["lot_size_basis"], "ORIGINAL_CURRENT_DHAN_MASTER")
         self.assertEqual(trade["units"], 60)
 
+    def test_rolling_normalization_keeps_inclusive_end_and_drops_post_session(self):
+        body=exp._request_body(date(2026,10,6),date(2026,10,7),"MONTH",0,"ATM","CALL")
+        times=[datetime(2026,10,d,h,m,tzinfo=exp.IST) for d,h,m in
+               ((6,9,15),(6,15,29),(6,15,30),(7,9,15),(7,15,29),(7,15,39),(8,9,15))]
+        n=len(times)
+        segment={"timestamp":[int(x.timestamp()) for x in times],
+                 "open":[100]*n,"high":[101]*n,"low":[99]*n,"close":[100]*n,
+                 "strike":[55000]*n,"volume":[100]*n}
+        rows=exp._normalize({"data":{"ce":segment}},body)
+        self.assertEqual(len(rows),4)
+        self.assertEqual([r["session_ist"] for r in rows],
+                         ["2026-10-06","2026-10-06","2026-10-07","2026-10-07"])
+        self.assertEqual(list(exp._rolling_windows(date(2026,10,6),date(2026,10,9))),
+                         [(date(2026,10,6),date(2026,10,7)),(date(2026,10,7),date(2026,10,8))])
+
     def test_dhan_request_spec_uses_near_monthly_25_security_id(self):
         body = exp._request_body(date(2026, 11, 18),
                                  date(2026, 11, 19), "MONTH", 0,

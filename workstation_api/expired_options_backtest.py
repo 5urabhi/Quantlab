@@ -29,7 +29,7 @@ MAX_SOURCE_ROWS = 15_000
 VALID_HOLDS = (1, 3, 5, 6, 10, 30, 60)
 VALID_POLICIES = ("fixed", "signal_reversal", "signal_reversal_or_cap",
                   "premium_target_stop", "hybrid")
-MAX_REQUESTS = 48
+MAX_REQUESTS = 1000
 # Current listed options can span several BANKNIFTY index levels across
 # a multi-day window; never reject all of them on the first unavailable ID.
 MAX_ACTIVE_REQUESTS = 96
@@ -148,10 +148,29 @@ def _chunks(first: date, last_exclusive: date):
         current = following
 
 
+def _rolling_windows(first: date, last_exclusive: date):
+    """Dhan authenticated evidence: two inclusive consecutive dates work.
+
+    Four dates and 30-day requests returned DH-905. Pair dates without
+    asking for an unexpired future session. A one-date remainder uses
+    the preceding date; callers must clip to their requested scope.
+    _chunks remains an exclusive-end processing-block helper only.
+    """
+    current=first
+    while current<last_exclusive:
+        second=current+timedelta(days=1)
+        if second<last_exclusive:
+            yield current,second
+            current=second+timedelta(days=1)
+        else:
+            yield current-timedelta(days=1),current
+            break
+
+
 def _request_body(start: date, end: date, flag: str, code: int,
                   offset: str, side: str) -> dict:
     if not start < end or (end - start).days > 30:
-        raise ValueError("Dhan expired option requests require up to 30 calendar days")
+        raise ValueError("Invalid historical rolling receipt date bounds")
     # Dhan /charts/rollingoption has its OWN ordinal convention:
     # 1 = near, 2 = next, 3 = far. Other Dhan endpoints use 0/1/2.
     # Confirmed by Dhan support on 2026-01-30 (MadeForTrade #60509).
@@ -333,7 +352,7 @@ def _normalize(payload: dict, body: dict) -> list[dict]:
     rows = []
     previous = None
     lower = date.fromisoformat(body["fromDate"])
-    upper = date.fromisoformat(body["toDate"])
+    upper = date.fromisoformat(body["toDate"])  # Dhan rolling endpoint is inclusive
     for index, epoch in enumerate(stamps):
         try:
             timestamp = datetime.fromtimestamp(float(epoch), tz=timezone.utc)
@@ -341,7 +360,7 @@ def _normalize(payload: dict, body: dict) -> list[dict]:
                 raise ValueError("Dhan option bars are not uniquely ordered")
             previous = timestamp
             local = timestamp.astimezone(IST)
-            if not lower <= local.date() < upper or not clock_time(9, 15) <= local.time().replace(tzinfo=None) <= clock_time(15, 29):
+            if not lower <= local.date() <= upper or not clock_time(9, 15) <= local.time().replace(tzinfo=None) <= clock_time(15, 29):
                 continue
             op, hi, lo, close, strike = (float(segment[name][index])
                                       for name in ("open", "high", "low", "close", "strike"))
@@ -379,7 +398,7 @@ def load_option_market(start: date, stop: date, *, expiry_flag: str,
     Never cache credentials. A batch is limited in number of vendor calls.
     """
     bodies = [_request_body(a, b, expiry_flag, expiry_code, offset, side)
-              for a, b in _chunks(start, stop)
+              for a, b in _rolling_windows(start, stop)
               for side in ("CALL", "PUT") for offset in _offsets(wings)]
     if len(bodies) > MAX_REQUESTS:
         raise ValueError(f"Historical options window requires {len(bodies)} vendor requests; reduce history or ATM wings (maximum {MAX_REQUESTS})")
@@ -413,6 +432,8 @@ def load_option_market(start: date, stop: date, *, expiry_flag: str,
         if not rows:
             empty += 1
         for row in rows:
+            if not start.isoformat() <= row["session_ist"] < stop.isoformat():
+                continue
             key = (row["timestamp_utc"], row["side"], row["strike"])
             if key in conflicted:
                 continue

@@ -383,7 +383,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
       If the replacement contract lacks original quotes or cash is insufficient, remain flat and record why.
     </div>
     <div className="hob-description">
-      <span><Database size={16}/> {requestedPairs} Dhan contract-series requests per 30-day chunk, minus cached receipts</span>
+      <span><Database size={16}/> {requestedPairs} Dhan contract-series requests per two-date inclusive window, minus cached receipts</span>
       <span>Preferred {lots} lots × {lotSize} assumed units = <strong>{lots*lotSize} option units</strong></span>
       <span>Estimated ₹{DEC(targetLtp*lots*lotSize,0)} at target LTP, excluding spread and charges.</span>
     </div>
