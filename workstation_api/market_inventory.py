@@ -26,6 +26,7 @@ SOURCES = {
     "raw_daily": ("Historical equity OHLCV", "candles", "Observation time", "Original Dhan CSV", "Original daily cache; may overlap canonical closes"),
     "raw_intraday": ("Historical equity intraday", "candles", "Observation time", "Original Dhan CSV", "Separate resolution per instrument"),
     "index_history": ("Historical index candles", "candles", "Observation time", "Original IDX_I batches", "Each batch listed separately; batches can overlap"),
+    "constituent_quotes": ("BANKNIFTY constituent quotes", "sampled quote packets", "Receipt time (UTC)", "Canonical SQLite", "Original cash-equity quotes sampled at most once per two seconds per instrument"),
     "live_ticks": ("Recorded index ticks", "ticks", "Exchange time (UTC)", "Canonical SQLite", "Original observed ticker packets"),
     "live_minute_bars": ("Recorded minute OHLC", "minute bars", "Bar time (UTC)", "Canonical SQLite", "Derived from recorded ticks; not additional tick coverage"),
     "option_quote": ("Live option quotes", "quote packets", "Receipt time (UTC)", "Canonical SQLite", "Original quote events, not unique trades"),
@@ -41,6 +42,7 @@ SOURCES = {
 # SQL is fixed and internal. Payload columns (book_json, normalized_json,
 # feature_json) are never read by inventory SQL.
 SQL = {
+    "constituent_quotes": ("banknifty_constituent_quotes", "identity", "received_utc", "", ""),
     "daily_closes": ("daily_closes", "identity", "session_date", "", ""),
     "live_ticks": ("live_ticks", "identity", "exchange_utc", "", ""),
     "live_minute_bars": ("live_minute_bars", "identity", "minute_utc", "", ""),
@@ -348,6 +350,7 @@ def inventory(source="all",query="",page=1,per_page=50,refresh=False):
 # Fixed, small scalar record previews. No credentials, original JSON payloads
 # or raw file paths. Full depth and chain payloads remain in Trading / Replay.
 RECORD_COLUMNS = {
+    "constituent_quotes": ("received_utc","exchange_trade_utc","identity","symbol","session_ist","price","volume","atp","buy_quantity","sell_quantity","packet_sha256","membership_sha256"),
     "daily_closes": ("session_date","identity","close","source_sha256"),
     "live_ticks": ("exchange_utc","received_utc","identity","price","packet_sha256"),
     "live_minute_bars": ("minute_utc","identity","open","high","low","close","tick_count","last_received_utc"),
