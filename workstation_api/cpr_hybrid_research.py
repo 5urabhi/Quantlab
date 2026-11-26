@@ -13,7 +13,9 @@ import json
 from . import historical_alpha as h, predictive_option_research as p
 from . import alpha_retraining, liquidity_spreads as fees
 
-VERSION = "cpr_ml_offline_q_v2"
+VERSION = "cpr_ml_offline_q_v3"
+TRAIL_ACTIVATION = .03
+TRAIL_GAP = .03
 MAX_LEARNING_STRIKES = 5
 FEATURE_FUNDING_SCALE = 17000.
 EMERGENCY_STOP = -.15
@@ -24,7 +26,8 @@ TARGET = .10
 STOP = -.05
 CLASSES = ("target", "stop", "other")
 METHODS = ("no_stop", "fixed_stop", "ml_fixed", "offline_q", "ml_offline_q",
-           "fixed_emergency_stop", "offline_q_emergency_stop", "no_trade")
+           "fixed_emergency_stop", "offline_q_emergency_stop",
+           "trailing_stop", "trailing_emergency_stop", "no_trade")
 FRAMES = (1, 3, 5, 15)
 HOLDS = (15, 30, 60, 120)
 MIN_STATE_EPISODES = 5
@@ -42,6 +45,8 @@ WARNING = (
     "Learning uses earlier unleveraged counterfactual single-lot trajectories independently of account funding; "
     "multiple strikes at the same signal are correlated and are grouped in support and training weights. "
     "Previously viewed evaluation dates are exploratory, not a new untouched confirmation set. "
+    "Trailing floors use completed net marks only; delayed exits can realize losses beyond those floors. "
+    "Open-position risk diagnostics are sampled marks through the exit decision, not intrabar or fill-time maxima. "
     "No-stop and wider-stop modes are paper comparators only; full premium may be lost. No live approval."
 )
 
@@ -252,8 +257,24 @@ def _forced(step, *, stop, stop_mark=STOP):
 def _exit(ep, policy, q=None, *, stop_mark=STOP):
     if ep["state"]!="entered":
         return {"state":ep["state"]}
+    low=high=None
+    drawdown=0.
+    floor=None
+    diagnostics={"min_observed_mark_return":None,"max_observed_mark_return":None,
+                 "max_observed_peak_to_mark_drawdown":None,"trailing_floor_return":None}
     for step in ep["path"]:
+        mark=step["mark_return"]
+        low=mark if low is None else min(low,mark)
+        high=mark if high is None else max(high,mark)
+        drawdown=max(drawdown,high-mark)
+        if policy=="trailing" and high>=TRAIL_ACTIVATION-1e-12:
+            floor=max(stop_mark,high-TRAIL_GAP)
+        diagnostics={"min_observed_mark_return":low,"max_observed_mark_return":high,
+                     "max_observed_peak_to_mark_drawdown":drawdown,
+                     "trailing_floor_return":floor}
         reason=_forced(step,stop=policy!="no_stop",stop_mark=stop_mark)
+        if reason is None and floor is not None and mark<=floor+1e-12:
+            reason="trailing_stop"
         if reason is None and policy=="offline_q":
             values=(q or {}).get(_key(step))
             # Unknown or tied states use the fixed target/stop baseline.
@@ -261,12 +282,12 @@ def _exit(ep, policy, q=None, *, stop_mark=STOP):
                 reason="learned_exit"
         if reason:
             if step["exit_net"] is None:
-                return {"state":"exit_censored","reason":"missing_chosen_exit","trigger":reason}
+                return {"state":"exit_censored","reason":"missing_chosen_exit","trigger":reason,**diagnostics}
             return {"state":"complete","reason":reason,"net":step["exit_net"],
                     "fees":step["exit_fees"],"exit_utc":step["exit_utc"],
                     "net_return":step["exit_net"]/ep["debit"],
-                    "target_realized":step["exit_net"]/ep["debit"]>=TARGET}
-    return {"state":"exit_censored"}
+                    "target_realized":step["exit_net"]/ep["debit"]>=TARGET,**diagnostics}
+    return {"state":"exit_censored",**diagnostics}
 
 
 def _label(result):
@@ -416,6 +437,7 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
     balance=capital; peak=capital;dd=0.;gross_losses=0.;day=None;halted=False
     daily=defaultdict(lambda:{"conditional_net_inr":0.,"scored":0,"unresolved":0})
     counts=Counter();journal=[];net=0.;charges=0.;winners=0;targets=0
+    exit_reasons=Counter();worst_mark=None;open_dd=None
     for ep in episodes:
         if day!=ep["session"]:
             day=ep["session"];gross_losses=0.;halted=False
@@ -439,12 +461,19 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             result={"state":"entry_limit_exceeded"}
         else:
             learned=method in ("offline_q","ml_offline_q","offline_q_emergency_stop")
-            wide=method in ("fixed_emergency_stop","offline_q_emergency_stop")
-            result=_exit(ep,"offline_q" if learned else method if method=="no_stop" else "fixed_stop",q,
+            wide=method in ("fixed_emergency_stop","offline_q_emergency_stop","trailing_emergency_stop")
+            policy="offline_q" if learned else "trailing" if method in ("trailing_stop","trailing_emergency_stop") else method if method=="no_stop" else "fixed_stop"
+            result=_exit(ep,policy,q,
                          stop_mark=EMERGENCY_STOP if wide else STOP)
         state=result["state"]
         counts[state]+=1
+        if result.get("min_observed_mark_return") is not None:
+            low=result["min_observed_mark_return"]
+            dd_open=result["max_observed_peak_to_mark_drawdown"]
+            worst_mark=low if worst_mark is None else min(worst_mark,low)
+            open_dd=dd_open if open_dd is None else max(open_dd,dd_open)
         if state=="complete":
+            exit_reasons[result["reason"]]+=1
             value=result["net"];net+=value;charges+=result["fees"];balance+=value
             gross_losses+=max(0.,-value);peak=max(peak,balance);dd=max(dd,peak-balance)
             winners+=int(value>0);targets+=int(result["target_realized"])
@@ -463,6 +492,8 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             "profitable_trades":winners,"realized_target_hits":targets,
             "conditional_net_inr":round(net,2) if scored or method=="no_trade" else None,
             "conditional_fees_inr":round(charges,2),"max_within_day_closed_drawdown_inr":round(dd,2),
+            "exit_reasons":dict(exit_reasons),"worst_observed_mark_return":worst_mark,
+            "max_observed_peak_to_mark_drawdown":open_dd,
             "independent_daily_accounts":True,"daily":dict(daily),
             "unresolved_trades":unresolved,"full_account_pnl_certified":False},journal
 
@@ -520,7 +551,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "hold_minutes":hold,"capital_inr":capital,"full_premium_and_fee_budget_inr":risk_budget,
              "historical_lot_size_assumed":lot_size,"max_lots":max_lots,"strike_wings":wings,
              "primary_adverse_penalty_bps_per_side":bps,"target_net_return":TARGET,"fixed_stop_mark":STOP,
-             "experimental_emergency_stop_mark":EMERGENCY_STOP,"max_learning_strikes_per_anchor":MAX_LEARNING_STRIKES},
+             "experimental_emergency_stop_mark":EMERGENCY_STOP,"max_learning_strikes_per_anchor":MAX_LEARNING_STRIKES,
+             "trailing_activation_net_return":TRAIL_ACTIVATION,"trailing_gap_return_points":TRAIL_GAP},
              "recorded_index_sessions":len(dates),"required_sessions":sum(SPLITS),
              "training_dates":splits[0],"validation_dates":splits[1],"holdout_dates":splits[2],
              "signal_counts":dict(counts),"day_audit":day_audit,"episode_states":dict(Counter(e["state"] for e in episodes)),
@@ -559,7 +591,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             report["methods"][method]=metrics;journal.extend(rows)
     else:
         # Always useful mathematical diagnostic; never labeled independent holdout.
-        for method in ("no_stop","fixed_stop","fixed_emergency_stop","no_trade"):
+        for method in ("no_stop","fixed_stop","fixed_emergency_stop","trailing_stop","trailing_emergency_stop","no_trade"):
             metrics,rows=_evaluate(episodes,method=method,capital=capital,risk_budget=risk_budget)
             report["methods"][method]=metrics;journal.extend(rows)
     evidence={"index_sources":index_hashes,"option_sources":meta["source_hashes"]}
