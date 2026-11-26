@@ -111,7 +111,7 @@ def discover(day=None):
     if len(info["resolved"])!=len(info["symbols"]):
         raise ValueError("Dated constituent equity identities are not fully resolved")
     p=dhan_workspace._master()
-    if not p.is_file() or p.is_symlink():
+    if not market_inventory._safe_file(p):
         raise ValueError("Refresh the authorized local master")
     st=p.stat()
     if not 0<st.st_size<=option_chain_live.MAX_MASTER_BYTES or not 0<=_now().timestamp()-st.st_mtime<=48*3600:
@@ -245,7 +245,7 @@ class Capture:
                     return
             key=(identity,kind)
             previous=self.last.get(key)
-            if previous and (received.timestamp()-previous[0]<2 or previous[1]==event["packet_sha256"] or (trade and previous[2] and trade.timestamp()<previous[2])):
+            if previous and (received.timestamp()-previous[0]<2 or (kind=="quote" and previous[1]==event["packet_sha256"]) or (trade and previous[2] and trade.timestamp()<previous[2])):
                 self.sampled+=1
                 return
             try:
@@ -328,7 +328,7 @@ def analysis(horizon=5,as_of=""):
                 found=db.execute("""SELECT DISTINCT identity,underlying,instrument,expiry,strike,option_type,lot_size
                   FROM constituent_derivative_events WHERE received_utc>=? AND received_utc<=?
                   ORDER BY underlying,instrument,expiry,strike,option_type,identity LIMIT 201""",(bank._iso(beginning),bank._iso(cutoff))).fetchall()
-                if len(found)>200:
+                if len(found)>200 or len({x[0] for x in found})!=len(found):
                     raise ValueError("Too many distinct archived selections; inspect the exact source inventory")
                 def lookup(identity,kind,end):
                     age=30 if kind=="quote" else 120
