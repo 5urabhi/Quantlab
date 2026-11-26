@@ -37,6 +37,8 @@ SYNC_WAKE = Event()
 SYNC_THREAD = None
 SYNC_STATE = {"state": "idle", "last_attempt_utc": None, "message": ""}
 SYNC_LAST = {}
+DISPLAY_REPAIR_LOCK = RLock()
+DISPLAY_REPAIR_LAST = {}
 
 
 def _minute(stamp):
@@ -75,6 +77,11 @@ def _receipt(path, metadata):
         raise ValueError("Invalid original candle headers")
     rows, previous = {}, ""
     count = 0
+    # A current-session receipt can include its forming minute. Keep the
+    # immutable receipt, but do not later promote that partial bar to a
+    # completed historical minute. Allow one minute of retrieval margin.
+    retrieved = datetime.fromisoformat(str(metadata.get("retrieved_utc", "")).replace("Z", "+00:00")) if metadata.get("retrieved_utc") else None
+    completed_before = retrieved.astimezone(IST)-timedelta(minutes=1) if retrieved and retrieved.tzinfo else None
     for row in reader:
         stamp, day, o, h, l, c, _ = intraday_parquet._decode(row)
         if stamp <= previous:
@@ -83,7 +90,9 @@ def _receipt(path, metadata):
         count += 1
         _, minute = _minute(stamp)
         if 0 <= minute < MINUTES:
-            rows.setdefault(day, {})[minute] = (o, h, l, c)
+            bar_time=datetime.fromisoformat(stamp.replace("Z","+00:00")).astimezone(IST)
+            if completed_before is None or bar_time<completed_before:
+                rows.setdefault(day, {})[minute] = (o, h, l, c)
     if count != metadata["row_count"]:
         raise ValueError("Original source row count mismatch")
     return rows
@@ -130,8 +139,16 @@ def _history(identity, today):
                 continue
             verified += 1
             try:
-                coverage.append((date.fromisoformat(meta["from_inclusive"]),
-                                 date.fromisoformat(meta["to_exclusive"])))
+                a,b=date.fromisoformat(meta["from_inclusive"]),date.fromisoformat(meta["to_exclusive"])
+                # A partial same-day chart repair must not mark the whole
+                # session checked and block the closed-session history sync.
+                stamp=meta.get("retrieved_utc")
+                if stamp:
+                    received=datetime.fromisoformat(stamp.replace("Z","+00:00")).astimezone(IST)
+                    if received.hour<16:
+                        b=min(b,received.date())
+                if a<b:
+                    coverage.append((a,b))
             except (KeyError, ValueError, TypeError):
                 pass
             for day, bars in values.items():
@@ -366,6 +383,62 @@ def current_context(bars, complete):
     return now
 
 
+def display_minutes(identity="INDEX:BANKNIFTY", now=None):
+    """Display-only current session, repaired from original verified IDX_I.
+
+    Never supplies prospective signal computation or the live recorder.
+    """
+    if identity not in cockpit_sources.INDEX_IDENTITIES:
+        raise ValueError("Select a supported spot index")
+    now=now or datetime.now(timezone.utc)
+    local=now.astimezone(IST)
+    day=local.date()
+    minute_now=max(0,min(MINUTES,local.hour*60+local.minute-555))
+    historical=_history(identity,day)["days"].get(day.isoformat(),{})
+    bars={i:(v,"dhan_historical_receipt") for i,v in historical.items() if 0<=i<minute_now}
+    repaired=len(bars)
+    try:
+        for row in live_market.minute_series(identity,limit=500)["rows"]:
+            d,i=_minute(row["timestamp_utc"])
+            if d==day.isoformat() and 0<=i<minute_now and i not in bars:
+                bars[i]=(tuple(row[k] for k in ("open","high","low","close")),"live_tick_aggregate")
+    except (ValueError,OSError,sqlite3.Error):
+        pass
+    origin=datetime(day.year,day.month,day.day,9,15,tzinfo=IST)
+    rows=[{"timestamp_utc":(origin+timedelta(minutes=i)).astimezone(timezone.utc).isoformat(),
+           **dict(zip(("open","high","low","close"),values)), "source":source}
+          for i,(values,source) in sorted(bars.items())]
+    return {"identity":identity,"date_ist":day.isoformat(),"rows":rows,
+            "historical_bars":repaired,"live_observed_bars":len(rows)-repaired,
+            "expected_completed_minutes":minute_now,"missing_minutes":minute_now-len(rows),
+            "warning":"Display only: original Dhan historical candles and observed live minute aggregates. Historical repairs never enter the prospective live signal ledger."}
+
+
+def repair_display_session(identity="INDEX:BANKNIFTY"):
+    if identity not in cockpit_sources.INDEX_IDENTITIES:
+        raise ValueError("Select a supported spot index")
+    local=datetime.now(IST)
+    if local.weekday()>=5 or local.hour*60+local.minute<=555:
+        raise ValueError("No current completed regular-session minutes to repair")
+    if not DISPLAY_REPAIR_LOCK.acquire(blocking=False):
+        raise ValueError("A current-session history repair is already running")
+    try:
+        key=(str(service.DATA),identity,local.date())
+        if time.monotonic()-DISPLAY_REPAIR_LAST.get(key,-100000)<60:
+            raise ValueError("Wait 60 seconds between current-session repair requests")
+        DISPLAY_REPAIR_LAST.clear()
+        DISPLAY_REPAIR_LAST[key]=time.monotonic()
+        if not dhan_auth.check_profile().get("ok"):
+            raise ValueError("Verify Dhan Data API access in Connections")
+        cockpit_sources.download_spot(identity,local.date().isoformat(),
+                                      (local.date()+timedelta(days=1)).isoformat())
+        with LOCK:
+            CACHE.pop(identity,None)
+        return display_minutes(identity)
+    finally:
+        DISPLAY_REPAIR_LOCK.release()
+
+
 def report(identity="INDEX:BANKNIFTY", now=None):
     if identity not in cockpit_sources.INDEX_IDENTITIES:
         raise ValueError("Select a supported original spot index")
@@ -521,6 +594,10 @@ def _sync_once():
 def _sync_worker():
     while not SYNC_STOP.is_set():
         _sync_once()
+        # Optional constituent preparation runs off the receiver thread.
+        # Existing recording consent controls the bounded public CSV refresh.
+        from . import banknifty_constituents
+        banknifty_constituents.maybe_refresh_current_membership()
         SYNC_WAKE.wait(60)
         SYNC_WAKE.clear()
 

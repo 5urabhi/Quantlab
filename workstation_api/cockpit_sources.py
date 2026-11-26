@@ -7,7 +7,8 @@ substitute futures or reconstruct missing index candles from today's members.
 from __future__ import annotations
 
 from collections import deque
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 import uuid
 from hashlib import sha256
 from pathlib import Path
@@ -233,7 +234,7 @@ def download_spot(identity: str, from_date: str, to_date: str, *, progress=None)
     if identity not in INDEX_IDENTITIES:
         raise ValueError("Select BANKNIFTY or NIFTY 50 spot index")
     start, stop = date.fromisoformat(from_date), date.fromisoformat(to_date)
-    if not start < stop <= date.today() + timedelta(days=1):
+    if not start < stop <= datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=1):
         raise ValueError("Choose a valid historical date window (end exclusive)")
     if (stop - start) > timedelta(days=90):
         raise ValueError("Request up to 90 calendar days of index history at a time")

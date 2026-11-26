@@ -30,6 +30,7 @@ type Feed={active:boolean;session_id?:string;index_identity?:string;depth_identi
   depth_recording?:string;audit_state?:string;read_only:boolean}
 type Contract={identity:string;symbol:string;display_name:string;instrument:string;
   expiry?:string|null;strike?:string|null;option_type?:string|null}
+type DisplayMinutes={identity:string;date_ist:string;rows:NonNullable<Signal['rows']>;historical_bars:number;live_observed_bars:number;missing_minutes:number;expected_completed_minutes:number;warning:string}
 type Signal={ready:boolean;reason?:string;identity:string;direction?:'UP'|'DOWN'|'NO_TRADE';
   quote_mode:string;latest_close?:number;last_observed_utc?:string;source_age_seconds?:number;
   rsi14?:number|null;ema9?:number|null;ema21?:number|null;
@@ -84,6 +85,10 @@ export default function LiveFeedPanel({
   const [replayHorizon,setReplayHorizon]=useState<'3'|'6'>('6')
   const [configOpen,setConfigOpen]=useState(false)
   const [chartView,setChartView]=useState<'index'|'receipts'|'python'>('index')
+  const [display,setDisplay]=useState<DisplayMinutes|null>(null)
+  const [liveOnly,setLiveOnly]=useState(false)
+  const [repairBusy,setRepairBusy]=useState(false)
+  const [repairNotice,setRepairNotice]=useState('')
   const [now,setNow]=useState(()=>Date.now())
 
   const refresh=useCallback(async()=>{
@@ -121,6 +126,31 @@ export default function LiveFeedPanel({
     const interval=window.setInterval(()=>{void poll()},4000)
     return()=>window.clearInterval(interval)
   },[watchedIndex,feed?.active])
+  useEffect(()=>{
+    if(view!=='signals'||chartView!=='index')return
+    let active=true,reading=false
+    const poll=async()=>{
+      if(reading||document.hidden)return
+      reading=true
+      try{
+        const result=await marketApi<DisplayMinutes>('/api/trading-cockpit/live/display-minutes?'+new URLSearchParams({identity:watchedIndex}))
+        if(active)setDisplay(result)
+      }catch{/* Original tick-only chart stays available. */}
+      finally{reading=false}
+    }
+    setDisplay(null);void poll()
+    const timer=window.setInterval(()=>void poll(),15000)
+    return()=>{active=false;window.clearInterval(timer)}
+  },[watchedIndex,view,chartView])
+  const repairMinutes=async()=>{
+    if(repairBusy)return
+    setRepairBusy(true);setRepairNotice('')
+    try{
+      const v=await marketPost<DisplayMinutes>('/api/trading-cockpit/live/repair-minutes',{identity:watchedIndex,confirm_readonly:true})
+      setDisplay(v);setLiveOnly(false);setRepairNotice(v.missing_minutes+' completed minutes still missing after source check.')
+    }catch(e){setRepairNotice(readableError(e))}
+    finally{setRepairBusy(false)}
+  }
   const findContracts=async()=>{
     if(queryBusy)return
     setQueryBusy(true);setError('');setContractInfo('')
@@ -177,6 +207,8 @@ export default function LiveFeedPanel({
     Math.max(liveBook.bid.length,liveBook.ask.length))},(_,i)=>({
       bid:liveBook.bid[i],ask:liveBook.ask[i],position:i+1,
     })):[],[liveBook])
+  const matchingDisplay=display?.identity===watchedIndex?display:null
+  const useRepaired=Boolean(!liveOnly&&matchingDisplay?.historical_bars&&matchingDisplay.rows.length)
   const configuredDepth=feed?.active?feed.depth_identity:depthIdentity
   const autoContracts=automatic?.contracts||[]
   return <section className="tc-panel lf-root" aria-label="Live BANKNIFTY and 20-level market feed">
@@ -236,7 +268,7 @@ export default function LiveFeedPanel({
             {automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'&&<button type="button" aria-pressed={chartView==='receipts'} onClick={()=>setChartView('receipts')}>Chain spot receipts</button>}
             {watchedIndex==='INDEX:BANKNIFTY'&&<button type="button" aria-pressed={chartView==='python'} onClick={()=>setChartView('python')}>Python results</button>}
           </nav><label>Index <select aria-label="Shared index to inspect" value={index} disabled={!!feed?.active} onChange={e=>{setIndex(e.target.value as typeof index);setChartView('index')}}><option value="INDEX:BANKNIFTY">BANKNIFTY</option><option value="INDEX:NIFTY50">NIFTY 50</option></select></label></div>
-          {chartView==='receipts'&&automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'?<RecordedChainSpot/>:chartView==='python'&&watchedIndex==='INDEX:BANKNIFTY'?<LivePythonResults mode="index"/>:<ObservedIndexChartV2 compact rows={signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'} sourceWarning={signal?.source_warning||''}/>}
+          {chartView==='receipts'&&automatic?.armed&&!feed?.active&&watchedIndex==='INDEX:BANKNIFTY'?<RecordedChainSpot/>:chartView==='python'&&watchedIndex==='INDEX:BANKNIFTY'?<LivePythonResults mode="index"/>:<><div className="lf-chart-repair"><span>{matchingDisplay?matchingDisplay.missing_minutes+' missing completed minutes · '+matchingDisplay.historical_bars+' historical / '+matchingDisplay.live_observed_bars+' recorded':'Checking session coverage…'}</span><label><input type="checkbox" checked={liveOnly} onChange={e=>setLiveOnly(e.target.checked)}/> Recorded only</label><button className="ws-button" type="button" onClick={()=>void repairMinutes()} disabled={repairBusy}>{repairBusy?'Repairing…':'Repair missing minutes'}</button></div>{repairNotice&&<p role="status" className="tc-muted">{repairNotice}</p>}<ObservedIndexChartV2 compact repaired={useRepaired} rows={useRepaired?matchingDisplay!.rows:signal?.rows||[]} instrument={watchedIndex==='INDEX:NIFTY50'?'NIFTY 50':'BANKNIFTY'} sourceWarning={useRepaired?'Original historical minute receipts + recorded aggregates. Display only; live EMA/RSI rule still requires fresh uninterrupted recorded ticks.':signal?.source_warning||''}/></>}
           <div className="lf-signal-actions lf-compact-call"><div><strong>Record prospective rule outcome</strong><small>Fresh, 30 consecutive recorded minutes required.</small></div><label>Horizon <select value={replayHorizon} onChange={e=>setReplayHorizon(e.target.value as '3'|'6')}><option value="3">3 minutes</option><option value="6">6 minutes</option></select></label><button type="button" onClick={()=>void record()} disabled={!hasSignal||busy}>Record {replayHorizon}m prediction</button></div>
         </div>
         <aside className="mi-live-side"><MarketPatternIntelligence compact identity={watchedIndex}/>{watchedIndex==='INDEX:BANKNIFTY'&&<BankHeatmap/>}<PositionsRisk compact/></aside>

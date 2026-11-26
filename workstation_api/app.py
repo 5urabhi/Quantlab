@@ -649,6 +649,32 @@ class MarketPatternSyncRequest(BaseModel):
     enabled: bool
 
 
+class DisplaySessionRepairRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    identity: Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY"
+    confirm_readonly: bool=False
+
+
+@app.get("/api/trading-cockpit/live/display-minutes")
+def live_display_minutes(identity:Literal["INDEX:BANKNIFTY","INDEX:NIFTY50"]="INDEX:BANKNIFTY"):
+    from . import market_patterns
+    try:
+        return market_patterns.display_minutes(identity)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
+@app.post("/api/trading-cockpit/live/repair-minutes")
+def repair_live_display_minutes(body:DisplaySessionRepairRequest):
+    from . import market_patterns
+    if not body.confirm_readonly:
+        raise HTTPException(400,"Confirm read-only Dhan current-session history repair")
+    try:
+        return market_patterns.repair_display_session(body.identity)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        bad(exc)
+
+
 @app.get("/api/trading-cockpit/market-patterns")
 def trading_market_patterns(identity: str = "INDEX:BANKNIFTY"):
     from . import market_patterns

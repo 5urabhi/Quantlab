@@ -39,6 +39,8 @@ SYMBOL = re.compile(r"^[A-Z0-9&_.-]{1,40}$")
 IDENTITY = re.compile(r"^NSE_EQ:[0-9]{1,12}$")
 CURRENT_MEMBERS_URL = "https://www.niftyindices.com/IndexConstituent/ind_niftybanklist.csv"
 MAX_CURRENT_CSV = 65536
+CURRENT_REFRESH_LOCK=RLock()
+CURRENT_REFRESH_LAST={}
 
 
 def _now():
@@ -141,6 +143,27 @@ def refresh_current_membership(opener=urlopen,now=None):
         _write_json(path,receipt)
     return {"date":day.isoformat(),"symbols":sorted(members),"source_sha256":receipt["sha256"],
             "capture_state":"Membership saved; enabled recording subscribes on the next normal shared-feed connection. No existing stream was stopped."}
+
+
+def maybe_refresh_current_membership():
+    """Bounded best-effort refresh for already-enabled recording, never a socket restart."""
+    if not enabled():
+        return
+    try:
+        now=_now()
+        day=_local_day(now)
+        if day.weekday()>=5 or _current_membership(day,None,now) is not None:
+            return
+        key=(str(service.DATA),day)
+        with CURRENT_REFRESH_LOCK:
+            if time.monotonic()-CURRENT_REFRESH_LAST.get(key,-100000)<1800:
+                return
+            CURRENT_REFRESH_LAST.clear()
+            CURRENT_REFRESH_LAST[key]=time.monotonic()
+        refresh_current_membership(now=now)
+    except (OSError,ValueError,TypeError,KeyError):
+        # Public source can be unavailable; no guessed members or retry storm.
+        return
 
 
 def _current_membership(day,instruments,as_of):
