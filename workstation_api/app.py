@@ -57,14 +57,14 @@ MAX_ACTIVE_LOCAL_JOBS = 6  # Shared admission bound; general writes remain seria
 
 
 def _job_lane(kind):
-    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research"} else "research"
+    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research"} else "research"
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -5590,6 +5590,35 @@ def context_cohort_register(body:ContextCohortRequest):
         return {"registration":context_cohort.register(**body.model_dump())}
     except (ValueError,TypeError,OSError,sqlite3.Error) as exc:
         raise HTTPException(400,str(exc)) from exc
+
+
+class ImpliedVolatilityEvidenceRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    from_date:str
+    to_date:str
+    horizon:Literal[5,15,30,60]=15
+
+
+class RealizedVolatilityEvidenceRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    batch_id:str=Field(pattern=r"^batch_[0-9a-f]{16}$")
+    horizon:Literal[5,15,30,60]=15
+
+
+@app.post("/api/market-intelligence/volatility/iv")
+def empirical_iv_research(body:ImpliedVolatilityEvidenceRequest):
+    from . import volatility_evidence
+    try:
+        volatility_evidence._range(body.from_date,body.to_date)
+    except (ValueError,TypeError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+    return _spawn("volatility_evidence_research",volatility_evidence.iv_run,**body.model_dump())
+
+
+@app.post("/api/market-intelligence/volatility/realized")
+def realized_volatility_research(body:RealizedVolatilityEvidenceRequest):
+    from . import volatility_evidence
+    return _spawn("volatility_evidence_research",volatility_evidence.rv_run,**body.model_dump())
 
 
 class HistoricalAlphaRequest(BaseModel):
