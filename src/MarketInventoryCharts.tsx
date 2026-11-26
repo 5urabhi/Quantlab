@@ -6,7 +6,7 @@ import {marketApi,readableError} from './tradingCockpitApi'
 
 type Source={id:string;label:string;unit:string;state:string;first:string|null;last:string|null;time_basis:string;count:number|null}
 type Activity={source:string;label:string;unit:string;time_basis:string;start:string;end:string;checked_utc:string;state:string;detail:string;note:string;rows:{date:string;count:number;instruments:number}[]}
-const canonical=new Set(['daily_closes','constituent_quotes','live_ticks','live_minute_bars','option_quote','option_oi','option_chain','live_depth_books','depth_features','sector_history'])
+const canonical=new Set(['daily_closes','constituent_quotes','constituent_derivative_quote','constituent_derivative_oi','live_ticks','live_minute_bars','option_quote','option_oi','option_chain','live_depth_books','depth_features','sector_history','prospective_signals'])
 const isoDay=(s:string|null)=>s&&/^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10):null
 const epoch=(s:string|null)=>{const d=isoDay(s);return d===null?NaN:Date.parse(d+'T00:00:00Z')}
 const dayString=(n:number)=>new Date(n).toISOString().slice(0,10)
