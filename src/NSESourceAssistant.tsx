@@ -123,7 +123,7 @@ export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenD
 
   const intake=async()=>{
     if(!files.length||busy)return
-    setBusy('intake');setError('');setReceipt(null);setArchiveRevision(n=>n+1)
+    setBusy('intake');setError('');setReceipt(null)
     try{
       const form=new FormData()
       files.forEach(file=>form.append('files',file))
@@ -134,7 +134,7 @@ export default function NSESourceAssistant({datasetId,suggestedSymbol='',onOpenD
         try{const body=await response.json() as {detail?:string};if(body.detail)detail=body.detail}catch{}
         throw new Error(detail)
       }
-      setReceipt(await response.json() as Receipt)
+      setReceipt(await response.json() as Receipt);setArchiveRevision(n=>n+1)
       setFiles([])
     }catch(e){setError(e instanceof Error?e.message:String(e))}
     finally{setBusy(null)}
