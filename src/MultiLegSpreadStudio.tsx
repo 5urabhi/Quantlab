@@ -2,6 +2,7 @@ import {useCallback,useEffect,useMemo,useState} from 'react'
 import {Download,RefreshCw,Save,ShieldAlert,Trash2} from 'lucide-react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import type {BrokerProfile} from './SpreadOpportunityScanner'
+import SpreadSpeedStudy from './SpreadSpeedStudy'
 import SpreadExecutionDecision,{type ExecutionDecision} from './SpreadExecutionDecision'
 import './multi-leg-spreads.css'
 import ResearchPlot from './ResearchPlots'
@@ -44,8 +45,8 @@ function PayoffChart({points,breakEven=[]}:{points:Point[];breakEven?:number[]})
 }
 export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerProfileChange}:{day:string;expiry:string;brokerProfile:BrokerProfile;onBrokerProfileChange:(v:BrokerProfile)=>void}){
   const [page,setPage]=useState<Page>('discover')
-  const [capital,setCapital]=useState(50000)
-  const [lots,setLots]=useState(5)
+  const [capital,setCapital]=useState(17000)
+  const [lots,setLots]=useState(3)
   const [skew,setSkew]=useState(10)
   const [age,setAge]=useState(60)
   const [data,setData]=useState<Scan|null>(null)
@@ -58,7 +59,7 @@ export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerP
   const [qualifiedOnly,setQualifiedOnly]=useState(false)
   const [selectedId,setSelectedId]=useState('')
   const [manual,setManual]=useState<Candidate|null>(null)
-  const [detail,setDetail]=useState<'payoff'|'legs'|'risk'>('payoff')
+  const [detail,setDetail]=useState<'payoff'|'legs'|'risk'|'speed'>('payoff')
   const [buildStrategy,setBuildStrategy]=useState<StrategyKey>('bull_call_debit')
   const [buildIds,setBuildIds]=useState<string[]>([])
   const [buildLots,setBuildLots]=useState(1)
@@ -208,7 +209,7 @@ export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerP
           'No verified fills or broker basket margin'}.
           The theoretical payoff must not be used as a live profitability forecast.</span>
       </div>
-      <div className="ml-detail-tabs">{([['payoff','Payoff'],['legs','Legs & Charges'],['risk','Execution Safety']] as const).map(([id,label])=><button type="button" key={id} className={detail===id?'active':''} onClick={()=>setDetail(id)}>{label}</button>)}</div>
+      <div className="ml-detail-tabs">{([['payoff','Payoff'],['legs','Legs & Charges'],['risk','Execution Safety'],['speed','Speed & Viability']] as const).map(([id,label])=><button type="button" key={id} className={detail===id?'active':''} onClick={()=>setDetail(id)}>{label}</button>)}</div>
       <div className="ml-summary">
         <Metric name="Max theoretical gain" value={money(selected.max_profit_inr)} detail="Not expected profit"/>
         <Metric name="Max theoretical loss" value={money(selected.max_loss_inr)} detail="Before exercise/settlement"/>
@@ -228,6 +229,7 @@ export default function MultiLegSpreadStudio({day,expiry,brokerProfile,onBrokerP
           <Metric name="Immediate exit charges" value={money(selected.exit_fees_if_immediate_inr)} detail="No future quote assumed"/>
           <Metric name="Quote skew" value={n(selected.quote_skew_seconds,2)+'s'} detail="Source receive times differ"/>
         </div></>}
+      {detail==='speed'&&<SpreadSpeedStudy key={day+selected.candidate_id+brokerProfile} day={day} identities={selected.legs.map(l=>l.identity)} strategy={selected.strategy} initialLots={selected.lots} initialCapital={capital} brokerProfile={brokerProfile}/>}
       {detail==='risk'&&<div className="ml-risk">
         <p><b>Shared execution gate:</b> {selected.feasibility?.reasons.length?
             selected.feasibility.reasons.map(x=>x.replaceAll('_',' ')).join(' · '):

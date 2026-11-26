@@ -150,6 +150,17 @@ class PaperExecutionTests(TestCase):
         self.assertAlmostEqual(x["net_pnl_inr"],300-x["total_fees_inr"],places=2)
         self.assertFalse(x["broker_margin_verified"])
 
+    def test_subminute_replay_does_not_select_best_later_exit(self):
+        self.save(NOW+timedelta(seconds=2),bid=99,ask=100)
+        self.save(NOW+timedelta(seconds=8),bid=110,ask=111)
+        self.save(NOW+timedelta(seconds=9),bid=140,ask=141)
+        x=replay.replay(strategy="LONG_OPTION",identities=[CE],decision_utc=paper._iso(NOW),
+            hold_seconds=5,window_seconds=5,participation_pct=100,slippage_bps=0,
+            now=NOW+timedelta(minutes=1))
+        self.assertTrue(x["exit_complete"])
+        self.assertEqual(x["entries"][0]["original_best_bid"],99)
+        self.assertEqual(x["exits"][0]["vwap"],110)
+
     def test_multi_leg_replay_requires_synchronized_terms_and_full_exit(self):
         self.save(NOW+timedelta(seconds=2),CE,bid=99,ask=100)
         self.save(NOW+timedelta(seconds=3),HIGH,bid=49,ask=50)

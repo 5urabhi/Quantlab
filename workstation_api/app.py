@@ -55,7 +55,7 @@ JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -1717,6 +1717,28 @@ class DefinedRiskOptionSpreadRequest(BaseModel):
         "zerodha", "zerodha_debit_balance", "dhan"] = "zerodha"
     max_quote_skew_seconds: float = Field(default=10, ge=0, le=120)
     capital_inr: float = Field(default=50000, ge=1000, le=10000000)
+
+
+class SpreadSpeedRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    day: str=Field(min_length=10,max_length=10)
+    strategy: Literal["LONG_OPTION","bull_call_debit","bear_put_debit","bull_put_credit","bear_call_credit","iron_condor","iron_butterfly"]="LONG_OPTION"
+    identities: list[str]=Field(min_length=1,max_length=4)
+    lots: int=Field(default=3,ge=1,le=10,strict=True)
+    capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
+    target_net: float=Field(default=100,ge=0,le=1e6,allow_inf_nan=False)
+    latency_ms: int=Field(default=1000,ge=0,le=60000)
+    window_seconds: int=Field(default=5,ge=1,le=30)
+    max_skew_seconds: float=Field(default=2,ge=0,le=30,allow_inf_nan=False)
+    participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
+    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
+
+
+@app.post("/api/trading-cockpit/spreads/speed-study")
+def start_spread_speed_study(body:SpreadSpeedRequest):
+    from . import spread_speed
+    return _spawn("spread_speed_study",spread_speed.run,**body.model_dump())
 
 
 @app.get("/api/trading-cockpit/spreads/multileg/scan")

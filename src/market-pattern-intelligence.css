@@ -14,3 +14,5 @@
 .mpi .tc-table-scroll table{width:100%;white-space:nowrap;font-variant-numeric:tabular-nums}
 
 .mpi-compact{display:grid;gap:6px}.mpi-compact-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.mpi-compact-grid .mpi-card{padding:8px}.mpi-compact-grid .mpi-card strong{font-size:1rem;overflow-wrap:anywhere}.mpi-compact .mpi-callout{font-size:.75rem}.mpi-compact .mpi-card small{font-size:.68rem}
+
+.mpi-view-tabs{display:flex;flex-wrap:wrap;gap:7px;align-items:center}.mpi-view-tabs button[aria-pressed=true]{border-color:var(--ql-accent,#f5c542);color:var(--ql-accent,#f5c542);background:#302718}.mpi-view-tabs a{margin-left:auto;text-decoration:none}.mpi-coverage summary{cursor:pointer;font-weight:600}.mpi-coverage[open]>summary{margin-bottom:6px}

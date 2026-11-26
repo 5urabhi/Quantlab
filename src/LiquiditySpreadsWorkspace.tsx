@@ -4,11 +4,12 @@ import {Activity,ArrowRight,BarChart3,BookOpen,Database,Info,
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import SpreadOpportunityScanner,{type BrokerProfile} from './SpreadOpportunityScanner'
 import MultiLegSpreadStudio from './MultiLegSpreadStudio'
+import SpreadSpeedStudy from './SpreadSpeedStudy'
 import OptionFeedStorageHealth from './OptionFeedStorageHealth'
 import './liquidity-spreads.css'
 import ResearchPlot from './ResearchPlots'
 
-type PageTab='live'|'multileg'|'execution'|'history'|'lab'
+type PageTab='live'|'multileg'|'speed'|'execution'|'history'|'lab'
 type Row={
   identity:string;expiry:string;strike:number;option_type:'CE'|'PE'
   lot_size:number;coverage_role:string;best_bid:number|null
@@ -105,6 +106,7 @@ const todayIST=()=>new Intl.DateTimeFormat('sv-SE',{
 const tabs:{id:PageTab;name:string;caption:string;icon:typeof Activity}[]=[
   {id:'live',name:'Live Spread Monitor',caption:'Bid–ask capture & automatic ranking',icon:Activity},
   {id:'multileg',name:'Multi-Leg Option Spreads',caption:'Auto discover, build, payoff',icon:Layers3},
+  {id:'speed',name:'Speed & Viability',caption:'5s–5m saved-depth replay',icon:Activity},
   {id:'execution',name:'Execution Simulator',caption:'Depth-weighted cost estimates',icon:SlidersHorizontal},
   {id:'history',name:'Historical Spread Analysis',caption:'Original saved book timeline',icon:BarChart3},
   {id:'lab',name:'Spread Strategy Lab',caption:'Unexecuted research bounds',icon:TrendingUp},
@@ -278,7 +280,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
         <button type="button" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button>
       </div>
     </div>
-    <OptionFeedStorageHealth/>
+    <details className="lq-section"><summary>Recorder &amp; source diagnostics</summary><OptionFeedStorageHealth/></details>
     <div className="lq-disclaimer"><ShieldCheck size={16}/>
       <span><strong>Research only — no orders sent.</strong> Bid/ask books are saved original Dhan
         observations, not executable commitments. Passive order fills, queue priority
@@ -420,6 +422,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
       <MultiLegSpreadStudio day={day} expiry={expiry}
         brokerProfile={brokerProfile} onBrokerProfileChange={changeBroker}/>
     </div>}
+    {tab==='speed'&&<section className="lq-section" role="tabpanel" aria-label="Spread Speed and Viability"><label>Exact recorded option <select aria-label="Speed study contract" value={selected} onChange={e=>setSelected(e.target.value)}><option value="">Choose source contract</option>{(overview?.rows||[]).map(r=><option value={r.identity} key={r.identity}>{r.strike} {r.option_type} · {r.expiry} · {r.identity}</option>)}</select></label><SpreadSpeedStudy key={day+selected+brokerProfile} day={day} identities={selected?[selected]:[]} strategy="LONG_OPTION" initialLots={lots} brokerProfile={brokerProfile}/><p className="lq-hint">To test a basket, choose a candidate in Multi-Leg Option Spreads → Analyze → Speed &amp; Viability.</p></section>}
     {tab==='execution'&&<section className="lq-section" role="tabpanel"
       aria-label="Execution Simulator">
       <div className="lq-section-title"><div><strong>Execution cost workbench</strong>

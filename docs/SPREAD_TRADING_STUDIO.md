@@ -159,3 +159,6 @@ Next milestone remains **measured paper/execution event collection**,
 with order acknowledgments and fully time-aligned market data. This
 change is a risk-rejection and prioritization layer, **not** proof the
 strategies make money.
+
+## Original-depth Speed & Viability study
+Trading → Liquidity & Spreads is a primary tab. The speed study replays selected exact contracts at fixed 15-minute decision anchors (09:20 onward, all six horizons elapsed), 5/15/30/60/120/300-second holds, configurable reaction delay, first subsequent original book, bounded receipt window, depth participation, slippage and broker fees. Multi-leg analysis offers the same study for the selected basket and strict 2-second leg receipt skew. Results include complete/attempted, target hits, net P&L, worst net, matched-cohort mean, entry and exit decision-to-receipt p90 and total elapsed median. Missing or partial paths are explicitly unscored. Single-option passive bid-entry markout assumes all units entered at the bid, not an observed or estimated fill probability. No actual fill speeds, broker margin, legging risks or profitable execution are established. This selected-contract fixed-clock diagnostic is not a strategy backtest. Actual real order latency needs separately observed broker order acknowledgements and fills. No orders or recorder changes.

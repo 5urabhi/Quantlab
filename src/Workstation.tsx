@@ -75,7 +75,7 @@ const primarySections:PrimarySection[]=[
   {id:'overview',label:'Home',icon:Gauge,tabs:['overview'],navTabs:['overview']},
   {id:'trading',label:'Trading',icon:Activity,
     tabs:['trading','tradingpatterns','tradingdirectional','tradingchain','tradinganalytics','tradingpositions','tradingjournal','tradingdepth','tradingspreads','tradingreplay','tradingpaper','customscanners'],
-    navTabs:['trading','tradingpatterns','tradingchain','tradinganalytics','tradingpositions','tradingjournal']},
+    navTabs:['trading','tradingpatterns','tradingdirectional','tradingchain','tradingspreads','tradinganalytics','tradingpositions','tradingjournal']},
   {id:'strategies',label:'Strategies',icon:TrendingUp,
     tabs:['strategies','strategyema','strategypython','strategybacktest','pythonmonitors'],
     navTabs:['strategies','strategyema','strategypython','strategybacktest']},
@@ -589,7 +589,7 @@ function App(){
         <Suspense fallback={<div className="ws-empty" role="status" aria-live="polite">
           <LoaderCircle size={18}/> Loading {titles[tab]}…
         </div>}>
-        {tab==='tradingpatterns'&&<><div className="mi-card"><div className="mi-heading"><h3>Market intelligence tools</h3><button className="ws-button" onClick={()=>begin('tradingdirectional')}>Full bank analysis →</button></div><BankHeatmap/></div><MarketPatternIntelligence/></>}
+        {tab==='tradingpatterns'&&<><MarketPatternIntelligence showBankHeatmap/></>}
         {tab==='tradingpositions'&&<PositionsRisk onOpenJournal={()=>begin('tradingjournal')} onOpenChain={()=>begin('tradingchain')}/>}
         {tab==='tradingdirectional'&&<ConstituentIntelligence onOpenRecording={()=>begin('recordingsettings')} onOpenSources={()=>begin('nse')} onOpenData={()=>begin('data')} onOpenOptions={()=>begin('tradinganalytics')}/>}
         {(['trading','tradingchain','tradinganalytics','tradingdepth','tradingreplay',

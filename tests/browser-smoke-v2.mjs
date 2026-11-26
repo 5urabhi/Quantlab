@@ -446,6 +446,9 @@ try{
    await scanner.getByText('Not a profit prediction').waitFor()
    await shot('02-spread-auto-scanner')
 
+   await page.getByRole('tab',{name:/Speed & Viability/}).click()
+   await page.getByRole('region',{name:'Original depth spread speed study'}).getByRole('button',{name:'Run speed & viability test'}).waitFor()
+   await page.getByRole('tab',{name:/Live Spread Monitor/}).click()
    await page.getByRole('tabpanel',{name:'Live Spread Monitor'}).waitFor()
    await page.getByRole('button',{name:'Inspect'}).first().waitFor()
    await page.getByText('Original 20-level order book').waitFor()
