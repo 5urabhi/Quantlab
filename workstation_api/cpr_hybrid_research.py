@@ -806,7 +806,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         context_mode="off",context_batch="auto",rank_entries=False,
         pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,
         sessions=60,dense_training=False,sequence_research=False,derivative_research=False,dynamic_q=False,
-        regime_research=False,utility_research=False,progress=None):
+        regime_research=False,utility_research=False,freeze_utility=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
@@ -817,6 +817,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         raise ValueError("Select 60, 90 or 120 observed sessions")
     if dense_training and entry_mode not in ("daily_scan","regime_scan"):
         raise ValueError("Dense training requires daily_scan or regime_scan")
+    if freeze_utility:
+        utility_research=True
     if utility_research:
         regime_research=True
     ntrain,nval,ntest=SESSION_SPLITS[sessions]
@@ -942,7 +944,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "requested_sessions":sessions,"split_sizes":SESSION_SPLITS[sessions],
              "dense_training":dense_training,"learning_day_balance":dense_training,
              "sequence_research":sequence_research,"derivative_research":derivative_research,"dynamic_q":dynamic_q,
-             "regime_research":regime_research,"utility_research":utility_research,
+             "regime_research":regime_research,"utility_research":utility_research,"freeze_utility_requested":freeze_utility,
              "derivative_feature_names":DERIVATIVE_NAMES if derivative_research else (),
              "dense_train_interval_minutes":DENSE_TRAIN_INTERVAL if dense_training else None,
              "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,
@@ -1022,7 +1024,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             pools=[ranked._candidate_paths(module,[s for s in signals if s["session"] in set(ds)],table,index,
                         hold=hold,lot_size=lot_size,bps=bps,risk_budget=risk_budget) for ds in splits[1:]]
             result,rows=utility.assess(module,train=broad_train,val=broad_val,pools=pools,
-                     nearest=(val,test),dates=splits[1:],capital=capital,budget=risk_budget)
+                     nearest=(val,test),dates=splits[1:],capital=capital,budget=risk_budget,freeze_policy=freeze_utility)
             report["utility_research"]=result
             journal.extend(rows)
         if debit_spreads:
