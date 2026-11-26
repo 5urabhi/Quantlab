@@ -57,6 +57,8 @@ for category in ("FII","DII","CLIENT","PRO"):
     for position in ("INDEX_FUT_NET","INDEX_CALL_NET","INDEX_PUT_NET"):
         FACTORS[category+"_"+position]=("daily_position","participants",
             category+" aggregate index derivatives net long minus short contracts: "+position)
+        FACTORS[category+"_"+position+"_VOL"]=("daily_position","participants",
+            category+" aggregate index derivatives long-side minus short-side traded contracts: "+position)
 
 GLOBAL_GROUPS=("global_equity","asia","macro")
 FEATURE_NAMES=tuple(v for key in FACTORS for v in
@@ -104,6 +106,12 @@ def _setup(db):
     );
     CREATE INDEX IF NOT EXISTS context_available
       ON market_context_observations(available_utc,factor,event_utc);
+    CREATE INDEX IF NOT EXISTS context_factor_receipt
+      ON market_context_observations(factor,receipt_sha256);
+    CREATE TABLE IF NOT EXISTS market_context_raw_reports(
+      receipt_sha256 TEXT PRIMARY KEY REFERENCES market_context_imports(receipt_sha256),
+      original_sha256 TEXT NOT NULL, original_csv TEXT NOT NULL
+    );
     """)
 
 
@@ -142,13 +150,13 @@ def parse_csv(text,now):
     return rows
 
 
-def ingest(csv_text,source,mode,confirm_reviewed,*,now=None):
+def ingest(csv_text,source,mode,confirm_reviewed,*,now=None,original_report=None):
     if confirm_reviewed is not True or mode not in ("receipt","archive") or not isinstance(source,str) or not 3<=len(source.strip())<=300:
         raise ValueError("Review the authorized source, actual availability and chosen import mode")
     now=now or _now()
     rows=parse_csv(csv_text,now)
     source=source.strip()
-    digest=sha256(json.dumps([source,mode,csv_text],ensure_ascii=False,separators=(",",":")).encode()).hexdigest()
+    digest=sha256(json.dumps([source,mode,csv_text,original_report],ensure_ascii=False,separators=(",",":")).encode()).hexdigest()
     path=shared_market_data.database_path()
     path.parent.mkdir(parents=True,exist_ok=True)
     with closing(sqlite3.connect(path,timeout=8)) as db:
@@ -156,15 +164,80 @@ def ingest(csv_text,source,mode,confirm_reviewed,*,now=None):
         db.execute("PRAGMA foreign_keys=ON")
         _setup(db)
         with db:
+            db.execute("BEGIN IMMEDIATE")
+            # One consistent instrument/provider series per factor.
+            for factor in sorted({r[0] for r in rows}):
+                previous=db.execute("""SELECT DISTINCT i.source FROM market_context_observations o
+                  JOIN market_context_imports i USING(receipt_sha256) WHERE o.factor=?""",(factor,)).fetchall()
+                if any(r[0]!=source for r in previous):
+                    raise ValueError("Source differs from existing series for "+factor)
             inserted=db.execute("INSERT OR IGNORE INTO market_context_imports VALUES(?,?,?,?,?,?)",
                 (digest,source,mode,_iso(now),csv_text,len(rows))).rowcount
             if inserted:
                 db.executemany("INSERT INTO market_context_observations VALUES(?,?,?,?,?)",
                     [(*r,digest) for r in rows])
+                if original_report is not None:
+                    db.execute("INSERT INTO market_context_raw_reports VALUES(?,?,?)",(digest,
+                        sha256(original_report.encode()).hexdigest(),original_report))
     return {"receipt_sha256":digest,"rows":len(rows),"inserted":bool(inserted),"mode":mode,
             "source":source,"factor_counts":dict(Counter(r[0] for r in rows)),
             "independently_verified":False,
             "note":"Archive availability is reviewed but not independently verified. Receipt mode cannot backdate the import."}
+
+
+def ingest_participant(csv_text,report_day,available_utc,report_type,mode,confirm_reviewed,*,now=None):
+    """Normalize reviewed NSE report long/short sides, preserving raw CSV."""
+    from datetime import time
+    if not isinstance(csv_text,str) or not 0<len(csv_text.encode())<=64_000:
+        raise ValueError("Provide an original participant CSV up to 64 KB")
+    if report_type not in ("oi","volume"):
+        raise ValueError("Choose open interest or trading volume")
+    day=date.fromisoformat(report_day)
+    event=datetime.combine(day,time(15,30),p.live_market.IST).astimezone(timezone.utc)
+    known=_stamp(available_utc)
+    now=now or _now()
+    if day.weekday()>=5 or not event<=known<=now:
+        raise ValueError("Review session date and report availability after market close")
+    raw=list(csv.reader(io.StringIO(csv_text.lstrip("\ufeff"))))
+    required=("client type","future index long","future index short",
+              "option index call long","option index call short","option index put long","option index put short")
+    header_idx=None
+    for i,r in enumerate(raw[:5]):
+        cols=[" ".join(x.strip().lower().split()) for x in r]
+        if all(k in cols for k in required):
+            if any(cols.count(k)!=1 for k in required):
+                raise ValueError("Ambiguous participant columns")
+            header_idx=i;positions={k:cols.index(k) for k in required};break
+    if header_idx is None:
+        raise ValueError("Missing official NSE participant report headers")
+    data={}
+    for row in raw[header_idx+1:]:
+        if not row or not any(x.strip() for x in row):
+            continue
+        if len(row)<=max(positions.values()):
+            raise ValueError("Truncated participant row")
+        category=row[positions["client type"]].strip().upper()
+        if category not in ("FII","DII","CLIENT","PRO","TOTAL") or category in data:
+            raise ValueError("Unexpected or duplicate participant category")
+        nums=[]
+        for k in required[1:]:
+            token=row[positions[k]].strip().replace(",","")
+            if not token.isdigit():
+                raise ValueError("Expected nonnegative integer contract counts")
+            nums.append(int(token))
+        data[category]=nums
+    if set(data)!={"FII","DII","CLIENT","PRO","TOTAL"}:
+        raise ValueError("Require all four categories and TOTAL row")
+    if any(sum(data[c][i] for c in ("FII","DII","CLIENT","PRO"))!=data["TOTAL"][i] for i in range(6)):
+        raise ValueError("Participant counts do not reconcile to TOTAL")
+    out=io.StringIO();writer=csv.writer(out,lineterminator="\n")
+    writer.writerow(HEADER)
+    suffix="_VOL" if report_type=="volume" else ""
+    for c in ("FII","DII","CLIENT","PRO"):
+        for i,name in enumerate(("INDEX_FUT_NET","INDEX_CALL_NET","INDEX_PUT_NET")):
+            writer.writerow((c+"_"+name+suffix,_iso(event),_iso(known),data[c][2*i]-data[c][2*i+1]))
+    return ingest(out.getvalue(),"NSE participant-wise "+report_type,mode,confirm_reviewed,
+                  now=now,original_report=csv_text)
 
 
 def _exists(db,table):
