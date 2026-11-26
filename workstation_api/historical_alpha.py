@@ -41,7 +41,9 @@ def _batch(batch_id):
     if raw.get("selection")!="banknifty_pit" or raw.get("interval")!=1:
         raise ValueError("Select a BANKNIFTY dated-membership one-minute batch")
     start,stop=map(date.fromisoformat,(raw["from_date"],raw["to_date"]))
-    if not 0<(stop-start).days<=MAX_DAYS or stop>datetime.now(IST).date():
+    local=datetime.now(IST)
+    max_stop=local.date()+timedelta(days=int(local.hour>=16))
+    if not 0<(stop-start).days<=MAX_DAYS or stop>max_stop:
         raise ValueError("Use a completed historical range up to 240 calendar days, end exclusive")
     info=raw.get("historical_index",{})
     intervals=info.get("intervals",[])
