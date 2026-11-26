@@ -1,5 +1,6 @@
 import {useEffect,useState} from 'react'
 import ResearchPlot from './ResearchPlots'
+import CandleBarrierResults from './CandleBarrierResults'
 import BankHeatmap from './BankHeatmap'
 import ScalpingEconomics from './ScalpingEconomics'
 import ScalpingValidation from './ScalpingValidation'
@@ -148,6 +149,7 @@ export default function MarketPatternIntelligence({identity='INDEX:BANKNIFTY',co
         <details className="mpi-detail"><summary>Historical sessions · exact observed OHLC</summary><Table headers={['Session','Open','High','Low','Close','Range','Up','Down','Net']} rows={[...b.daily].reverse().map(s=>[s.date,fmt(s.open),fmt(s.high),fmt(s.low),fmt(s.close),fmt(s.range),fmt(s.up),fmt(s.down),fmt(s.net)])}/></details>
       </>}
       </>}
+      {identity==='INDEX:BANKNIFTY'&&<CandleBarrierResults/>}
       <details className="mpi-detail"><summary>Source methodology &amp; limitations</summary><p className="tc-muted">{data.warning}</p></details>
     </>}
   </section>
