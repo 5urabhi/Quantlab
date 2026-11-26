@@ -91,6 +91,7 @@ def configure(config):
 
 def pause():
     with _db() as db:
+        db.execute("BEGIN IMMEDIATE")
         cfg=_settings(db);cfg["enabled"]=False
         db.execute("INSERT OR REPLACE INTO settings VALUES(1,?)",(_encode(cfg),))
     return status()
@@ -303,6 +304,7 @@ def cycle(now=None):
         if not paper._regular(decision) or decision+timedelta(seconds=cfg["hold_seconds"]+2*select.WINDOW_SECONDS+4)>=close:
             return
         with _db() as db:
+            db.execute("BEGIN IMMEDIATE")
             # A pause or configuration change during analysis takes effect
             # before recording any new paper entry.
             if _settings(db)!=cfg:
