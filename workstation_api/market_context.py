@@ -17,7 +17,7 @@ import math
 import sqlite3
 
 from . import advanced_options as ao, constituent_prospective as p
-from . import replay_storage, shared_market_data, market_inventory
+from . import replay_storage, shared_market_data
 
 VERSION="market_context_v1"
 MAX_IMPORT_BYTES=5_000_000
@@ -139,7 +139,10 @@ def parse_csv(text,now):
         if not event<=available<=now:
             raise ValueError("Require event <= actual source availability <= import time")
         kind=FACTORS[factor][0]
-        value=float(r["value"])
+        try:
+            value=float(r["value"])
+        except (TypeError,ValueError) as exc:
+            raise ValueError("Missing or invalid factor value") from exc
         if not math.isfinite(value) or abs(value)>1e12 or (kind in ("daily_return","intraday_return") and value<=0):
             raise ValueError("Invalid factor level")
         key=(factor,_iso(event),_iso(available))
@@ -277,12 +280,16 @@ def load_timelines(db,start,stop,mode):
         raise ValueError("Unknown source availability mode")
     if not _exists(db,"market_context_observations"):
         return {},{"rows":0,"ambiguous_factors":[]}
+    mode_filter=" AND i.mode='receipt' AND i.imported_utc<=?" if mode=="receipt" else ""
+    args=[_iso(stop),_iso(start-timedelta(days=10)),_iso(stop)]
+    if mode=="receipt":
+        args.append(_iso(stop))
+    args.append(MAX_READ_ROWS+1)
     rows=replay_storage.fetchall(db,"""SELECT o.factor,o.event_utc,o.available_utc,o.value,
          i.source,i.receipt_sha256,i.imported_utc,i.mode
          FROM market_context_observations o JOIN market_context_imports i USING(receipt_sha256)
-         WHERE o.available_utc<=? AND o.event_utc>=? AND o.event_utc<=?
-         ORDER BY o.factor,o.available_utc,o.event_utc LIMIT ?""",
-         (_iso(stop),_iso(start-timedelta(days=10)),_iso(stop),MAX_READ_ROWS+1))
+         WHERE o.available_utc<=? AND o.event_utc>=? AND o.event_utc<=?"""+mode_filter+
+         " ORDER BY o.factor,o.available_utc,o.event_utc LIMIT ?",tuple(args))
     if len(rows)>MAX_READ_ROWS:
         raise ValueError("Market context evidence exceeds bounded study read; reduce archive frequency")
     factors=defaultdict(list);sources=defaultdict(set)
@@ -320,7 +327,7 @@ def factor_at(timelines,cutoff):
             if 0<=age<=max_age and level is not None:
                 prev=(t.at(cutoff-timedelta(minutes=30)) if kind=="intraday_return" else rows[1:])
                 if prev:
-                    pe,pk,pv,_,_=prev[0]
+                    pe,pk,pv,prior_source,prior_digest=prev[0]
                     gap=(event-pe).total_seconds()/3600
                     anchor_age=(cutoff-timedelta(minutes=30)-pe).total_seconds()/3600
                     if pv is not None and 0<gap<=24*7 and (kind!="intraday_return" or 0<=anchor_age<=10/60):
@@ -338,7 +345,9 @@ def factor_at(timelines,cutoff):
             if values is not None and all(math.isfinite(x) for x in values):
                 details[key]={"state":"available","level":level,"change_feature":values[1],
                     "event_utc":_iso(event),"known_utc":_iso(known),"age_hours":age,
-                    "source":source,"receipt_sha256":digest,"group":group}
+                    "source":source,"receipt_sha256":digest,"group":group,
+                    "prior_event_utc":_iso(pe),"prior_known_utc":_iso(pk),
+                    "prior_source":prior_source,"prior_receipt_sha256":prior_digest}
                 groups.add(group)
             else:
                 values=None
@@ -371,7 +380,7 @@ def _chain(db,cutoff,expiry=None):
     expiry,stamp,raw,digest=r
     try:
         captured=_stamp(stamp)
-        if sha256(raw.encode()).hexdigest()!=digest or not cutoff-timedelta(seconds=MAX_CHAIN_AGE)<=captured<=cutoff:
+        if not isinstance(raw,str) or sha256(raw.encode()).hexdigest()!=digest or not cutoff-timedelta(seconds=MAX_CHAIN_AGE)<=captured<=cutoff:
             return None
         chain=json.loads(raw)
         if chain["underlying"]!="BANKNIFTY" or chain["expiry"]!=expiry or chain["received_utc"]!=stamp or chain["read_only"] is not True:
@@ -391,22 +400,24 @@ def _pairs(chain,spot):
             side=c["option_type"]
             if abs(strike/spot-1)>OPTION_BAND or side not in ("CE","PE") or c["expiry"]!=chain["expiry"]:
                 continue
-            if not c["contract_master_verified"] or not c["quote_valid"] or not c["identity"]:
+            if c["contract_master_verified"] is not True or c["quote_valid"] is not True or not c["identity"]:
                 continue
             if not isinstance(c["identity"],str) or not c["identity"].startswith("NSE_FNO:"):
                 continue
             for field in ("oi","volume"):
                 if type(c[field]) is not int or c[field]<0:
                     raise ValueError("Invalid OI or volume")
-            if not c["lot_size"] or c["lot_size"]<=0:
+            if type(c["lot_size"]) is not int or c["lot_size"]<=0:
                 continue
             if side in pairs[strike]:
                 duplicates.add(strike)
             pairs[strike][side]=c
         except (ValueError,KeyError,TypeError,OverflowError):
             continue
+    identity_counts=Counter(c["identity"] for v in pairs.values() for c in v.values())
     return {k:v for k,v in pairs.items() if k not in duplicates and set(v)=={"CE","PE"}
-            and v["CE"]["lot_size"]==v["PE"]["lot_size"] and v["CE"]["identity"]!=v["PE"]["identity"]}
+            and v["CE"]["lot_size"]==v["PE"]["lot_size"]
+            and all(identity_counts[v[s]["identity"]]==1 for s in ("CE","PE"))}
 
 
 def _imb(put,call):
