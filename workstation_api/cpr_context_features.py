@@ -23,7 +23,10 @@ SCOPE_GROUPS={"technical":(),"constituents":("constituents",),"global":("global"
               "panel_global":("bank_panel","global"),"patterns":("patterns",),
               "global_patterns":("global","patterns"),
               "panel_global_patterns":("bank_panel","global","patterns"),
-              "combined_patterns":("constituents","global","patterns")}
+              "combined_patterns":("constituents","global","patterns"),
+              "sequences":("sequence",),"sequence_panel_global":("sequence","panel_detail","global"),
+              "derivatives":("derivatives",),"sequence_derivatives":("sequence","derivatives")}
+ML_ONLY_SCOPES=("sequences","sequence_panel_global","derivatives","sequence_derivatives")
 FACTORS=tuple(k for k,spec in m.FACTORS.items() if spec[1]!="participants")
 PARTICIPANTS=("FII_CASH_NET_CR","DII_CASH_NET_CR","FII_INDEX_FUT_NET","CLIENT_INDEX_FUT_NET")
 FACTORS+=PARTICIPANTS
