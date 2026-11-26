@@ -196,7 +196,7 @@ def inspect(*,day,strategy,identities,capital=17000.,lots=3,participation_pct=25
 
 def automatic(*,day,capital=17000.,lots=3,participation_pct=25.,
               slippage_bps=5.,broker_profile="zerodha",expiry="",side="ALL",
-              search="",now=None):
+              search="",now=None,include_all=False,include_inventory=False,progress=None):
     """Select an affordable exact research contract before launching replay.
 
     Today's subscribed identities are an efficient, bounded indexed universe.
@@ -231,7 +231,10 @@ def automatic(*,day,capital=17000.,lots=3,participation_pct=25.,
     def reject(reason):
         rejected[reason]=rejected.get(reason,0)+1
     candidates=[]
-    for row in inventory:
+    eligible_inventory=[]
+    for index,row in enumerate(inventory):
+        if progress and index%10==0:
+            progress(index,len(inventory))
         book=row["book"]
         if book is None:
             reject("missing_or_invalid_original_book")
@@ -240,6 +243,7 @@ def automatic(*,day,capital=17000.,lots=3,participation_pct=25.,
             query and query not in f'{book["identity"]} {book["strike"]:g} {book["option_type"]} {book["expiry"]}'.lower()):
             reject("outside_selected_filters")
             continue
+        eligible_inventory.append(row)
         screen=_screen("LONG_OPTION",[row],capital,lots,participation_pct,slippage_bps,broker_profile,2.)
         # Both entry budget and immediate displayed exit capacity must pass.
         # This is not evidence that a later exit will execute.
@@ -269,11 +273,14 @@ def automatic(*,day,capital=17000.,lots=3,participation_pct=25.,
     candidates.sort(key=lambda c:(-c["observed_seconds"],c["spread_bps"],
                     -c["study_lots"],c["latest_book_age_seconds"],c["identity"]))
     pick=candidates[0] if candidates else None
-    return {"day_ist":day,"cutoff_utc":paper._iso(now),"capital":capital,"lots":lots,
+    result={"day_ist":day,"cutoff_utc":paper._iso(now),"capital":capital,"lots":lots,
         "elapsed_seconds":elapsed,"scanned_contracts":len(inventory),"scan_truncated":truncated,
-        "scope":scope,"affordable_candidates":len(candidates),"candidates":candidates[:TOP_RESULTS],
+        "scope":scope,"affordable_candidates":len(candidates),"candidates":candidates if include_all else candidates[:TOP_RESULTS],
         "automatic_pick":pick,"rejections":rejected,
         "reason":"selected_by_saved_coverage_spread_and_affordability" if pick else "no_eligible_recorded_contract",
         "warning":"Selection uses the chosen date's observed evidence, not a buy signal or unbiased backtest. "
           "Low coverage and missing future receipts remain unscored. Same-book exit capacity is not an actual fill. "
           "The scan is bounded; a partial scan may omit better-covered candidates."}
+    if include_inventory:
+        result["_inventory"]=eligible_inventory
+    return result
