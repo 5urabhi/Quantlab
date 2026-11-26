@@ -13,7 +13,10 @@ import json
 from . import historical_alpha as h, predictive_option_research as p
 from . import alpha_retraining, liquidity_spreads as fees
 
-VERSION = "cpr_ml_offline_q_v3"
+VERSION = "cpr_ml_offline_q_v4"
+ENTRY_MODES = ("crossover", "daily_scan")
+SCAN_MINUTES = 15
+MAX_DAILY_ATTEMPTS = 3
 TRAIL_ACTIVATION = .03
 TRAIL_GAP = .03
 MAX_LEARNING_STRIKES = 5
@@ -44,6 +47,8 @@ WARNING = (
     "Independent daily accounts reset to starting capital; the aggregate is not a compounded account path. "
     "Learning uses earlier unleveraged counterfactual single-lot trajectories independently of account funding; "
     "multiple strikes at the same signal are correlated and are grouped in support and training weights. "
+    "Daily scan opportunities can overlap, but positions cannot; skip signals while holding, halt on unresolved positions, "
+    "and cap attempted entries at three per day. Daily trade coverage is not guaranteed. "
     "Previously viewed evaluation dates are exploratory, not a new untouched confirmation set. "
     "Trailing floors use completed net marks only; delayed exits can realize losses beyond those floors. "
     "Open-position risk diagnostics are sampled marks through the exit decision, not intrabar or fill-time maxima. "
@@ -73,7 +78,7 @@ def _bar_closes(bars, frame):
     return [bars[m][3] for m in range(frame-1,375,frame)]
 
 
-def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learning_grid=False):
+def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learning_grid=False, entry_mode="crossover"):
     levels = _cpr(previous)
     # Fail closed on an unverified missing weekday rather than using a stale
     # CPR. Official holidays/special sessions need separate calendar evidence.
@@ -95,6 +100,11 @@ def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learnin
     stride=((max(hold+3,60)+frame-1)//frame)*frame
     first=((30+frame-1)//frame)*frame-1
     grid=set(range(first,375,stride)) if learning_grid else set()
+    daily=entry_mode=="daily_scan" and not learning_grid
+    scan_stride=((SCAN_MINUTES+frame-1)//frame)*frame
+    opening_complete=False
+    opening_hi=opening_lo=None
+    previous_close=close
     for m in range(frame-1,375,frame):
         if any(k not in bars for k in range(m-frame+1,m+1)):
             # A later EMA would silently skip a missing interval. Stop this session.
@@ -104,12 +114,43 @@ def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learnin
         fast+=(price-fast)*2/10
         slow+=(price-slow)*2/22
         gap=fast-slow
-        # Decision at m+1; entry m+2. Terminal exit open <=374.
-        if m+2+hold>374 or m<=last+hold+2 or len(rows)>=max_signals:
+        prev_close=previous_close
+        previous_close=price
+        # Opening range becomes available only after the first 15 minutes.
+        if not opening_complete and m>=14:
+            opening_hi=max(bars[k][1] for k in range(15))
+            opening_lo=min(bars[k][2] for k in range(15))
+            opening_complete=True
+        # The daily scanner reserves overlapping *opportunities*, never
+        # overlapping positions. Account policies enforce that separately.
+        if m+2+hold>374 or (not daily and m<=last+hold+2) or len(rows)>=max_signals:
             continue
         cross="CALL" if old<=0<gap and price>top else "PUT" if old>=0>gap and price<bottom else None
+        entry_type=None
         if learning_grid:
             side=("CALL" if gap>0 and price>top else "PUT" if gap<0 and price<bottom else None) if m in grid else None
+        elif daily:
+            # Every scheduled checkpoint, plus fresh confirmed crossovers.
+            # No ranking using later bars or best-of-day hindsight.
+            scheduled=(m+1)%scan_stride==0
+            side=cross
+            if scheduled and opening_complete and side is None:
+                side="CALL" if gap>0 and price>top else "PUT" if gap<0 and price<bottom else None
+            if side is not None:
+                bar_lo=min(bars[k][2] for k in range(m-frame+1,m+1))
+                bar_hi=max(bars[k][1] for k in range(m-frame+1,m+1))
+                if side==cross:
+                    entry_type="crossover"
+                elif (side=="CALL" and prev_close<=hi<price) or (side=="PUT" and price<lo<=prev_close):
+                    entry_type="previous_day_breakout"
+                elif (side=="CALL" and prev_close>top and bar_lo<=top<price) or (side=="PUT" and prev_close<bottom and price<bottom<=bar_hi):
+                    entry_type="cpr_retest"
+                elif (side=="CALL" and prev_close<=top<price) or (side=="PUT" and price<bottom<=prev_close):
+                    entry_type="cpr_breakout"
+                elif m>=15+frame-1 and ((side=="CALL" and prev_close<=opening_hi<price) or (side=="PUT" and price<opening_lo<=prev_close)):
+                    entry_type="opening_range_breakout"
+                else:
+                    entry_type="trend_continuation"
         else:
             side=cross
         if side is None:
@@ -122,7 +163,7 @@ def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learnin
         x += [(top-bottom)*scale, direction*gap*scale, m/375.,float(side==cross)]
         rows.append({"session":day,"prior_session":prev_day,"minute":m,
                      "side":side,"spot":price,"features":x,
-                     "entry_type":"crossover" if side==cross else "scheduled_continuation",
+                     "entry_type":entry_type or ("crossover" if side==cross else "scheduled_continuation"),
                      "decision_utc":_stamp(day,m+1),"entry_utc":_stamp(day,m+2),
                      "target_utc":_stamp(day,m+2+hold)})
         last=m
@@ -433,22 +474,33 @@ def _ml_accept(model,means,ep):
     return float(pr["target"])>=.50 and ev>0
 
 
-def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None):
+def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None,dates=None,max_attempts=MAX_DAILY_ATTEMPTS):
     balance=capital; peak=capital;dd=0.;gross_losses=0.;day=None;halted=False
     daily=defaultdict(lambda:{"conditional_net_inr":0.,"scored":0,"unresolved":0})
     counts=Counter();journal=[];net=0.;charges=0.;winners=0;targets=0
     exit_reasons=Counter();worst_mark=None;open_dd=None
-    for ep in episodes:
+    daily_coverage={d:{"opportunities":0,"affordable_observed_entries":0,"entry_attempts":0,
+                        "entered_positions":0,"scored_trades":0,"states":{}} for d in (dates or [])}
+    active_until=None;attempts=0
+    for ep in sorted(episodes,key=lambda e:(e["session"],e["decision_utc"])):
         if day!=ep["session"]:
             day=ep["session"];gross_losses=0.;halted=False
             # Independent day accounts avoid carrying unobserved positions into
             # the next session. Aggregate net is not a compounded account path.
-            balance=capital;peak=capital
+            balance=capital;peak=capital;active_until=None;attempts=0
+        coverage=daily_coverage.setdefault(day,{"opportunities":0,"affordable_observed_entries":0,
+            "entry_attempts":0,"entered_positions":0,"scored_trades":0,"states":{}})
+        coverage["opportunities"]+=1
+        coverage["affordable_observed_entries"]+=int(ep["state"]=="entered")
         state=None
         if method=="no_trade":
             state="no_trade"
         elif halted:
             state="session_halted"
+        elif active_until is not None and ep["decision_utc"]<=active_until:
+            state="position_still_open"
+        elif attempts>=max_attempts:
+            state="daily_attempt_limit"
         elif ep["state"] in SOURCE_STATES:
             state=ep["state"]
         elif ep["planned_funding"]>min(balance,risk_budget-gross_losses):
@@ -457,16 +509,20 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             state="ml_abstain"
         if state:
             result={"state":state}
-        elif ep["state"]=="entered" and ep["funding"]>min(balance,risk_budget-gross_losses):
-            result={"state":"entry_limit_exceeded"}
         else:
-            learned=method in ("offline_q","ml_offline_q","offline_q_emergency_stop")
-            wide=method in ("fixed_emergency_stop","offline_q_emergency_stop","trailing_emergency_stop")
-            policy="offline_q" if learned else "trailing" if method in ("trailing_stop","trailing_emergency_stop") else method if method=="no_stop" else "fixed_stop"
-            result=_exit(ep,policy,q,
-                         stop_mark=EMERGENCY_STOP if wide else STOP)
+            attempts+=1
+            coverage["entry_attempts"]+=1
+            if ep["state"]=="entered" and ep["funding"]>min(balance,risk_budget-gross_losses):
+                result={"state":"entry_limit_exceeded"}
+            else:
+                learned=method in ("offline_q","ml_offline_q","offline_q_emergency_stop")
+                wide=method in ("fixed_emergency_stop","offline_q_emergency_stop","trailing_emergency_stop")
+                policy="offline_q" if learned else "trailing" if method in ("trailing_stop","trailing_emergency_stop") else method if method=="no_stop" else "fixed_stop"
+                result=_exit(ep,policy,q,stop_mark=EMERGENCY_STOP if wide else STOP)
         state=result["state"]
         counts[state]+=1
+        coverage["states"][state]=coverage["states"].get(state,0)+1
+        coverage["entered_positions"]+=int(state in ("complete","exit_censored"))
         if result.get("min_observed_mark_return") is not None:
             low=result["min_observed_mark_return"]
             dd_open=result["max_observed_peak_to_mark_drawdown"]
@@ -474,6 +530,8 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             open_dd=dd_open if open_dd is None else max(open_dd,dd_open)
         if state=="complete":
             exit_reasons[result["reason"]]+=1
+            active_until=result["exit_utc"]
+            coverage["scored_trades"]+=1
             value=result["net"];net+=value;charges+=result["fees"];balance+=value
             gross_losses+=max(0.,-value);peak=max(peak,balance);dd=max(dd,peak-balance)
             winners+=int(value>0);targets+=int(result["target_realized"])
@@ -482,7 +540,7 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             halted=True
             daily[day]["unresolved"]+=1
         journal.append({"method":method,"session":day,"decision_utc":ep["decision_utc"],
-                        "side":ep["side"],"strike":ep.get("strike"),
+                        "side":ep["side"],"entry_type":ep.get("entry_type"),"strike":ep.get("strike"),
                         "minimum_funding_inr":ep.get("minimum_funding_inr"),
                         "observed_side_quotes":ep.get("observed_side_quotes"),
                         "qualified_contracts":ep.get("qualified_contracts"),**result})
@@ -495,17 +553,26 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             "exit_reasons":dict(exit_reasons),"worst_observed_mark_return":worst_mark,
             "max_observed_peak_to_mark_drawdown":open_dd,
             "independent_daily_accounts":True,"daily":dict(daily),
+            "daily_coverage":{"reserved_sessions":len(daily_coverage),
+                "days_with_opportunity":sum(d["opportunities"]>0 for d in daily_coverage.values()),
+                "days_with_affordable_candidate":sum(d["affordable_observed_entries"]>0 for d in daily_coverage.values()),
+                "days_with_entry":sum(d["entered_positions"]>0 for d in daily_coverage.values()),
+                "days_with_scored_trade":sum(d["scored_trades"]>0 for d in daily_coverage.values()),
+                "days_without_entry":sum(d["entered_positions"]==0 for d in daily_coverage.values()),
+                "by_session":daily_coverage},
             "unresolved_trades":unresolved,"full_account_pnl_certified":False},journal
 
 
 def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
-        lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,progress=None):
+        lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
         raise ValueError("Run CPR research outside Indian market priority hours")
     if not 0<(stop-start).days<=120 or stop>now.astimezone(h.IST).date():
         raise ValueError("Select up to 120 calendar days, completed sessions, end exclusive")
+    if entry_mode not in ENTRY_MODES:
+        raise ValueError("Unsupported entry mode")
     if frame not in FRAMES or hold not in HOLDS or type(lot_size) is not int or not 1<=lot_size<=1000 or type(max_lots) is not int or not 1<=max_lots<=3 or type(wings) is not int or not 0<=wings<=3:
         raise ValueError("Unsupported timeframe, hold, historical lot assumption or wings")
     if not all(type(v) in (int,float) and isfinite(v) for v in (capital,risk_budget,premium_penalty_bps)) or not 1000<=capital<=1e7 or not 0<risk_budget<=capital or not 0<=premium_penalty_bps<=200:
@@ -515,23 +582,27 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     ordered=sorted(index)
     dates=[d for d in ordered if from_date<=d<to_date and date.fromisoformat(d).weekday()<5][-sum(SPLITS):]
     splits=[dates[:30],dates[30:40],dates[40:60]]
-    signals=[];learning_grid=[];counts=Counter();day_audit={}
+    signals=[];learning_grid=[];train_crossovers=[];counts=Counter();day_audit={}
     for day in dates:
         i=ordered.index(day)
         if not i:
             day_audit[day]={"state":"prior_session_missing","signals":0}
             continue
         prior=ordered[i-1]
-        rows,status=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,max_signals=3)
+        rows,status=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,
+                             max_signals=375 if entry_mode=="daily_scan" else 3,entry_mode=entry_mode)
         signals.extend(rows)
         if day in splits[0]:
             extra,_=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,max_signals=5,learning_grid=True)
             learning_grid.extend(extra)
+            base,_=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,max_signals=3)
+            train_crossovers.extend(base)
         counts[status]+=1
-        day_audit[day]={"state":status,"signals":len(rows),"prior_session":prior}
+        day_audit[day]={"state":status,"signals":len(rows),"prior_session":prior,
+                        "entry_types":dict(Counter(s["entry_type"] for s in rows))}
     by_anchor={(s["session"],s["minute"]):s for s in learning_grid}
     # Prefer the original crossover if a scheduled anchor coincides.
-    by_anchor.update({(s["session"],s["minute"]):s for s in signals if s["session"] in splits[0]})
+    by_anchor.update({(s["session"],s["minute"]):s for s in train_crossovers})
     train_signals=sorted(by_anchor.values(),key=lambda s:(s["session"],s["minute"]))
     val_signals=[s for s in signals if s["session"] in splits[1]]
     all_signals=signals+train_signals
@@ -548,7 +619,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     broad_train=_learning_episodes(train_signals,table,index,hold=hold,lot_size=lot_size,bps=bps)
     broad_val=_learning_episodes(val_signals,table,index,hold=hold,lot_size=lot_size,bps=bps)
     report={"version":VERSION,"settings":{"from_date":from_date,"to_exclusive":to_date,"timeframe":frame,
-             "hold_minutes":hold,"capital_inr":capital,"full_premium_and_fee_budget_inr":risk_budget,
+             "hold_minutes":hold,"entry_mode":entry_mode,"scan_interval_minutes":SCAN_MINUTES,
+             "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,"full_premium_and_fee_budget_inr":risk_budget,
              "historical_lot_size_assumed":lot_size,"max_lots":max_lots,"strike_wings":wings,
              "primary_adverse_penalty_bps_per_side":bps,"target_net_return":TARGET,"fixed_stop_mark":STOP,
              "experimental_emergency_stop_mark":EMERGENCY_STOP,"max_learning_strikes_per_anchor":MAX_LEARNING_STRIKES,
@@ -587,12 +659,12 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
                 report["methods"][method]={"state":"insufficient_training_support"}
                 continue
             metrics,rows=_evaluate(test,method=method,capital=capital,risk_budget=risk_budget,
-                                   model=model,means=means,q=wide_q if method=="offline_q_emergency_stop" else q)
+                                   model=model,means=means,q=wide_q if method=="offline_q_emergency_stop" else q,dates=splits[2])
             report["methods"][method]=metrics;journal.extend(rows)
     else:
         # Always useful mathematical diagnostic; never labeled independent holdout.
         for method in ("no_stop","fixed_stop","fixed_emergency_stop","trailing_stop","trailing_emergency_stop","no_trade"):
-            metrics,rows=_evaluate(episodes,method=method,capital=capital,risk_budget=risk_budget)
+            metrics,rows=_evaluate(episodes,method=method,capital=capital,risk_budget=risk_budget,dates=dates)
             report["methods"][method]=metrics;journal.extend(rows)
     evidence={"index_sources":index_hashes,"option_sources":meta["source_hashes"]}
     report["source_sha256"]=sha256(json.dumps(evidence,sort_keys=True).encode()).hexdigest()
