@@ -3,16 +3,17 @@
 Ranking is a research-data diagnostic, not a directional signal or a live
 trade recommendation. Never substitute a contract inside a historical run.
 """
-from collections import Counter
 from contextlib import closing
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import sqlite3
+from time import monotonic
 
 from . import depth_replay as replay, liquidity_spreads as fees, paper_execution as paper
 
 MAX_CANDIDATES=400
 MAX_LOTS=10
 TOP_RESULTS=20
+SCAN_SECONDS=8
 
 
 def _bounds(day, now):
@@ -28,9 +29,10 @@ def _inventory(day, identities, now, include_candidates):
     """Single read transaction; actual saved timestamp inventory, not fills."""
     start,end=_bounds(day,now)
     elapsed=max(0,int((end-start).total_seconds()))
-    if end<=start:
+    if elapsed<=0:
         return [],elapsed,False
-    limits=(paper._iso(start),paper._iso(end))
+    # The same complete-second denominator as the speed-study inventory.
+    limits=(paper._iso(start),paper._iso(start+timedelta(seconds=elapsed)))
     try:
         with closing(replay.ao._read_database()) as db:
             db.execute("BEGIN")
@@ -41,9 +43,24 @@ def _inventory(day, identities, now, include_candidates):
             selected=db.execute(base+" AND identity IN ("+
                 ",".join("?" for _ in identities)+") GROUP BY identity",
                 (*limits,*identities)).fetchall()
-            candidates=db.execute(base+""" GROUP BY identity
-                ORDER BY 4 DESC,identity LIMIT ?""",(*limits,MAX_CANDIDATES+1)).fetchall() if include_candidates else []
-            truncated=len(candidates)>MAX_CANDIDATES
+            candidates=[]
+            truncated=False
+            if include_candidates:
+                # The existing index is identity-first. A very large archive
+                # may require a long covering-index scan. Bound that optional
+                # scan rather than starving the live writer.
+                deadline=monotonic()+SCAN_SECONDS
+                db.set_progress_handler(lambda:int(monotonic()>deadline),10000)
+                try:
+                    candidates=db.execute(base+""" GROUP BY identity
+                        ORDER BY 4 DESC,identity LIMIT ?""",(*limits,MAX_CANDIDATES+1)).fetchall()
+                    truncated=len(candidates)>MAX_CANDIDATES
+                except sqlite3.OperationalError as exc:
+                    if "interrupted" not in str(exc):
+                        raise
+                    truncated=True
+                finally:
+                    db.set_progress_handler(None,0)
             by_id={row[0]:row for row in candidates[:MAX_CANDIDATES]}
             by_id.update({row[0]:row for row in selected})
             output=[]
@@ -78,14 +95,7 @@ def _entry_requirements(strategy, books, lots, participation_pct, slippage_bps, 
              for row,action in zip(books,actions)]
     if any(row["displayed_fill_units"]!=units for row in entries):
         return None
-    gross_buys=sum(-row["cashflow"] for row in entries if row["action"]=="BUY")
-    if strategy=="LONG_OPTION":
-        max_loss=-fees._money(sum(row["cashflow"] for row in entries))
-    else:
-        legs=[{**row,"action":action} for row,action in zip(books,actions)]
-        gross=sum((1 if row["action"]=="SELL" else -1)*row["turnover"] for row in entries)
-        max_loss=replay.studio._terminal_payoff(legs,gross,sum(row["fees"] for row in entries),units)["max_loss_before_expiry_settlement_inr"]
-    return fees._money(max(max_loss,gross_buys))
+    return replay._entry_risk(strategy,books,actions,entries,units)[2]
 
 
 def _screen(strategy, rows, capital, lots, participation_pct, slippage_bps, broker_profile, max_skew_seconds):
@@ -149,6 +159,7 @@ def inspect(*,day,strategy,identities,capital=17000.,lots=3,participation_pct=25
             if candidate["max_affordable_lots"]<1:
                 continue
             candidate.update(identity=row["identity"],strike=book["strike"],option_type=book["option_type"],
+                latest_book_age_seconds=round(max(0.,(now-book["stamp"]).total_seconds()),2),
                 expiry=book["expiry"],bid=book["bid"],ask=book["ask"],saved_receipts=row["saved_receipts"],
                 observed_seconds=row["observed_seconds"],coverage_pct=row["coverage_pct"])
             candidates.append(candidate)
@@ -159,4 +170,4 @@ def inspect(*,day,strategy,identities,capital=17000.,lots=3,participation_pct=25
     return {"day_ist":day,"cutoff_utc":paper._iso(now),"capital":capital,"lots":lots,
         "elapsed_seconds":elapsed,"scanned_contracts":len(inventory),"scan_truncated":truncated,
         "selected":screen,"affordable_candidates":len(candidates),"candidates":candidates[:TOP_RESULTS],
-        "warning":"Latest saved original books for this day, not live quotes or verified fills. Coverage counts observed seconds across elapsed session, not guaranteed sampling. Historical candidates are in-sample research screens; validate on later data. Multi-leg budget is a risk proxy, not broker margin."}
+        "warning":"Latest saved original books for this day, not live quotes or verified fills. Coverage counts saved timestamps across elapsed session, not independently verified books for every second or guaranteed sampling. A bounded scan may omit candidates. Historical candidates are in-sample research screens; validate on later data. Multi-leg budget is a risk proxy, not broker margin."}
