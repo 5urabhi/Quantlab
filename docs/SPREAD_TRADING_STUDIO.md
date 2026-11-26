@@ -252,3 +252,45 @@ profitability is certified. Use the existing frozen prospective monitoring
 workflow to assess predictive performance separately.
 
 Offline tests: `python -m unittest discover -s tests -p 'test_paper_forecast.py' -v`.
+
+
+## Off-hours local trading validation
+
+After updating the repository, run `bash run.sh validate-trading` on the local
+machine. The command uses the latest completed weekday with saved BANKNIFTY
+index ticks, one to three replay dates, a fixed 15-minute forecast horizon by
+default, and separate virtual directional and vertical-spread accounts.
+For reproducible scope, specify explicit dates and model IDs:
+
+```bash
+bash run.sh validate-trading --day 2026-11-26 --horizon 15
+bash run.sh validate-trading --sessions 3 --capital 17000 --max-loss 4250
+```
+
+It checks stored depth integrity, runs chronological reversal and exit-policy
+replay, checks the original prospective ledger for forecast-depth research,
+assesses training-only IV intervals on later sessions, and monitors up to five
+previously frozen candidates. The candidate inventory is pinned before any new
+retrospective training in the same command; recency, not performance, limits
+automatic monitoring. Use explicit `--model-id` arguments to fix the candidate
+set. Later-session scoring is not necessarily a genuinely prospective deployed
+test. The default funding, loss allowance and maximum three lots are research
+assumptions, not recommendations or actual account balances.
+
+It also summarizes local processing and conditional entry/exit receipt delays
+from at most 5,000 recent paper decisions (sample counts, median, 95th percentile
+and maximum). Missing timing fields remain missing. Broker order acknowledgments
+and actual fills are not measured.
+
+An incremental JSON report is saved under `results/trading_validation_*.json`.
+Each task preserves its own result, coverage, run identifiers, and explicit
+not-run/error states. The report can contain local simulated trade details;
+review before sharing. A saved assessment is not an all-pass certificate.
+The command never downloads source data, calls a broker, promotes a candidate
+to live use, changes recorder settings, or submits orders. It refuses to start
+during weekday 08:30–16:00 IST market-priority hours and checks the window
+between bounded tasks. It does not interrupt a task midway.
+
+Current margin verification still requires the explicitly authorized Kite
+basket preview in Trading economics. Real broker execution latency, prospective
+profitability and independently validated RL remain separate evidence gates.
