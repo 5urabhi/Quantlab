@@ -1,6 +1,7 @@
 import {useCallback,useEffect,useState} from 'react'
 import {marketApi,readableError} from './tradingCockpitApi'
 import ResearchPlot from './ResearchPlots'
+import {LocalMetadataBackups} from './LegacySafetyPanels'
 import './operations-closeout.css'
 
 type Nav=(route:string)=>void
@@ -74,7 +75,7 @@ export function StorageOverview({onNavigate}:{onNavigate:Nav}){
  const free=h?.storage.free_bytes
  const used=typeof total==='number'&&typeof free==='number'&&total>0?Math.max(0,total-free):null
  const dbs=h?.databases.filter(d=>typeof d.size_bytes==='number'&&Number.isFinite(d.size_bytes))||[]
- return <section className="qoc-panel" aria-label="Local storage inventory">
+ return <><section className="qoc-panel" aria-label="Local storage inventory">
    <header><div><small>LOCAL DISK · READ-ONLY CHECK</small><h2>Storage & recovery overview</h2><p>Measure the actual database files and disk free space using the operational-health endpoint. This does not purge, repair or download anything.</p></div><button className="ws-button primary" type="button" disabled={report.busy} onClick={report.refresh}>{report.busy?'Inspecting…':'Inspect storage health'}</button></header>
    <PanelError error={report.error} stale={Boolean(h)}/>
    {h&&<><div className="qoc-grid"><Stat name="Operational state" value={label(h.overall_state)} detail="Not a certification of market data"/><Stat name="Free disk space" value={bytes(free)} detail={h.storage.low_space===true?'Low-space warning':h.storage.low_space===false?'No reported low-space warning':'Not verified'}/><Stat name="Disk capacity" value={bytes(total)} detail="Filesystem capacity, not QuantLab-only usage"/><Stat name="Measured databases" value={dbs.length} detail="Main database file sizes, not all cache/WAL/archive bytes"/></div>
@@ -83,7 +84,7 @@ export function StorageOverview({onNavigate}:{onNavigate:Nav}){
      <div className="qoc-scroll"><table aria-label="Managed database integrity"><thead><tr><th>Database</th><th>State</th><th>Main file size</th></tr></thead><tbody>{h.databases.map(d=><tr key={d.id}><td>{d.label}</td><td>{label(d.state)}</td><td>{bytes(d.size_bytes)}</td></tr>)}</tbody></table></div>
      {h.blockers.map((b,i)=><p className="qoc-error" key={i}>{b.component}: {b.action}</p>)}{h.warnings.map((w,i)=><p className="qoc-note" key={i}>{w.message}</p>)}<p className="qoc-note">{h.note} Checked {stamp(h.checked_utc)}.</p></>}
    <div className="qoc-actions"><button className="ws-button" onClick={()=>onNavigate('dataquality')}>Source quality and coverage</button><button className="ws-button" onClick={()=>onNavigate('data')}>Market Library</button></div>
- </section>
+ </section><LocalMetadataBackups/></>
 }
 export function ReportWorkspace({detail,runId,runPicker,busy,onBuild,onNavigate}:{detail:RunDetail|null;runId:string;runPicker:React.ReactNode;busy:boolean;onBuild:()=>void;onNavigate:Nav}){
  const library=useLocal<{records:ReportRecord[]}>('/api/workspace/records?kind=report')
