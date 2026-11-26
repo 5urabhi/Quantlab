@@ -107,7 +107,9 @@ def historical_universe(db, contracts, spot, now):
         "universe_scope":"contemporaneous_chain_intersect_fresh_recorded_depth"}
 
 
-def _source(now, config, *, historical=False, signal_override=None):
+def _source(now, config, *, historical=False, signal_override=None, forecast_only=False):
+    if forecast_only and not historical:
+        raise ValueError("Forecast source access is historical research only")
     day=now.astimezone(paper.IST).date().isoformat()
     subscribed=[]
     if not historical:
@@ -127,7 +129,7 @@ def _source(now, config, *, historical=False, signal_override=None):
     try:
         with closing(ao._read_database()) as db:
             db.execute("BEGIN")
-            signal=signal_override if historical else policy.signal_from_db(db,now)
+            signal=policy.signal_from_db(db,now) if forecast_only or not historical else signal_override
             if not signal:
                 return report,[],"no_completed_index_bars"
             report.update(direction=signal["direction"],bar_utc=signal["last_observed_utc"],
@@ -136,7 +138,7 @@ def _source(now, config, *, historical=False, signal_override=None):
             if signal["quote_mode"]!="RECENT_LOCAL_CANDLE_NOT_VERIFIED_LIVE":
                 report["direction"]="NO_TRADE"
                 return report,[],"stale_completed_index_bar"
-            if signal["direction"] not in ("UP","DOWN"):
+            if not forecast_only and signal["direction"] not in ("UP","DOWN"):
                 return report,[],"no_confirmed_ema_rsi_trend"
             lower=(now-timedelta(seconds=MAX_CHAIN_AGE)).isoformat()
             if historical:
