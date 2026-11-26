@@ -691,6 +691,12 @@ def repair_live_display_minutes(body:DisplaySessionRepairRequest):
         bad(exc)
 
 
+@app.get("/api/trading-cockpit/candle-barriers/latest")
+def latest_candle_barrier_research():
+    from . import candle_report_summary
+    return candle_report_summary.latest(service.ROOT/"results")
+
+
 @app.get("/api/trading-cockpit/market-patterns")
 def trading_market_patterns(identity: str = "INDEX:BANKNIFTY"):
     from . import market_patterns
