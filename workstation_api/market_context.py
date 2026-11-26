@@ -1,0 +1,430 @@
+"""Underlying-first market context on the canonical shared market store.
+
+Imported values are user-reviewed normalized evidence, not independently
+verified feed data. Archive mode trusts documented availability timestamps
+for retrospective research; receipt mode additionally enforces actual import
+time. Neither path makes an order or contacts a provider.
+"""
+from bisect import bisect_right, insort
+from collections import defaultdict, Counter
+from contextlib import closing
+from datetime import datetime, timedelta, timezone, date
+from hashlib import sha256
+import csv
+import io
+import json
+import math
+import sqlite3
+
+from . import advanced_options as ao, constituent_prospective as p
+from . import replay_storage, shared_market_data, market_inventory
+
+VERSION="market_context_v1"
+MAX_IMPORT_BYTES=5_000_000
+MAX_IMPORT_ROWS=50000
+MAX_READ_ROWS=350000
+MAX_CHAIN_AGE=90
+OPTION_BAND=.03
+# kind: daily level return in bps, daily yield change in bps, intraday
+# return in bps, or signed daily report level (fixed scale, not inferred).
+FACTORS={
+    "SP500_CLOSE":("daily_return","global_equity","S&P 500 previous available close"),
+    "NASDAQ_CLOSE":("daily_return","global_equity","Nasdaq Composite previous available close"),
+    "US_BANKS_CLOSE":("daily_return","global_equity","US banking index / ETF close (consistent series)"),
+    "NIKKEI_CLOSE":("daily_return","asia","Nikkei 225 close"),
+    "HANGSENG_CLOSE":("daily_return","asia","Hang Seng close"),
+    "SHANGHAI_CLOSE":("daily_return","asia","Shanghai Composite close"),
+    "EUROPE_BANKS_CLOSE":("daily_return","global_equity","European bank index close"),
+    "US_VIX_CLOSE":("daily_return","macro","US VIX close"),
+    "USDINR_CLOSE":("daily_return","macro","USD/INR close (INR per USD)"),
+    "BRENT_CLOSE":("daily_return","macro","Brent benchmark close"),
+    "US10Y":("daily_yield","macro","US 10-year yield, percentage points"),
+    "INDIA10Y":("daily_yield","macro","India 10-year government yield, percentage points"),
+    "GIFT_NIFTY":("intraday_return","asia","GIFT NIFTY continuous consistent price series"),
+    "NIKKEI":("intraday_return","asia","Nikkei 225 intraday"),
+    "HANGSENG":("intraday_return","asia","Hang Seng intraday"),
+    "SHANGHAI":("intraday_return","asia","Shanghai Composite intraday"),
+    "EUROPE_BANKS":("intraday_return","global_equity","European bank index intraday"),
+    "SP500_FUT":("intraday_return","global_equity","S&P 500 futures consistent series"),
+    "NASDAQ_FUT":("intraday_return","global_equity","Nasdaq futures consistent series"),
+    "USDINR":("intraday_return","macro","USD/INR intraday (INR per USD)"),
+    "BRENT":("intraday_return","macro","Brent intraday consistent series"),
+    "INDIA_VIX":("intraday_return","domestic","India VIX intraday level"),
+    "FII_CASH_NET_CR":("daily_flow","participants","FII/FPI cash net buy, INR crore"),
+    "DII_CASH_NET_CR":("daily_flow","participants","DII cash net buy, INR crore"),
+}
+for category in ("FII","DII","CLIENT","PRO"):
+    for position in ("INDEX_FUT_NET","INDEX_CALL_NET","INDEX_PUT_NET"):
+        FACTORS[category+"_"+position]=("daily_position","participants",
+            category+" aggregate index derivatives net long minus short contracts: "+position)
+
+GLOBAL_GROUPS=("global_equity","asia","macro")
+FEATURE_NAMES=tuple(v for key in FACTORS for v in
+                    (key.lower()+"_value",key.lower()+"_change",key.lower()+"_age_hours",key.lower()+"_missing"))
+OPTION_NAMES=("oi_imbalance","volume_imbalance","oi_change_put_minus_call",
+              "volume_increment_imbalance","atm_iv_pct","otm_put_minus_call_iv",
+              "call_oi_concentration","put_oi_concentration","days_to_expiry",
+              "paired_strikes","oi_change_missing","volume_increment_missing","iv_skew_missing")
+HEADER=("factor","event_utc","available_utc","value")
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def _stamp(s):
+    if not isinstance(s,str):
+        raise ValueError("Timestamp must be a timezone-aware ISO value")
+    t=datetime.fromisoformat(s.replace("Z","+00:00"))
+    if t.tzinfo is None:
+        raise ValueError("Timezone offset is required")
+    return t.astimezone(timezone.utc)
+
+
+def _iso(t):
+    return p._iso(t)
+
+
+def _finite(v):
+    if type(v) not in (int,float) or not math.isfinite(v):
+        raise ValueError("Invalid numeric evidence")
+    return float(v)
+
+
+def _setup(db):
+    db.executescript("""
+    CREATE TABLE IF NOT EXISTS market_context_imports(
+      receipt_sha256 TEXT PRIMARY KEY, source TEXT NOT NULL, mode TEXT NOT NULL,
+      imported_utc TEXT NOT NULL, normalized_csv TEXT NOT NULL, row_count INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS market_context_observations(
+      factor TEXT NOT NULL, event_utc TEXT NOT NULL, available_utc TEXT NOT NULL,
+      value REAL NOT NULL, receipt_sha256 TEXT NOT NULL REFERENCES market_context_imports(receipt_sha256),
+      PRIMARY KEY(factor,event_utc,available_utc,receipt_sha256)
+    );
+    CREATE INDEX IF NOT EXISTS context_available
+      ON market_context_observations(available_utc,factor,event_utc);
+    """)
+
+
+def catalog():
+    return [{"factor":key,"kind":kind,"group":group,"description":desc}
+            for key,(kind,group,desc) in FACTORS.items()]
+
+
+def parse_csv(text,now):
+    if not isinstance(text,str) or not 0<len(text.encode())<=MAX_IMPORT_BYTES:
+        raise ValueError("Provide a normalized CSV up to 5 MB")
+    reader=csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+    if tuple(reader.fieldnames or [])!=HEADER:
+        raise ValueError("CSV header must be factor,event_utc,available_utc,value")
+    rows=[];seen=set()
+    for r in reader:
+        if len(rows)>=MAX_IMPORT_ROWS or None in r:
+            raise ValueError("Import row limit or malformed columns")
+        factor=r["factor"]
+        if factor not in FACTORS:
+            raise ValueError("Unsupported factor: "+str(factor)[:80])
+        event,available=_stamp(r["event_utc"]),_stamp(r["available_utc"])
+        if not event<=available<=now:
+            raise ValueError("Require event <= actual source availability <= import time")
+        kind=FACTORS[factor][0]
+        value=float(r["value"])
+        if not math.isfinite(value) or abs(value)>1e12 or (kind in ("daily_return","intraday_return") and value<=0):
+            raise ValueError("Invalid factor level")
+        key=(factor,_iso(event),_iso(available))
+        if key in seen:
+            raise ValueError("Duplicate factor/event/availability in import")
+        seen.add(key)
+        rows.append((*key,value))
+    if not rows:
+        raise ValueError("CSV contains no observations")
+    return rows
+
+
+def ingest(csv_text,source,mode,confirm_reviewed,*,now=None):
+    if confirm_reviewed is not True or mode not in ("receipt","archive") or not isinstance(source,str) or not 3<=len(source.strip())<=300:
+        raise ValueError("Review the authorized source, actual availability and chosen import mode")
+    now=now or _now()
+    rows=parse_csv(csv_text,now)
+    source=source.strip()
+    digest=sha256(json.dumps([source,mode,csv_text],ensure_ascii=False,separators=(",",":")).encode()).hexdigest()
+    path=shared_market_data.database_path()
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with closing(sqlite3.connect(path,timeout=8)) as db:
+        db.execute("PRAGMA busy_timeout=8000")
+        db.execute("PRAGMA foreign_keys=ON")
+        _setup(db)
+        with db:
+            inserted=db.execute("INSERT OR IGNORE INTO market_context_imports VALUES(?,?,?,?,?,?)",
+                (digest,source,mode,_iso(now),csv_text,len(rows))).rowcount
+            if inserted:
+                db.executemany("INSERT INTO market_context_observations VALUES(?,?,?,?,?)",
+                    [(*r,digest) for r in rows])
+    return {"receipt_sha256":digest,"rows":len(rows),"inserted":bool(inserted),"mode":mode,
+            "source":source,"factor_counts":dict(Counter(r[0] for r in rows)),
+            "independently_verified":False,
+            "note":"Archive availability is reviewed but not independently verified. Receipt mode cannot backdate the import."}
+
+
+def _exists(db,table):
+    return bool(replay_storage.fetchone(db,"SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)))
+
+
+class Timeline:
+    """As-of two latest distinct event times; revisions never backdate.
+
+    Every step captures the latest and preceding event available at that
+    information time. Older late reports cannot replace a newer event.
+    """
+    def __init__(self,rows):
+        self.times=[];self.snapshots=[]
+        known={};events=[]
+        for available,event,value,source,digest in sorted(rows,key=lambda r:(r[0],r[1],r[3],r[4])):
+            if event not in known:
+                insort(events,event)
+            old=known.get(event)
+            # An ambiguous simultaneous conflicting revision is unavailable.
+            if old and old[0]==available and old[1]!=value:
+                known[event]=(available,None,source,digest)
+            else:
+                known[event]=(available,value,source,digest)
+            self.times.append(available)
+            self.snapshots.append(tuple((e,*known[e]) for e in reversed(events[-2:])))
+
+    def at(self,cutoff):
+        pos=bisect_right(self.times,cutoff)-1
+        return self.snapshots[pos] if pos>=0 else ()
+
+
+def load_timelines(db,start,stop,mode):
+    if mode not in ("receipt","archive"):
+        raise ValueError("Unknown source availability mode")
+    if not _exists(db,"market_context_observations"):
+        return {},{"rows":0,"ambiguous_factors":[]}
+    rows=replay_storage.fetchall(db,"""SELECT o.factor,o.event_utc,o.available_utc,o.value,
+         i.source,i.receipt_sha256,i.imported_utc,i.mode
+         FROM market_context_observations o JOIN market_context_imports i USING(receipt_sha256)
+         WHERE o.available_utc<=? AND o.event_utc>=? AND o.event_utc<=?
+         ORDER BY o.factor,o.available_utc,o.event_utc LIMIT ?""",
+         (_iso(stop),_iso(start-timedelta(days=10)),_iso(stop),MAX_READ_ROWS+1))
+    if len(rows)>MAX_READ_ROWS:
+        raise ValueError("Market context evidence exceeds bounded study read; reduce archive frequency")
+    factors=defaultdict(list);sources=defaultdict(set)
+    for key,event,available,value,source,digest,imported,import_mode in rows:
+        if key not in FACTORS or import_mode not in ("receipt","archive"):
+            continue
+        if mode=="receipt" and import_mode!="receipt":
+            continue
+        try:
+            event,available,imported=map(_stamp,(event,available,imported))
+            value=_finite(value)
+            if not event<=available<=imported:
+                continue
+            known=max(available,imported) if import_mode=="receipt" else available
+            if known>stop:
+                continue
+            factors[key].append((known,event,value,source,digest))
+            sources[key].add(source)
+        except (TypeError,ValueError,OverflowError):
+            continue
+    ambiguous=sorted(k for k,s in sources.items() if len(s)>1)
+    return {k:Timeline(v) for k,v in factors.items() if k not in ambiguous},{"rows":sum(map(len,factors.values())),"ambiguous_factors":ambiguous}
+
+
+def factor_at(timelines,cutoff):
+    vector=[];details={};groups=set()
+    for key,(kind,group,_) in FACTORS.items():
+        t=timelines.get(key)
+        rows=t.at(cutoff) if t else ()
+        values=None
+        if rows:
+            event,known,level,source,digest=rows[0]
+            age=(cutoff-event).total_seconds()/3600
+            max_age=10/60 if kind=="intraday_return" else 24*7
+            if 0<=age<=max_age and level is not None:
+                prev=(t.at(cutoff-timedelta(minutes=30)) if kind=="intraday_return" else rows[1:])
+                if prev:
+                    pe,pk,pv,_,_=prev[0]
+                    gap=(event-pe).total_seconds()/3600
+                    anchor_age=(cutoff-timedelta(minutes=30)-pe).total_seconds()/3600
+                    if pv is not None and 0<gap<=24*7 and (kind!="intraday_return" or 0<=anchor_age<=10/60):
+                        if kind.endswith("return") and min(pv,level)>0:
+                            change=10000*(level/pv-1)
+                            # Keep level only for volatility measures; price
+                            # levels across indices are nonstationary scales.
+                            stable_level=level if key in ("US_VIX_CLOSE","INDIA_VIX") else 0.
+                            values=(stable_level,change,age,0.)
+                        elif kind=="daily_yield":
+                            values=(level,100*(level-pv),age,0.)
+                        elif kind in ("daily_flow","daily_position"):
+                            scale=1000. if kind=="daily_flow" else 100000.
+                            values=(level/scale,(level-pv)/scale,age,0.)
+            if values is not None and all(math.isfinite(x) for x in values):
+                details[key]={"state":"available","level":level,"change_feature":values[1],
+                    "event_utc":_iso(event),"known_utc":_iso(known),"age_hours":age,
+                    "source":source,"receipt_sha256":digest,"group":group}
+                groups.add(group)
+            else:
+                values=None
+                details[key]={"state":"stale_or_missing_anchor","event_utc":_iso(event),"age_hours":age}
+        if values is None:
+            values=(0.,0.,0.,1.)
+            details.setdefault(key,{"state":"unavailable"})
+        vector.extend(values)
+    # Require evidence from three distinct economic groups rather than
+    # counting several highly correlated US equity series as diversification.
+    return vector,details,all(g in groups for g in GLOBAL_GROUPS)
+
+
+def _chain(db,cutoff,expiry=None):
+    if not _exists(db,"option_chain_observations"):
+        return None
+    session=p._session(cutoff).date().isoformat()
+    args=[session,(cutoff-timedelta(seconds=MAX_CHAIN_AGE)).isoformat(),cutoff.isoformat()]
+    # Current writer uses UTC isoformat; query exact expiry only for the
+    # earlier observation. No roll across different expiry series.
+    extra=""
+    if expiry is not None:
+        extra=" AND expiry=?"
+        args.append(expiry)
+    r=replay_storage.fetchone(db,"""SELECT expiry,captured_utc,normalized_json,snapshot_sha256
+        FROM option_chain_observations WHERE underlying='BANKNIFTY' AND expiry>=?
+        AND captured_utc>=? AND captured_utc<=?"""+extra+" ORDER BY expiry,captured_utc DESC LIMIT 1",tuple(args))
+    if not r:
+        return None
+    expiry,stamp,raw,digest=r
+    try:
+        captured=_stamp(stamp)
+        if sha256(raw.encode()).hexdigest()!=digest or not cutoff-timedelta(seconds=MAX_CHAIN_AGE)<=captured<=cutoff:
+            return None
+        chain=json.loads(raw)
+        if chain["underlying"]!="BANKNIFTY" or chain["expiry"]!=expiry or chain["received_utc"]!=stamp or chain["read_only"] is not True:
+            return None
+        if p._session(captured).date()!=p._session(cutoff).date():
+            return None
+        return chain,digest
+    except (KeyError,ValueError,TypeError,OverflowError):
+        return None
+
+
+def _pairs(chain,spot):
+    pairs=defaultdict(dict);duplicates=set()
+    for c in chain["contracts"]:
+        try:
+            strike=_finite(c["strike"])
+            side=c["option_type"]
+            if abs(strike/spot-1)>OPTION_BAND or side not in ("CE","PE") or c["expiry"]!=chain["expiry"]:
+                continue
+            if not c["contract_master_verified"] or not c["quote_valid"] or not c["identity"]:
+                continue
+            if not isinstance(c["identity"],str) or not c["identity"].startswith("NSE_FNO:"):
+                continue
+            for field in ("oi","volume"):
+                if type(c[field]) is not int or c[field]<0:
+                    raise ValueError("Invalid OI or volume")
+            if not c["lot_size"] or c["lot_size"]<=0:
+                continue
+            if side in pairs[strike]:
+                duplicates.add(strike)
+            pairs[strike][side]=c
+        except (ValueError,KeyError,TypeError,OverflowError):
+            continue
+    return {k:v for k,v in pairs.items() if k not in duplicates and set(v)=={"CE","PE"}
+            and v["CE"]["lot_size"]==v["PE"]["lot_size"] and v["CE"]["identity"]!=v["PE"]["identity"]}
+
+
+def _imb(put,call):
+    total=put+call
+    return (put-call)/total if total>0 else None
+
+
+def option_features(current,prior=None):
+    """Paired near-spot OI and IV are crowding proxies, not dealer direction."""
+    try:
+        chain,digest=current
+        spot=_finite(chain["underlying_spot"])
+        if spot<=0:
+            return None
+        pairs=_pairs(chain,spot)
+        if len(pairs)<5:
+            return None
+        sums=lambda field,side:sum(v[side][field] for v in pairs.values())
+        co,po,cv,pv=sums("oi","CE"),sums("oi","PE"),sums("volume","CE"),sums("volume","PE")
+        oi,vol=_imb(po,co),_imb(pv,cv)
+        if oi is None or vol is None or co<=0 or po<=0:
+            return None
+        atm=min(pairs,key=lambda k:(abs(k-spot),k))
+        def iv(c):
+            v=c.get("iv")
+            return float(v) if type(v) in (int,float) and math.isfinite(v) and 0<v<=500 else None
+        atm_values=[iv(pairs[atm][s]) for s in ("CE","PE")]
+        if any(v is None for v in atm_values):
+            return None
+        below=[k for k in pairs if k<spot]
+        above=[k for k in pairs if k>spot]
+        skew=None
+        if below and above:
+            pi=iv(pairs[min(below,key=lambda k:abs(k-.99*spot))]["PE"])
+            ci=iv(pairs[min(above,key=lambda k:abs(k-1.01*spot))]["CE"])
+            if pi is not None and ci is not None:
+                skew=pi-ci
+        oi_change=volume_change=None;matched=0
+        if prior is not None and prior[0]["expiry"]==chain["expiry"]:
+            old=_pairs(prior[0],spot)
+            common=[k for k,v in pairs.items() if k in old and all(v[s]["identity"]==old[k][s]["identity"] and
+                        v[s]["lot_size"]==old[k][s]["lot_size"] for s in ("CE","PE"))]
+            matched=len(common)
+            if matched>=5 and matched>=.8*len(pairs):
+                previous_oi=sum(old[k][s]["oi"] for k in common for s in ("CE","PE"))
+                if previous_oi>0:
+                    oi_change=(sum(pairs[k]["PE"]["oi"]-old[k]["PE"]["oi"] for k in common)-
+                               sum(pairs[k]["CE"]["oi"]-old[k]["CE"]["oi"] for k in common))/previous_oi
+                increments={s:[pairs[k][s]["volume"]-old[k][s]["volume"] for k in common] for s in ("CE","PE")}
+                if all(v>=0 for values in increments.values() for v in values):
+                    volume_change=_imb(sum(increments["PE"]),sum(increments["CE"]))
+        ce_strike=max(pairs,key=lambda k:(pairs[k]["CE"]["oi"],-abs(k-spot)))
+        pe_strike=max(pairs,key=lambda k:(pairs[k]["PE"]["oi"],-abs(k-spot)))
+        day=p._session(_stamp(chain["received_utc"])).date()
+        dte=(date.fromisoformat(chain["expiry"])-day).days
+        if dte<0:
+            return None
+        vector=[oi,vol,oi_change if oi_change is not None else 0.,volume_change if volume_change is not None else 0.,
+                sum(atm_values)/2,skew if skew is not None else 0.,pairs[ce_strike]["CE"]["oi"]/co,
+                pairs[pe_strike]["PE"]["oi"]/po,float(dte),float(len(pairs)),
+                float(oi_change is None),float(volume_change is None),float(skew is None)]
+        if not all(math.isfinite(v) for v in vector):
+            return None
+        return vector,{"expiry":chain["expiry"],"received_utc":chain["received_utc"],"sha256":digest,
+                "prior_received_utc":prior[0]["received_utc"] if prior else None,
+                "prior_sha256":prior[1] if prior else None,"spot":spot,"paired_strikes":len(pairs),"matched_prior_strikes":matched,
+                "put_call_oi_ratio":po/co,"put_call_volume_ratio":pv/cv if cv>0 else None,
+                "call_oi":co,"put_oi":po,"call_volume":cv,"put_volume":pv,
+                "largest_call_oi_strike":ce_strike,"largest_put_oi_strike":pe_strike,
+                "features":dict(zip(OPTION_NAMES,vector))}
+    except (KeyError,ValueError,TypeError,OverflowError,ZeroDivisionError):
+        return None
+
+
+def options_at(db,cutoff):
+    current=_chain(db,cutoff)
+    if not current:
+        return None
+    prior=_chain(db,cutoff-timedelta(minutes=15),expiry=current[0]["expiry"])
+    return option_features(current,prior)
+
+
+def snapshot(*,mode="receipt",now=None):
+    now=now or _now()
+    result={"version":VERSION,"as_of_utc":_iso(now),"mode":mode,"catalog":catalog(),
+            "factors":{},"global_group_coverage":False,"options":None,"imported_rows":0,"ambiguous_factors":[],
+            "warning":"External inputs are reviewed imports, not independently verified live feeds. Chain OI/volume are aggregate two-sided exposures, not signed retail flow or net dealer gamma. Participant categories cover aggregate index derivatives, not BANKNIFTY-only positions."}
+    if not shared_market_data.database_path().is_file():
+        return result
+    with closing(ao._read_database()) as db:
+        timelines,meta=load_timelines(db,now-timedelta(hours=1),now,mode)
+        _,details,ok=factor_at(timelines,now)
+        opt=options_at(db,now)
+    result.update(factors=details,global_group_coverage=ok,options=opt[1] if opt else None,
+                  imported_rows=meta["rows"],ambiguous_factors=meta["ambiguous_factors"])
+    return result
