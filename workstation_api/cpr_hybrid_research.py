@@ -626,6 +626,10 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
                         "ranked_expected_return":ep.get("ranked_expected_return"),
                         "ranked_target_probability":ep.get("ranked_target_probability"),
                         "ranked_candidate_count":ep.get("ranked_candidate_count"),
+                        "structure":ep.get("structure"),"short_strike":ep.get("short_strike"),
+                        "spread_funding_lane":ep.get("spread_funding_lane"),
+                        "planned_gross_funding":ep.get("planned_gross_funding"),
+                        "planned_net_debit":ep.get("planned_net_debit"),
                         "candle_pattern_types":ep.get("candle_pattern_types"),
                         "candle_direction_5m":ep.get("candle_direction_5m"),**result})
     scored=counts["complete"]
@@ -654,7 +658,7 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
 def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
         context_mode="off",context_batch="auto",rank_entries=False,
-        pattern_research=False,fixed_panel=False,context_q=False,progress=None):
+        pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
@@ -663,6 +667,10 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         raise ValueError("Select up to 120 calendar days, completed sessions, end exclusive")
     if context_mode not in ("off","receipt","archive"):
         raise ValueError("Unsupported context availability mode")
+    if fixed_panel and context_mode=="off":
+        raise ValueError("Fixed-panel research requires receipt or archive context mode")
+    if context_q and context_mode=="off" and not pattern_research:
+        raise ValueError("Contextual Q requires context or candle patterns")
     if entry_mode not in ENTRY_MODES:
         raise ValueError("Unsupported entry mode")
     if frame not in FRAMES or hold not in HOLDS or type(lot_size) is not int or not 1<=lot_size<=1000 or type(max_lots) is not int or not 1<=max_lots<=3 or type(wings) is not int or not 0<=wings<=5:
@@ -733,7 +741,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "squareoff_ist":"15:20","last_retry_ist":"15:29","entry_mode":entry_mode,"scan_interval_minutes":SCAN_MINUTES,
              "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,
              "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,
-             "pattern_research":pattern_research,"fixed_panel":fixed_panel,"context_q":context_q,"full_premium_and_fee_budget_inr":risk_budget,
+             "pattern_research":pattern_research,"fixed_panel":fixed_panel,"context_q":context_q,"debit_spreads":debit_spreads,"full_premium_and_fee_budget_inr":risk_budget,
              "historical_lot_size_assumed":lot_size,"max_lots":max_lots,"strike_wings":wings,
              "primary_adverse_penalty_bps_per_side":bps,"target_net_return":TARGET,"fixed_stop_mark":STOP,
              "experimental_emergency_stop_mark":EMERGENCY_STOP,"max_learning_strikes_per_anchor":MAX_LEARNING_STRIKES,
@@ -754,7 +762,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
                      for name,ss,es in (("train",train_signals,broad_train),("validation",val_signals,broad_val))},
              "index_source_failures":failures,"option_coverage":{k:v for k,v in meta.items() if k!="source_hashes"},
              "context_coverage":{k:v for k,v in context_audit.items() if k!="anchors"},
-             "ranked_entry_research":{},"candle_patterns":pattern_report,
+             "ranked_entry_research":{},"candle_patterns":pattern_report,"debit_spread_research":{},
              "methods":{},"state":"descriptive_only_insufficient_sessions","broker_orders_enabled":False,
              "live_model_promoted":False,"warning":WARNING}
     journal=[]
@@ -787,6 +795,13 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
                 fixed_panel=fixed_panel,context_q=context_q,progress=progress)
             report["ranked_entry_research"]=ranked_results
             journal.extend(ranked_rows)
+        if debit_spreads:
+            from . import cpr_debit_spreads as spreads
+            spread_results,spread_rows=spreads.assess(__import__(__name__,fromlist=["run"]),
+                signals,table,index,splits[2],hold=hold,lot_size=lot_size,bps=bps,
+                capital=capital,risk_budget=risk_budget,progress=progress)
+            report["debit_spread_research"]=spread_results
+            journal.extend(spread_rows)
     else:
         # Always useful mathematical diagnostic; never labeled independent holdout.
         for method in ("no_stop","fixed_stop","fixed_emergency_stop","trailing_stop","trailing_emergency_stop","volatility_trailing_stop","no_trade"):
