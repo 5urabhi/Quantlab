@@ -86,8 +86,7 @@ def sample_trade(result,audit,cfg):
         return {k:o[k] for k in ("identity","action","strike","option_type","expiry","requested_units",
             "original_best_bid","original_best_ask","received_utc","vwap","turnover","fees","cashflow")}
     return {**audit,"entries":[order(o) for o in result["entries"]],"exits":[order(o) for o in result["exits"]],
-            "actual_fills_observed":False,"broker_margin_verified":False,
-            "long_option_exit_thresholds":target_exit_vwap(result,cfg)}
+            "actual_fills_observed":False,"broker_margin_verified":False}
 
 
 def aggregate(audits):
