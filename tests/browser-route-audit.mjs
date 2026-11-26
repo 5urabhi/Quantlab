@@ -49,6 +49,32 @@ try{
         console.error('[route-audit] FAIL '+mode+' '+route+' '+String(e))
       }finally{page.off('pageerror',error);page.off('response',response)}
     }
+    // Populated operational views: safe local reads only, no provider calls.
+    await page.goto(base+'#/overview',{waitUntil:'domcontentloaded'})
+    const home=page.getByRole('region',{name:'Workstation operations overview'})
+    await home.waitFor()
+    await home.getByRole('button',{name:'Inspect saved coverage'}).click()
+    await home.getByRole('table',{name:'Home stored source coverage'}).waitFor({timeout:30000})
+    await page.goto(base+'#/storage',{waitUntil:'domcontentloaded'})
+    const storage=page.getByRole('region',{name:'Local storage inventory'})
+    await storage.getByRole('button',{name:'Inspect storage health'}).click()
+    await storage.getByRole('table',{name:'Managed database integrity'}).waitFor({timeout:30000})
+    await page.goto(base+'#/nse',{waitUntil:'domcontentloaded'})
+    const receipts=page.getByRole('region',{name:'Saved NSE evidence receipts'})
+    await receipts.getByRole('searchbox',{name:'Search NSE receipts'}).waitFor()
+    await receipts.getByRole('searchbox',{name:'Search NSE receipts'}).fill('ci-no-such-receipt')
+    await receipts.getByText('No matching saved intake receipts.').waitFor()
+    await page.goto(base+'#/reports',{waitUntil:'domcontentloaded'})
+    const reports=page.getByRole('region',{name:'Research report workspace'})
+    await reports.getByRole('searchbox',{name:'Search saved reports'}).waitFor()
+    await page.goto(base+'#/settings',{waitUntil:'domcontentloaded'})
+    const privacy=page.getByRole('region',{name:'Backend safety checks'})
+    await privacy.getByText('Read-only',{exact:true}).waitFor()
+    await privacy.getByText('Disabled',{exact:true}).waitFor()
+    await page.goto(base+'#/connections',{waitUntil:'domcontentloaded'})
+    await page.getByText('Zerodha secondary data connection',{exact:true}).click()
+    await page.getByText('Zerodha secondary data connection',{exact:true}).waitFor()
+    console.log('[route-audit] PASS '+mode+' operational interaction checks')
     await context.close()
   }
 }finally{
