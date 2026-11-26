@@ -22,7 +22,8 @@ def main():
     parser.add_argument("--context-batch",default="auto",help="Dated BANKNIFTY membership batch ID; auto selects by date overlap")
     parser.add_argument("--rank-entries",action="store_true",help="Compare validation-calibrated probability and affordable contract ranking")
     parser.add_argument("--frame",type=int,choices=research.FRAMES,default=5)
-    parser.add_argument("--hold",type=int,choices=research.HOLDS,default=60)
+    parser.add_argument("--hold",type=int,choices=research.HOLDS,default=60,
+                        help="Maximum holding minutes; 0 holds to mandatory 15:20 IST square-off unless exited earlier")
     parser.add_argument("--capital",type=float,default=17000)
     parser.add_argument("--risk-budget",type=float,default=4250,
                         help="Maximum modeled full premium plus fee exposure and daily gross loss allowance")
