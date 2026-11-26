@@ -857,10 +857,11 @@ try{
        if(route==='rolling'){
          await pane.getByRole('combobox',{name:'Rolling relative metrics metric'}).selectOption('rolling_tracking_error')
          await pane.getByRole('heading',{name:'Rolling relative metrics · Annualized tracking error',exact:true}).waitFor()
-         await pane.locator('details').first().locator('summary').click()
-         await pane.getByRole('table',{name:'Rolling relative metrics evidence'}).waitFor()
-         await pane.getByRole('button',{name:'Next',exact:true}).first().click()
-         await pane.getByText(/Page 2 of/).waitFor()
+         const evidence=pane.locator('details.sia-table').filter({hasText:'Rolling relative metrics evidence'})
+         await evidence.locator('summary').click()
+         await evidence.getByRole('table',{name:'Rolling relative metrics evidence'}).waitFor()
+         await evidence.getByRole('button',{name:'Next',exact:true}).click()
+         await evidence.getByText(/Page 2 of/).waitFor()
        }
        if(route==='robustness'){
          await pane.getByRole('combobox',{name:'Robustness metric'}).selectOption('strategy_cagr')
