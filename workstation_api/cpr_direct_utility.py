@@ -70,6 +70,9 @@ def _design(ep,regime):
 
 
 def _predict(bundle,rows):
+    if bundle.get("frozen"):
+        from .cpr_forward_utility import predict
+        return predict(bundle,rows)
     if not rows:
         return []
     x=[_design(ep,bundle["regime"]) for ep in rows]
@@ -190,7 +193,7 @@ def _gate(metrics):
             and metrics["stress_utility_inr"]>0)
 
 
-def assess(r,*,train,val,pools,nearest,dates,capital,budget):
+def assess(r,*,train,val,pools,nearest,dates,capital,budget,freeze_policy=False):
     va_pool,te_pool=pools;va_near,te_near=nearest
     # Same candidates for both models. Keep absent contexts as abstentions
     # in account evaluation rather than excluding their sessions.
@@ -229,6 +232,9 @@ def assess(r,*,train,val,pools,nearest,dates,capital,budget):
         if chosen is None:
             report["methods"][name]={"state":"abstain_no_supported_validation_gate","scored_trades":0}
             continue
+        if freeze_policy and name=="regime_execution":
+            from .cpr_forward_utility import export_bundle
+            report["frozen_candidate"]={"threshold":chosen,"bundle":export_bundle(model)}
         selected=_rank(model,te_pool,te_near,chosen)
         metrics,rows=_strict(r,selected,dates[1],capital,budget,filtered=True)
         report["methods"][name]=metrics
