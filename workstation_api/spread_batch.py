@@ -15,9 +15,9 @@ import re
 import uuid
 
 from . import depth_replay as replay, paper_execution as paper, service
-from . import spread_batch_core as core, spread_speed as speed
+from . import spread_batch_core as core, spread_speed as speed, execution_realism as realism, replay_storage
 
-VERSION="batch_depth_research_v1"
+VERSION="batch_depth_research_v2"
 TOP_PER_COHORT=25
 FAMILIES=("directional","spread")
 COHORTS=("fixed","signal")
@@ -27,10 +27,14 @@ WARNING=("In-sample exploration; not a strategy profitability claim. Scored P&L 
     "the random control has the same number of attempted source-valid anchors, not "
     "necessarily the same completed trades. Ranking uses a descriptive lower-block "
     "statistic, not a confidence bound or significance test. No actual fills, broker "
-    "latency, margin, legging or passive queue fill probabilities are verified.")
+    "latency, margin, legging or passive queue fill probabilities are verified. "
+    "Current published tariff assumptions are applied, not historical or personal contract-note reconciliation. "
+    "Additional slippage stresses reuse the baseline observed allocation; they are not actual fills. "
+    "Sequential paper cash is conditional on observed paths; unknown entries or unresolved exits prevent full-session P&L.")
 CSV_METRICS=("attempted","scored","unscored","completion_pct","entry_complete",
     "profitable","losing","target_hits","mean_net","total_net","worst_net",
-    "mean_fees","scored_blocks","lower_block_mean","robust_score","rankable","states")
+    "mean_fees","scored_blocks","lower_block_mean","robust_score","rankable","states",
+    "execution_costs","sequential_account")
 CSV_FIELDS=("family","cohort","strategy","identities","legs","direction","lots",
     "latency_ms","hold_seconds","selection_coverage_pct",*CSV_METRICS,
     *("random_"+k for k in CSV_METRICS),"signal_minus_random_mean","random_overlap_attempts")
@@ -139,11 +143,12 @@ def _csv_row(row):
     out={k:row.get(k) for k in CSV_FIELDS if not k.startswith("random_")}
     out["identities"]=" / ".join(row["identities"])
     out["legs"]=json.dumps(row["legs"],sort_keys=True,separators=(",",":"))
-    out["states"]=json.dumps(row["states"],sort_keys=True,separators=(",",":"))
+    for key in ("states","execution_costs","sequential_account"):
+        out[key]=json.dumps(row.get(key),sort_keys=True,separators=(",",":"),allow_nan=False)
     out["random_overlap_attempts"]=row.get("random_overlap_attempts")
     control=row.get("random_control") or {}
     for k in CSV_METRICS:
-        out["random_"+k]=json.dumps(control[k],sort_keys=True,separators=(",",":")) if k=="states" and k in control else control.get(k)
+        out["random_"+k]=json.dumps(control[k],sort_keys=True,separators=(",",":")) if k in ("states","execution_costs","sequential_account") and k in control else control.get(k)
     return out
 
 
@@ -181,7 +186,12 @@ def _execute(tasks,cfg,day,now,progress,*,validation=False):
         progress(9,"Reconstructing causal index signals from original received ticks")
     anchors=speed._anchors(day,now,max(speed.LATENCIES_MS),cfg["window_seconds"],cfg["step_minutes"])
     directions,signal=core.signal_cohorts(day,anchors,now)
+    storage_mode=replay_storage.journal_mode()
     workers=speed._worker_count(len(tasks)) if tasks else 0
+    if storage_mode!="wal" and workers>1:
+        workers=1
+    if progress and storage_mode!="wal":
+        progress(9,"Legacy database journal: using one replay worker to reduce recorder contention")
     # No nested pools; original-book lookups are reused across sizes and holds.
     counts={family:{cohort:{"rows":0,"rankable":0,"positive_robust":0} for cohort in COHORTS} for family in FAMILIES}
     top={family:{cohort:[] for cohort in COHORTS} for family in FAMILIES}
@@ -223,20 +233,29 @@ def _execute(tasks,cfg,day,now,progress,*,validation=False):
     finally:
         temp.unlink(missing_ok=True)
     result={"run_id":run_id,"day_ist":day.isoformat(),"cutoff_utc":paper._iso(now),
-        "settings":cfg,"worker_count":workers,"anchor_count":len(anchors),"signal":signal,
+        "settings":cfg,"storage_journal_mode":storage_mode,"worker_count":workers,"anchor_count":len(anchors),"signal":signal,
         "structures":len(tasks),"configuration_count":sum(len(t[1]) for t in tasks),
         "attempted_paths":len(anchors)*sum(len(t[1]) for t in tasks),
         "summary_rows":rows_written,"counts":counts,"rankings":top,
         "thresholds":{"min_scored":core.MIN_SCORED,"min_completion_pct":100*core.MIN_COMPLETION,
                       "min_scored_blocks":core.MIN_BLOCKS,"block_minutes":core.BLOCK_MINUTES},
         "validation_rows":sorted(validation_rows,key=lambda r:(r["family"],r["cohort"],r["strategy"],r["identities"])),
+        "baseline_slippage_bps":cfg["slippage_bps"],"stress_additional_bps":list(realism.STRESS_BPS),
+        "fee_version":replay.fees.FEE_VERSION,"fee_assumptions":replay.fees.WARN_FEES,
         "actual_fills_observed":False,"broker_orders_enabled":False,"broker_margin_verified":False,
         "warning":WARNING}
+    # Compute continuous exit thresholds only for displayed representative
+    # trades, not tens of thousands of discarded intermediate rankings.
+    displayed=validation_rows if validation else [r for family in top.values() for cohort in family.values() for r in cohort]
+    for row in displayed:
+        sample=row.get("sample_trade")
+        if sample:
+            sample["long_option_exit_thresholds"]=realism.target_exit_vwap({**sample,"strategy":row["strategy"]},cfg)
     return result,freeze
 
 
 def run(*,day,capital=17000.,max_lots=3,target_net=100.,window_seconds=1,
-        step_minutes=5,participation_pct=25.,slippage_bps=5.,broker_profile="zerodha",
+        step_minutes=5,participation_pct=25.,slippage_bps=0.,broker_profile="zerodha",
         expiry="",side="ALL",search="",include_spreads=True,progress=None,now=None):
     # Single cutoff is taken before screening. Later recordings are not
     # consumed by this study; source files must remain unchanged during it.

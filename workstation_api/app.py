@@ -89,7 +89,7 @@ def _persist_job(snapshot: dict):
         safe_snapshot["stage"] = job_safety.stage(
             safe_snapshot.get("stage") or "")
         research_library.store_job(safe_snapshot)
-    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, sqlite3.Error) as exc:
         LOG.warning("Job summary persistence failed for %s: %s", snapshot.get("id"),
                     type(exc).__name__)
 
@@ -707,6 +707,16 @@ def trading_market_patterns_sync(body: MarketPatternSyncRequest):
         return market_patterns.configure_sync(body.enabled)
     except (ValueError, OSError) as exc:
         bad(exc)
+
+
+@app.on_event("startup")
+def initialize_shared_market_concurrency():
+    try:
+        result=shared_market_data.configure_concurrency()
+        if not result["wal_enabled"]:
+            LOG.warning("Shared market WAL not available; bounded replay retries remain active")
+    except (OSError, sqlite3.Error) as exc:
+        LOG.warning("Shared market WAL initialization deferred: %s",type(exc).__name__)
 
 
 @app.on_event("startup")
@@ -1775,7 +1785,7 @@ class SpreadSpeedRequest(BaseModel):
     compare_delays: bool=False
     max_skew_seconds: float=Field(default=2,ge=0,le=30,allow_inf_nan=False)
     participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
-    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
 
 
@@ -1820,7 +1830,7 @@ class SpreadReadinessRequest(BaseModel):
     capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
     max_skew_seconds: float=Field(default=2,ge=0,le=30,allow_inf_nan=False)
     participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
-    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
 
 
@@ -1839,7 +1849,7 @@ class AutomaticSpreadReadinessRequest(BaseModel):
     capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
     lots: int=Field(default=3,ge=1,le=10,strict=True)
     participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
-    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
     expiry: str=Field(default="",max_length=10)
     side: Literal["ALL","CE","PE"]="ALL"
@@ -1864,7 +1874,7 @@ class SpreadBatchRequest(BaseModel):
     window_seconds: int=Field(default=1,ge=1,le=30,strict=True)
     step_minutes: Literal[1,5,15]=5
     participation_pct: float=Field(default=25,ge=1,le=100,allow_inf_nan=False)
-    slippage_bps: float=Field(default=5,ge=0,le=500,allow_inf_nan=False)
+    slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
     expiry: str=Field(default="",max_length=10)
     side: Literal["ALL","CE","PE"]="ALL"

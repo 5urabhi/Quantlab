@@ -529,6 +529,8 @@ try{
    })
    await page.route('**/api/jobs/fixture-batch',route=>route.fulfill({json:{status:'complete',percent:100,stage:'Output saved',result:{
      run_id:'a'.repeat(32),mode:'exploration',day_ist:'2026-11-26',cutoff_utc:'2026-11-26T10:00:00Z',
+     settings:{capital:17000,max_lots:3,target_net:100,window_seconds:1,step_minutes:5,participation_pct:25,slippage_bps:0,broker_profile:'zerodha',expiry:'',side:'ALL',search:'',include_spreads:true},
+     baseline_slippage_bps:0,stress_additional_bps:[1,5,10],storage_journal_mode:'wal',
      worker_count:6,anchor_count:60,structures:56,configuration_count:4800,attempted_paths:288000,summary_rows:9600,
      signal:{state:'available',valid:42,up:20,down:10,neutral:12,ticks:2000},
      counts:{directional:counts,spread:counts},rankings:{directional:{fixed:[batchRow],signal:[signalRow]},spread:{fixed:[],signal:[]}},
@@ -545,11 +547,19 @@ try{
    assert.equal(batchPosts[0].capital,17000)
    assert.equal(batchPosts[0].max_lots,3)
    assert.equal(batchPosts[0].include_spreads,true)
+   assert.equal(batchPosts[0].slippage_bps,0)
    assert.equal('identities' in batchPosts[0],false)
    await batchPanel.getByRole('table',{name:'Batch research rankings'}).getByText('62,900 CE').waitFor()
    await batchPanel.getByLabel('Entry cohort').selectOption('signal')
    await batchPanel.getByRole('table',{name:'Batch research rankings'}).getByText('₹-24.5 (30/60)').waitFor()
    await batchPanel.getByRole('link',{name:'Download all batch summary rows (CSV)'}).waitFor()
+   const appliedSettings=batchPanel.getByRole('region',{name:'Completed run settings'})
+   await appliedSettings.getByText('0 bps',{exact:true}).waitFor()
+   await batchPanel.getByText('Execution assumptions',{exact:true}).click()
+   await batchPanel.getByLabel('Additional baseline slippage (bps / side)').fill('5')
+   await appliedSettings.getByRole('alert').getByText(/Current form differs from the completed run/).waitFor()
+   await appliedSettings.getByText('0 bps',{exact:true}).waitFor()
+   await batchPanel.getByLabel('Additional baseline slippage (bps / side)').fill('0')
    await shot('02-batch-research')
    await page.unroute('**/api/trading-cockpit/spreads/batch/plans')
    await page.unroute('**/api/trading-cockpit/spreads/batch')

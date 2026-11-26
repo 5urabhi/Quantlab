@@ -180,7 +180,7 @@ def _coverage(day, identities, now):
 
 def run(*,day,strategy,identities,lots=3,capital=17000.,target_net=100.,
         latency_ms=1000,window_seconds=1,max_skew_seconds=2.,
-        participation_pct=25.,slippage_bps=5.,broker_profile="zerodha",
+        participation_pct=25.,slippage_bps=0.,broker_profile="zerodha",
         progress=None,now=None,step_minutes=STEP_MINUTES,compare_delays=False):
     now=now or paper._now()
     chosen=date.fromisoformat(day)

@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import sqlite3
 from time import monotonic
 
-from . import depth_replay as replay, liquidity_spreads as fees, paper_execution as paper
+from . import depth_replay as replay, liquidity_spreads as fees, paper_execution as paper, replay_storage
 
 MAX_CANDIDATES=400
 MAX_LOTS=10
@@ -35,14 +35,17 @@ def _inventory(day, identities, now, include_candidates, candidate_ids=None):
     limits=(paper._iso(start),paper._iso(start+timedelta(seconds=elapsed)))
     try:
         with closing(replay.ao._read_database()) as db:
-            db.execute("BEGIN")
+            # WAL readers can hold a short inventory snapshot without blocking
+            # the live writer. Legacy rollback mode uses short independent reads.
+            if replay_storage.fetchone(db,"PRAGMA journal_mode")[0].lower()=="wal":
+                db.execute("BEGIN")
             # Timestamp inventory is ranked before fetching any book JSON.
             base="""SELECT identity,MAX(received_utc),COUNT(*),
                 COUNT(DISTINCT substr(received_utc,1,19))
                 FROM live_depth_books WHERE received_utc>=? AND received_utc<?"""
-            selected=db.execute(base+" AND identity IN ("+
+            selected=replay_storage.fetchall(db,base+" AND identity IN ("+
                 ",".join("?" for _ in identities)+") GROUP BY identity",
-                (*limits,*identities)).fetchall() if identities else []
+                (*limits,*identities)) if identities else []
             candidates=[]
             truncated=False
             if include_candidates and candidate_ids is not None:
@@ -55,7 +58,7 @@ def _inventory(day, identities, now, include_candidates, candidate_ids=None):
                         if monotonic()>deadline:
                             truncated=True
                             break
-                        candidates.extend(db.execute(base+" AND identity=? GROUP BY identity",(*limits,identity)).fetchall())
+                        candidates.extend(replay_storage.fetchall(db,base+" AND identity=? GROUP BY identity",(*limits,identity)))
                 except sqlite3.OperationalError as exc:
                     if "interrupted" not in str(exc):
                         raise
@@ -70,8 +73,8 @@ def _inventory(day, identities, now, include_candidates, candidate_ids=None):
                 deadline=monotonic()+SCAN_SECONDS
                 db.set_progress_handler(lambda:int(monotonic()>deadline),10000)
                 try:
-                    candidates=db.execute(base+""" GROUP BY identity
-                        ORDER BY 4 DESC,identity LIMIT ?""",(*limits,MAX_CANDIDATES+1)).fetchall()
+                    candidates=replay_storage.fetchall(db,base+""" GROUP BY identity
+                        ORDER BY 4 DESC,identity LIMIT ?""",(*limits,MAX_CANDIDATES+1))
                     truncated=len(candidates)>MAX_CANDIDATES
                 except sqlite3.OperationalError as exc:
                     if "interrupted" not in str(exc):
@@ -83,9 +86,9 @@ def _inventory(day, identities, now, include_candidates, candidate_ids=None):
             by_id.update({row[0]:row for row in selected})
             output=[]
             for identity,stamp,count,seconds in by_id.values():
-                raw=db.execute("""SELECT book_json,packet_pair_sha256
+                raw=replay_storage.fetchone(db,"""SELECT book_json,packet_pair_sha256
                     FROM live_depth_books WHERE identity=? AND received_utc=?
-                    LIMIT 1""",(identity,stamp)).fetchone()
+                    LIMIT 1""",(identity,stamp))
                 item=None
                 if raw:
                     original=replay.spread_scanner._original_book(identity,stamp,*raw)

@@ -130,6 +130,7 @@ class BatchTests(TestCase):
         g=group()
         anchors=[START+timedelta(minutes=i) for i in range(120)]
         metrics=core.summarize([(110.,"complete",True,20.)]*120,list(range(120)),anchors,100.)
+        metrics["execution_costs"]={"stress":{str(x):{"scored":120,"mean_net":90.} for x in (1,5,10)}}
         calls=[]
         def evaluate(g,specs,cfg,day,anchors,directions,now,stop,cohorts):
             calls.append((g,specs,cfg.copy(),day,cohorts))
@@ -188,3 +189,46 @@ class BatchTests(TestCase):
             with self.assertRaisesRegex(RuntimeError,"cancelled"):
                 batch._task_groups([(g,[(1,1000,5)],("fixed",))]*20,CFG,DAY,[],{},NOW,2,cancel,lambda _:None)
         self.assertLessEqual(len(started),2)
+
+
+    def test_execution_cost_bridge_and_matched_stress(self):
+        from workstation_api import execution_realism as realism
+        anchor=START+timedelta(minutes=40)
+        self.put("NSE_FNO:1",anchor+timedelta(seconds=1),100.)
+        self.put("NSE_FNO:1",anchor+timedelta(seconds=7),110.)
+        cfg={**CFG,"slippage_bps":0.}
+        result=replay.replay(strategy="LONG_OPTION",identities=["NSE_FNO:1"],lots=1,
+            decision_utc=paper._iso(anchor),capital=17000.,hold_seconds=5,latency_ms=1000,
+            window_seconds=1,participation_pct=25.,slippage_bps=0.,broker_profile="zerodha",now=NOW)
+        audit=realism.analyze(result,cfg)
+        self.assertEqual(audit["extra_slippage_inr"],0.)
+        self.assertEqual(audit["spread_cost_inr"],30.)
+        self.assertEqual(audit["depth_impact_inr"],0.)
+        self.assertEqual(audit["net_inr"],result["net_pnl_inr"])
+        self.assertAlmostEqual(audit["gross_midpoint_move_inr"]-audit["spread_cost_inr"]-
+            audit["depth_impact_inr"]-audit["extra_slippage_inr"]-audit["fees_inr"]+
+            audit["rounding_reconciliation_inr"],audit["net_inr"],places=2)
+        self.assertAlmostEqual(sum(audit["fee_components_inr"].values()),audit["fees_inr"],places=2)
+        for bps in (1,5,10):
+            stressed=replay.replay(strategy="LONG_OPTION",identities=["NSE_FNO:1"],lots=1,
+                decision_utc=paper._iso(anchor),capital=17000.,hold_seconds=5,latency_ms=1000,
+                window_seconds=1,participation_pct=25.,slippage_bps=bps,broker_profile="zerodha",now=NOW)
+            self.assertEqual(audit["stress"][str(bps)]["net_inr"],stressed["net_pnl_inr"])
+        self.assertGreater(audit["stress"]["1"]["net_inr"],audit["stress"]["10"]["net_inr"])
+        thresholds=realism.target_exit_vwap(result,cfg)
+        self.assertGreater(thresholds["target_exit_vwap"],thresholds["break_even_exit_vwap"])
+
+    def test_sequential_cash_blocks_overlap_and_unresolved_exit(self):
+        from workstation_api import execution_realism as realism
+        anchors=[START+timedelta(minutes=40+i) for i in range(4)]
+        audit={"entry_risk_inr":16000.,"exit_utc":paper._iso(anchors[1]+timedelta(seconds=5))}
+        records=[(100.,"complete",True,10.,audit),
+                 (1000.,"complete",True,10.,audit),
+                 (None,"exit_unobservable",True,0.,None),
+                 (1000.,"complete",True,10.,audit)]
+        result=realism.sequential(records,[0,1,2,3],anchors,17000.)
+        self.assertEqual(result["completed"],1)
+        self.assertEqual(result["overlap_skipped"],1)
+        self.assertEqual(result["halted_reason"],"exit_unobservable")
+        self.assertEqual(result["conditional_completed_net_inr"],100.)
+        self.assertIsNone(result["fully_observed_account_net_inr"])

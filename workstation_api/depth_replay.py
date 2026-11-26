@@ -28,10 +28,11 @@ def _first(identity,eligible,end,now):
 
 def _first_on_db(db,identity,eligible,end,now):
     """Same first-receipt lookup, using a caller-owned read-only connection."""
-    raw=db.execute("""SELECT received_utc,book_json,packet_pair_sha256
+    from . import replay_storage
+    raw=replay_storage.fetchone(db,"""SELECT received_utc,book_json,packet_pair_sha256
         FROM live_depth_books WHERE identity=? AND received_utc>=?
         AND received_utc<=? ORDER BY received_utc LIMIT 1""",
-        (identity,paper._iso(eligible),paper._iso(min(end,now)))).fetchone()
+        (identity,paper._iso(eligible),paper._iso(min(end,now))))
     if raw is None:
         return None,"no_book_in_fixed_window"
     verified=spread_scanner._original_book(identity,*raw)
@@ -48,6 +49,8 @@ def _first_on_db(db,identity,eligible,end,now):
 def _execute(row,action,units,participation_pct,slippage_bps,profile,fee_floor_per_side=0.):
     result=paper.marketable_walk(row["book"],action,units,row["lot_size"],
          1e9 if action=="BUY" else 0.,participation_pct/100,slippage_bps)
+    levels=row["book"]["ask" if action=="BUY" else "bid"]
+    observed_turnover=sum(q*float(levels[i]["price"]) for i,q in result["allocations"])
     cost=paper._fees(action,result["turnover"],profile)
     if result["turnover"]>0:
         cost=max(cost,fee_floor_per_side)
@@ -56,6 +59,7 @@ def _execute(row,action,units,participation_pct,slippage_bps,profile,fee_floor_p
        "received_utc":row["received_utc"],"book_pair_sha256":row["digest"],
        "requested_units":units,"displayed_fill_units":result["units"],
        "vwap":result["vwap"],"turnover":result["turnover"],"fees":cost,
+       "observed_depth_turnover":observed_turnover,
        "original_best_bid":row["bid"],"original_best_ask":row["ask"],
        "cashflow":fees._money((1 if action=="SELL" else -1)*result["turnover"]-cost)}
 
