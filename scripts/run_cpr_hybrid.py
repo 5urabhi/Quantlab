@@ -24,6 +24,8 @@ def main():
     parser.add_argument("--context-batch",default="auto",help="Dated BANKNIFTY membership batch ID; auto selects by date overlap")
     parser.add_argument("--debit-spreads",action="store_true",help="Compare paired debit spread gross-funding and net-debit paper lanes")
     parser.add_argument("--context-q",action="store_true",help="Compare matched technical and contextual offline-Q exits")
+    parser.add_argument("--sequences",action="store_true",help="Add longer completed candle sequences and detailed bank features to matched ML")
+    parser.add_argument("--derivatives",action="store_true",help="Add observed same-strike OI/raw IV/relative volume to matched ML")
     parser.add_argument("--patterns",action="store_true",help="Study and compare completed-candle pattern models")
     parser.add_argument("--fixed-panel",action="store_true",help="Add separate major-bank panel research, not historical index membership")
     parser.add_argument("--rank-entries",action="store_true",help="Compare validation-calibrated probability and affordable contract ranking")
@@ -45,7 +47,7 @@ def main():
             frame=a.frame,hold=a.hold,capital=a.capital,risk_budget=a.risk_budget,entry_mode=a.entry_mode,
             context_mode=a.context_mode,context_batch=a.context_batch,rank_entries=a.rank_entries,
             pattern_research=a.patterns,fixed_panel=a.fixed_panel,context_q=a.context_q,debit_spreads=a.debit_spreads,
-            sessions=a.sessions,dense_training=a.dense_training,
+            sessions=a.sessions,dense_training=a.dense_training,sequence_research=a.sequences,derivative_research=a.derivatives,
             lot_size=a.lot_size,max_lots=a.max_lots,wings=a.wings,premium_penalty_bps=a.penalty_bps,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
