@@ -87,6 +87,20 @@ class JobQueueTests(unittest.TestCase):
         self.assertEqual(module.workspace_cancel_job(new)["status"],"cancelled")
         self.assertTrue(module.JOB_FUTURES[new].cancelled())
 
+    def test_batch_and_frozen_validation_share_bounded_spread_lane(self):
+        first=module._spawn("spread_batch_study",lambda:{"ok":True})["job_id"]
+        self.assertEqual(module.JOBS[first]["worker_lane"],"spread_replay")
+        self.assertTrue(module.JOBS[first]["cancellable"])
+        for kind in ("spread_speed_study","spread_batch_study","spread_batch_validation"):
+            with self.assertRaises(HTTPException) as failure:
+                module._spawn(kind,lambda:None)
+            self.assertEqual(failure.exception.status_code,409)
+        module.workspace_cancel_job(first)
+        second=module._spawn("spread_batch_validation",lambda:None)["job_id"]
+        self.assertEqual(module.JOBS[second]["worker_lane"],"spread_replay")
+        self.assertTrue(module.JOBS[second]["cancellable"])
+        self.assertEqual(len(self.worker.pending),0)
+
     def test_cancel_queued_releases_capacity_and_safe_retry(self):
         first=module._spawn("workspace_validation",lambda:None)["job_id"]
         for _ in range(5):module._spawn("workspace_validation",lambda:None)
