@@ -13,8 +13,9 @@ import sqlite3
 
 from . import auto_option_depth as recorder, advanced_options as ao
 from . import depth_replay as replay, paper_execution as paper, trading_cockpit as trend
+from . import dynamic_exit_policy as policy, replay_storage
 
-VERSION = "prospective_ema_rsi_atr_bsm_v1"
+VERSION = "prospective_ema_rsi_atr_bsm_v2"
 MAX_BOOK_AGE = 8
 MAX_CHAIN_AGE = 60
 MAX_SKEW = 2
@@ -30,10 +31,10 @@ DIVIDEND = 0.
 
 
 def latest_book(db, identity, now):
-    raw = db.execute("""SELECT received_utc,book_json,packet_pair_sha256
+    raw = replay_storage.fetchone(db,"""SELECT received_utc,book_json,packet_pair_sha256
         FROM live_depth_books WHERE identity=? AND received_utc>=? AND received_utc<=?
         ORDER BY received_utc DESC LIMIT 1""",
-        (identity,paper._iso(now-timedelta(seconds=MAX_BOOK_AGE)),paper._iso(now))).fetchone()
+        (identity,paper._iso(now-timedelta(seconds=MAX_BOOK_AGE)),paper._iso(now)))
     if not raw:
         return None
     stamp,body,digest=raw
@@ -50,17 +51,17 @@ def latest_book(db, identity, now):
 
 def _activity(db, identity, now, lot_size):
     cutoff=paper._iso(now-timedelta(seconds=120)); stop=paper._iso(now)
-    receipts=db.execute("""SELECT COUNT(*),COUNT(DISTINCT packet_pair_sha256)
+    receipts=replay_storage.fetchone(db,"""SELECT COUNT(*),COUNT(DISTINCT packet_pair_sha256)
         FROM live_depth_books WHERE identity=? AND received_utc>=? AND received_utc<=?""",
-        (identity,cutoff,stop)).fetchone()
+        (identity,cutoff,stop))
     if receipts[0]<MIN_RECEIPTS or receipts[1]<2:
         return None,"insufficient_recent_depth"
     try:
         # Bounded last 120 seconds for this exact indexed identity.
-        trades=db.execute("""SELECT COUNT(DISTINCT exchange_trade_utc),
+        trades=replay_storage.fetchone(db,"""SELECT COUNT(DISTINCT exchange_trade_utc),
             MAX(volume)-MIN(volume) FROM dhan_option_live_events WHERE identity=? AND kind='quote'
             AND received_utc>=? AND received_utc<=? AND exchange_trade_utc>=? AND exchange_trade_utc<=?
-            AND volume>=0""",(identity,cutoff,stop,cutoff,stop)).fetchone()
+            AND volume>=0""",(identity,cutoff,stop,cutoff,stop))
     except sqlite3.OperationalError as exc:
         if "no such table" not in str(exc):
             raise
@@ -71,34 +72,29 @@ def _activity(db, identity, now, lot_size):
             "distinct_trade_times_120s":trades[0],"volume_range_120s":trades[1]},None
 
 
-def _source(now, config):
+def _source(now, config, *, historical=False, signal_override=None):
     day=now.astimezone(paper.IST).date().isoformat()
-    with recorder.LOCK:
-        subscribed=[dict(row) for row in recorder.STATE.get("contracts",[])][:MAX_CONTRACTS]
+    subscribed=[]
+    if not historical:
+        with recorder.LOCK:
+            subscribed=[dict(row) for row in recorder.STATE.get("contracts",[])][:MAX_CONTRACTS]
     subscribed={row["identity"]:row for row in subscribed if replay.fees.ID.fullmatch(row.get("identity",""))}
     report={"source_cutoff_utc":paper._iso(now),"direction":"NO_TRADE","rejections":{},
             "subscribed_contracts":len(subscribed),"valid_contracts":0}
     if not paper._regular(now):
         return report,[],"outside_regular_session"
-    if not subscribed:
+    if not subscribed and not historical:
         return report,[],"no_subscribed_depth_contracts"
     expiries=sorted({row["expiry"] for row in subscribed.values() if row.get("expiry","")>=day})
-    if not expiries:
+    if not expiries and not historical:
         return report,[],"no_current_expiry"
-    expiry=expiries[0]
+    expiry=expiries[0] if expiries else None
     try:
         with closing(ao._read_database()) as db:
             db.execute("BEGIN")
-            cutoff=paper._iso(now.replace(second=0,microsecond=0))
-            bars=db.execute("""SELECT minute_utc,session_ist,open,high,low,close
-                FROM live_minute_bars WHERE identity='INDEX:BANKNIFTY' AND session_ist=?
-                AND minute_utc<? AND last_received_utc<=? ORDER BY minute_utc DESC LIMIT 120""",
-                (day,cutoff,paper._iso(now))).fetchall()
-            if not bars:
+            signal=signal_override if historical else policy.signal_from_db(db,now)
+            if not signal:
                 return report,[],"no_completed_index_bars"
-            rows=[dict(zip(("timestamp_utc","session_ist","open","high","low","close"),row),volume=0)
-                  for row in reversed(bars)]
-            signal=trend.snapshot("INDEX:BANKNIFTY",rows,now=now,include_chart=False)
             report.update(direction=signal["direction"],bar_utc=signal["last_observed_utc"],
                 source_age_seconds=signal["source_age_seconds"],ema9=signal["ema9"],ema21=signal["ema21"],
                 rsi14=signal["rsi14"],atr14=signal["atr14"],contiguous_bars=signal["contiguous_session_bars"])
@@ -107,10 +103,20 @@ def _source(now, config):
                 return report,[],"stale_completed_index_bar"
             if signal["direction"] not in ("UP","DOWN"):
                 return report,[],"no_confirmed_ema_rsi_trend"
-            stamp=db.execute("""SELECT captured_utc,normalized_json,snapshot_sha256 FROM option_chain_observations
-                WHERE underlying='BANKNIFTY' AND expiry=? AND captured_utc>=? AND captured_utc<=?
-                ORDER BY captured_utc DESC LIMIT 1""",
-                (expiry,(now-timedelta(seconds=MAX_CHAIN_AGE)).isoformat(),now.isoformat())).fetchone()
+            lower=(now-timedelta(seconds=MAX_CHAIN_AGE)).isoformat()
+            if historical:
+                # Freeze the universe at the historical observation. Never
+                # use the current watchlist or the session's final prices.
+                stamp=replay_storage.fetchone(db,"""SELECT captured_utc,normalized_json,snapshot_sha256,expiry FROM option_chain_observations
+                    WHERE underlying='BANKNIFTY' AND expiry>=? AND captured_utc>=? AND captured_utc<=?
+                    ORDER BY expiry,captured_utc DESC LIMIT 1""",(day,lower,now.isoformat()))
+                if stamp:
+                    expiry=stamp[3]
+                    stamp=stamp[:3]
+            else:
+                stamp=replay_storage.fetchone(db,"""SELECT captured_utc,normalized_json,snapshot_sha256 FROM option_chain_observations
+                    WHERE underlying='BANKNIFTY' AND expiry=? AND captured_utc>=? AND captured_utc<=?
+                    ORDER BY captured_utc DESC LIMIT 1""",(expiry,lower,now.isoformat()))
             if not stamp:
                 return report,[],"missing_fresh_chain"
             captured,raw,digest=stamp
@@ -133,7 +139,15 @@ def _source(now, config):
                           expiry=expiry,scenario_move_points=round(move,3))
             rejected=Counter(); output=[]; seen=set()
             counts=Counter(c.get("identity") for c in chain.get("contracts",[]))
-            for c in chain.get("contracts",[]):
+            contracts=chain.get("contracts",[])
+            if historical:
+                # Only original books received by now qualify. Limit the
+                # universe using contemporaneous strike distance, not P&L.
+                contracts=sorted(contracts,key=lambda c:(abs((ao.number(c.get("strike")) or 0.)-spot),str(c.get("identity"))))[:MAX_CONTRACTS]
+                subscribed={c["identity"]:c for c in contracts if replay.fees.ID.fullmatch(c.get("identity") or "")}
+                report["subscribed_contracts"]=len(subscribed)
+                report["universe_scope"]="nearest_200_contemporaneous_chain_contracts"
+            for c in contracts:
                 identity=c.get("identity")
                 if identity not in subscribed or identity in seen:
                     continue
@@ -174,16 +188,16 @@ def actions(strategy):
     return ("BUY",) if strategy=="LONG_OPTION" else replay.studio.STRATEGIES[strategy]["actions"]
 
 
-def executions(books,strategy,lots,profile,reverse=False):
+def executions(books,strategy,lots,profile,reverse=False,slippage_bps=SLIPPAGE):
     units=lots*books[0]["lot_size"]
     sides=actions(strategy)
     if reverse:
         sides=tuple("SELL" if a=="BUY" else "BUY" for a in sides)
-    rows=[replay._execute(b,a,units,PARTICIPATION,SLIPPAGE,profile) for b,a in zip(books,sides)]
+    rows=[replay._execute(b,a,units,PARTICIPATION,slippage_bps,profile) for b,a in zip(books,sides)]
     return rows if all(r["displayed_fill_units"]==units for r in rows) else None
 
 
-def _scenario_exit(books,strategy,units,spot,move,iv_shock,hold_seconds,profile):
+def _scenario_exit(books,strategy,units,spot,move,iv_shock,hold_seconds,profile,slippage_bps=SLIPPAGE):
     cash=0.
     for book,action in zip(books,actions(strategy)):
         iv=book["sigma"]+iv_shock
@@ -193,7 +207,7 @@ def _scenario_exit(books,strategy,units,spot,move,iv_shock,hold_seconds,profile)
         mid=ao.bsm(spot+move,book["strike"],years,RATE,iv,book["option_type"],DIVIDEND)["price"]
         half=(book["ask"]-book["bid"])/2
         side="SELL" if action=="BUY" else "BUY"
-        price=max(0.,mid-half)*(1-SLIPPAGE/10000) if side=="SELL" else (mid+half)*(1+SLIPPAGE/10000)
+        price=max(0.,mid-half)*(1-slippage_bps/10000) if side=="SELL" else (mid+half)*(1+slippage_bps/10000)
         gross=replay.fees._money(price*units)
         cash+=(gross if side=="SELL" else -gross)-paper._fees(side,gross,profile)
     return cash
@@ -213,8 +227,9 @@ def _candidate(strategy,books,config,report,rejections):
     direction=1 if report["direction"]=="UP" else -1
     best=None
     for lots in range(1,config["max_lots"]+1):
-        entry=executions(books,strategy,lots,profile)
-        exit_=executions(books,strategy,lots,profile,reverse=True)
+        slip=config.get("slippage_bps",SLIPPAGE)
+        entry=executions(books,strategy,lots,profile,slippage_bps=slip)
+        exit_=executions(books,strategy,lots,profile,reverse=True,slippage_bps=slip)
         if entry is None or exit_ is None:
             rejections["insufficient_displayed_roundtrip_depth"]+=1;continue
         units=lots*books[0]["lot_size"]
@@ -231,7 +246,7 @@ def _candidate(strategy,books,config,report,rejections):
                 ("favorable_iv_down",direction*report["scenario_move_points"],-.02),
                 ("favorable_iv_up",direction*report["scenario_move_points"],.02),
                 ("flat",0.,0.),("adverse",-direction*report["scenario_move_points"],0.)):
-            value=_scenario_exit(books,strategy,units,report["spot"],move,iv,config["hold_seconds"],profile)
+            value=_scenario_exit(books,strategy,units,report["spot"],move,iv,config["hold_seconds"],profile,slip)
             if value is None:
                 break
             outcomes[name]=replay.fees._money(cash+value)
@@ -261,7 +276,10 @@ def _candidate(strategy,books,config,report,rejections):
 
 
 def select(now,config,lane_caps=None):
-    report,books,reason=_source(now,config)
+    return from_source(*_source(now,config),config,lane_caps)
+
+
+def from_source(report,books,reason,config,lane_caps=None):
     output={}
     for lane in ("directional","spread"):
         output[lane]={"action":"NO_TRADE","reason":reason or "no_candidate_passed", "candidates":[], "rejections":{}}
