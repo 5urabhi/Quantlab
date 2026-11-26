@@ -18,6 +18,9 @@ class MaintenanceTests(TestCase):
         self.p.start();self.addCleanup(self.p.stop)
         self.legacy=patch.object(m.mp,"configure_sync")
         self.legacy.start();self.addCleanup(self.legacy.stop)
+        self.stop_was_set=m.STOP.is_set()
+        m.STOP.clear()
+        self.addCleanup(m.STOP.set if self.stop_was_set else m.STOP.clear)
         self.now=datetime(2026,11,26,11,tzinfo=timezone.utc) # 16:30 IST
 
     def test_persisted_consent_and_quiet_window(self):
