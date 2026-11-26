@@ -2,6 +2,7 @@ import {useEffect,useState} from 'react'
 import {BookOpen,CheckCircle2,Download,FileText,FlaskConical,
   RefreshCw,ShieldAlert,SlidersHorizontal} from 'lucide-react'
 import './research-scholar.css'
+import ResearchPlot from './ResearchPlots'
 
 type Dataset={id:string;label:string;ready:boolean;has_prices:boolean}
 type Run={id:string;kind:'model_run'|'research_run';label:string}
@@ -404,6 +405,8 @@ export default function ResearchScholar({datasets,selectedDataset,onSelectDatase
           <input type="date" value={decisionDate} onChange={e=>setDecisionDate(e.target.value)}/></label></div>
         <button disabled={!chosenRun||busy} onClick={why}><SlidersHorizontal size={15}/> Explain index decisions</button>
         {decision&&<><p className="rw-note">Rebalance {decision.decision_date} · {decision.dataset_kind}</p>
+          {decision.rows.some(r=>r.target_weight>0)&&<ResearchPlot provenance={decision.dataset_kind==='synthetic'?'synthetic':'Saved historical decision'} plot={{kind:'bar2d',title:'Saved target weights at rebalance',x_label:'Selected constituent',y_label:'Target weight (%)',x:decision.rows.filter(r=>r.target_weight>0).map(r=>r.ticker),traces:[{name:'Target weight',y:decision.rows.filter(r=>r.target_weight>0).map(r=>100*r.target_weight)}]}}/>}
+          {decision.rows.some(r=>r.score!==null)&&<ResearchPlot provenance={decision.dataset_kind==='synthetic'?'synthetic':'Saved historical decision'} plot={{kind:'bar2d',title:'Saved factor scores at decision',x_label:'Constituent',y_label:'Composite factor score',x:decision.rows.map(r=>r.ticker),traces:[{name:'Composite score',y:decision.rows.map(r=>r.score)}]}}/>}
           <div className="rw-scroll"><table><thead><tr>
             <th>Ticker</th><th>Rank</th><th>Score</th><th>Target weight</th><th>Explanation</th>
           </tr></thead><tbody>{decision.rows.map(row=><tr key={row.ticker}>
@@ -429,11 +432,7 @@ export default function ResearchScholar({datasets,selectedDataset,onSelectDatase
           <strong>{nf(risk.systematic_fraction,true)}</strong></div>
         <div><small>Past monthly observations</small><strong>{risk.fitted_observations}</strong></div>
       </div>
-      <div className="rs-factors">{risk.factor_contributions.map(v=>
-        <div key={v.factor}><strong>{v.factor}</strong><span>{nf(v.active_exposure)} active exposure</span>
-          <div className="rs-factor-bar"><i style={{width:Math.min(100,Math.abs((v.fraction_total_variance||0)*100))+'%'}}/></div>
-          <span>{nf(v.fraction_total_variance,true)} of total variance</span>
-        </div>)}</div>
+      {risk.factor_contributions.length>0&&<><ResearchPlot provenance="Conditional sourced covariance estimate" plot={{kind:'bar2d',title:'Signed estimated factor variance contributions',x_label:'Factor',y_label:'Share of total active variance (%)',x:risk.factor_contributions.map(v=>v.factor),traces:[{name:'Variance contribution',y:risk.factor_contributions.map(v=>v.fraction_total_variance===null?null:100*v.fraction_total_variance)}]}}/><ResearchPlot provenance="Conditional sourced covariance estimate" plot={{kind:'bar2d',title:'Estimated active factor exposures',x_label:'Factor',y_label:'Regression beta exposure',x:risk.factor_contributions.map(v=>v.factor),traces:[{name:'Active exposure',y:risk.factor_contributions.map(v=>v.active_exposure)}]}}/></>}
         <p className="rw-caution">{risk.warning}</p></>}
     </Pane>}
     {tab==='publication'&&<div className="rw-stack">
