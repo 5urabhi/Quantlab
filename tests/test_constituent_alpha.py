@@ -85,11 +85,15 @@ class AlphaEvidenceTests(TestCase):
     def test_partial_ledger_does_not_train(self):
         empty={"version":a.VERSION,"policy_sha256":a.POLICY_HASH,"horizon_minutes":5,
                "training_dates":["2026-10-01"],"calibration_dates":[],"holdout_dates":[]}
-        with patch.object(a,"readiness",return_value=empty), \
+        with TemporaryDirectory() as tmp, \
+             patch.object(a,"_root",return_value=Path(tmp)), \
+             patch.object(a,"readiness",return_value=empty), \
              patch.object(a,"_read",side_effect=lambda:sqlite3.connect(":memory:")), \
              patch.object(a,"_rows",return_value=[row(i) for i in range(43)]), \
              patch.object(a,"_fit") as fit:
             out=a.run(horizon=5)
+            with a.result_path(out["audit_id"],audit=True).open() as f:
+                self.assertEqual(len(list(csv.DictReader(f))),2)
         fit.assert_not_called()
         self.assertEqual(out["state"],"awaiting_recorded_sessions")
         self.assertGreater(out["evidence_counts"]["scored"],0)
