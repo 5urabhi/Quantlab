@@ -13,7 +13,7 @@ import json
 from . import historical_alpha as h, predictive_option_research as p
 from . import alpha_retraining, liquidity_spreads as fees
 
-VERSION = "cpr_ml_offline_q_v6"
+VERSION = "cpr_ml_offline_q_v7"
 SQUAREOFF_MINUTE = 365  # 15:20 IST, minutes from 09:15
 LAST_SESSION_MINUTE = 374  # last regular minute open, 15:29 IST
 ENTRY_MODES = ("crossover", "daily_scan", "regime_scan")
@@ -637,7 +637,8 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
 
 def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
-        context_mode="off",context_batch="auto",rank_entries=False,progress=None):
+        context_mode="off",context_batch="auto",rank_entries=False,
+        pattern_research=False,fixed_panel=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
@@ -690,7 +691,11 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     val_signals=[s for s in signals if s["session"] in splits[1]]
     all_signals=signals+train_signals
     from . import cpr_context_features as cx
-    context_audit=cx.attach(all_signals,mode=context_mode,batch_id=context_batch)
+    context_audit=cx.attach(all_signals,mode=context_mode,batch_id=context_batch,fixed_panel=fixed_panel)
+    pattern_report={}
+    if pattern_research:
+        from . import candle_pattern_research as patterns
+        pattern_report=patterns.assess(index,splits,all_signals,progress=progress)
     # Read each relevant session through 15:29, for pending exit retries.
     earliest={}
     for s in all_signals:
@@ -711,7 +716,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "hold_minutes":hold if hold else None,"hold_until_squareoff":hold==0,
              "squareoff_ist":"15:20","last_retry_ist":"15:29","entry_mode":entry_mode,"scan_interval_minutes":SCAN_MINUTES,
              "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,
-             "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,"full_premium_and_fee_budget_inr":risk_budget,
+             "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,
+             "pattern_research":pattern_research,"fixed_panel":fixed_panel,"full_premium_and_fee_budget_inr":risk_budget,
              "historical_lot_size_assumed":lot_size,"max_lots":max_lots,"strike_wings":wings,
              "primary_adverse_penalty_bps_per_side":bps,"target_net_return":TARGET,"fixed_stop_mark":STOP,
              "experimental_emergency_stop_mark":EMERGENCY_STOP,"max_learning_strikes_per_anchor":MAX_LEARNING_STRIKES,
@@ -732,7 +738,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
                      for name,ss,es in (("train",train_signals,broad_train),("validation",val_signals,broad_val))},
              "index_source_failures":failures,"option_coverage":{k:v for k,v in meta.items() if k!="source_hashes"},
              "context_coverage":{k:v for k,v in context_audit.items() if k!="anchors"},
-             "ranked_entry_research":{},
+             "ranked_entry_research":{},"candle_patterns":pattern_report,
              "methods":{},"state":"descriptive_only_insufficient_sessions","broker_orders_enabled":False,
              "live_model_promoted":False,"warning":WARNING}
     journal=[]
@@ -755,13 +761,14 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             metrics,rows=_evaluate(test,method=method,capital=capital,risk_budget=risk_budget,
                                    model=model,means=means,q=wide_q if method=="offline_q_emergency_stop" else q,dates=splits[2])
             report["methods"][method]=metrics;journal.extend(rows)
-        if rank_entries or context_mode!="off":
+        if rank_entries or context_mode!="off" or pattern_research:
             from . import cpr_ranked_entries as ranked
             ranked_results,ranked_rows=ranked.assess(
                 __import__(__name__,fromlist=["run"]),signals=signals,table=table,index=index,
                 train=broad_train,val=broad_val,test=test,dates=(splits[1],splits[2]),
                 hold=hold,lot_size=lot_size,bps=bps,capital=capital,risk_budget=risk_budget,
-                context_audit=context_audit,q=q,progress=progress)
+                context_audit=context_audit,q=q,pattern_research=pattern_research,
+                fixed_panel=fixed_panel,progress=progress)
             report["ranked_entry_research"]=ranked_results
             journal.extend(ranked_rows)
     else:
@@ -770,7 +777,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             metrics,rows=_evaluate(episodes,method=method,capital=capital,risk_budget=risk_budget,dates=dates)
             report["methods"][method]=metrics;journal.extend(rows)
     evidence={"index_sources":index_hashes,"option_sources":meta["source_hashes"],
-              "context_evidence":context_audit}
+              "context_evidence":context_audit,"candle_pattern_evidence":pattern_report}
     report["source_sha256"]=sha256(json.dumps(evidence,sort_keys=True).encode()).hexdigest()
     if progress:progress(100,"CPR strategy comparison complete")
     return report,journal,evidence
