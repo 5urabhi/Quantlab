@@ -200,3 +200,24 @@ def view(episodes,scope):
         out.append({**e,"features":e["features"]+[x for g in groups for x in vectors[g]]}
                    if "features" in e else e)
     return out
+
+
+def rule_accept(episode,scope):
+    """Fixed direction-confirmation hypotheses, never a fitted causal claim."""
+    vectors=episode.get("context_vectors",{})
+    if scope in ("constituents","combined"):
+        b=vectors.get("constituents")
+        if b is None or b[0]<1/3 or b[1]<=0 or b[3]<=0 or (not b[8] and b[6]<=0):
+            return False
+    if scope in ("global","combined"):
+        g=vectors.get("global")
+        if g is None:
+            return False
+        direction=1 if episode["side"]=="CALL" else -1
+        for group in ("global_equity","asia"):
+            changes=[direction*g[4*i+1] for i,k in enumerate(FACTORS)
+                     if m.FACTORS[k][1]==group and m.FACTORS[k][0].endswith("return")
+                     and not g[4*i+3]]
+            if not changes or sum(changes)<=0:
+                return False
+    return True
