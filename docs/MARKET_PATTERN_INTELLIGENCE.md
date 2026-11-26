@@ -104,3 +104,5 @@ These are current-tariff estimates, not historic contract-note reconstruction
 or actual Kite execution costs. Do not double count spread in fill-based P&L.
 
 Optional virtual-note comparison calls only documented Kite POST /charges/orders on explicit click with a user-entered exact symbol; response terms and charge sums are checked. No order-placement endpoints. Positions & Risk supports opt-in, page-scoped read-only GET /portfolio/positions every 60 seconds; broker-reported net positions remain separate from the journal and estimated liquidation P&L. Both require the existing authenticated local Kite session; synthetic tests do not prove real authentication.
+
+Historical option candle replay UI now defaults to the current Zerodha tariff instead of the flat fee assumption. Legacy API calls retain flat mode unless fee_mode is set. Actual filled price/turnover is used for the selected charge model; current-tariff mode is a counterfactual for older dates, not a reconstruction of their original tax rates.

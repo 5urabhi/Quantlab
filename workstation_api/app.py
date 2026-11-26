@@ -819,6 +819,7 @@ class HistoricalOptionsBacktestRequest(BaseModel):
     target_pct: float = Field(default=5, ge=.1, le=100, allow_inf_nan=False)
     slippage_bps: float = Field(default=5, ge=0, le=500, allow_inf_nan=False)
     fee_per_side: float = Field(default=20, ge=0, le=1000, allow_inf_nan=False)
+    fee_mode: Literal["flat","zerodha","zerodha_debit_balance"]="flat"
     hold_rule: Literal["fixed", "signal_reversal", "signal_reversal_or_cap",
                        "premium_target_stop", "hybrid"] = "fixed"
     signal_model: Literal["ema_rsi", "ema_crossover"] = "ema_rsi"

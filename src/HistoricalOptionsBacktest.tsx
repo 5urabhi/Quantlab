@@ -118,6 +118,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
   const [stopLoss,setStopLoss]=useState(2.5)
   const [slippage,setSlippage]=useState(5)
   const [feePerSide,setFeePerSide]=useState(20)
+  const [feeMode,setFeeMode]=useState<"flat"|"zerodha"|"zerodha_debit_balance">("zerodha")
   const [selectedRule,setSelectedRule]=useState<Rule>('signal_reversal')
   const [signalModel,setSignalModel]=useState<SignalModel>('ema_crossover')
 
@@ -159,7 +160,7 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
         expiry_flag:expiryFlag,expiry_code:expiryCode,
         wings,target_ltp:targetLtp,tolerance,lots,lot_size:lotSize,
         stop_pct:stopLoss,target_pct:profitTarget,slippage_bps:slippage,
-        fee_per_side:feePerSide,hold_rule:selectedRule,hold_minutes:holdMinutes,
+        fee_per_side:feePerSide,fee_mode:feeMode,hold_rule:selectedRule,hold_minutes:holdMinutes,
         reversal_cap_minutes:reversalCap,signal_model:signalModel,
         confirm_readonly:true,
       }
@@ -364,10 +365,12 @@ export default function HistoricalOptionsBacktest({ready,onOpenData}:Props){
           <input aria-label="Historical option slippage bps" type="number" min="0" max="500" step="1"
             value={slippage} onChange={e=>setSlippage(Number(e.target.value))}/>
         </label>
-        <label>Assumed brokerage (₹ per side)
+        <label>Fee basis<select value={feeMode} onChange={e=>setFeeMode(e.target.value as typeof feeMode)}><option value="zerodha">Zerodha current tariff</option><option value="zerodha_debit_balance">Zerodha debit balance</option><option value="flat">Flat all-in assumption</option></select></label>
+        <label>Flat cost (₹ per side; used only in flat mode)
           <input aria-label="Historical option brokerage per side" type="number" min="0" max="1000" step="1"
             value={feePerSide} onChange={e=>setFeePerSide(Number(e.target.value))}/>
         </label>
+        <small>Current tariff mode applies today's charges to all historical dates; not historical contract-note reconstruction.</small>
       </div>
     </details>
     <div className="hob-flip-note" role="note">
