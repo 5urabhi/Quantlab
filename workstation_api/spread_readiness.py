@@ -25,7 +25,7 @@ def _bounds(day, now):
     return start,min(close,now)
 
 
-def _inventory(day, identities, now, include_candidates):
+def _inventory(day, identities, now, include_candidates, candidate_ids=None):
     """Single read transaction; actual saved timestamp inventory, not fills."""
     start,end=_bounds(day,now)
     elapsed=max(0,int((end-start).total_seconds()))
@@ -42,10 +42,28 @@ def _inventory(day, identities, now, include_candidates):
                 FROM live_depth_books WHERE received_utc>=? AND received_utc<?"""
             selected=db.execute(base+" AND identity IN ("+
                 ",".join("?" for _ in identities)+") GROUP BY identity",
-                (*limits,*identities)).fetchall()
+                (*limits,*identities)).fetchall() if identities else []
             candidates=[]
             truncated=False
-            if include_candidates:
+            if include_candidates and candidate_ids is not None:
+                # Indexed reads for the current watchlist; retain completed
+                # results if the time budget is exhausted.
+                deadline=monotonic()+SCAN_SECONDS
+                db.set_progress_handler(lambda:int(monotonic()>deadline),10000)
+                try:
+                    for identity in candidate_ids[:MAX_CANDIDATES]:
+                        if monotonic()>deadline:
+                            truncated=True
+                            break
+                        candidates.extend(db.execute(base+" AND identity=? GROUP BY identity",(*limits,identity)).fetchall())
+                except sqlite3.OperationalError as exc:
+                    if "interrupted" not in str(exc):
+                        raise
+                    truncated=True
+                finally:
+                    db.set_progress_handler(None,0)
+                truncated=truncated or len(candidate_ids)>MAX_CANDIDATES
+            elif include_candidates:
                 # The existing index is identity-first. A very large archive
                 # may require a long covering-index scan. Bound that optional
                 # scan rather than starving the live writer.
@@ -124,7 +142,8 @@ def _screen(strategy, rows, capital, lots, participation_pct, slippage_bps, brok
               for n in range(1,MAX_LOTS+1)}
     affordable=[n for n,v in required.items() if v is not None and v<=capital]
     result.update(one_lot_required_inr=required[1],requested_lots_required_inr=required[lots],
-        max_affordable_lots=max(affordable,default=0))
+        max_affordable_lots=max(affordable,default=0),
+        affordable_lot_options=affordable)
     if required[lots] is None:
         result.update(status="insufficient_displayed_depth",reason="Requested whole lots exceed haircut displayed entry depth")
     elif required[lots]>capital:
@@ -173,3 +192,88 @@ def inspect(*,day,strategy,identities,capital=17000.,lots=3,participation_pct=25
         "elapsed_seconds":elapsed,"scanned_contracts":len(inventory),"scan_truncated":truncated,
         "selected":screen,"affordable_candidates":len(candidates),"candidates":candidates[:TOP_RESULTS],
         "warning":"Latest saved original books for this day, not live quotes or verified fills. Coverage counts saved timestamps across elapsed session, not independently verified books for every second or guaranteed sampling. A bounded scan may omit candidates. Historical candidates are in-sample research screens; validate on later data. Multi-leg budget is a risk proxy, not broker margin."}
+
+
+def automatic(*,day,capital=17000.,lots=3,participation_pct=25.,
+              slippage_bps=5.,broker_profile="zerodha",expiry="",side="ALL",
+              search="",now=None):
+    """Select an affordable exact research contract before launching replay.
+
+    Today's subscribed identities are an efficient, bounded indexed universe.
+    Older dates fall back to the bounded saved-date scan. No historical outcome
+    or future fill is used in ranking; same-day selection is still in-sample.
+    """
+    from . import auto_option_depth as recorder
+    now=now or paper._now()
+    if broker_profile not in fees.BROKER_PROFILES or side not in ("ALL","CE","PE"):
+        raise ValueError("Unsupported fee profile or option side")
+    if expiry and date.fromisoformat(expiry).isoformat()!=expiry:
+        raise ValueError("Choose an ISO expiry")
+    if type(lots) is not int or not 1<=lots<=MAX_LOTS:
+        raise ValueError("Choose 1–10 maximum lots")
+    for value,lo,hi,label in ((capital,1000,1e7,"capital"),(participation_pct,1,100,"participation"),
+                              (slippage_bps,0,500,"slippage")):
+        paper._check(value,lo,hi,label)
+    if not isinstance(search,str) or len(search)>80:
+        raise ValueError("Search is limited to 80 characters")
+    query=search.strip().lower()
+    candidate_ids=None
+    scope="saved_date_inventory"
+    if day==now.astimezone(paper.IST).date().isoformat():
+        with recorder.LOCK:
+            ids=sorted({row["identity"] for row in recorder.STATE.get("contracts",[])
+                        if fees.ID.fullmatch(row.get("identity") or "")})
+        if ids:
+            candidate_ids=ids
+            scope="current_depth_watchlist"
+    inventory,elapsed,truncated=_inventory(day,[],now,True,candidate_ids)
+    rejected={}
+    def reject(reason):
+        rejected[reason]=rejected.get(reason,0)+1
+    candidates=[]
+    for row in inventory:
+        book=row["book"]
+        if book is None:
+            reject("missing_or_invalid_original_book")
+            continue
+        if (expiry and expiry!=book["expiry"]) or (side!="ALL" and side!=book["option_type"]) or (
+            query and query not in f'{book["identity"]} {book["strike"]:g} {book["option_type"]} {book["expiry"]}'.lower()):
+            reject("outside_selected_filters")
+            continue
+        screen=_screen("LONG_OPTION",[row],capital,lots,participation_pct,slippage_bps,broker_profile,2.)
+        # Both entry budget and immediate displayed exit capacity must pass.
+        # This is not evidence that a later exit will execute.
+        actual=0
+        for n in reversed(screen.get("affordable_lot_options",[])):
+            if n>lots:
+                continue
+            units=n*book["lot_size"]
+            close=replay._execute(book,"SELL",units,participation_pct,slippage_bps,broker_profile)
+            if close["displayed_fill_units"]==units:
+                actual=n
+                break
+        if not actual:
+            reject("budget_or_roundtrip_depth")
+            continue
+        if not row["observed_seconds"]:
+            reject("no_observed_seconds")
+            continue
+        cost=_entry_requirements("LONG_OPTION",[book],actual,participation_pct,slippage_bps,broker_profile)
+        candidates.append({**screen,"identity":row["identity"],"strike":book["strike"],
+            "option_type":book["option_type"],"expiry":book["expiry"],"bid":book["bid"],"ask":book["ask"],
+            "saved_receipts":row["saved_receipts"],"observed_seconds":row["observed_seconds"],
+            "coverage_pct":row["coverage_pct"],"latest_book_age_seconds":round(max(0.,(now-book["stamp"]).total_seconds()),2),
+            "study_lots":actual,"study_entry_inr":cost})
+    # For a data-availability diagnostic, evidence density outranks sizing.
+    # Prefer a narrow spread and affordable whole lots, never historical P&L.
+    candidates.sort(key=lambda c:(-c["observed_seconds"],c["spread_bps"],
+                    -c["study_lots"],c["latest_book_age_seconds"],c["identity"]))
+    pick=candidates[0] if candidates else None
+    return {"day_ist":day,"cutoff_utc":paper._iso(now),"capital":capital,"lots":lots,
+        "elapsed_seconds":elapsed,"scanned_contracts":len(inventory),"scan_truncated":truncated,
+        "scope":scope,"affordable_candidates":len(candidates),"candidates":candidates[:TOP_RESULTS],
+        "automatic_pick":pick,"rejections":rejected,
+        "reason":"selected_by_saved_coverage_spread_and_affordability" if pick else "no_eligible_recorded_contract",
+        "warning":"Selection uses the chosen date's observed evidence, not a buy signal or unbiased backtest. "
+          "Low coverage and missing future receipts remain unscored. Same-book exit capacity is not an actual fill. "
+          "The scan is bounded; a partial scan may omit better-covered candidates."}

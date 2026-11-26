@@ -38,9 +38,11 @@ class ReadinessTests(TestCase):
             conn.execute("""CREATE TABLE live_depth_books(identity TEXT,received_utc TEXT,
                 book_json TEXT,packet_pair_sha256 TEXT,PRIMARY KEY(identity,received_utc))""")
 
-    def put(self,identity,seconds,ask,quantity=2000,valid=True,strike=63000,side="CE"):
+    def put(self,identity,seconds,ask,quantity=2000,valid=True,strike=63000,side="CE",bid_quantity=None):
         stamp=START+timedelta(seconds=seconds)
         raw,digest=book(identity,stamp,ask,quantity,strike,side)
+        if bid_quantity is not None:
+            raw['bid'][0]['quantity']=bid_quantity
         with sqlite3.connect(self.db) as conn:
             conn.execute("INSERT INTO live_depth_books VALUES (?,?,?,?)",
                          (identity,p._iso(stamp),json.dumps(raw),digest if valid else "0"*64))
@@ -101,3 +103,41 @@ class ReadinessTests(TestCase):
         result=self.inspect(["NSE_FNO:2","NSE_FNO:3"],lots=1,strategy="bull_call_debit")
         self.assertEqual(result["selected"]["status"],"ready")
         self.assertGreater(result["selected"]["one_lot_required_inr"],0)
+
+
+    def automatic(self,ids,**kwargs):
+        from workstation_api import auto_option_depth as recorder
+        with patch.dict(recorder.STATE,{"contracts":[{"identity":i} for i in ids]}), \
+             patch.object(r.replay.ao,"_read_database",
+                          side_effect=lambda:sqlite3.connect(self.db.as_uri()+"?mode=ro",uri=True)):
+            return r.automatic(day=DAY,capital=17000,lots=3,now=NOW,**kwargs)
+
+    def test_automatic_prefers_coverage_and_reduces_lots_without_manual_id(self):
+        for t in range(1,9):
+            self.put("NSE_FNO:1",t,600,strike=63000)
+            self.put("NSE_FNO:2",t,200,strike=63100)
+        for t in (1,2,3):
+            self.put("NSE_FNO:3",t,100,strike=63200)
+        for t in range(1,10):
+            self.put("NSE_FNO:4",t,100,strike=63300,bid_quantity=10)
+            self.put("NSE_FNO:5",t,100,strike=63400) # not in current watchlist
+        result=self.automatic(["NSE_FNO:1","NSE_FNO:2","NSE_FNO:3","NSE_FNO:4"])
+        self.assertEqual(result["scope"],"current_depth_watchlist")
+        self.assertEqual(result["scanned_contracts"],4)
+        self.assertEqual(result["affordable_candidates"],2)
+        self.assertEqual(result["automatic_pick"]["identity"],"NSE_FNO:2")
+        self.assertEqual(result["automatic_pick"]["study_lots"],2)
+        self.assertLessEqual(result["automatic_pick"]["study_entry_inr"],17000)
+        self.assertEqual(result["rejections"]["budget_or_roundtrip_depth"],2)
+        self.assertFalse(result["scan_truncated"])
+
+    def test_automatic_respects_filters_and_does_not_invent_a_candidate(self):
+        self.put("NSE_FNO:1",1,100,strike=63000,side="CE")
+        self.put("NSE_FNO:2",2,100,strike=63100,side="PE")
+        ids=["NSE_FNO:1","NSE_FNO:2"]
+        result=self.automatic(ids,side="PE",search="63100")
+        self.assertEqual(result["automatic_pick"]["identity"],"NSE_FNO:2")
+        result=self.automatic(ids,side="PE",search="63000")
+        self.assertIsNone(result["automatic_pick"])
+        self.assertEqual(result["reason"],"no_eligible_recorded_contract")
+        self.assertEqual(result["candidates"],[])
