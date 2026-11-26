@@ -112,7 +112,7 @@ class BatchTests(TestCase):
         self.assertEqual(stats["valid"],2)
 
     def test_rank_requires_sample_coverage_and_distinct_blocks(self):
-        anchors=[START+timedelta(minutes=i) for i in range(120)]
+        anchors=[START+timedelta(minutes=15+i) for i in range(120)]
         few=[(1000.,"complete",True,20.) if i<5 else (None,"missing",False,0.) for i in range(120)]
         stats=core.summarize(few,list(range(120)),anchors,100.)
         self.assertEqual(stats["mean_net"],1000.)
