@@ -2,6 +2,7 @@ import {useEffect,useMemo,useState} from 'react'
 import ResearchPlot from './ResearchPlots'
 import ConstituentProspective from './ConstituentProspective'
 import ArchivedWeights from './ArchivedWeights'
+import ConstituentDerivatives from './ConstituentDerivatives'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './constituent-intelligence.css'
 
@@ -123,6 +124,7 @@ export default function ConstituentIntelligence({onOpenRecording,onOpenSources,o
    </>:<p className="bci-note">{busy?'Reading saved constituent observations…':mode==='history'?'Choose an exact historical IST timestamp and inspect it.':'No analysis response available.'}</p>}
   </div>
   <ConstituentProspective/>
+  <ConstituentDerivatives/>
   <ArchivedWeights onSaved={()=>setRevision(n=>n+1)}/>
   <details className="bci-panel"><summary>Import dated BANKNIFTY weights from a reviewed source</summary>
    <p className="bci-note">Use an authorized dated NSE index weight report. CSV must contain exactly symbol,weight_pct, every dated member once, and a sum within 0.1 percentage point of 100%. No equal-weight fallback. Snapshot must be no more than 35 days old and actually saved before the analysis cutoff.</p>
