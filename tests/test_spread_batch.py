@@ -130,6 +130,7 @@ class BatchTests(TestCase):
         g=group()
         anchors=[START+timedelta(minutes=i) for i in range(120)]
         metrics=core.summarize([(110.,"complete",True,20.)]*120,list(range(120)),anchors,100.)
+        metrics["execution_costs"]={"stress":{str(x):{"scored":120,"mean_net":90.} for x in (1,5,10)}}
         calls=[]
         def evaluate(g,specs,cfg,day,anchors,directions,now,stop,cohorts):
             calls.append((g,specs,cfg.copy(),day,cohorts))
