@@ -1,0 +1,4 @@
+# Optional advanced historical model comparisons; install into QuantLab's existing venv.
+# pip install -r requirements-alpha-optional.txt
+lightgbm>=4.5,<5
+xgboost>=2.1,<4
