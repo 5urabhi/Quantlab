@@ -25,7 +25,7 @@ import shutil
 import struct
 import time
 
-from . import auto_option_depth as auto, dhan_option_chain, live_market, option_chain_live, shared_index_feed
+from . import auto_option_depth as auto, dhan_option_chain, live_market, option_chain_live, shared_index_feed, banknifty_constituents
 
 LOCK = RLock()
 STOP = Event()
@@ -225,7 +225,7 @@ def _subscribe_batches(contracts: list[dict]) -> list[dict]:
     return messages
 
 
-def decode_quote_frames(blob: bytes, *, include_index: bool = False) -> list[dict]:
+def decode_quote_frames(blob: bytes, *, include_index: bool = False, include_equity: bool = False) -> list[dict]:
     """Decode official v2 binary Quote(4), OI(5); never guess other bodies.
 
     One WebSocket frame may contain multiple concatenated Dhan packets.
@@ -264,6 +264,10 @@ def decode_quote_frames(blob: bytes, *, include_index: bool = False) -> list[dic
             out.append({"kind": "oi", "security_id": str(secid),
                         "oi": struct.unpack_from("<I", raw, 8)[0],
                         "packet_sha256": sha256(raw).hexdigest()})
+        elif include_equity and segment == 1:
+            equity_event=banknifty_constituents.decode_quote(raw,code,segment,secid)
+            if equity_event is not None:
+                out.append(equity_event)
         elif include_index and segment == 0:
             index_event=shared_index_feed.decode_index_packet(raw,code,segment,secid)
             if index_event is not None:
@@ -764,7 +768,10 @@ def _run(stop: Event) -> None:
         writer.start()
         index_writer=Thread(target=shared_index_feed.CAPTURE.writer,args=(writer_stop,),daemon=True,name='quantlab-shared-index-writer')
         index_writer.start()
+        constituent_writer=Thread(target=banknifty_constituents.CAPTURE.writer,args=(writer_stop,),daemon=True,name='quantlab-constituent-writer')
+        constituent_writer.start()
         index_enabled=True
+        constituent_enabled=True
         try:
             while not stop.is_set():
                 if not _armed():
@@ -786,6 +793,8 @@ def _run(stop: Event) -> None:
                     day = current_day
                     _session_rollover()
                 index_subscription_sent=False
+                constituent_subscription_sent=False
+                constituent_subscribed_at=0.0
                 subscribed_at=0.0
                 try:
                     contracts, excess = _discover()
@@ -818,6 +827,15 @@ def _run(stop: Event) -> None:
                                 index_subscription_sent=True
                                 subscribed_at=time.monotonic()
                                 socket.send(json.dumps(index_message))
+                            # Only spare slots, after all options and existing index tickers.
+                            constituent_message,member_info,member_state=banknifty_constituents.subscription_plan(
+                                len(contracts)+len(shared_index_requested),
+                                capture_allowed=constituent_enabled and banknifty_constituents.enabled())
+                            banknifty_constituents.CAPTURE.begin(session,member_info,member_state)
+                            if constituent_message and not stop.is_set():
+                                constituent_subscription_sent=True
+                                constituent_subscribed_at=time.monotonic()
+                                socket.send(json.dumps(constituent_message))
                             _set(state="subscribed_awaiting_quotes",connected=True,
                                 session_id=session)
                             failures = 0
@@ -839,7 +857,7 @@ def _run(stop: Event) -> None:
                                     continue
                                 received = _utc()
                                 try:
-                                    decoded = decode_quote_frames(payload,include_index=True)
+                                    decoded = decode_quote_frames(payload,include_index=True,include_equity=constituent_subscription_sent)
                                 except ValueError:
                                     with LOCK:
                                         STATUS["rejected_frames"]+=1
@@ -848,19 +866,26 @@ def _run(stop: Event) -> None:
                                 for event in decoded:
                                     if event['kind'] in ('index_tick','index_unsupported'):
                                         shared_index_feed.CAPTURE.submit(event,received,session)
+                                    elif event['kind']=='constituent_quote':
+                                        banknifty_constituents.CAPTURE.submit(event,received,session)
                                     else:
                                         _ingest(event,received,session)
                                         option_count+=1
                                 if option_count:
                                     _set(state="streaming_original_quotes")
                     shared_index_feed.CAPTURE.end(session)
+                    banknifty_constituents.CAPTURE.end(session)
                     _set(connected=False)
                 except Exception as exc:
                     if 'session' in locals():
                         shared_index_feed.CAPTURE.end(session)
+                        banknifty_constituents.CAPTURE.end(session)
                     # If the provider immediately rejects the mixed subscription,
                     # retry option-only for the remainder of this worker session.
-                    if locals().get('index_subscription_sent') and time.monotonic()-locals().get('subscribed_at',0)<30:
+                    if constituent_subscription_sent and time.monotonic()-constituent_subscribed_at<30:
+                        constituent_enabled=False
+                        banknifty_constituents.CAPTURE.disconnect('mixed_equity_subscription_rejected')
+                    elif locals().get('index_subscription_sent') and time.monotonic()-locals().get('subscribed_at',0)<30:
                         index_enabled=False
 
                     # Never log WebSocket URLs or token-bearing exception strings.
@@ -872,6 +897,7 @@ def _run(stop: Event) -> None:
         finally:
             writer_stop.set()
             index_writer.join(timeout=3)
+            constituent_writer.join(timeout=3)
             writer.join(timeout=15)
             if writer.is_alive():
                 _set(state="storage_flush_incomplete",
@@ -881,6 +907,7 @@ def _run(stop: Event) -> None:
     finally:
         if 'session' in locals():
             shared_index_feed.CAPTURE.end(session)
+            banknifty_constituents.CAPTURE.end(session)
         with LOCK:
             flushing = STATUS.get("state") == "storage_flush_incomplete"
         if flushing:
@@ -915,6 +942,7 @@ def resume_if_armed() -> None:
 
 def disarmed() -> None:
     shared_index_feed.CAPTURE.disconnect()
+    banknifty_constituents.CAPTURE.disconnect()
     STOP.set()
     _set(state="stopping",connected=False)
 
