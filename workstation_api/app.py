@@ -64,7 +64,7 @@ JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","predictive_option_research","forecast_depth_research","alpha_candidate_monitor","market_library_maintenance","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","predictive_option_research","forecast_depth_research","alpha_candidate_monitor","alpha_rolling_retraining","market_library_maintenance","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -5706,6 +5706,55 @@ def alpha_model_candidate_monitor(body:AlphaCandidateMonitorRequest):
     except (ValueError,OSError,TypeError,KeyError) as exc:
         raise HTTPException(400,str(exc)) from exc
     return _spawn("alpha_candidate_monitor",alpha_model_registry.monitor,**body.model_dump())
+
+
+class AlphaRetrainingConfig(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    enabled: bool=Field(strict=True)
+    horizon: Literal[0,5,10,15,30,60]=15
+    confirm_local_research: bool=False
+
+
+def _submit_alpha_retraining():
+    from . import alpha_retraining
+    # Automatic computations yield to user work and existing maintenance.
+    with JOBS_LOCK:
+        if any(task.get("status") in {"queued","running"} for task in JOBS.values()):
+            return None
+    try:
+        return _spawn("alpha_rolling_retraining",alpha_retraining.run)
+    except HTTPException:
+        return None
+
+
+@app.on_event("startup")
+def start_alpha_rolling_retraining():
+    from . import alpha_retraining
+    alpha_retraining.start(_submit_alpha_retraining)
+
+
+@app.on_event("shutdown")
+def stop_alpha_rolling_retraining():
+    from . import alpha_retraining
+    alpha_retraining.shutdown()
+
+
+@app.get("/api/market-intelligence/model-registry/retraining")
+def alpha_retraining_status():
+    from . import alpha_retraining
+    try:
+        return alpha_retraining.status()
+    except (ValueError,OSError,TypeError,KeyError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+@app.post("/api/market-intelligence/model-registry/retraining")
+def alpha_retraining_configure(body:AlphaRetrainingConfig):
+    from . import alpha_retraining
+    try:
+        return alpha_retraining.configure(**body.model_dump())
+    except (ValueError,OSError,TypeError,KeyError) as exc:
+        raise HTTPException(400,str(exc)) from exc
 
 
 class ForecastDepthResearchRequest(BaseModel):

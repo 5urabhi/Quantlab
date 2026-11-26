@@ -137,3 +137,29 @@ The original 1/5/10/30/60-minute rule ledger and its source policy hash are unch
 Successful predictive option training automatically stores supported logistic candidates as checksum-addressed portable JSON containing scaler and coefficients, calibration temperature, source policy, distinct training/calibration/reference-holdout dates and exact feature/label fingerprints. Portable predictions are checked against the original fitted estimator. No pickle or live approval. Historical versus prospective feature schemas are not interchangeable. The Alpha Research model registry allows receipt-based candidate monitoring on the first 20 recorded sessions strictly after the original holdout. Reuse the frozen coefficients and report Brier comparison; a deterioration greater than 0.05 is a descriptive flag, not a statistical guarantee. Missing support blocks the comparison. Automatic periodic retraining, independently verified empirical IV calibration, prediction-driven adaptive exit policies in live paper, verified broker margin and final prospective performance remain outstanding. No automatic model promotion or order execution.
 
 Tests: `test_predictive_option_research.py`, `test_forecast_depth_research.py`, `test_alpha_model_registry.py`, and the existing prospective ledger regressions. Offline fixtures demonstrate software logic, not actual market profitability.
+
+
+## Opt-in rolling candidate retraining
+
+Market Intelligence → Alpha Research → Model registry → Automatic rolling retraining
+allows a recurring local assessment for a selected horizon. It is disabled by default
+and requires explicit confirmation. The backend checks the latest completed IST
+recorded dates while the application is running, outside market priority hours.
+It yields to existing active research jobs and requires five new recorded dates
+after each completed attempt. The 60-date (30/10/20) or near-close 120-date
+(60/20/40) rolling window retains unsupported dates. No missing labels are filled;
+the existing original-source sample and minimum-support gates apply.
+
+Both standardized logistic candidates are trained on the training block,
+temperature-calibrated on the calibration block, and evaluated on the later
+reference holdout. The audit records class-prior Brier, both candidate metrics,
+session coverage, chronology and candidate IDs. Checksums identify portable,
+immutable artifacts. Use the frozen model monitoring control for strictly later
+20 recorded sessions. Overlapping rolling windows are NOT independent tests;
+the reference holdout is NOT genuinely forward evidence for an already deployed
+model. No automatic promotion, broker requests, or order placement are enabled.
+Failed evidence attempts back off before retrying. Disabling or changing the
+scope pauses further work at bounded session/model boundaries.
+
+Offline regression: `python -m unittest discover -s tests -p 'test_alpha_retraining.py' -v`.
+Actual training requires sufficient original receipts and dated weights.
