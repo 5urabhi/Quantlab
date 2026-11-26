@@ -312,3 +312,37 @@ def rule_accept(episode,scope):
         if not patterns.accepts(episode):
             return False
     return True
+
+
+def context_state(episode,scope):
+    """Compact frozen entry-time regime for the Q ablation.
+
+    Returns None for unavailable scopes. This is not a learned causal
+    market-state estimate or a continuously refreshed global feed.
+    """
+    vectors=episode.get("context_vectors",{})
+    groups=SCOPE_GROUPS[scope]
+    if not groups or any(g not in vectors for g in groups):
+        return None
+    direction=1 if episode["side"]=="CALL" else -1
+    states=[]
+    for group in groups:
+        v=vectors[group]
+        if group in ("constituents","bank_panel"):
+            states.append(1 if v[0]>=1/3 and v[1]>0 else -1 if v[0]<=-1/3 and v[1]<0 else 0)
+        elif group=="global":
+            # Balance global-equity and Asian groups instead of allowing
+            # multiple correlated US proxies to dominate the regime.
+            for category in ("global_equity","asia"):
+                changes=[direction*v[4*i+1] for i,k in enumerate(FACTORS)
+                         if m.FACTORS[k][1]==category and m.FACTORS[k][0].endswith("return") and not v[4*i+3]]
+                if not changes:
+                    return None
+                states.append(1 if sum(changes)>0 else -1 if sum(changes)<0 else 0)
+        elif group=="patterns":
+            from .candle_pattern_research import FEATURE_NAMES
+            body=direction*v[len(FEATURE_NAMES)]
+            states.append(1 if body>=.25 else -1 if body<=-.25 else 0)
+    if not states:
+        return None
+    return 1 if all(v>0 for v in states) else -1 if all(v<0 for v in states) else 0
