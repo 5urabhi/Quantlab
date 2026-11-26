@@ -1069,14 +1069,15 @@ try{
      required_sessions:60,recorded_sessions:2,training_dates:['2026-11-23','2026-11-24'],calibration_dates:[],holdout_dates:[],
      state:'awaiting_recorded_sessions',prospective_enabled:true,constituent_capture_enabled:true,note:'Synthetic readiness fixture'}
    const support={samples:0,sessions:0,classes:{'-1':0,'0':0,'1':0}}
-   const result={...readiness,evidence_counts:{ledger_rows:90,missing_index_features:30,missing_constituent_features:60,scored:0},
+   const result={...readiness,context_scope:'options',context_mode:'receipt',context_factor_coverage:{},evidence_counts:{ledger_rows:90,missing_index_features:30,missing_constituent_features:60,scored:0,base_scored:0,context_matched:0},
      session_audit:[],support:{training:support,calibration:support,holdout:support},methods:{},regimes:{},quantiles:null,
      walk_forward:[],run_id:null,warning:'Synthetic insufficient-evidence result'}
    const routes=[
      ['**'+source+'status',route=>route.fulfill({json:{enabled:true,connected:true,state:'recording',requested:{},saved:10,dropped:0,ignored_stale:0,sample_seconds:2,last_saved_utc:null,note:'fixture',storage:{state:'ok',last_error:null}}})],
      ['**'+source+'analysis?*',route=>route.fulfill({json:{as_of_utc:'2026-11-25T09:00:00Z',anchor_utc:'2026-11-25T08:55:00Z',session_ist:'2026-11-25',horizon_minutes:5,weight_snapshot:null,membership:{date:'2026-11-25',symbols:[]},rows:[],expected_members:0,observed_members:0,observed_weight_pct:null,complete_weighted_coverage:false,weighted_return_pct:null,weighted_breadth_pct:null,partial_contribution_pp:null,spot_anchor:null,blockers:[],note:'fixture'}})],
      ['**'+source+'alpha/readiness?*',route=>route.fulfill({json:readiness})],
-     ['**'+source+'alpha/research',route=>{assert.equal(route.request().postDataJSON().horizon,30);return route.fulfill({json:{job_id:'fixture-alpha'}})}],
+     ['**'+source+'alpha/context?*',route=>route.fulfill({json:{as_of_utc:'2026-11-25T09:00:00Z',mode:'receipt',catalog:[{factor:'SP500_CLOSE',kind:'daily_return',group:'global_equity',description:'S&P 500 close'}],factors:{SP500_CLOSE:{state:'unavailable'}},global_group_coverage:false,options:null,domestic:null,imported_rows:0,ambiguous_factors:[],warning:'Synthetic context fixture'}})],
+     ['**'+source+'alpha/research',route=>{const request=route.request().postDataJSON();assert.equal(request.horizon,30);assert.equal(request.scope,'options');assert.equal(request.mode,'receipt');return route.fulfill({json:{job_id:'fixture-alpha'}})}],
      ['**/api/jobs/fixture-alpha',route=>route.fulfill({json:{status:'complete',stage:'Output saved',percent:100,result}})]
    ]
    for(const [pattern,handler] of routes)await page.route(pattern,handler)
@@ -1087,8 +1088,11 @@ try{
      await workspace.getByRole('button',{name:'Alpha research',exact:true}).click()
      const alpha=workspace.getByRole('region',{name:'Constituent alpha research'})
      await alpha.getByText('2 / 60',{exact:true}).waitFor()
+     await alpha.getByText('BANKNIFTY paired option strikes',{exact:true}).waitFor()
+     await alpha.getByRole('combobox',{name:'Alpha research scope'}).selectOption('options')
      await alpha.getByRole('button',{name:'Audit evidence & run model comparison'}).click()
      await alpha.getByText(/No trained model or forecast produced/).waitFor()
+     await alpha.getByText('context matched',{exact:true}).waitFor()
      assert.equal(await alpha.getByRole('link',{name:'Download all matched holdout predictions (CSV)'}).count(),0)
      await shot('constituent-alpha-insufficient')
    }finally{for(const [pattern] of routes)await page.unroute(pattern)}
