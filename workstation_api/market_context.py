@@ -19,7 +19,7 @@ import sqlite3
 from . import advanced_options as ao, constituent_prospective as p
 from . import replay_storage, shared_market_data
 
-VERSION="market_context_v1"
+VERSION="market_context_v2"
 MAX_IMPORT_BYTES=5_000_000
 MAX_IMPORT_ROWS=50000
 MAX_READ_ROWS=350000
