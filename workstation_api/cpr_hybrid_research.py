@@ -496,7 +496,7 @@ def _ml_accept(model,means,ep):
     return float(pr["target"])>=getattr(model,"target_threshold",.50) and ev>0
 
 
-def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None,dates=None,max_attempts=MAX_DAILY_ATTEMPTS):
+def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None,dates=None,max_attempts=MAX_DAILY_ATTEMPTS,context_filter=None):
     balance=capital; peak=capital;dd=0.;gross_losses=0.;day=None;halted=False
     daily=defaultdict(lambda:{"conditional_net_inr":0.,"scored":0,"unresolved":0})
     counts=Counter();journal=[];net=0.;charges=0.;winners=0;targets=0
@@ -527,6 +527,8 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             state=ep["state"]
         elif ep["planned_funding"]>min(balance,risk_budget-gross_losses):
             state="remaining_budget_gate"
+        elif context_filter is not None and not context_filter(ep):
+            state="context_abstain"
         elif method.startswith("ml_") and not _ml_accept(model,means,ep):
             state="ml_abstain"
         if state:
@@ -558,6 +560,8 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             gross_losses+=max(0.,-value);peak=max(peak,balance);dd=max(dd,peak-balance)
             winners+=int(value>0);targets+=int(result["target_realized"])
             daily[day]["conditional_net_inr"]+=value;daily[day]["scored"]+=1
+        elif state=="entry_limit_exceeded":
+            active_until=ep.get("entry_utc",ep["decision_utc"])
         elif state in ("missing_entry","exit_censored"):
             halted=True
             daily[day]["unresolved"]+=1
