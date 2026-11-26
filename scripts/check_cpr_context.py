@@ -17,6 +17,8 @@ def main():
     p.add_argument("--from-date",default=(today-timedelta(days=100)).isoformat())
     p.add_argument("--to-date",default=today.isoformat(),help="End exclusive")
     p.add_argument("--context-batch",default="auto")
+    p.add_argument("--fixed-panel",action="store_true",help="Audit separate fixed major-bank panel")
+    p.add_argument("--hold",type=int,choices=r.HOLDS,default=60)
     p.add_argument("--mode",choices=("receipt","archive"),default="archive")
     p.add_argument("--fetch-fred",action="store_true",help="Opt in to local FRED/ALFRED vintage requests")
     p.add_argument("--fetch-alpaca",action="store_true",help="Opt in to historical US-listed ETF proxy requests")
@@ -41,7 +43,7 @@ def main():
             if not i:
                 continue
             prev=ordered[i-1]
-            rows,_=r._signals(day,index[day],prev,index[prev],frame=5,hold=60,
+            rows,_=r._signals(day,index[day],prev,index[prev],frame=5,hold=a.hold,
                                max_signals=375,entry_mode="regime_scan")
             signals.extend(rows)
         if a.fetch_fred:
@@ -60,15 +62,15 @@ def main():
             print("Membership source: unavailable",flush=True)
         print("Stored context inventory:",json.dumps(archive.inventory()),flush=True)
         print("Reserved sessions:",len(dates),"Opportunity anchors:",len(signals),flush=True)
-        audit=cx.attach(signals,mode=a.mode,batch_id=a.context_batch)
+        audit=cx.attach(signals,mode=a.mode,batch_id=a.context_batch,fixed_panel=a.fixed_panel)
         summary={k:v for k,v in audit.items() if k not in ("anchors","bank_feature_names",
             "global_feature_names","factor_receipt_sha256")}
         print("Context readiness:",json.dumps(summary),flush=True)
         split=[dates[:30],dates[30:40],dates[40:60]]
+        scopes=["constituents","global","combined"]+list(cx.PANEL_SCOPES if a.fixed_panel else ())
         print("Split matched coverage:",json.dumps({
-            name:{scope:sum(scope in s.get("context_vectors",{}) or (scope=="combined" and
-                 all(x in s.get("context_vectors",{}) for x in ("global","constituents")))
-                 for s in signals if s["session"] in set(ds)) for scope in ("constituents","global","combined")}
+            name:{scope:sum(all(x in s.get("context_vectors",{}) for x in cx.SCOPE_GROUPS[scope])
+                 for s in signals if s["session"] in set(ds)) for scope in scopes}
             for name,ds in zip(("train","validation","holdout"),split)}))
         print("No option replay, orders, or model promotion performed.")
         return 0
