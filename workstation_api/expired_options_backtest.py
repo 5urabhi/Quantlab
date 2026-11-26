@@ -299,7 +299,8 @@ def _save_cache(body: dict, payload: dict, *, wire_request=None) -> None:
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ValueError("Expired-options source is too large to cache")
-    envelope = {"source": "Dhan v2 /charts/rollingoption", "request": body,
+    source = "Dhan v2 /charts/rollingoption" if "drvOptionType" in body else "Dhan v2 /charts/intraday"
+    envelope = {"source": source, "request": body,
                 "sha256": sha256(raw).hexdigest(), "payload": payload,
                 "saved_utc": datetime.now(timezone.utc).isoformat()}
     if wire_request is not None:

@@ -59,6 +59,30 @@ class MarketInventoryTests(unittest.TestCase):
         self.assertEqual(row["evidence"],"receipt_count_csv_edges")
         self.assertEqual(data["external_requests"],0)
 
+    def test_legacy_flat_option_history_is_not_empty_rolling_history(self):
+        from datetime import date
+        from workstation_api import expired_options_backtest as exp
+        body=exp._active_body("62313",date(2026,11,6),date(2026,11,19))
+        payload={"timestamp":[1793933100,1793933160],"open":[59.7,65.7],
+                 "high":[66.,67.],"low":[59.,65.],"close":[65.,66.],"volume":[90,90]}
+        exp._save_cache(body,payload)
+        path=exp._cache_path(body)
+        item=json.loads(path.read_text())
+        self.assertEqual(item["source"],"Dhan v2 /charts/intraday")
+        # Reproduce the original mislabel without touching payload/digest.
+        item["source"]="Dhan v2 /charts/rollingoption"
+        path.write_text(json.dumps(item))
+        rolling=exp._request_body(date(2026,10,6),date(2026,10,7),"MONTH",0,"ATM","CALL")
+        exp._save_cache(rolling,{"data":{"ce":{"timestamp":[1791267900]}}})
+        report=inv.inventory()
+        sources={s["id"]:s for s in report["sources"]}
+        self.assertEqual(sources["active_option_history"]["count"],2)
+        self.assertEqual(sources["expired_options"]["count"],1)
+        rows=inv.inventory("active_option_history")["items"]
+        self.assertEqual(rows[0]["identity"],"NSE_FNO:62313")
+        self.assertEqual(exp._get_cached(body),payload)
+        self.assertEqual(json.loads(path.read_text())["source"],"Dhan v2 /charts/rollingoption")
+
     def test_missing_store_is_not_created_and_invalid_query_is_rejected(self):
         result=inv.inventory()
         self.assertFalse(inv.shared_market_data.database_path().exists())

@@ -17,7 +17,7 @@ const stateText=(s:string)=>(({stored:'Stored rows',receipt:'Saved receipts',emp
 const evidenceText=(s:string)=>(({stored_rows:'Stored database rows',receipt_count_csv_edges:'Receipt count + actual file endpoints',receipt_timestamps:'Saved response timestamps',archive_manifest:'Archive manifest'} as Record<string,string>)[s]||s)
 const sqlSources=new Set(['daily_closes','constituent_quotes','constituent_derivative_quote','constituent_derivative_oi','live_ticks','live_minute_bars','option_quote','option_oi','option_chain','live_depth_books','depth_features','sector_history','prospective_signals'])
 const categories=[
- {title:'Historical prices',ids:['daily_closes','raw_daily','raw_intraday','index_history','expired_options']},
+ {title:'Historical prices',ids:['daily_closes','raw_daily','raw_intraday','index_history','active_option_history','expired_options']},
  {title:'Recorded market activity',ids:['constituent_quotes','constituent_derivative_quote','constituent_derivative_oi','live_ticks','live_minute_bars','option_quote','option_oi','option_chain','live_depth_books','depth_features']},
  {title:'Derived research evidence',ids:['prospective_signals']},
  {title:'Reference & backups',ids:['sector_history','archives']},
