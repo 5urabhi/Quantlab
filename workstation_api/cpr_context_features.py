@@ -15,6 +15,15 @@ from . import historical_alpha as h, banknifty_constituents as bank
 from . import market_context as m, constituent_alpha as a, shared_market_data
 
 SCOPES=("technical","constituents","global","combined")
+PANEL_SYMBOLS=("AXISBANK","HDFCBANK","ICICIBANK","KOTAKBANK","SBIN")
+PANEL_SCOPES=("bank_panel","panel_global")
+PATTERN_SCOPES=("patterns","global_patterns","panel_global_patterns","combined_patterns")
+SCOPE_GROUPS={"technical":(),"constituents":("constituents",),"global":("global",),
+              "combined":("constituents","global"),"bank_panel":("bank_panel",),
+              "panel_global":("bank_panel","global"),"patterns":("patterns",),
+              "global_patterns":("global","patterns"),
+              "panel_global_patterns":("bank_panel","global","patterns"),
+              "combined_patterns":("constituents","global","patterns")}
 FACTORS=tuple(k for k,spec in m.FACTORS.items() if spec[1]!="participants")
 PARTICIPANTS=("FII_CASH_NET_CR","DII_CASH_NET_CR","FII_INDEX_FUT_NET","CLIENT_INDEX_FUT_NET")
 FACTORS+=PARTICIPANTS
@@ -90,6 +99,49 @@ def _load_banks(start,stop,batch_id):
     return stocks,intervals,left,right,meta
 
 
+def _load_fixed_panel(start,stop,batch_meta,*,enabled):
+    """Fixed major-bank watchlist, NOT historical index membership.
+    Resolve using the pinned earlier batch rather than today's index list.
+    Read the same canonical Dhan files beyond that batch's membership window.
+    """
+    meta={"state":"disabled","symbols":PANEL_SYMBOLS,"source_hashes":{},"failures":{}}
+    if not enabled:
+        return {},[],meta
+    if not batch_meta.get("batch_id"):
+        meta["state"]="no_pinned_security_mapping"
+        return {},[],meta
+    try:
+        raw=h.dw._load_batch(batch_meta["batch_id"])
+        left=date.fromisoformat(raw["from_date"])
+        covered=date.fromisoformat(raw["historical_index"]["covered_through"])
+        if not left<=start<=covered or not set(PANEL_SYMBOLS)<=set(h._member_set(raw["historical_index"]["intervals"],start.isoformat())):
+            raise ValueError("Fixed panel must be documented before the study starts")
+        # _load_banks already validates this pinned membership and its hash;
+        # validate exact mapping here too, independently of later outcomes.
+        mapping={s:[v["id"] for v in raw["items"] if v.get("pit_symbol")==s] for s in PANEL_SYMBOLS}
+        if any(len(v)!=1 or not bank.IDENTITY.fullmatch(v[0]) for v in mapping.values()) or len({v[0] for v in mapping.values()})!=len(PANEL_SYMBOLS):
+            raise ValueError("Invalid fixed panel identity mapping")
+    except (OSError,ValueError,KeyError,TypeError):
+        meta["state"]="no_validated_panel_mapping";return {},[],meta
+    meta.update(state="loaded",mapping_batch=batch_meta["batch_id"],selection_as_of=start.isoformat(),
+                identities={s:v[0] for s,v in mapping.items()})
+    stocks={};budget=[h.MAX_TOTAL]
+    for s,ids in mapping.items():
+        try:
+            sig=h.pq._source_signature(ids[0])
+            if not sig:
+                raise ValueError("Missing original panel minute receipt")
+            file,_=h.pq._raw(ids[0])
+            stocks[s]=h._read_file(file,sig["source_sha256"],start-timedelta(days=35),stop,budget)
+            meta["source_hashes"][s]=sig["source_sha256"]
+        except (ValueError,OSError,KeyError,TypeError,OverflowError,csv.Error) as exc:
+            meta["failures"][s]=type(exc).__name__
+    # These intervals are the fixed panel research definition, NOT NSE data.
+    intervals=[{"symbol":s,"valid_from":start.isoformat(),"valid_to":None} for s in PANEL_SYMBOLS]
+    meta["observed_sessions_by_symbol"]={s:len(v) for s,v in stocks.items()}
+    return stocks,intervals,meta
+
+
 def _bank_vector(signal,stocks,intervals,prior_dates,weights):
     day=signal["session"];minute=signal["minute"]
     members=h._member_set(intervals,day)
@@ -149,7 +201,7 @@ def _global_vector(timelines,signal):
                                     "factors":available}
 
 
-def attach(signals,*,mode="receipt",batch_id="auto"):
+def attach(signals,*,mode="receipt",batch_id="auto",fixed_panel=False):
     if mode not in ("receipt","archive","off"):
         raise ValueError("Invalid CPR context availability mode")
     if mode=="off" or not signals:
@@ -158,6 +210,8 @@ def attach(signals,*,mode="receipt",batch_id="auto"):
     dates=sorted({s["session"] for s in unique.values()})
     start=date.fromisoformat(dates[0]);stop=date.fromisoformat(dates[-1])+timedelta(days=1)
     stocks,intervals,left,right,bank_meta=_load_banks(start,stop,batch_id)
+    panel,panel_intervals,panel_meta=_load_fixed_panel(start,stop,bank_meta,enabled=fixed_panel)
+    panel_dates=sorted({d for series in panel.values() for d in series})
     timelines={};global_meta={"rows":0,"ambiguous_factors":[],"state":"no_context_database"}
     if shared_market_data.database_path().is_file():
         try:
@@ -189,6 +243,15 @@ def attach(signals,*,mode="receipt",batch_id="auto"):
         if bvec is not None:
             vectors["constituents"]=bvec
             coverage["constituents"]+=1
+        if fixed_panel and panel_intervals:
+            pv,pdetail=_bank_vector(s,panel,panel_intervals,[d for d in panel_dates if d<day],None)
+            if pv is not None:
+                vectors["bank_panel"]=pv
+                coverage["bank_panel"]+=1
+                if gvec is not None:
+                    coverage["panel_global"]+=1
+        else:
+            pdetail={"state":"disabled_or_missing_panel"}
         if gvec is not None:
             vectors["global"]=gvec
             coverage["global"]+=1
@@ -197,7 +260,7 @@ def attach(signals,*,mode="receipt",batch_id="auto"):
         for k,v in gdetail["factors"].items():
             factor_coverage[k]+=1
             factor_hashes.update((v["receipt_sha256"],v["prior_receipt_sha256"]))
-        record={"vectors":vectors,"constituents":bdetail,"global":gdetail}
+        record={"vectors":vectors,"constituents":bdetail,"global":gdetail,"bank_panel":pdetail}
         audit["|".join(map(str,key))]=record
     # Update all signal copies, not just the deduplicated objects.
     for s in signals:
@@ -205,7 +268,7 @@ def attach(signals,*,mode="receipt",batch_id="auto"):
         s["context_vectors"]=audit[key]["vectors"]
     return {"state":"audited","mode":mode,"unique_anchors":len(unique),"coverage":dict(coverage),
             "factor_coverage":dict(factor_coverage),"factor_receipt_sha256":sorted(factor_hashes),
-            "bank_sources":bank_meta,"global_sources":global_meta,"anchors":audit,
+            "bank_sources":bank_meta,"fixed_panel_sources":panel_meta,"global_sources":global_meta,"anchors":audit,
             "constituent_state_counts":dict(bank_states),"global_state_counts":dict(global_states),
             "missing_constituent_anchor_counts":dict(missing_members),
             "bank_feature_names":BANK_NAMES,"global_feature_names":GLOBAL_NAMES,
@@ -214,8 +277,7 @@ def attach(signals,*,mode="receipt",batch_id="auto"):
 
 
 def view(episodes,scope):
-    groups={"technical":(),"constituents":("constituents",),"global":("global",),
-            "combined":("constituents","global")}[scope]
+    groups=SCOPE_GROUPS[scope]
     out=[]
     for e in episodes:
         vectors=e.get("context_vectors",{})
@@ -229,11 +291,12 @@ def view(episodes,scope):
 def rule_accept(episode,scope):
     """Fixed direction-confirmation hypotheses, never a fitted causal claim."""
     vectors=episode.get("context_vectors",{})
-    if scope in ("constituents","combined"):
-        b=vectors.get("constituents")
+    groups=SCOPE_GROUPS[scope]
+    if "constituents" in groups or "bank_panel" in groups:
+        b=vectors.get("constituents" if "constituents" in groups else "bank_panel")
         if b is None or b[0]<1/3 or b[1]<=0 or b[3]<=0 or (not b[8] and b[6]<=0):
             return False
-    if scope in ("global","combined"):
+    if "global" in groups:
         g=vectors.get("global")
         if g is None:
             return False
@@ -244,4 +307,8 @@ def rule_accept(episode,scope):
                      and not g[4*i+3]]
             if not changes or sum(changes)<=0:
                 return False
+    if "patterns" in groups:
+        from . import candle_pattern_research as patterns
+        if not patterns.accepts(episode):
+            return False
     return True
