@@ -343,11 +343,14 @@ def chain(expiry: str, *, force_refresh: bool = False, sleep=time.sleep) -> dict
         delay = MIN_CHAIN_INTERVAL_SECONDS - (time.monotonic() - _LAST_VENDOR_CALL)
         if delay > 0:
             sleep(delay)
+        request_started=time.monotonic()
         response, _ = dhan_option_chain._json_http(
             dhan_option_chain.CHAIN_ENDPOINT, token=token, client_id=client,
             body={"UnderlyingScrip": 25, "UnderlyingSeg": "IDX_I", "Expiry": expiry})
         _LAST_VENDOR_CALL = time.monotonic()
+        request_elapsed_ms=round(1000*(time.monotonic()-request_started),3)
         source = _normalize(response, expiry, _clock(), _contracts())
+        source["rest_request_elapsed_ms"]=request_elapsed_ms
         try:
             storage_result = _save_snapshot(source)
         except (OSError, sqlite3.Error):
