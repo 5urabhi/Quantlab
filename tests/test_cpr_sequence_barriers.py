@@ -155,3 +155,67 @@ class SequenceBarrierTests(TestCase):
         self.assertEqual(rows[0]["iv"],23.)
         segment["iv"]=["bad"]
         self.assertIsNone(exp._normalize({"data":{"ce":segment}},body)[0]["iv"])
+
+
+    def test_dynamic_state_changes_only_after_completed_five_minute_anchor(self):
+        from workstation_api import cpr_dynamic_context as dynamic
+        signal={"side":"CALL","_dynamic_states":{19:1,24:-1,34:0}}
+        self.assertIsNone(dynamic.state_at(signal,18))
+        self.assertEqual(dynamic.state_at(signal,23),1)
+        self.assertEqual(dynamic.state_at(signal,24),-1)
+        self.assertIsNone(dynamic.state_at(signal,29))
+        self.assertEqual(dynamic.state_at({**signal,"side":"PUT"},24),1)
+        step={"mark_return":.02,"elapsed":6,"trend":.01,"drawdown":.0,"dynamic_regime":-1}
+        self.assertEqual(r._q_key(step,r.DYNAMIC_SCOPE,None),r._key(step)+(-1,))
+        self.assertIsNone(r._q_key({**step,"dynamic_regime":None},r.DYNAMIC_SCOPE,None))
+
+    def test_dense_q_weighting_matches_hierarchical_mean(self):
+        a=(1,1,1,1);bstate=(2,1,1,1)
+        transitions={a:[("d1",1,100,1.,bstate,0.,False)]*10+
+            [("d1",1,200,3.,bstate,0.,False),("d1",2,100,4.,None,2.,True),
+             ("d2",1,100,7.,None,6.,True)],
+             bstate:[("d1",1,100,2.,None,1.,True)]}
+        q=r._dense_q_iteration(transitions,2)
+        # d1 anchor mean = (2+4)/2=3; d2 = 7, equal session mean=5.
+        self.assertAlmostEqual(q[a][0],5.)
+        # d1 continuation mean (2+2)/2, d2=6.
+        self.assertAlmostEqual(q[a][1],4.)
+
+    def test_bank_outcomes_separate_direction_and_divergence(self):
+        day="2026-10-06"
+        ix={day:bars()}
+        panel={s:{day:bars()} for s in cx.PANEL_SYMBOLS}
+        ix[day][19]=(60000.,60000.,60000.,60000.,100.)
+        ix[day][20]=(60000.,60100.,60000.,60100.,100.)
+        for history in panel.values():
+            history[day][19]=(60000.,60000.,60000.,60000.,100.)
+            history[day][20]=(60000.,60050.,60000.,60050.,100.)
+        result=b.bank_outcomes(ix,panel,day,19,1)
+        self.assertEqual(result,[2]*5+[0]*5)
+        del panel["HDFCBANK"][day][20]
+        self.assertIsNone(b.bank_outcomes(ix,panel,day,19,1))
+
+    def test_saved_summary_reads_only_bounded_known_report_files(self):
+        from workstation_api import candle_report_summary as report
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        import json
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            self.assertEqual(report.latest(root)["state"],"no_saved_report")
+            (root/"candle_barriers_secret.json").write_text('{"secret":"ignore"}')
+            expected={"version":"sequence_first_passage_v1","horizons":{},"training_dates":["2026-08-01"],
+                      "validation_dates":["2026-08-02"],"holdout_dates":["2026-08-03"],"bank_target_state":"disabled"}
+            path=root/("candle_barriers_"+"a"*32+".json")
+            path.write_text(json.dumps(expected))
+            out=report.latest(root)
+            self.assertEqual(out["state"],"available")
+            self.assertEqual(out["holdout_dates"],expected["holdout_dates"])
+            self.assertEqual(out["report_name"],path.name)
+
+    def test_funding_diagnostic_does_not_treat_missing_as_affordable(self):
+        rows=[{"session":"a","minimum_funding_inr":8000},{"session":"a","minimum_funding_inr":15000},
+              {"session":"b","minimum_funding_inr":None}]
+        result=r._funding_diagnostic(rows,12000,17000)
+        self.assertEqual(result["missing_or_unqualified"],1)
+        self.assertEqual(next(x["anchors"] for x in result["signal_time_funding_sensitivity"] if x["budget_inr"]==12000),1)
