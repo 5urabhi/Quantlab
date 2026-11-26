@@ -2,7 +2,7 @@ import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {
   Activity, ArrowRight, BarChart3, Beaker, BookOpen, Check,
   CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Clock3, Database,
-  FileText, Gauge, LoaderCircle,
+  Gauge, LoaderCircle,
   LockKeyhole, Menu, Play, RefreshCw, Settings2,
   ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp
 } from 'lucide-react'
@@ -259,6 +259,7 @@ function App(){
   const [selectedRun,setSelectedRun]=useState('')
   const [focusedModelRun,setFocusedModelRun]=useState('')
   const [detail,setDetail]=useState<Detail|null>(null)
+  const [detailRevision,setDetailRevision]=useState(0)
   const [config,setConfig]=useState<RunConfig>(defaultConfig)
   const [job,setJob]=useState<Job|null>(null)
   const [busy,setBusy]=useState(false)
@@ -299,7 +300,7 @@ function App(){
     let active=true
     request<Detail>('/runs/'+encodeURIComponent(selectedRun)).then(d=>{if(active)setDetail(d)}).catch(e=>{if(active){setDetail(null);notify(errorMessage(e),true)}})
     return()=>{active=false}
-  },[selectedRun])
+  },[selectedRun,detailRevision])
   useEffect(()=>{
     if(!job||!['queued','running'].includes(job.status))return
     const timer=setTimeout(()=>{
@@ -308,6 +309,7 @@ function App(){
         if(j.status==='complete'){
           notify(['experiment','frozen_evaluation'].includes(j.kind)?'Research run completed; saved to Results Studio.':'Operation completed.')
           void refresh()
+          if(j.kind==='reports')setDetailRevision(n=>n+1)
           if(['experiment','frozen_evaluation'].includes(j.kind) && typeof j.result==='string'){setSelectedRun(j.result);setTab(j.kind==='frozen_evaluation'?'history':'overview')}
         }
         if(j.status==='error')notify(j.error||'Job failed',true)
