@@ -1,5 +1,6 @@
 import {useEffect,useState} from 'react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
+import HistoricalAlphaResearch from './HistoricalAlphaResearch'
 
 type Scope='none'|'options'|'global'|'participants'|'events'|'combined'|'all'
 type Mode='receipt'|'archive'
@@ -60,6 +61,7 @@ export default function ConstituentAlphaResearch({onOpenSetup,onOpenLedger,onOpe
  {Object.keys(result.evidence_counts).some(k=>k.startsWith('bank_'))&&<div className="bci-note"><strong>Constituent evidence blockers</strong><p>{Object.entries(result.evidence_counts).filter(([k])=>k.startsWith('bank_')).map(([k,v])=>label(k.replace(/^bank_/,''))+': '+v).join(' · ')}</p></div>}
  {result.audit_id&&<a className="ws-button" download href={base+'/audit/'+encodeURIComponent(result.audit_id)}>Download source coverage audit (CSV)</a>}
  <p className="bci-note">{result.warning}</p></>}
+ <HistoricalAlphaResearch/>
  <p className="bci-note">No prediction is automatically promoted to live paper trading. Option pricing, IV calibration, portfolio sizing, and actual fee-adjusted instrument validation are separate next steps.</p>
  </section>
 }
