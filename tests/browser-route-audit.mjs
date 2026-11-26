@@ -52,7 +52,7 @@ try{
     // Populated operational views: safe local reads only, no provider calls.
     await page.goto(base+'#/data',{waitUntil:'domcontentloaded'})
     const inventory=page.getByRole('region',{name:'Unified saved market data inventory'})
-    await inventory.getByRole('button',{name:'Get missing data'}).click()
+    await inventory.getByRole('button',{name:'Manual repair & inspection'}).click()
     const repair=page.getByRole('region',{name:'Repair missing Bank Nifty trading data'})
     await repair.getByRole('heading',{name:'Complete your Bank Nifty trading data'}).waitFor()
     assert.equal(new URL(page.url()).hash,'#/data','Gap repair must remain in the library')
