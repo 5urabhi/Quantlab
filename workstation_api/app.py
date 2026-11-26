@@ -4888,3 +4888,18 @@ def reviewed_session_coverage(body:ReviewedSessionCoverageRequest):
         return session_coverage.audit(**body.model_dump())
     except (ValueError,TypeError,KeyError,OverflowError) as exc:
         raise HTTPException(400,str(exc)) from exc
+
+
+class ArchivedConstituentWeightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    receipt_id: str = Field(pattern=r"^intake_[0-9a-f]{16}$")
+    filename: str = Field(min_length=1,max_length=160)
+    snapshot_date: str = Field(min_length=10,max_length=10)
+    confirm_reviewed: bool = False
+
+@app.post("/api/trading-cockpit/constituents/weights/import-receipt")
+def import_archived_constituent_weights(body:ArchivedConstituentWeightRequest):
+    try:
+        return banknifty_constituents.import_archived_weights(**body.model_dump())
+    except (ValueError,TypeError,KeyError,OSError,AttributeError) as exc:
+        raise HTTPException(400,"Reviewed original weight intake could not be imported: "+job_safety.scrub(exc)[:250]) from exc
