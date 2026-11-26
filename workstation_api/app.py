@@ -5488,7 +5488,7 @@ from . import constituent_alpha, context_alpha, market_context, context_feeds, c
 
 class ConstituentAlphaRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
-    horizon: Literal[5,10,30,60]=30
+    horizon: Literal[0,5,10,15,30,60]=30
     scope: Literal["none","options","global","participants","events","combined","all"]="none"
     mode: Literal["receipt","archive"]="receipt"
     cohort: Literal["original","registered"]="original"
@@ -5634,7 +5634,7 @@ def sync_market_context_feeds(body:ContextFeedSyncRequest):
 class ContextCohortRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
     scope: Literal["options","global","participants","events","combined","all"]
-    horizon: Literal[5,10,30,60]=30
+    horizon: Literal[0,5,10,15,30,60]=30
     confirm: bool=False
 
 
