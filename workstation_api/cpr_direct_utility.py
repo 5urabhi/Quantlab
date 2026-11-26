@@ -17,6 +17,7 @@ MIN_VAL_TRADES=10
 MIN_VAL_DAYS=5
 THRESHOLDS=(0.,.005,.01)
 MAX_BAD_PROBABILITY=.10
+TRIGGERS=("target_first","stop_first","other_exit","unverified_or_delayed")
 FEATURE_NAMES=("observed_10m_fraction","observed_last_3","log_median_volume","premium_move_5m_fraction","premium_move_missing")
 
 
@@ -52,7 +53,9 @@ def target(r,ep):
     # Delayed observations are retained for conditional reporting but penalized
     # at full planned funding in this separate adverse scenario.
     stress=realized if good else min(-1.,realized) if realized is not None else -1.
-    return {"timely":good,"bad":int(not good),"observed_net_per_planned_funding":realized,
+    reason=result.get("reason")
+    trigger="unverified_or_delayed" if not good else "target_first" if reason=="target" else "stop_first" if reason=="stop" else "other_exit"
+    return {"timely":good,"bad":int(not good),"trigger":trigger,"observed_net_per_planned_funding":realized,
             "timely_net_per_planned_funding":realized if good else None,"stress_utility":stress}
 
 
@@ -78,9 +81,14 @@ def _predict(bundle,rows):
     conditional=bundle["conditional"].predict(x)
     risk=bundle["failure"]
     prob=risk.predict_proba(x)[:,list(risk.classes_).index(1)] if 1 in risk.classes_ else np.zeros(len(x))
+    trigger=bundle["trigger"]
+    raw=trigger.predict_proba(x)
+    ordered=np.zeros((len(x),len(TRIGGERS)))
+    ordered[:,[TRIGGERS.index(c) for c in trigger.classes_]]=raw
     return [{"expected_stress_utility":float(ev),"tree_disagreement_p20":float(lo),
-             "expected_timely_net_return":float(c),"predicted_execution_failure":float(p)}
-            for ev,lo,c,p in zip(expected,q,conditional,prob)]
+             "expected_timely_net_return":float(c),"predicted_execution_failure":float(p),
+             "trigger_probabilities":dict(zip(TRIGGERS,map(float,t)))}
+            for ev,lo,c,p,t in zip(expected,q,conditional,prob,ordered)]
 
 
 def _fit(r,episodes,regime):
@@ -97,12 +105,14 @@ def _fit(r,episodes,regime):
     common=dict(n_estimators=80,max_depth=4,min_samples_leaf=15,random_state=72,n_jobs=1)
     stress=RandomForestRegressor(**common).fit(X,[y["stress_utility"] for _,y in rows],sample_weight=weights)
     failure=RandomForestClassifier(**common).fit(X,[y["bad"] for _,y in rows],sample_weight=weights)
+    trigger=RandomForestClassifier(**common).fit(X,[y["trigger"] for _,y in rows],sample_weight=weights)
     conditional=RandomForestRegressor(**common).fit([_design(ep,regime) for ep,_ in timely],
                     [y["timely_net_per_planned_funding"] for _,y in timely],sample_weight=r._anchor_weights(timely))
     info.update(stress_prior=float(np.average([y["stress_utility"] for _,y in rows],weights=weights)),
                 failure_prior=float(np.average([y["bad"] for _,y in rows],weights=weights)),
                 conditional_prior=float(np.average([y["timely_net_per_planned_funding"] for _,y in timely],weights=r._anchor_weights(timely))))
-    return {"stress":stress,"failure":failure,"conditional":conditional,"regime":regime},info
+    info["trigger_prior"]={k:float(np.average([y["trigger"]==k for _,y in rows],weights=weights)) for k in TRIGGERS}
+    return {"stress":stress,"failure":failure,"conditional":conditional,"trigger":trigger,"regime":regime},info
 
 
 def _metrics(r,bundle,info,episodes):
@@ -123,6 +133,13 @@ def _metrics(r,bundle,info,episodes):
          "failure_brier":float(np.average((fail-bad)**2,weights=w)),
          "failure_prior_brier":float(np.average((info["failure_prior"]-bad)**2,weights=w)),
          "mean_failure_forecast":float(np.average(fail,weights=w)),"observed_failure_fraction":float(np.average(bad,weights=w))}
+    truth=np.asarray([[float(y["trigger"]==k) for k in TRIGGERS] for _,y in rows])
+    trig=np.asarray([[p["trigger_probabilities"][k] for k in TRIGGERS] for p in pred])
+    prior=np.asarray([info["trigger_prior"][k] for k in TRIGGERS])
+    out.update(trigger_brier=float(np.average(np.sum((trig-truth)**2,axis=1),weights=w)),
+        trigger_prior_brier=float(np.average(np.sum((prior-truth)**2,axis=1),weights=w)),
+        trigger_mean_forecast=dict(zip(TRIGGERS,map(float,np.average(trig,axis=0,weights=w)))),
+        trigger_observed=dict(zip(TRIGGERS,map(float,np.average(truth,axis=0,weights=w)))))
     if timely:
         ret=np.asarray([rows[i][1]["timely_net_per_planned_funding"] for i in timely])
         f=np.asarray([pred[i]["expected_timely_net_return"] for i in timely])
