@@ -1,6 +1,7 @@
 import {useEffect,useState} from 'react'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import ResearchPlot from './ResearchPlots'
+import ConstituentCalibration from './ConstituentCalibration'
 
 type Method='pressure'|'volume_pressure'|'ema_rsi'
 type MethodStats={calls:number;abstained:number;unavailable:number;scored:number;correct:number;accuracy:number|null;scored_coverage:number|null;confusion:Record<string,number>}
@@ -78,5 +79,6 @@ export default function ConstituentProspective(){
    {report.truncated&&<p className="bci-note">Report is limited to the latest returned decisions; not lifetime performance.</p>}
    <p className="bci-note">{report.note}</p>
   </>}
+  <ConstituentCalibration key={horizon} horizon={horizon}/>
  </section>
 }
