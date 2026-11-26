@@ -5609,6 +5609,9 @@ class ContextFeedConfigRequest(BaseModel):
     enabled: bool=False
     fred: bool=True
     news: bool=True
+    alpaca: bool=False
+    alpaca_feed: Literal["iex","sip"]="iex"
+    alpaca_intraday: bool=False
     mappings: list[dict[str,str]]=Field(default_factory=list,max_length=8)
     confirm_reviewed: bool=False
 
