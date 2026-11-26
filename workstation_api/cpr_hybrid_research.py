@@ -13,7 +13,7 @@ import json
 from . import historical_alpha as h, predictive_option_research as p
 from . import alpha_retraining, liquidity_spreads as fees
 
-VERSION = "cpr_ml_offline_q_v7"
+VERSION = "cpr_ml_offline_q_v8"
 SQUAREOFF_MINUTE = 365  # 15:20 IST, minutes from 09:15
 LAST_SESSION_MINUTE = 374  # last regular minute open, 15:29 IST
 ENTRY_MODES = ("crossover", "daily_scan", "regime_scan")
@@ -27,6 +27,9 @@ EMERGENCY_STOP = -.15
 SOURCE_STATES = ("missing_signal_quotes", "no_qualified_observed_contract",
                  "no_affordable_observed_contract")
 SPLITS = (30, 10, 20)
+SESSION_SPLITS = {60:SPLITS,90:(45,15,30),120:(60,20,40)}
+MAX_STUDY_DAYS = 200
+DENSE_TRAIN_INTERVAL = 15
 TARGET = .10
 STOP = -.05
 CLASSES = ("target", "stop", "other")
@@ -418,6 +421,7 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
     supplies counterfactual hold/exit marks under the same price proxy.
     """
     transitions=defaultdict(list)
+    day_balance=any(ep.get("learning_day_balance",False) for ep in episodes)
     for ep in episodes:
         if ep["state"]!="entered" or not _full_path(ep):
             continue
@@ -460,20 +464,49 @@ def _fit_q(episodes, *, sweeps=20, stop_mark=STOP,context_scope=None):
             by_anchor=defaultdict(list)
             for (day,minute,strike),v in per_episode.items():
                 by_anchor[(day,minute)].append((sum(x[0] for x in v)/len(v),sum(x[1] for x in v)/len(v)))
-            averages=[(sum(x[0] for x in v)/len(v),sum(x[1] for x in v)/len(v))
-                      for v in by_anchor.values()]
+            anchor_values={key:(sum(x[0] for x in v)/len(v),sum(x[1] for x in v)/len(v))
+                           for key,v in by_anchor.items()}
+            if day_balance:
+                by_day=defaultdict(list)
+                for (day,_),value in anchor_values.items():
+                    by_day[day].append(value)
+                averages=[(sum(x[0] for x in v)/len(v),sum(x[1] for x in v)/len(v)) for v in by_day.values()]
+            else:
+                averages=list(anchor_values.values())
             new[k]=(sum(x[0] for x in averages)/len(averages),
                     sum(x[1] for x in averages)/len(averages))
         q=new
     return q,{"supported_states":len(q),"observed_states":len(transitions),
               "training_transitions":sum(len(v) for v in transitions.values()),
               "sweeps":sweeps,"stop_mark":stop_mark,"entry_context_scope":context_scope,
-              "supported_unique_anchors":len({(x[0],x[1]) for rows in supported.values() for x in rows})}
+              "supported_unique_anchors":len({(x[0],x[1]) for rows in supported.values() for x in rows}),
+              "day_balanced":day_balance}
 
 
 def _anchor_weights(rows):
     counts=Counter((e["session"],e["minute"]) for e,_ in rows)
-    return [1./counts[(e["session"],e["minute"])] for e,_ in rows]
+    if not rows:
+        return []
+    balanced=any(e.get("learning_day_balance",False) for e,_ in rows)
+    if not balanced:
+        return [1./counts[(e["session"],e["minute"])] for e,_ in rows]
+    # Equal total weight per session, then per anchor, then per candidate.
+    # Preserve total anchor mass for comparability of regularization and
+    # prior pseudo-counts. This weighting does NOT make observations independent.
+    daily=Counter(day for day,_ in counts)
+    scale=len(counts)/len(daily)
+    return [scale/(daily[e["session"]]*counts[(e["session"],e["minute"])]) for e,_ in rows]
+
+
+def _dense_anchors(rows):
+    """At most one earliest scanner opportunity per fixed 15-minute bin.
+    Training only; overlapping EOD trajectories remain clustered by day.
+    No future labels, prices or availability used in sampling.
+    """
+    bins={}
+    for s in sorted(rows,key=lambda v:(v["session"],v["minute"],v["side"])):
+        bins.setdefault((s["session"],s["minute"]//DENSE_TRAIN_INTERVAL),s)
+    return list(bins.values())
 
 
 def _fit_ml(train,validation):
@@ -658,13 +691,19 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
 def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         lot_size=30,max_lots=1,wings=3,premium_penalty_bps=25.,entry_mode="crossover",
         context_mode="off",context_batch="auto",rank_entries=False,
-        pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,progress=None):
+        pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,
+        sessions=60,dense_training=False,progress=None):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
     if not alpha_retraining.safe_window(now):
         raise ValueError("Run CPR research outside Indian market priority hours")
-    if not 0<(stop-start).days<=120 or stop>now.astimezone(h.IST).date():
-        raise ValueError("Select up to 120 calendar days, completed sessions, end exclusive")
+    if not 0<(stop-start).days<=MAX_STUDY_DAYS or stop>now.astimezone(h.IST).date():
+        raise ValueError("Select up to 200 calendar days, completed sessions, end exclusive")
+    if type(sessions) is not int or sessions not in SESSION_SPLITS:
+        raise ValueError("Select 60, 90 or 120 observed sessions")
+    if dense_training and entry_mode not in ("daily_scan","regime_scan"):
+        raise ValueError("Dense training requires daily_scan or regime_scan")
+    ntrain,nval,ntest=SESSION_SPLITS[sessions]
     if context_mode not in ("off","receipt","archive"):
         raise ValueError("Unsupported context availability mode")
     if fixed_panel and context_mode=="off":
@@ -680,8 +719,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     if progress:progress(1,"Verifying original BANKNIFTY minute receipts")
     index,index_hashes,failures=h.shared_index_sources(start-timedelta(days=7),stop,[h.MAX_TOTAL])
     ordered=sorted(index)
-    dates=[d for d in ordered if from_date<=d<to_date and date.fromisoformat(d).weekday()<5][-sum(SPLITS):]
-    splits=[dates[:30],dates[30:40],dates[40:60]]
+    dates=[d for d in ordered if from_date<=d<to_date and date.fromisoformat(d).weekday()<5][-sessions:]
+    splits=[dates[:ntrain],dates[ntrain:ntrain+nval],dates[ntrain+nval:ntrain+nval+ntest]]
     signals=[];learning_grid=[];train_crossovers=[];counts=Counter();day_audit={}
     for day in dates:
         i=ordered.index(day)
@@ -691,8 +730,13 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         prior=ordered[i-1]
         rows,status=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,
                              max_signals=375 if entry_mode!="crossover" else 3,entry_mode=entry_mode)
+        if dense_training:
+            for row in rows:
+                row["learning_day_balance"]=True
         signals.extend(rows)
-        if day in splits[0]:
+        if day in splits[0] and dense_training:
+            train_crossovers.extend(_dense_anchors(rows))
+        elif day in splits[0]:
             extra,_=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,max_signals=5,learning_grid=True)
             learning_grid.extend(extra)
             base,_=_signals(day,index[day],prior,index[prior],frame=frame,hold=hold,max_signals=3)
@@ -740,6 +784,9 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "hold_minutes":hold if hold else None,"hold_until_squareoff":hold==0,
              "squareoff_ist":"15:20","last_retry_ist":"15:29","entry_mode":entry_mode,"scan_interval_minutes":SCAN_MINUTES,
              "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,
+             "requested_sessions":sessions,"split_sizes":SESSION_SPLITS[sessions],
+             "dense_training":dense_training,"learning_day_balance":dense_training,
+             "dense_train_interval_minutes":DENSE_TRAIN_INTERVAL if dense_training else None,
              "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,
              "pattern_research":pattern_research,"fixed_panel":fixed_panel,"context_q":context_q,"debit_spreads":debit_spreads,"full_premium_and_fee_budget_inr":risk_budget,
              "historical_lot_size_assumed":lot_size,"max_lots":max_lots,"strike_wings":wings,
@@ -747,7 +794,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "experimental_emergency_stop_mark":EMERGENCY_STOP,"max_learning_strikes_per_anchor":MAX_LEARNING_STRIKES,
              "trailing_activation_net_return":TRAIL_ACTIVATION,"trailing_gap_return_points":TRAIL_GAP,
              "volatility_trailing_gap_range":[.02,.06]},
-             "recorded_index_sessions":len(dates),"required_sessions":sum(SPLITS),
+             "recorded_index_sessions":len(dates),"required_sessions":sessions,
              "training_dates":splits[0],"validation_dates":splits[1],"holdout_dates":splits[2],
              "signal_counts":dict(counts),"day_audit":day_audit,"episode_states":dict(Counter(e["state"] for e in episodes)),
              "split_support":{name:{"signals":len(rows),"entered":sum(e["state"]=="entered" for e in rows),
@@ -764,9 +811,10 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
              "context_coverage":{k:v for k,v in context_audit.items() if k!="anchors"},
              "ranked_entry_research":{},"candle_patterns":pattern_report,"debit_spread_research":{},
              "methods":{},"state":"descriptive_only_insufficient_sessions","broker_orders_enabled":False,
-             "live_model_promoted":False,"warning":WARNING}
+             "live_model_promoted":False,"warning":WARNING,
+             "learning_warning":"Overlapping candidate paths are not independent. Dense mode balances sessions; previously inspected dates remain exploratory."}
     journal=[]
-    if len(dates)==sum(SPLITS):
+    if len(dates)==sessions:
         train,val,test=parts
         if progress:progress(65,"Fitting train-only ML and offline Q values; validation chooses ML")
         model,means,ml_info=_fit_ml(broad_train,broad_val)
