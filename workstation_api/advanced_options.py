@@ -101,7 +101,14 @@ def implied_iv(price, spot, strike, years, rate, side, dividend):
 
 def _read_database():
     path = shared_market_data.database_path().resolve()
-    return sqlite3.connect(path.as_uri()+"?mode=ro", uri=True, timeout=2)
+    db=sqlite3.connect(path.as_uri()+"?mode=ro", uri=True, timeout=8)
+    try:
+        db.execute("PRAGMA busy_timeout=8000")
+        db.execute("PRAGMA query_only=ON")
+        return db
+    except Exception:
+        db.close()
+        raise
 
 
 def _read_json(raw):
