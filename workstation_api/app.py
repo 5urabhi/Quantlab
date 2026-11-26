@@ -5431,8 +5431,15 @@ class ConstituentAlphaRequest(BaseModel):
 
 
 @app.get("/api/trading-cockpit/constituents/alpha/readiness")
-def constituent_alpha_readiness(horizon:int=30):
+def constituent_alpha_readiness(horizon:int=30,scope:str="none",cohort:Literal["original","registered"]="original"):
     try:
+        if cohort=="registered":
+            from . import context_cohort
+            registration=context_cohort.get(scope,horizon)
+            if registration is None:
+                raise ValueError("Register the forward cohort before inspecting its readiness")
+            return {**constituent_alpha.readiness(horizon,start_session=registration["start_session"]),
+                    "cohort_registration":registration}
         return constituent_alpha.readiness(horizon)
     except (ValueError,OSError,sqlite3.Error,RuntimeError) as exc:
         bad(exc)
