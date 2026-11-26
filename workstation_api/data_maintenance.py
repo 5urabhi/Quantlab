@@ -17,9 +17,9 @@ from . import (service, market_patterns as mp, cockpit_sources, dhan_workspace a
                options_history_sync as options, recorder_storage, job_safety)
 
 IST=ZoneInfo("Asia/Kolkata")
-DEFAULT={"enabled":False,"index":True,"constituents":True,"options":True,
+DEFAULT={"enabled":False,"index":True,"constituents":True,"options":True,"bank_panel":False,
          "index_days":365,"constituent_days":240,"option_days":365,"wings":3}
-VERSION="automatic_market_library_v1"
+VERSION="automatic_market_library_v2"
 INDEX_IDENTITIES=("INDEX:BANKNIFTY","INDEX:NIFTY50")
 MAX_INDEX_WINDOWS=5
 MAX_OPTION_REQUESTS=112
@@ -61,17 +61,19 @@ def _write(name,value):
         temp.unlink(missing_ok=True)
 
 def validate(cfg):
+    if isinstance(cfg,dict) and set(cfg)==set(DEFAULT)-{"bank_panel"}:
+        cfg={**cfg,"bank_panel":False}
     if not isinstance(cfg,dict) or set(cfg)!=set(DEFAULT):
         raise ValueError("Invalid automatic maintenance settings")
-    for k in ("enabled","index","constituents","options"):
+    for k in ("enabled","index","constituents","options","bank_panel"):
         if type(cfg[k]) is not bool:
             raise ValueError("Maintenance switches must be boolean")
     for k,lo,hi in (("index_days",30,365),("constituent_days",30,240),("option_days",30,365),("wings",0,5)):
         if type(cfg[k]) is not int or not lo<=cfg[k]<=hi:
             raise ValueError("Maintenance scope outside supported bound: "+k)
-    if cfg["enabled"] and not any(cfg[k] for k in ("index","constituents","options")):
+    if cfg["enabled"] and not any(cfg[k] for k in ("index","constituents","options","bank_panel")):
         raise ValueError("Enable at least one source scope")
-    if cfg["enabled"] and cfg["constituents"] and not cfg["index"]:
+    if cfg["enabled"] and (cfg["constituents"] or cfg["bank_panel"]) and not cfg["index"]:
         raise ValueError("Constituent coverage repair requires the index history scope")
     return dict(cfg)
 
@@ -339,6 +341,58 @@ def _equity_pass(cfg,state,now,stop,progress,should_stop):
             "batch_counts":outcome["counts"],"observed_member_session_gaps":gaps,"unavailable_sources":unavailable,
             "members":observed,"repair_dates_attempted":sum(map(len,repairs.values()))}
 
+def _panel_pass(cfg,state,now,stop,progress,should_stop):
+    """Optional, independently labeled five-bank watchlist.
+    Same canonical original-price files and serialized acquisition lane.
+    No fabricated dated-index membership and no new provider credentials.
+    """
+    from .cpr_context_features import PANEL_SYMBOLS
+    start=_local(now).date()-timedelta(days=cfg["constituent_days"])
+    rows=dw._choose("watchlist",[],list(PANEL_SYMBOLS))
+    identities=sorted((r["symbol"],r["id"]) for r in rows)
+    if set(s for s,_ in identities)!=set(PANEL_SYMBOLS):
+        return {"state":"blocked","reason":"Exact fixed-panel security identities not resolved"}
+    desired=[start.isoformat(),stop.isoformat(),[list(x) for x in identities]]
+    raw=None
+    if state.get("panel_batch_scope")==desired and state.get("panel_batch_id"):
+        try:
+            candidate=dw._load_batch(state["panel_batch_id"])
+            if (candidate.get("maintenance_panel_owned") and
+                candidate["from_date"]==desired[0] and candidate["to_date"]==desired[1] and
+                sorted((r["symbol"],r["id"]) for r in candidate["items"])==identities):
+                raw=candidate
+        except (OSError,ValueError,KeyError):
+            pass
+    if raw is None:
+        summary=dw.create_batch(selection="selected",ids=[key for _,key in identities],tickers=[],
+             from_date=desired[0],to_date=desired[1],interval=1,acknowledged_bulk=False,
+             include_index_spot=False)
+        raw=dw._load_batch(summary["id"])
+        raw["maintenance_owned"]=True
+        raw["maintenance_panel_owned"]=True
+        dw._save_batch(raw)
+        state.update(panel_batch_id=raw["id"],panel_batch_scope=desired);_save_state(state)
+    # Reuse the minute-coverage audit with the fixed research definition
+    # in memory only. The persisted manifest remains a selected watchlist.
+    audit={**raw,"historical_index":{"intervals":[{"symbol":s,"valid_from":desired[0],"valid_to":None}
+               for s,_ in identities]},"items":[{**r,"pit_symbol":r["symbol"]} for r in raw["items"]]}
+    index=mp._history("INDEX:BANKNIFTY",_local(now).date())["days"]
+    _,repairs=_equity_audit(audit,start,stop,index,state,now,choose_repairs=True)
+    for identity,days in repairs.items():
+        for day in days:_mark(state,identity+"|"+day,_now())
+    if should_stop():
+        return {"state":"paused","batch_id":raw["id"]}
+    outcome=dw.run_batch(raw["id"],cancel_event=_Stop(should_stop,progress),repair_dates_by_identity=repairs)
+    observed,_=_equity_audit(audit,start,stop,index,state,now,choose_repairs=False)
+    gaps=sum(x["missing_or_partial_sessions"] or 0 for x in observed.values())
+    unavailable=sum(x["complete_sessions"] is None for x in observed.values())
+    return {"state":"partial" if gaps or unavailable or outcome["status"]!="completed" or outcome["errors"] or not observed else "checked",
+            "batch_id":raw["id"],"symbols":list(PANEL_SYMBOLS),"requested_end_exclusive":desired[1],
+            "actual_end_exclusive":desired[1],"observed_member_session_gaps":gaps,"unavailable_sources":unavailable,
+            "members":observed,"repair_dates_attempted":sum(map(len,repairs.values())),
+            "warning":"Fixed research watchlist, not verified BANKNIFTY membership or index attribution."}
+
+
 def run(*,progress=None,now=None):
     now=now or _now();cfg=config()
     if not cfg["enabled"] or not safe_window(now):
@@ -372,6 +426,13 @@ def run(*,progress=None,now=None):
             except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
                 if progress:progress(49,"Constituent history remains partially unavailable")
                 report["sources"]["constituents"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
+            _save_state(state)
+        if cfg["bank_panel"] and not should_stop():
+            if progress:progress(49,"Checking fixed major-bank research panel")
+            try:
+                report["sources"]["bank_panel"]=_panel_pass(cfg,state,now,stop,progress,should_stop)
+            except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
+                report["sources"]["bank_panel"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
             _save_state(state)
         if cfg["options"] and not should_stop():
             if progress:progress(55,"Checking saved expired-option request windows")
