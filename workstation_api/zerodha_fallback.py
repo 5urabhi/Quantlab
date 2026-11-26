@@ -30,6 +30,7 @@ import time
 from . import compatible_sources, dhan_workspace, service, shared_market_data
 
 KITE = "https://api.kite.trade"
+BASKET_MARGIN_PATH = "/margins/basket?consider_positions=false"
 LOGIN = "https://kite.zerodha.com/connect/login"
 IST = ZoneInfo("Asia/Kolkata")
 MAX_RESPONSE = 20 * 1024 * 1024
@@ -167,13 +168,14 @@ def _request(path: str, *, method: str = "GET",
         raise ValueError("Invalid fixed-host Kite endpoint")
     if method not in ("GET", "POST"):
         raise ValueError("Kite fallback is read-only; unsupported HTTP method")
-    if method == "POST" and path not in ("/session/token","/charges/orders"):
-        raise ValueError("Kite read-only provider: only login and virtual charge calculation may POST")
-    if path == "/charges/orders":
-        if method != "POST" or form is not None or not need_auth or not isinstance(json_body,list) or not 1 <= len(json_body) <= 50:
-            raise ValueError("Invalid read-only virtual charge calculation")
+    if method == "POST" and path not in ("/session/token","/charges/orders",BASKET_MARGIN_PATH):
+        raise ValueError("Kite read-only provider: only login, virtual charges and standalone basket-margin calculation may POST")
+    if path in ("/charges/orders",BASKET_MARGIN_PATH):
+        max_items = 2 if path == BASKET_MARGIN_PATH else 50
+        if method != "POST" or form is not None or not need_auth or not isinstance(json_body,list) or not 1 <= len(json_body) <= max_items:
+            raise ValueError("Invalid read-only calculation request")
     elif json_body is not None:
-        raise ValueError("JSON requests are permitted only for virtual charge calculation")
+        raise ValueError("JSON requests are permitted only for read-only calculations")
     key = _api_key()
     token = _access_token()
     if not KEY.fullmatch(key) or (need_auth and not TOKEN.fullmatch(token)):
