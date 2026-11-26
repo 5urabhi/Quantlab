@@ -57,14 +57,14 @@ MAX_ACTIVE_LOCAL_JOBS = 6  # Shared admission bound; general writes remain seria
 
 
 def _job_lane(kind):
-    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation"} else "research"
+    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research"} else "research"
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -1796,7 +1796,12 @@ class AutomaticPaperRequest(BaseModel):
     max_loss: float=Field(default=4250,ge=1,le=1e7,allow_inf_nan=False)
     target_net: float=Field(default=100,ge=1,le=1e6,allow_inf_nan=False)
     max_lots: int=Field(default=3,ge=1,le=10,strict=True)
-    hold_seconds: Literal[60,120,300,600]=300
+    hold_seconds: Literal[60,120,300,600,900,1800]=900
+    exit_mode: Literal["fixed","target_stop","trailing","signal_reversal","adaptive"]="adaptive"
+    stop_net: float=Field(default=250,ge=1,le=1e7,allow_inf_nan=False)
+    trail_net: float=Field(default=50,ge=1,le=1e7,allow_inf_nan=False)
+    liquidity_grace_seconds: int=Field(default=20,ge=5,le=120,strict=True)
+    slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
     broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
 
 
@@ -1819,6 +1824,38 @@ def configure_automatic_paper(body:AutomaticPaperRequest):
 def pause_automatic_paper():
     from . import auto_paper_engine
     return auto_paper_engine.pause()
+
+
+class DynamicStrategyRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    day: str=Field(min_length=10,max_length=10)
+    capital: float=Field(default=17000,ge=1000,le=1e7,allow_inf_nan=False)
+    max_loss: float=Field(default=4250,ge=1,le=1e7,allow_inf_nan=False)
+    target_net: float=Field(default=100,ge=1,le=1e6,allow_inf_nan=False)
+    stop_net: float=Field(default=250,ge=1,le=1e7,allow_inf_nan=False)
+    trail_net: float=Field(default=50,ge=1,le=1e7,allow_inf_nan=False)
+    max_lots: int=Field(default=3,ge=1,le=10,strict=True)
+    hold_seconds: Literal[60,120,300,600,900,1800]=1800
+    liquidity_grace_seconds: int=Field(default=20,ge=5,le=120,strict=True)
+    slippage_bps: float=Field(default=0,ge=0,le=500,allow_inf_nan=False)
+    broker_profile: Literal["zerodha","zerodha_debit_balance","dhan"]="zerodha"
+    include_spreads: bool=Field(default=True,strict=True)
+
+
+@app.post("/api/trading-cockpit/strategy-research")
+def start_dynamic_strategy_research(body:DynamicStrategyRequest):
+    from . import dynamic_strategy_research
+    return _spawn("dynamic_strategy_research",dynamic_strategy_research.run,**body.model_dump())
+
+
+@app.get("/api/trading-cockpit/strategy-research/results/{run_id}")
+def download_dynamic_strategy_research(run_id:str):
+    from . import dynamic_strategy_research
+    try:
+        path=dynamic_strategy_research.result_path(run_id)
+    except (ValueError,FileNotFoundError) as exc:
+        raise HTTPException(404,str(exc)) from exc
+    return FileResponse(path,filename="quantlab_strategy_"+run_id+".csv",media_type="text/csv")
 
 
 class SpreadReadinessRequest(BaseModel):
