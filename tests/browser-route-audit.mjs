@@ -50,6 +50,17 @@ try{
       }finally{page.off('pageerror',error);page.off('response',response)}
     }
     // Populated operational views: safe local reads only, no provider calls.
+    await page.goto(base+'#/data',{waitUntil:'domcontentloaded'})
+    const inventory=page.getByRole('region',{name:'Unified saved market data inventory'})
+    await inventory.getByRole('button',{name:'Get missing data'}).click()
+    const repair=page.getByRole('region',{name:'Repair missing Bank Nifty trading data'})
+    await repair.getByRole('heading',{name:'Complete your Bank Nifty trading data'}).waitFor()
+    assert.equal(new URL(page.url()).hash,'#/data','Gap repair must remain in the library')
+    await repair.getByRole('button',{name:'Download missing expired-option history'}).waitFor({timeout:30000})
+    assert.equal(await repair.getByRole('button',{name:'Download missing expired-option history'}).isDisabled(),true,'Provider acquisition requires explicit consent')
+    await page.screenshot({path:path.join(dir,mode+'-banknifty-data-repair.png'),fullPage:false})
+    await inventory.getByRole('button',{name:'Close data repair'}).click()
+    await repair.waitFor({state:'hidden'})
     await page.goto(base+'#/overview',{waitUntil:'domcontentloaded'})
     const home=page.getByRole('region',{name:'Workstation operations overview'})
     await home.waitFor()

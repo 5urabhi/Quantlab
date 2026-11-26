@@ -776,7 +776,7 @@ export default function MarketDataWorkspace({initialPage='get',activePage,integr
       </section>}
     </div>}
     {page==='datasets'&&<>
-      {integrated&&<Suspense fallback={<p role="status">Loading saved market coverage…</p>}><MarketInventory onAcquire={()=>{setStage(0);goPage('get')}} onReplay={onReplay} onModels={()=>{onSelectDataset('dhan_shared');onOpenModels()}}/></Suspense>}
+      {integrated&&<Suspense fallback={<p role="status">Loading saved market coverage…</p>}><MarketInventory onAcquire={()=>{setSelection('banknifty_pit');setFromDate(new Date(Date.now()-365*86400000).toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'}));setThroughDate(new Date(Date.now()-86400000).toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'}));setInterval('1');setModelId('');setModelDataset('');setAllowPartial(false);setConfirmBulk(false);setStage(1);goPage('get')}} onReplay={onReplay} onModels={()=>{onSelectDataset('dhan_shared');onOpenModels()}}/></Suspense>}
       <section className="mdw-card">
       <div className="mdw-section-top"><div><span className="mdw-kicker">ONE MARKET LIBRARY</span>
         <h3>{integrated?'Equity universes and sectors':"Everything you've collected"}</h3>
