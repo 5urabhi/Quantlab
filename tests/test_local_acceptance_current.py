@@ -12,16 +12,18 @@ class LocalAcceptanceCurrentTests(TestCase):
              mock.patch.object(local_acceptance, "_build_react") as build, \
              mock.patch.object(local_acceptance, "_doctor", return_value="not_ready") as doctor:
             local_acceptance.main([])
-        run.assert_called_once_with(include_streamlit=False, include_legacy=False)
+        run.assert_called_once_with(include_legacy=False)
         build.assert_called_once_with()
         doctor.assert_called_once_with("data/research_v1", "config/research_multifactor.json")
 
-    def test_legacy_streamlit_is_explicitly_opt_in(self):
+    def test_retired_streamlit_flag_is_rejected_before_any_work(self):
         with mock.patch.object(local_acceptance, "run_complete_acceptance") as run, \
              mock.patch.object(local_acceptance, "_build_react"), \
              mock.patch.object(local_acceptance, "_doctor"):
-            local_acceptance.main(["--legacy-streamlit"])
-        run.assert_called_once_with(include_streamlit=True, include_legacy=False)
+            with self.assertRaises(SystemExit) as caught:
+                local_acceptance.main(["--legacy-streamlit"])
+            self.assertEqual(caught.exception.code, 2)
+        run.assert_not_called()
 
     def test_missing_original_market_sources_are_not_software_failure(self):
         status = SimpleNamespace(

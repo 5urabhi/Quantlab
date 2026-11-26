@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local React/Vite + Python research workstation. Default is NOT Streamlit.
+# Local React/Vite + Python research workstation.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
@@ -108,9 +108,6 @@ case "${1:-workstation}" in
     shift
     exec bash scripts/research_packages.sh "$@"
     ;;
-  legacy-streamlit)
-    exec bash scripts/start.sh research
-    ;;
   setup|check|evaluate)
     exec bash scripts/start.sh "$1"
     ;;
@@ -135,7 +132,6 @@ bash run.sh audit-models --dataset dhan_shared  Audit shared Dhan only
 bash run.sh audit-models --preflight-only  Check inputs without running models
 bash run.sh cpr-research  CPR/EMA baseline, ML filter and offline-Q exits\nbash run.sh validate-trading  Off-hours saved-source trading validation; no broker requests\nbash run.sh archive-market --day YYYY-MM-DD  Verified non-destructive market archive (off-hours)
 bash run.sh archive-market --verify PATH  Verify archive checksums and row counts
-bash run.sh legacy-streamlit Launch preserved legacy Streamlit UI if needed
 HELP
     ;;
   *)

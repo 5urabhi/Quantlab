@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 # Ubuntu local-first one-command bootstrap and launcher.
-# Usage: bash scripts/start.sh [research|evaluate|check|web|both|setup]
+# Usage: bash scripts/start.sh [workstation|evaluate|check|setup]
 # No Redis, Docker, global npm packages, GitHub Actions or Dhan token needed.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-# Keep in-repository Python packages importable from Streamlit and helper scripts.
+# Keep in-repository Python packages importable from API and helper scripts.
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
-MODE="${1:-research}"
+MODE="${1:-workstation}"
 case "$MODE" in
-  web|research|both|check|setup|evaluate) ;;
+  workstation|web|research|both)
+    exec bash scripts/run_workstation.sh
+    ;;
+  check|setup|evaluate) ;;
   -h|--help|help)
     cat <<'HELP'
-Usage: bash scripts/start.sh [web|research|both|check|evaluate|setup]
+Usage: bash scripts/start.sh [workstation|check|evaluate|setup]
 
-  research  DEFAULT: install Python dependencies and start your local research lab.
-  web       Optional: install Node/Vite, build and start the presentation website.
-  both      Install both stacks; launch both apps together.
+  workstation  DEFAULT: current React/Vite and FastAPI workstation.
+  research, web, both  Compatibility aliases for the same workstation.
   check     Current React build, Python/integration and math checks, source doctor.
   evaluate  Run current checks, synthetic research and visual reports,
             writing artifacts to results/. No servers.
@@ -60,7 +62,6 @@ install_apt_missing() {
 info "Inspecting operating-system dependencies"
 install_apt_missing git curl ca-certificates xz-utils
 
-if [ "$MODE" != web ]; then
 install_apt_missing python3 python3-venv python3-pip
 
 PYTHON=python3
@@ -83,7 +84,7 @@ PY_TAG="$(.venv/bin/python -c 'import sys;print(f"{sys.version_info.major}.{sys.
 REQ_MARKER=".local-state/python-requirements.sha256"
 EXPECTED_PY="$REQ_HASH:$PY_TAG"
 CURRENT_PY="$(cat "$REQ_MARKER" 2>/dev/null || true)"
-if [ "$CURRENT_PY" != "$EXPECTED_PY" ] || ! .venv/bin/python -c 'import numpy,pandas,scipy,streamlit,plotly,reportlab,dotenv' >/dev/null 2>&1; then
+if [ "$CURRENT_PY" != "$EXPECTED_PY" ] || ! .venv/bin/python -c 'import numpy,pandas,scipy,plotly,reportlab,dotenv,fastapi,uvicorn' >/dev/null 2>&1; then
   info "Installing/updating local Python packages"
   .venv/bin/python -m pip install -r requirements.txt
   printf '%s\n' "$EXPECTED_PY" > "$REQ_MARKER"
@@ -97,15 +98,6 @@ if [ ! -f .env ] && [ -f .env.example ]; then
   info "Created private .env template (Dhan token optional; edit with nano .env)"
 fi
 if [ -f .env ]; then chmod 600 .env; fi
-fi
-
-# Research-only operation must not depend on npm, Vite or the web build.
-if [ "$MODE" = research ]; then
-  info "Opening YOUR quantitative research lab on http://127.0.0.1:8501"
-  info "Sidebar: Index Research -> enable synthetic example -> Run experiment"
-  info "Press Ctrl+C to stop"
-  exec .venv/bin/streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501
-fi
 
 # Use one compatible Node/npm pair for local builds. Node alone is not
 # sufficient: npm 12.2 requires Node >=22.22.2, while user's 22.22.1 warns.
@@ -150,7 +142,7 @@ info "Checking frontend TypeScript and production Vite build"
 npm run build
 
 if [ "$MODE" = setup ]; then
-  info "Setup and build complete. Run: bash scripts/start.sh"
+  info "Setup and build complete. Run: bash run.sh"
   exit 0
 fi
 
@@ -177,26 +169,3 @@ if [ "$MODE" = check ] || [ "$MODE" = evaluate ]; then
   exit 0
 fi
 
-STREAMLIT_PID=""
-stop_all() {
-  if [ -n "$STREAMLIT_PID" ]; then
-    kill "$STREAMLIT_PID" 2>/dev/null || true
-    wait "$STREAMLIT_PID" 2>/dev/null || true
-  fi
-}
-trap stop_all EXIT INT TERM
-
-if [ "$MODE" = research ] || [ "$MODE" = both ]; then
-  info "Starting local Streamlit research laboratory on http://127.0.0.1:8501"
-  if [ "$MODE" = research ]; then
-    exec .venv/bin/streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501
-  fi
-  .venv/bin/streamlit run dashboard/app.py --server.address 127.0.0.1 --server.port 8501 &
-  STREAMLIT_PID=$!
-  sleep 2
-  kill -0 "$STREAMLIT_PID" 2>/dev/null || fail "Streamlit failed to start; check terminal output above."
-fi
-
-info "Starting React/Vite research website (normally http://127.0.0.1:5173)"
-info "Press Ctrl+C to stop"
-npm run dev -- --port 5173 --strictPort
