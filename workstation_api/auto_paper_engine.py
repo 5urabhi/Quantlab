@@ -28,7 +28,7 @@ WORKER=None
 HEALTH={"state":"idle","last_cycle_utc":None,"last_error":None}
 WARNING=("Paper research only. Each lane has a separate hypothetical budget. Scenario scores "
     "are not forecasts, and original quote-depth replay is not an actual execution. "
-    "The modeled session loss allowance is reduced by scored losses and not replenished by wins. "
+    "The modeled session loss allowance is reduced by scored losses and not replenished by wins. Entries are sampled from fresh observations, at most one attempt per lane per minute; monitoring is approximately every five seconds. "
     "Target/stop marks are sampled, exits can be late or unobservable, and actual loss "
     "and short-leg margin are not certified. No broker orders are enabled.")
 
@@ -210,7 +210,8 @@ def _monitor(row,now,*,update=None,mark_lookup=None,signal_lookup=None):
     if now>=close:
         update(row,"exit_censored",exit_reason="monitoring_missed_session_close",finished_utc=paper._iso(now))
         return
-    mark=(mark_lookup or _mark)(row,now)
+    deadline=replay.ao.timestamp(row["hold_deadline_utc"])
+    mark=(mark_lookup or _mark)(row,now) if now<deadline else None
     signal=None
     if cfg.get("exit_mode") in ("signal_reversal","adaptive") and now<replay.ao.timestamp(row["hold_deadline_utc"]):
         if signal_lookup:
@@ -324,7 +325,7 @@ def cycle(now=None):
             return
         # Selection stress horizon is capped at five minutes; the exit cap
         # is not a forecast horizon. Reconsider failed gates on fresh ticks.
-        report,decisions=select.select(now,{**cfg,"hold_seconds":min(300,cfg["hold_seconds"])},lane_caps=budgets)
+        report,decisions=select.select(now,{**cfg,"hold_seconds":300},lane_caps=budgets)
         decision=now if fixed else paper._now()
         day=decision.astimezone(paper.IST).date().isoformat()
         minute=paper._iso(decision.replace(second=0,microsecond=0))
