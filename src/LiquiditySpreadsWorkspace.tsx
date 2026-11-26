@@ -6,12 +6,13 @@ import SpreadOpportunityScanner,{type BrokerProfile} from './SpreadOpportunitySc
 import MultiLegSpreadStudio from './MultiLegSpreadStudio'
 import SpreadSpeedStudy from './SpreadSpeedStudy'
 import BatchSpeedResearch from './BatchSpeedResearch'
+import DynamicStrategyResearch from './DynamicStrategyResearch'
 import AutomaticPaperPanel from './AutomaticPaperPanel'
 import OptionFeedStorageHealth from './OptionFeedStorageHealth'
 import './liquidity-spreads.css'
 import ResearchPlot from './ResearchPlots'
 
-type PageTab='live'|'automatic'|'multileg'|'speed'|'batch'|'execution'|'history'|'lab'
+type PageTab='live'|'automatic'|'multileg'|'speed'|'batch'|'strategy'|'execution'|'history'|'lab'
 type Row={
   identity:string;expiry:string;strike:number;option_type:'CE'|'PE'
   lot_size:number;coverage_role:string;best_bid:number|null
@@ -107,10 +108,11 @@ const todayIST=()=>new Intl.DateTimeFormat('sv-SE',{
 }).format(new Date())
 const tabs:{id:PageTab;name:string;caption:string;icon:typeof Activity}[]=[
   {id:'live',name:'Live Spread Monitor',caption:'Bid–ask capture & automatic ranking',icon:Activity},
-  {id:'automatic',name:'Automatic Paper Decisions',caption:'Auto-select contracts, sizes & outcomes',icon:TrendingUp},
+  {id:'automatic',name:'Live Paper Trading',caption:'Automatic Paper Decisions · dynamic exits',icon:TrendingUp},
+  {id:'strategy',name:'Strategy Research',caption:'Chronological entry and dynamic exit comparison',icon:BarChart3},
   {id:'multileg',name:'Multi-Leg Option Spreads',caption:'Auto discover, build, payoff',icon:Layers3},
   {id:'speed',name:'Speed & Viability',caption:'1s–5m saved-depth replay',icon:Activity},
-  {id:'batch',name:'Batch Research',caption:'All eligible contracts, lots & verticals',icon:BarChart3},
+  {id:'batch',name:'Batch Research',caption:'Execution Research · fixed-clock comparisons',icon:BarChart3},
   {id:'execution',name:'Execution Simulator',caption:'Depth-weighted cost estimates',icon:SlidersHorizontal},
   {id:'history',name:'Historical Spread Analysis',caption:'Original saved book timeline',icon:BarChart3},
   {id:'lab',name:'Spread Strategy Lab',caption:'Unexecuted research bounds',icon:TrendingUp},
@@ -329,6 +331,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
         onChange={e=>setDay(e.target.value)}/></label>
     </div>
     {tab==='automatic'&&<AutomaticPaperPanel/>}
+    {tab==='strategy'&&<section role="tabpanel" aria-label="Strategy Research"><DynamicStrategyResearch day={day} brokerProfile={brokerProfile}/></section>}
     {tab==='live'&&<div className="lq-section" role="tabpanel" aria-label="Live Spread Monitor">
       <SpreadOpportunityScanner day={day} expiry={expiry} side={side}
         search={search} brokerProfile={brokerProfile}
@@ -439,7 +442,7 @@ export default function LiquiditySpreadsWorkspace({onOpenRecording,onOpenReplay}
       </div>
       {speedManual&&<label>Exact recorded option <select aria-label="Speed study contract" value={speedSelected} onChange={e=>setSelected(e.target.value)}><option value="">Choose source contract</option>{filtered.map(r=><option value={r.identity} key={r.identity}>{num(r.strike)} {r.option_type} · {r.expiry} · {r.identity}</option>)}</select></label>}
       <SpreadSpeedStudy key={day+brokerProfile} day={day} identities={speedManual&&speedSelected?[speedSelected]:[]} strategy="LONG_OPTION" initialLots={lots} brokerProfile={brokerProfile} automatic={!speedManual} expiryFilter={expiry} sideFilter={side} searchFilter={search}/>
-      <p className="lq-hint">Compare all eligible contracts and quantities under <button type="button" className="ws-button" onClick={()=>setTab('batch')}>Batch Research</button>. For continuous paper entries, open Automatic Paper Decisions. To test a specific basket, use Multi-Leg Option Spreads → Analyze.</p>
+      <p className="lq-hint">Compare all eligible contracts and quantities under <button type="button" className="ws-button" onClick={()=>setTab('batch')}>Batch Research</button>. For dynamic historical strategy tests, open Strategy Research. For continuous paper entries, open Live Paper Trading. To test a specific basket, use Multi-Leg Option Spreads → Analyze.</p>
     </section>}
     {tab==='batch'&&<section role="tabpanel" aria-label="Batch Research"><BatchSpeedResearch day={day} expiry={expiry} side={side} search={search} brokerProfile={brokerProfile}/></section>}
     {tab==='execution'&&<section className="lq-section" role="tabpanel"
