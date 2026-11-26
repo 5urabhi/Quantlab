@@ -19,11 +19,16 @@ from . import (service, market_patterns as mp, cockpit_sources, dhan_workspace a
 IST=ZoneInfo("Asia/Kolkata")
 DEFAULT={"enabled":False,"index":True,"constituents":True,"options":True,"bank_panel":False,
          "index_days":365,"constituent_days":240,"option_days":365,"wings":3}
-VERSION="automatic_market_library_v3"
+VERSION="automatic_market_library_v4"
 INDEX_IDENTITIES=("INDEX:BANKNIFTY","INDEX:NIFTY50")
 MAX_INDEX_WINDOWS=5
 MAX_OPTION_REQUESTS=112
 MAX_EQUITY_REPAIRS=2
+LIVE_INDEX_WINDOWS=1
+LIVE_OPTION_REQUESTS=32
+LIVE_EQUITY_REPAIRS=1
+LIVE_RECORDER_DROP_COOLDOWN=timedelta(minutes=2)
+LIVE_QUOTE_QUEUE_FRACTION=.10
 REPAIR_COOLDOWN=timedelta(days=7)
 RETRY=timedelta(hours=4)
 PRODUCTIVE_RETRY=timedelta(minutes=2)
@@ -120,8 +125,40 @@ def _local(now):
 
 def safe_window(now):
     local=_local(now)
-    # Quiet period; does not claim a weekday is an exchange session.
+    # Quiet period for intensive work, NOT a prohibition on historical
+    # acquisition. Does not claim a weekday is an exchange session.
     return local.weekday()>=5 or local.time().replace(tzinfo=None)<clock(8,30) or local.time().replace(tzinfo=None)>=clock(16)
+
+def _recent_pressure(stamp,now):
+    if not stamp:
+        return False
+    try:
+        age=now-datetime.fromisoformat(stamp)
+        return timedelta(0)<=age<LIVE_RECORDER_DROP_COOLDOWN
+    except (TypeError,ValueError):
+        return False
+
+
+def live_pressure(now):
+    """Cheap process-local storage/queue pressure check, not a fill or
+    latency guarantee. Historical work yields at request boundaries.
+    No historical scan of quote events and no provider calls.
+    """
+    if safe_window(now):
+        return None
+    from . import full_option_feed as feed
+    if feed.WRITES.qsize()>=max(1,int(feed.MAX_QUEUE*LIVE_QUOTE_QUEUE_FRACTION)):
+        return "live_quote_queue_backlog"
+    with feed.LOCK:
+        recent=any(_recent_pressure(feed.STATUS.get(k),now) for k in ("storage_last_drop_utc","storage_gap_started_utc"))
+    if recent:
+        return "recent_live_quote_storage_gap"
+    for stream in ("quote_oi_queue","option_chain","auto_depth","individual_depth","live_ticks"):
+        health=recorder_storage.status(stream)
+        if any(_recent_pressure(health.get(k),now) for k in ("last_drop_utc","gap_started_utc")):
+            return "recent_live_recorder_storage_gap:"+stream
+    return None
+
 
 def target_dates(now):
     local=_local(now);day=local.date()
@@ -137,7 +174,7 @@ def _target(now):
     return {"end_exclusive":stop.isoformat(),"option_through":option_end.isoformat()}
 
 def _due(cfg,state,now):
-    if not cfg["enabled"] or not safe_window(now):
+    if not cfg["enabled"]:
         return False
     if state.get("target")!=_target(now):
         return True
@@ -162,6 +199,8 @@ def _next_schedule(report):
     state=report["state"]
     if state=="checked":
         return CHECKED_RETRY,"all_authorized_scopes_checked"
+    if state=="paused" and report.get("pause_reason","").startswith(("live_","recent_live_","market_priority_transition")):
+        return PRODUCTIVE_RETRY,"live_recording_priority"
     if state!="partial":
         return RETRY,"normal_backoff"
     sources=report.get("sources",{})
@@ -194,11 +233,15 @@ def status():
     now=_now()
     return {"version":VERSION,"config":cfg,"last_run":state.get("last_run"),"target":_target(now),
             "next_due_utc":state.get("next_due_utc"),"next_due_reason":state.get("next_due_reason"),"batch_id":state.get("batch_id"),
-            "safe_window":safe_window(now),"worker_running":bool(THREAD and THREAD.is_alive()),
+            "safe_window":safe_window(now),"backfill_mode":"standard" if safe_window(now) else "live_priority",
+            "live_pressure":live_pressure(now) if cfg["enabled"] else None,
+            "worker_running":bool(THREAD and THREAD.is_alive()),
             "due":_due(cfg,state,now),"error":error,
             "limits":{"option_requests_per_pass":MAX_OPTION_REQUESTS,"equity_repairs_per_instrument":MAX_EQUITY_REPAIRS,
+                      "live_option_requests_per_pass":LIVE_OPTION_REQUESTS,"live_equity_repairs_per_instrument":LIVE_EQUITY_REPAIRS,
+                      "live_index_windows_per_instrument":LIVE_INDEX_WINDOWS,
                       "productive_retry_seconds":int(PRODUCTIVE_RETRY.total_seconds()),"normal_retry_seconds":int(RETRY.total_seconds())},
-            "note":"Runs while the backend is open, outside the Indian market recording window. Verified request coverage is not proof of every minute. Global feeds, approved report deliveries and live capture retain their own source permissions. Historical missed ticks/books, unknown membership, unavailable provider history and missing dated weights cannot be fabricated."}
+            "note":"Runs while the backend is open, including during Indian market hours with smaller batches and live-recorder pressure checks. In-flight requests may finish before a pause. Verified request coverage is not proof of every minute. Global feeds, approved report deliveries and live capture retain their own source permissions. Historical missed ticks/books, unknown membership, unavailable provider history and missing dated weights cannot be fabricated."}
 
 def request_check():
     if not enabled():
@@ -224,7 +267,7 @@ def _mark(state,key,now):
                        if not _attempt_allowed({k:v},k,now)}
     _save_state(state)
 
-def _index_plan(source,other,start,stop,identity,state,now):
+def _index_plan(source,other,start,stop,identity,state,now,*,limit=MAX_INDEX_WINDOWS):
     gaps=mp.missing_windows(start,stop,source["coverage"])
     gaps=[(a,b) for a,b in gaps if any((a+timedelta(days=i)).weekday()<5 for i in range((b-a).days))]
     expected={d for d,bars in source["days"].items() if 0<len(bars)<mp.MINUTES}
@@ -240,7 +283,7 @@ def _index_plan(source,other,start,stop,identity,state,now):
         key=identity+"|"+day
         if _attempt_allowed(state.get("repairs",{}),key,now):
             selected.append((d,d+timedelta(days=1),key))
-    return [(a,b,None) for a,b in gaps[:MAX_INDEX_WINDOWS]]+selected[:max(0,MAX_INDEX_WINDOWS-len(gaps))],missing
+    return [(a,b,None) for a,b in gaps[:limit]]+selected[:max(0,limit-len(gaps))],missing
 
 def _index_pass(cfg,state,now,stop,progress,should_stop):
     today=_local(now).date()
@@ -249,7 +292,8 @@ def _index_pass(cfg,state,now,stop,progress,should_stop):
     result={}
     for i,identity in enumerate(INDEX_IDENTITIES):
         source=sources[identity];other=sources[INDEX_IDENTITIES[1-i]]
-        plan,missing=_index_plan(source,other,start,stop,identity,state,now)
+        plan,missing=_index_plan(source,other,start,stop,identity,state,now,
+                                 limit=MAX_INDEX_WINDOWS if safe_window(now) else LIVE_INDEX_WINDOWS)
         errors=0;downloaded=0
         for a,b,key in plan:
             if should_stop():break
@@ -320,7 +364,7 @@ def _equity_audit(raw,start,stop,index_days,state,now,*,choose_repairs):
                             "missing_or_partial_sessions":len(gaps),"retryable_sessions":len(eligible),"example_dates":gaps[:8]}
             if choose_repairs:
                 if eligible:
-                    repairs[identity]=eligible[:MAX_EQUITY_REPAIRS]
+                    repairs[identity]=eligible[:MAX_EQUITY_REPAIRS if safe_window(now) else LIVE_EQUITY_REPAIRS]
         except (OSError,ValueError,TypeError,KeyError,OverflowError):
             result[symbol]={"expected_observed_index_sessions":len(days),"complete_sessions":None,
                             "missing_or_partial_sessions":None,"state":"original_source_unavailable"}
@@ -442,20 +486,39 @@ def _panel_pass(cfg,state,now,stop,progress,should_stop):
 
 def run(*,progress=None,now=None):
     now=now or _now();cfg=config()
-    if not cfg["enabled"] or not safe_window(now):
-        return {"state":"paused","reason":"Disabled or live-session priority"}
+    if not cfg["enabled"]:
+        return {"state":"paused","reason":"Automatic maintenance disabled"}
+    during_priority=not safe_window(now)
     with LOCK:
         state=_state()
     stop,option_end=target_dates(now)
-    report={"started_utc":now.isoformat(),"state":"running","sources":{}}
+    report={"started_utc":now.isoformat(),"state":"running","sources":{},
+            "backfill_mode":"live_priority" if during_priority else "standard"}
     state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),next_due_reason="pass_running",last_run=report)
     _save_state(state)
     def should_stop():
-        return STOP.is_set() or config()!=cfg or not safe_window(_now()) or not recorder_storage.allow("market_maintenance")
+        # Once paused, do not re-enter the same pass if pressure briefly
+        # clears. The next scheduled pass rechecks current resources.
+        if report.get("pause_reason"):
+            return True
+        current=_now()
+        reason=None
+        if STOP.is_set() or config()!=cfg:
+            reason="disabled_or_reconfigured"
+        elif not recorder_storage.allow("market_maintenance"):
+            reason="storage_reserve"
+        elif not safe_window(current):
+            if not during_priority:
+                reason="market_priority_transition"
+            else:
+                reason=live_pressure(current)
+        if reason:
+            report["pause_reason"]=reason
+        return reason is not None
     try:
         if progress:progress(1,"Checking Dhan connection and shared storage")
         if should_stop():
-            report.update(state="paused",reason="Disabled, market session, or storage reserve")
+            report.update(state="paused",reason=report["pause_reason"])
             return report
         if not dhan_auth.check_profile().get("ok"):
             report.update(state="blocked",reason="Dhan token or historical data permission requires attention")
@@ -495,7 +558,7 @@ def run(*,progress=None,now=None):
                 except (ValueError,OSError,RuntimeError,KeyError,TypeError):
                     pass
                 opt=options.run(start_date=option_start.isoformat(),
-                    end_date=option_end.isoformat(),wings=cfg["wings"],request_limit=MAX_OPTION_REQUESTS,
+                    end_date=option_end.isoformat(),wings=cfg["wings"],request_limit=LIVE_OPTION_REQUESTS if during_priority else MAX_OPTION_REQUESTS,
                     priority_sessions=priority,
                     should_stop=should_stop,progress=(lambda pct,msg:progress(55+.44*pct,msg)) if progress else None)
                 report["sources"]["options"]={k:opt[k] for k in ("state","existing_verified_receipts","new_receipts",
@@ -510,6 +573,8 @@ def run(*,progress=None,now=None):
         states=[v["state"] for k,v in report["sources"].items() if k!="index"]
         states.extend(v["state"] for v in report["sources"].get("index",{}).values())
         report["state"]="paused" if should_stop() else "partial" if not states or any(x!="checked" for x in states) else "checked"
+        if report["state"]=="paused":
+            report["reason"]=report.get("pause_reason","maintenance_paused")
         if progress:progress(100,"Automatic maintenance pass saved")
         return report
     finally:
