@@ -4,6 +4,8 @@ import {marketApi,readableError} from './tradingCockpitApi'
 import type {Chain,OptionContract} from './OptionChainLive'
 import './advanced-options.css'
 import ResearchPlot from './ResearchPlots'
+import ConditionalGamma from './ConditionalGamma'
+import './constituent-intelligence.css'
 import ManualOptionsWorkflow,{IndiaVixMetric} from './ManualOptionsWorkflow'
 
 type Settings={
@@ -319,6 +321,7 @@ export default function AdvancedOptionsAnalytics({expiry,selected,onSelect,onSna
           <Plot title="OI change by strike" yLabel="Change in reported OI" series={chainPlot(r=>r.oi_change)} description="Difference from previous saved same-session snapshot"/>
           <Plot title="Unsigned gamma × OI proxy" yLabel="Unsigned gamma × OI proxy" series={chainPlot(r=>r.unsigned_gamma_oi_proxy)} description="Gamma × reported OI × spot² × 1%; dealer sign / OI unit convention unknown"/>
         </div><p className="ao-muted">Dealer gamma exposure is unavailable: public OI does not reveal net dealer positioning. The unsigned proxy must not be interpreted as dealer GEX.</p></section>}
+      {tab==='oi'&&<ConditionalGamma key={result.chain.expiry} rows={result.rows} spot={result.chain.underlying_spot} expiry={result.chain.expiry}/>}
       {tab==='liquidity'&&<section className="ao-panel"><h4>Quote and original-depth evidence</h4>
         <p>Chain top-level bid/ask and quantities are snapshots. Depth is checked only for up to 60 leading candidates plus the inspected contract. Recent trade observations and original depth do not establish your own fill or queue position.</p>
         <div className="ao-charts"><Plot title="Relative bid–ask spread" yLabel="Bid–ask spread (bps)" series={chainPlot(r=>r.spread_bps)} description="Basis points, within ±5% of spot"/>

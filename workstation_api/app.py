@@ -4827,3 +4827,122 @@ def index_execution_stress(run_id:str,body:ExecutionStressRequest):
         return execution_stress.calculate(run_id,**body.model_dump())
     except (ValueError,FileNotFoundError,KeyError,TypeError,OverflowError) as exc:
         raise HTTPException(400,"Saved monthly evidence or execution assumptions are invalid: "+job_safety.scrub(exc)[:300]) from exc
+
+
+# Explicit opt-in prospective, local-only research. The UI does not drive the
+# worker clock or submit arbitrary past observations.
+from . import constituent_prospective
+
+class ConstituentProspectiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    confirm_local_research: bool = False
+
+@app.on_event("startup")
+def resume_constituent_prospective():
+    constituent_prospective.resume()
+
+@app.on_event("shutdown")
+def stop_constituent_prospective():
+    constituent_prospective.shutdown()
+
+@app.get("/api/trading-cockpit/constituents/prospective/status")
+def constituent_prospective_status():
+    return constituent_prospective.status()
+
+@app.post("/api/trading-cockpit/constituents/prospective/configure")
+def configure_constituent_prospective(body: ConstituentProspectiveRequest):
+    if body.enabled and not body.confirm_local_research:
+        raise HTTPException(400,"Confirm prospective local-only research recording")
+    try:
+        return constituent_prospective.configure(body.enabled)
+    except (OSError,ValueError) as exc:
+        raise HTTPException(400,"Prospective recording configuration unavailable") from exc
+
+@app.get("/api/trading-cockpit/constituents/prospective/report")
+def constituent_prospective_report(horizon:int=5,limit:int=12000):
+    try:
+        return constituent_prospective.report(horizon,limit)
+    except (OSError,ValueError,sqlite3.Error) as exc:
+        raise HTTPException(400,"Prospective report unavailable; check local store and selected horizon") from exc
+
+
+from . import session_coverage
+
+class ReviewedSessionCoverageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: str = Field(max_length=40)
+    identity: str = Field(min_length=1,max_length=160)
+    start: str = Field(min_length=10,max_length=10)
+    end: str = Field(min_length=10,max_length=10)
+    calendar_csv: str = Field(min_length=1,max_length=20000)
+    source_label: str = Field(min_length=3,max_length=300)
+    confirm_reviewed: bool = False
+    expect_recording: bool = False
+    qualifier: str = Field(default="",max_length=180)
+
+@app.post("/api/data-manager/inventory/session-coverage")
+def reviewed_session_coverage(body:ReviewedSessionCoverageRequest):
+    try:
+        return session_coverage.audit(**body.model_dump())
+    except (ValueError,TypeError,KeyError,OverflowError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+
+
+class ArchivedConstituentWeightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    receipt_id: str = Field(pattern=r"^intake_[0-9a-f]{16}$")
+    filename: str = Field(min_length=1,max_length=160)
+    snapshot_date: str = Field(min_length=10,max_length=10)
+    confirm_reviewed: bool = False
+
+@app.post("/api/trading-cockpit/constituents/weights/import-receipt")
+def import_archived_constituent_weights(body:ArchivedConstituentWeightRequest):
+    try:
+        return banknifty_constituents.import_archived_weights(**body.model_dump())
+    except (ValueError,TypeError,KeyError,OSError,AttributeError) as exc:
+        raise HTTPException(400,"Reviewed original weight intake could not be imported: "+job_safety.scrub(exc)[:250]) from exc
+
+
+from . import constituent_derivatives
+
+class ConstituentDerivativeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    option_ids: list[str] = Field(default_factory=list,max_length=50)
+    confirm_shared_feed: bool = False
+
+@app.get("/api/trading-cockpit/constituents/derivatives/status")
+def constituent_derivative_status():
+    return constituent_derivatives.status()
+
+@app.get("/api/trading-cockpit/constituents/derivatives/catalog")
+def constituent_derivative_catalog(symbol:str="",offset:int=0,limit:int=100):
+    try:
+        return constituent_derivatives.catalog(symbol,offset,limit)
+    except (ValueError,OSError,KeyError,TypeError) as exc:
+        raise HTTPException(400,job_safety.scrub(exc)[:300]) from exc
+
+@app.post("/api/trading-cockpit/constituents/derivatives/configure")
+def configure_constituent_derivatives(body:ConstituentDerivativeRequest):
+    try:
+        return constituent_derivatives.configure(body.enabled,body.option_ids,body.confirm_shared_feed)
+    except (ValueError,OSError,KeyError,TypeError) as exc:
+        raise HTTPException(400,job_safety.scrub(exc)[:300]) from exc
+
+@app.get("/api/trading-cockpit/constituents/derivatives/analysis")
+def constituent_derivative_analysis(horizon:int=5,as_of:str=""):
+    try:
+        return constituent_derivatives.analysis(horizon,as_of)
+    except (ValueError,OSError,TypeError,OverflowError,sqlite3.Error) as exc:
+        raise HTTPException(400,"Stored derivative analysis unavailable; inspect source and selected time") from exc
+
+
+from . import constituent_calibration
+
+@app.get("/api/trading-cockpit/constituents/prospective/calibration")
+def constituent_probability_assessment(horizon:int=5):
+    try:
+        return constituent_calibration.report(horizon)
+    except (ValueError,OSError,sqlite3.Error) as exc:
+        raise HTTPException(400,"Frozen probability assessment unavailable; inspect local ledger") from exc

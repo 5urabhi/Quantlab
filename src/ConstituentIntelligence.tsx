@@ -1,5 +1,8 @@
 import {useEffect,useMemo,useState} from 'react'
 import ResearchPlot from './ResearchPlots'
+import ConstituentProspective from './ConstituentProspective'
+import ArchivedWeights from './ArchivedWeights'
+import ConstituentDerivatives from './ConstituentDerivatives'
 import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 import './constituent-intelligence.css'
 
@@ -120,6 +123,9 @@ export default function ConstituentIntelligence({onOpenRecording,onOpenSources,o
     <p className="bci-note">{report.note}</p>
    </>:<p className="bci-note">{busy?'Reading saved constituent observations…':mode==='history'?'Choose an exact historical IST timestamp and inspect it.':'No analysis response available.'}</p>}
   </div>
+  <ConstituentProspective/>
+  <ConstituentDerivatives/>
+  <ArchivedWeights onSaved={()=>setRevision(n=>n+1)}/>
   <details className="bci-panel"><summary>Import dated BANKNIFTY weights from a reviewed source</summary>
    <p className="bci-note">Use an authorized dated NSE index weight report. CSV must contain exactly symbol,weight_pct, every dated member once, and a sum within 0.1 percentage point of 100%. No equal-weight fallback. Snapshot must be no more than 35 days old and actually saved before the analysis cutoff.</p>
    <div className="bci-actions"><label>Snapshot date<input aria-label="Constituent weight snapshot date" type="date" max={today()} value={date} onChange={e=>{setDate(e.target.value);setReviewed(false)}}/></label><label>Source reference<input aria-label="Constituent weight source" maxLength={300} placeholder="Authorized source report name/date" value={source} onChange={e=>{setSource(e.target.value);setReviewed(false)}}/></label><label>Read CSV file<input type="file" accept=".csv,text/csv" aria-label="Select constituent weight CSV" onChange={async e=>{const f=e.target.files?.[0];setReviewed(false);if(f&&f.size<=16000)setCsv(await f.text());else if(f)setWeightMessage('Weight CSV exceeds 16 KB')}}/></label></div>

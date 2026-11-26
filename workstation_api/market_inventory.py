@@ -26,6 +26,9 @@ SOURCES = {
     "raw_daily": ("Historical equity OHLCV", "candles", "Observation time", "Original Dhan CSV", "Original daily cache; may overlap canonical closes"),
     "raw_intraday": ("Historical equity intraday", "candles", "Observation time", "Original Dhan CSV", "Separate resolution per instrument"),
     "index_history": ("Historical index candles", "candles", "Observation time", "Original IDX_I batches", "Each batch listed separately; batches can overlap"),
+    "constituent_derivative_quote": ("Constituent derivative quotes", "sampled quote packets", "Receipt time (UTC)", "Canonical SQLite", "Original optional stock futures and stock option quote observations"),
+    "constituent_derivative_oi": ("Constituent derivative open interest", "sampled OI packets", "Receipt time (UTC)", "Canonical SQLite", "Original optional stock derivative OI observations; no exchange trade timestamp"),
+    "prospective_signals": ("Prospective paired research decisions", "horizon decision rows", "Decision time (UTC)", "Canonical SQLite", "Derived frozen-rule research ledger; not additional original market data"),
     "constituent_quotes": ("BANKNIFTY constituent quotes", "sampled quote packets", "Receipt time (UTC)", "Canonical SQLite", "Original cash-equity quotes sampled at most once per two seconds per instrument"),
     "live_ticks": ("Recorded index ticks", "ticks", "Exchange time (UTC)", "Canonical SQLite", "Original observed ticker packets"),
     "live_minute_bars": ("Recorded minute OHLC", "minute bars", "Bar time (UTC)", "Canonical SQLite", "Derived from recorded ticks; not additional tick coverage"),
@@ -42,6 +45,9 @@ SOURCES = {
 # SQL is fixed and internal. Payload columns (book_json, normalized_json,
 # feature_json) are never read by inventory SQL.
 SQL = {
+    "constituent_derivative_quote": ("constituent_derivative_events", "identity", "received_utc", "WHERE kind='quote'", ""),
+    "constituent_derivative_oi": ("constituent_derivative_events", "identity", "received_utc", "WHERE kind='oi'", ""),
+    "prospective_signals": ("banknifty_paired_signals", "identity", "decided_utc", "", "horizon_minutes"),
     "constituent_quotes": ("banknifty_constituent_quotes", "identity", "received_utc", "", ""),
     "daily_closes": ("daily_closes", "identity", "session_date", "", ""),
     "live_ticks": ("live_ticks", "identity", "exchange_utc", "", ""),
@@ -350,6 +356,9 @@ def inventory(source="all",query="",page=1,per_page=50,refresh=False):
 # Fixed, small scalar record previews. No credentials, original JSON payloads
 # or raw file paths. Full depth and chain payloads remain in Trading / Replay.
 RECORD_COLUMNS = {
+    "constituent_derivative_quote": ("received_utc","exchange_trade_utc","identity","underlying","instrument","expiry","strike","option_type","lot_size","price","volume","packet_sha256","membership_sha256"),
+    "constituent_derivative_oi": ("received_utc","identity","underlying","instrument","expiry","strike","option_type","open_interest","packet_sha256","membership_sha256"),
+    "prospective_signals": ("decided_utc","identity","protocol_hash","slot_utc","cutoff_utc","target_utc","horizon_minutes","reference_price","pressure","volume_pressure","ema_rsi","outcome","observed_price","observed_received_utc","reference_sha256","observed_sha256"),
     "constituent_quotes": ("received_utc","exchange_trade_utc","identity","symbol","session_ist","price","volume","atp","buy_quantity","sell_quantity","packet_sha256","membership_sha256"),
     "daily_closes": ("session_date","identity","close","source_sha256"),
     "live_ticks": ("exchange_utc","received_utc","identity","price","packet_sha256"),
@@ -376,7 +385,7 @@ def records(source, identity, qualifier="", before="", limit=50):
         where.append(condition.removeprefix("WHERE "))
     if extra:
         if not qualifier:
-            raise ValueError("Choose the exact saved expiry")
+            raise ValueError("Choose the exact saved group qualifier")
         where.append(extra+"=?");args.append(qualifier)
     if before:
         _stamp(before)

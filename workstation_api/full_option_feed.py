@@ -25,7 +25,7 @@ import shutil
 import struct
 import time
 
-from . import auto_option_depth as auto, dhan_option_chain, live_market, option_chain_live, shared_index_feed, banknifty_constituents
+from . import auto_option_depth as auto, dhan_option_chain, live_market, option_chain_live, shared_index_feed, banknifty_constituents, constituent_derivatives
 
 LOCK = RLock()
 STOP = Event()
@@ -770,6 +770,9 @@ def _run(stop: Event) -> None:
         index_writer.start()
         constituent_writer=Thread(target=banknifty_constituents.CAPTURE.writer,args=(writer_stop,),daemon=True,name='quantlab-constituent-writer')
         constituent_writer.start()
+        derivative_writer=Thread(target=constituent_derivatives.CAPTURE.writer,args=(writer_stop,),daemon=True,name='quantlab-stock-derivative-writer')
+        derivative_writer.start()
+        derivative_enabled=True
         index_enabled=True
         constituent_enabled=True
         try:
@@ -795,6 +798,8 @@ def _run(stop: Event) -> None:
                 index_subscription_sent=False
                 constituent_subscription_sent=False
                 constituent_subscribed_at=0.0
+                derivative_subscription_sent=False
+                derivative_subscribed_at=0.0
                 subscribed_at=0.0
                 try:
                     contracts, excess = _discover()
@@ -813,6 +818,20 @@ def _run(stop: Event) -> None:
                     shared_index_requested=[]
                     index_subscription_sent=False
                     subscribed_at=0.0
+                    # Resolve all optional local masters BEFORE opening the socket;
+                    # the original receiver never waits for a large CSV parse.
+                    index_message,shared_index_requested=shared_index_feed.subscriptions(len(contracts)) if index_enabled else (None,[])
+                    constituent_message,member_info,member_state=banknifty_constituents.subscription_plan(
+                        len(contracts)+len(shared_index_requested),capture_allowed=constituent_enabled and banknifty_constituents.enabled())
+                    equity_count=constituent_message["InstrumentCount"] if constituent_message else 0
+                    try:
+                        derivative_messages,derivative_map,derivative_state=constituent_derivatives.plan(
+                            len(contracts)+len(shared_index_requested)+equity_count,allowed=derivative_enabled)
+                    except Exception:
+                        # A malformed optional local source must never prevent the original feed.
+                        derivative_messages,derivative_map,derivative_state=[],{},"optional_derivative_plan_unavailable"
+                    if set(derivative_map)&set(selected):
+                        derivative_messages,derivative_map,derivative_state=[],{},"identity_collision_with_index_options"
                     with connect(url,open_timeout=12,close_timeout=3,
                                  max_size=MAX_FRAME_BYTES) as socket:
                             for msg in _subscribe_batches(contracts):
@@ -821,21 +840,23 @@ def _run(stop: Event) -> None:
                                 stop.wait(.03)
                             # Dhan documents mixed ticker / quote subscriptions on one feed.
                             # Never displace an option or open a sixth connection.
-                            index_message,shared_index_requested=shared_index_feed.subscriptions(len(contracts)) if index_enabled else (None,[])
                             shared_index_feed.CAPTURE.begin(session,shared_index_requested)
                             if index_message and not stop.is_set():
                                 index_subscription_sent=True
                                 subscribed_at=time.monotonic()
                                 socket.send(json.dumps(index_message))
                             # Only spare slots, after all options and existing index tickers.
-                            constituent_message,member_info,member_state=banknifty_constituents.subscription_plan(
-                                len(contracts)+len(shared_index_requested),
-                                capture_allowed=constituent_enabled and banknifty_constituents.enabled())
                             banknifty_constituents.CAPTURE.begin(session,member_info,member_state)
                             if constituent_message and not stop.is_set():
                                 constituent_subscription_sent=True
                                 constituent_subscribed_at=time.monotonic()
                                 socket.send(json.dumps(constituent_message))
+                            constituent_derivatives.CAPTURE.begin(session,derivative_map,derivative_state)
+                            for msg in derivative_messages:
+                                if stop.is_set():break
+                                derivative_subscription_sent=True
+                                derivative_subscribed_at=time.monotonic()
+                                socket.send(json.dumps(msg))
                             _set(state="subscribed_awaiting_quotes",connected=True,
                                 session_id=session)
                             failures = 0
@@ -868,6 +889,8 @@ def _run(stop: Event) -> None:
                                         shared_index_feed.CAPTURE.submit(event,received,session)
                                     elif event['kind']=='constituent_quote':
                                         banknifty_constituents.CAPTURE.submit(event,received,session)
+                                    elif constituent_derivatives.CAPTURE.owns(event,session):
+                                        constituent_derivatives.CAPTURE.submit(event,received,session)
                                     else:
                                         _ingest(event,received,session)
                                         option_count+=1
@@ -875,14 +898,19 @@ def _run(stop: Event) -> None:
                                     _set(state="streaming_original_quotes")
                     shared_index_feed.CAPTURE.end(session)
                     banknifty_constituents.CAPTURE.end(session)
+                    constituent_derivatives.CAPTURE.end(session)
                     _set(connected=False)
                 except Exception as exc:
                     if 'session' in locals():
                         shared_index_feed.CAPTURE.end(session)
                         banknifty_constituents.CAPTURE.end(session)
+                        constituent_derivatives.CAPTURE.end(session)
                     # If the provider immediately rejects the mixed subscription,
                     # retry option-only for the remainder of this worker session.
-                    if constituent_subscription_sent and time.monotonic()-constituent_subscribed_at<30:
+                    if derivative_subscription_sent and time.monotonic()-derivative_subscribed_at<30:
+                        derivative_enabled=False
+                        constituent_derivatives.CAPTURE.disconnect('mixed_stock_derivative_subscription_rejected')
+                    elif constituent_subscription_sent and time.monotonic()-constituent_subscribed_at<30:
                         constituent_enabled=False
                         banknifty_constituents.CAPTURE.disconnect('mixed_equity_subscription_rejected')
                     elif locals().get('index_subscription_sent') and time.monotonic()-locals().get('subscribed_at',0)<30:
@@ -898,6 +926,7 @@ def _run(stop: Event) -> None:
             writer_stop.set()
             index_writer.join(timeout=3)
             constituent_writer.join(timeout=3)
+            derivative_writer.join(timeout=3)
             writer.join(timeout=15)
             if writer.is_alive():
                 _set(state="storage_flush_incomplete",
@@ -908,6 +937,7 @@ def _run(stop: Event) -> None:
         if 'session' in locals():
             shared_index_feed.CAPTURE.end(session)
             banknifty_constituents.CAPTURE.end(session)
+            constituent_derivatives.CAPTURE.end(session)
         with LOCK:
             flushing = STATUS.get("state") == "storage_flush_incomplete"
         if flushing:
@@ -943,6 +973,7 @@ def resume_if_armed() -> None:
 def disarmed() -> None:
     shared_index_feed.CAPTURE.disconnect()
     banknifty_constituents.CAPTURE.disconnect()
+    constituent_derivatives.CAPTURE.disconnect()
     STOP.set()
     _set(state="stopping",connected=False)
 
@@ -951,6 +982,8 @@ def suspend_for_shutdown() -> None:
     global SHUTTING_DOWN
     SHUTTING_DOWN=True
     shared_index_feed.CAPTURE.disconnect()
+    banknifty_constituents.CAPTURE.disconnect()
+    constituent_derivatives.CAPTURE.disconnect()
     STOP.set()
     _set(state="local_server_stopping",connected=False)
 
