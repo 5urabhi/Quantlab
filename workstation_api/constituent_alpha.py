@@ -119,6 +119,10 @@ def _reference(row,e):
 def _bank_features(e,cutoff):
     members=e["expected_members"]
     rows=e["constituent_receipts"]
+    if not p._valid_hash(e.get("membership_sha256")):
+        raise ValueError("Missing dated membership")
+    if not p._valid_hash(e.get("weights_sha256")) or not e.get("weights_recorded_utc"):
+        raise ValueError("Missing dated weights")
     membership=_hash(e["membership_sha256"])
     _hash(e["weights_sha256"])
     if _stamp(e["weights_recorded_utc"])>cutoff or not 1<=members<=50 or e["members"]!=members or len(rows)!=members:
@@ -238,8 +242,16 @@ def sample_day(rows):
                 raise ValueError("Unavailable weighted rule evidence")
             if not all(math.isfinite(v) for v in index+bank):
                 raise ValueError("Nonfinite feature")
-        except (ValueError,TypeError,KeyError,OverflowError):
+        except (ValueError,TypeError,KeyError,OverflowError) as exc:
             counts["missing_constituent_features"]+=1
+            reason=str(exc)
+            key={"Missing dated membership":"bank_missing_membership",
+                 "Missing dated weights":"bank_missing_weights",
+                 "Incomplete dated constituent evidence":"bank_incomplete_dated_evidence",
+                 "Incomplete weighted coverage":"bank_incomplete_weight_coverage",
+                 "Quote unavailable at cutoff":"bank_stale_or_future_quote",
+                 "Unavailable weighted rule evidence":"bank_unavailable_weighted_rule"}.get(reason,"bank_other_invalid_evidence")
+            counts[key]+=1
             continue
         counts["matched_features"]+=1
         if next_eligible is not None and decided<=next_eligible:
@@ -284,10 +296,10 @@ def _root():
     return path
 
 
-def result_path(run_id):
+def result_path(run_id,*,audit=False):
     if not re.fullmatch(r"[a-f0-9]{32}",run_id):
         raise ValueError("Invalid alpha result identifier")
-    path=_root()/("run-"+run_id+".csv")
+    path=_root()/("run-"+run_id+("-audit" if audit else "")+".csv")
     if not path.is_file() or path.is_symlink():
         raise FileNotFoundError("Alpha result unavailable")
     return path
@@ -501,9 +513,9 @@ def _walk_forward(train,dates,progress=None):
     return output
 
 
-def _save(records):
+def _save(records,*,audit=False):
     run_id=uuid.uuid4().hex
-    path=_root()/("run-"+run_id+".csv")
+    path=_root()/("run-"+run_id+("-audit" if audit else "")+".csv")
     tmp=path.with_suffix(".tmp")
     try:
         with tmp.open("x",newline="",encoding="utf-8") as f:
@@ -553,6 +565,15 @@ def run(*,horizon=30,progress=None,now=None):
         methods,regimes,quantiles,records=_compare(train,cal,test,progress)
         status.update(state="holdout_assessment_available",methods=methods,regimes=regimes,quantiles=quantiles,
                       run_id=_save(records),prediction_rows=len(records))
+    # The coverage artifact is useful even when model fitting is blocked.
+    audit_records=[{"day":"RUN_SUMMARY","state":status["state"],"counts_json":json.dumps(dict(counts),sort_keys=True),
+                    "support_json":json.dumps(status["support"],sort_keys=True),
+                    "policy_sha256":POLICY_HASH}]
+    for item in audit:
+        audit_records.append({"day":item["day"],"state":"recorded_session",
+            "counts_json":json.dumps({k:v for k,v in item.items() if k!="day"},sort_keys=True),
+            "support_json":"","policy_sha256":POLICY_HASH})
+    status["audit_id"]=_save(audit_records,audit=True)
     if progress:
         progress(100,"Constituent alpha research report saved")
     return status
