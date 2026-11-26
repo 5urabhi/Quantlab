@@ -76,9 +76,6 @@ def predict(value,rows):
     coef=np.asarray(value["coef"]);intercept=np.asarray(value["intercept"])
     if x.ndim!=2 or x.shape[1]!=len(mean) or scale.shape!=mean.shape or coef.shape!=(3,len(mean)) or intercept.shape!=(3,) or np.any(scale<=0):
         raise ValueError("Frozen model feature schema mismatch")
-    z=(((x-mean)/scale)@coef.T+intercept)/value["temperature"]
-    z-=z.max(axis=1,keepdims=True)
-    q=np.exp(z);q/=q.sum(axis=1,keepdims=True)
     # Reproduce the original probability floor in the calibration step.
     raw=((x-mean)/scale)@coef.T+intercept
     raw-=raw.max(axis=1,keepdims=True)
