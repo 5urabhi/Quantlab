@@ -1,7 +1,7 @@
 import {lazy, Suspense, useCallback, useEffect, useMemo, useState} from 'react'
 import {
-  Activity, ArrowDownToLine, ArrowRight, BarChart3, Beaker, BookOpen, Check,
-  CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Clock3, Database, FileArchive,
+  Activity, ArrowRight, BarChart3, Beaker, BookOpen, Check,
+  CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Clock3, Database,
   FileText, Gauge, LoaderCircle,
   LockKeyhole, Menu, Play, RefreshCw, Settings2,
   ShieldCheck, Sigma, Upload, Trash2, RotateCcw, Search, X, TrendingUp
@@ -18,6 +18,8 @@ import PythonWorkbench from './PythonWorkbench'
 import PythonMonitors from './PythonMonitors'
 import PythonEnvironment from './PythonEnvironment'
 import ResearchPlot from './ResearchPlots'
+import {HomeOperations,StorageOverview,ReportWorkspace,PrivacyChecks} from './OperationsCloseout'
+import ZerodhaProviderPanel from './ZerodhaProviderPanel'
 const CustomModelWorkspace = lazy(() => import('./CustomModelWorkspace'))
 const ResearchNotebook = lazy(() => import('./ResearchNotebook'))
 const PaperTradingWorkspace = lazy(() => import('./PaperTradingWorkspace'))
@@ -610,13 +612,14 @@ function App(){
         {tab==='tradingspreads'&&<LiquiditySpreadsWorkspace
           onOpenRecording={()=>begin('recordingsettings')}
           onOpenReplay={()=>begin('tradingreplay')}/>}
-        {tab==='connections'&&!connectionEditing&&
+        {tab==='connections'&&!connectionEditing&&<>
           <ConnectionsLandingV2 apiHealthy={Boolean(health?.ok)}
             tokenConfigured={Boolean(health?.dhan_token_configured)}
             onConfigure={()=>setConnectionEditing(true)}
             onRecording={()=>begin('recordingsettings')}
             onDiagnostics={()=>begin('diagnostics')}
-            onData={()=>begin('data')}/>}
+            onData={()=>begin('data')}/>
+          <details className="v2-advanced-links"><summary>Zerodha secondary data connection</summary><ZerodhaProviderPanel onSourceChange={refresh}/></details></>}
         {tab==='connections'&&connectionEditing&&
           <button type="button" className="ws-button secondary v2-connection-back"
             onClick={()=>setConnectionEditing(false)}>
@@ -641,6 +644,7 @@ function App(){
             onStrategy={()=>begin('strategyema')}
             onModel={()=>begin('mathematics')}
             onData={()=>begin('dhan')}/>
+          <HomeOperations onNavigate={route=>begin(route as Tab)}/>
           <QuickPageNote title="Read-only market intelligence"
             description="Market collection continues in the local backend. No broker orders or unobserved price series are generated."
             ><button className="v2-secondary" type="button" onClick={()=>begin('trading')}>
@@ -892,22 +896,22 @@ function App(){
             onDataChanged={refresh} onOpenDhan={()=>begin('dhan')}
             onOpenModels={()=>begin('mathematics')}/>}
         {tab==='guide'&&<ResearchGuide onNavigate={route=>begin(route as Tab)}/>}
-        {tab==='reports'&&<>{withRun(<Card title="Generate reproducible research report"><p className="ws-caption">Generate an offline HTML report and PDF draft from selected saved Python run artifacts. Synthetic demonstrations are explicitly labeled.</p><div className="ws-actions"><button className="ws-button primary" disabled={!selectedRun||busy} onClick={downloadReport}><FileText size={15}/> Build HTML + PDF</button></div><div className="ws-artifact-list">{(detail?.artifacts||[]).map(name=><a key={name} href={'/api/runs/'+encodeURIComponent(selectedRun)+'/files/'+encodeURIComponent(name)} download><FileArchive size={16}/><span>{name}</span><ArrowDownToLine size={14}/></a>)}</div></Card>)}</>}
+        {tab==='reports'&&<ReportWorkspace detail={detail} runId={selectedRun} runPicker={runPicker} busy={busy||Boolean(job&&['queued','running'].includes(job.status))} onBuild={downloadReport} onNavigate={route=>begin(route as Tab)}/>}
         {tab==='recordingsettings'&&<div className="v2-layout-section">
           <QuickPageNote title="Automatic BANKNIFTY CE/PE recording"
             description="Configure read-only original 20-level capture. Collector processes remain active regardless of which QuantLab page is open."/>
           <AutoDepthRecorder onOpenSaved={()=>begin('tradingreplay')}/>
         </div>}
-        {tab==='storage'&&<DataManager initialSection="database" integrated
+        {tab==='storage'&&<><StorageOverview onNavigate={route=>begin(route as Tab)}/><DataManager initialSection="database" integrated
           onSelectDataset={setSelectedDataset} onChanged={refresh}
-          onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/>}
+          onOpenDhan={()=>begin('dhan')} onOpenModels={()=>begin('mathematics')}/></>}
         {tab==='pythonenvironment'&&<PythonEnvironment/>}
         {tab==='custommodels'&&<CustomModelWorkspace datasets={datasets} selectedDataset={selectedDataset}/>}
         {(['pythonmonitors','custommodels','customscanners'].includes(tab))&&<PythonMonitors key={tab} initialKind={tab==='custommodels'?'model':tab==='customscanners'?'scanner':undefined} onEdit={id=>{showPython();if(id)window.dispatchEvent(new CustomEvent('quantlab:open-saved-script',{detail:id}))}}/>}
         {tab==='preferences'&&<SettingsPreferencesV2/>}
         {tab==='diagnostics'&&<DiagnosticsV2 onRepair={()=>begin('settings')}
           onData={()=>begin('dataquality')}/>}
-        {tab==='settings'&&<div className="ws-grid halves"><Card title="Backend and privacy"><div className="ws-data-audit"><div><span>API address</span><strong>127.0.0.1:8765</strong></div><div><span>Frontend address</span><strong>127.0.0.1:5173</strong></div><div><span>Data directory</span><strong>data/ (Git-ignored)</strong></div><div><span>Run artifacts</span><strong>results/workstation_runs/</strong></div><div><span>Authentication</span><strong>Loopback-only; not for public exposure</strong></div><div><span>Broker trading</span><strong>DISABLED</strong></div><div><span>Dhan token</span><strong>{health?.dhan_token_configured?'CONFIGURED (HIDDEN)':'MISSING'}</strong></div></div></Card><Card title="Integrity controls"><div className="ws-rule"><ShieldCheck size={18}/> Local data import, explicit dataset status, safe path allowlists, no broker order operations, no credential output, and no historical-performance fabrication.</div><p className="ws-caption">This is a local research environment, not an authenticated public server. Do not expose port 8765 on a network or deploy it as-is.</p><button className="ws-button secondary" onClick={()=>void refresh()}><RefreshCw size={16}/> Refresh engine status</button></Card></div>}
+        {tab==='settings'&&<><PrivacyChecks onNavigate={route=>begin(route as Tab)}/><div className="ws-grid halves"><Card title="Backend and privacy"><div className="ws-data-audit"><div><span>API address</span><strong>127.0.0.1:8765</strong></div><div><span>Frontend address</span><strong>127.0.0.1:5173</strong></div><div><span>Data directory</span><strong>data/ (Git-ignored)</strong></div><div><span>Run artifacts</span><strong>results/workstation_runs/</strong></div><div><span>Authentication</span><strong>Loopback-only; not for public exposure</strong></div><div><span>Broker trading</span><strong>DISABLED</strong></div><div><span>Dhan token</span><strong>{health?.dhan_token_configured?'CONFIGURED (HIDDEN)':'MISSING'}</strong></div></div></Card><Card title="Integrity controls"><div className="ws-rule"><ShieldCheck size={18}/> Local data import, explicit dataset status, safe path allowlists, no broker order operations, no credential output, and no historical-performance fabrication.</div><p className="ws-caption">This is a local research environment, not an authenticated public server. Do not expose port 8765 on a network or deploy it as-is.</p><button className="ws-button secondary" onClick={()=>void refresh()}><RefreshCw size={16}/> Refresh engine status</button></Card></div></>}
         </Suspense>
         <footer className="ws-footer"><span>QUANTLAB / RESEARCH WORKSTATION</span><span>LOCAL ENGINE · HISTORICAL CLAIMS REQUIRE EXTERNAL VALIDATION</span><span>© PERSONAL RESEARCH</span></footer>
       </main>
