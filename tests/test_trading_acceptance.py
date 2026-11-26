@@ -119,6 +119,46 @@ class LocalAcceptanceTests(unittest.TestCase):
         self.assertNotIn("NSE_FNO:111", encoded)
         self.assertNotIn("300.0", encoded)
 
+    def test_consistent_partial_original_is_not_corrupt_or_full_depth(self):
+        self.create_db()
+        self.store("CE", "NSE_FNO:111")
+        book, feature, digest = original("PE", "NSE_FNO:222")
+        book["bid"] = book["bid"][:8]
+        book["full_depth"] = False
+        feature["full_20_levels"] = False
+        with sqlite3.connect(self.path) as db:
+            db.execute("INSERT INTO live_depth_books VALUES(?,?,?,?,?)",
+                       ("NSE_FNO:222", STAMP, SID, json.dumps(book), digest))
+            db.execute("INSERT INTO auto_banknifty_depth_features VALUES(?,?,?,?,?)",
+                       ("NSE_FNO:222", STAMP, SID, json.dumps(feature), digest))
+        report = doctor.inspect_saved_books(self.path)
+        self.assertEqual(report["status"], "partial_depth_sample")
+        self.assertEqual(report["sample_checked"], 2)
+        self.assertEqual(report["valid_sample_books"], 1)
+        self.assertEqual(report["partial_sample_books"], 1)
+        self.assertEqual(report["invalid_sample_books"], 0)
+        self.assertEqual(report["invalid_reason_counts"], {})
+        self.assertFalse(doctor._valid_pair(book, feature, digest, digest,
+                                          "NSE_FNO:222", SID, STAMP))
+
+    def test_partial_depth_never_masks_invalid_source_or_digest(self):
+        book, feature, digest = original()
+        book["ask"] = book["ask"][:6]
+        book["full_depth"] = False
+        args = ("NSE_FNO:111", SID, STAMP)
+        self.assertEqual(doctor._pair_rejection_reason(
+            {**book, "source": "unknown"}, feature, digest, digest, *args),
+            "source_provenance_mismatch")
+        self.assertEqual(doctor._pair_rejection_reason(
+            book, feature, digest, "0"*64, *args),
+            "stored_receipt_digest_mismatch")
+        self.assertEqual(doctor._pair_rejection_reason(
+            {**book, "full_depth": True}, feature, digest, digest, *args),
+            "depth_completeness_flag_mismatch")
+        self.assertEqual(doctor._pair_rejection_reason(
+            book, {**feature, "full_20_levels": True}, digest, digest, *args),
+            "depth_completeness_flag_mismatch")
+
     def test_missing_book_reports_exact_reason_without_repair(self):
         self.create_db()
         book, feature, digest = original()
