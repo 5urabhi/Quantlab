@@ -36,9 +36,9 @@ def _config_path():
 def _ensure_folder():
     root=service.DATA.resolve()
     folder=_folder()
-    folder.mkdir(parents=True,exist_ok=True)
     if not folder.resolve().is_relative_to(root) or folder.is_symlink() or folder.parent.is_symlink():
         raise ValueError("Unsafe participant inbox")
+    folder.mkdir(parents=True,exist_ok=True)
     return folder
 
 def _config():
@@ -117,6 +117,7 @@ def scan(now=None):
         if not cfg["enabled"]:
             return status()
         folder=_ensure_folder()
+        fixed_now=now
         now=now or m._now()
         files=[]
         # Explicit bound; do not silently drop the tail of a large directory.
@@ -146,6 +147,7 @@ def scan(now=None):
                 kind="oi" if match.group(1).lower()=="oi" else "volume"
                 day=datetime.strptime(match.group(2),"%d%m%Y").date().isoformat()
                 raw=_read(path)
+                received=fixed_now or m._now()
                 if _already_saved(raw,day,kind,cfg["source"]):
                     result.update(state="already_saved",rows=0)
                 else:
@@ -155,18 +157,19 @@ def scan(now=None):
                     # reading; no archive mode or filesystem timestamp used.
                     if _config()!=cfg:
                         raise ValueError("Inbox authorization changed")
-                    receipt=m.ingest_participant(raw,day,m._iso(now),kind,"receipt",True,now=now,source_identity=cfg["source"])
+                    receipt=m.ingest_participant(raw,day,m._iso(received),kind,"receipt",True,now=received,source_identity=cfg["source"])
                     result.update(state="imported" if receipt["inserted"] else "already_saved",rows=receipt["rows"] if receipt["inserted"] else 0,receipt_sha256=receipt["receipt_sha256"])
                     if receipt["inserted"]:
-                        recorder_storage.saved("participant_inbox",m._iso(now),receipt["rows"])
+                        recorder_storage.saved("participant_inbox",m._iso(received),receipt["rows"])
             except (OSError,ValueError,TypeError,OverflowError,sqlite3.Error):
                 result["detail"]="File incomplete, invalid, conflicting source, unavailable storage or session not closed. Will retry."
             with _LOCK:
                 _CACHE[path.name]=(fp,result,time.monotonic())
             results.append(result)
+        names={p.name for p in files}
         with _LOCK:
             for key in list(_CACHE):
-                if key not in {p.name for p in files}:
+                if key not in names:
                     del _CACHE[key]
             _STATUS.update(state="scanned",last_scan_utc=m._iso(now),eligible_files=len(files),
                            files=results[:100],counts={k:sum(r["state"]==k for r in results) for k in ("imported","already_saved","queued","unavailable")})
