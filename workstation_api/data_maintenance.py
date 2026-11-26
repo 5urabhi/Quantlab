@@ -104,6 +104,9 @@ def configure(cfg,confirm):
             state["next_due_utc"]=None
             state["target"]=None
             _write("state",state)
+    # Transfer the old index-only policy to this one master control.
+    if cfg["enabled"]:
+        mp.configure_sync(False)
     WAKE.set()
     return status()
 
@@ -378,7 +381,8 @@ def run(*,progress=None,now=None):
                     should_stop=should_stop,progress=(lambda pct,msg:progress(55+.44*pct,msg)) if progress else None)
                 report["sources"]["options"]={k:opt[k] for k in ("state","existing_verified_receipts","new_receipts",
                     "planned_missing_requests","unattempted_requests","empty_processed_receipts","usable_rows_in_processed_receipts",
-                    "unreadable_receipts_encountered","excluded_active_calendar_days","continuous_coverage_certified")}
+                    "unreadable_receipts_encountered","excluded_active_calendar_days","continuous_coverage_certified",
+                    "empty_verified_receipts","observed_rolling_minute_slots","observed_offset_session_pairs","observed_session_dates")}
                 report["sources"]["options"]["rejected_windows"]=len(opt["rejected_requests"])
                 report["sources"]["options"]["state"]="partial" if opt["state"]=="partial_requests" or opt["unreadable_receipts_encountered"] else "checked"
             except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
@@ -397,6 +401,8 @@ def run(*,progress=None,now=None):
         with LOCK:
             # Preserve a concurrently saved request to disable/reconfigure;
             # its new settings take effect at the next safe boundary.
+            if config()!=cfg:
+                state["target"]=None;state["next_due_utc"]=None
             state["last_run"]=report
             _save_state(state)
 
