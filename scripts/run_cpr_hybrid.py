@@ -15,6 +15,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from-date",default=(today-timedelta(days=100)).isoformat())
     parser.add_argument("--to-date",default=today.isoformat(),help="End exclusive; completed sessions only")
+    parser.add_argument("--entry-mode",choices=research.ENTRY_MODES,default="crossover",
+                        help="Original crossover baseline or daily scheduled CPR/EMA opportunity scan")
     parser.add_argument("--frame",type=int,choices=research.FRAMES,default=5)
     parser.add_argument("--hold",type=int,choices=research.HOLDS,default=60)
     parser.add_argument("--capital",type=float,default=17000)
@@ -27,7 +29,7 @@ def main():
     a=parser.parse_args()
     try:
         report,journal,sources=research.run(from_date=a.from_date,to_date=a.to_date,
-            frame=a.frame,hold=a.hold,capital=a.capital,risk_budget=a.risk_budget,
+            frame=a.frame,hold=a.hold,capital=a.capital,risk_budget=a.risk_budget,entry_mode=a.entry_mode,
             lot_size=a.lot_size,max_lots=a.max_lots,wings=a.wings,premium_penalty_bps=a.penalty_bps,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
@@ -48,6 +50,7 @@ def main():
             print(str(exc)[:240])
         return 2
     print("State:",report["state"])
+    print("Entry mode:",report["settings"]["entry_mode"])
     print("Sessions:",report["recorded_index_sessions"],"/",report["required_sessions"])
     print("Episode states:",report["episode_states"])
     print("Account-constrained split support:",json.dumps(report["split_support"]))
@@ -58,7 +61,10 @@ def main():
         print("Offline Q (5% stop):",json.dumps(report["offline_q"]))
         print("Offline Q (15% emergency stop):",json.dumps(report["offline_q_emergency_stop"]))
     for name,result in report["methods"].items():
-        print(name,json.dumps({k:v for k,v in result.items() if k!="daily"}))
+        summary={k:v for k,v in result.items() if k not in ("daily","daily_coverage")}
+        if "daily_coverage" in result:
+            summary["daily_coverage"]={k:v for k,v in result["daily_coverage"].items() if k!="by_session"}
+        print(name,json.dumps(summary))
     print("Report:",path.resolve())
     print("No actual fills, profitability, or live RL approval certified.")
     return 0
