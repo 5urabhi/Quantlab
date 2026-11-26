@@ -52,7 +52,7 @@ class ProspectiveTests(TestCase):
         ref={"price":60000.,"sha256":HASH,"received_utc":p._iso(cutoff),"exchange_utc":p._iso(cutoff)}
         inputs=(ref,"UP","UP","DOWN",{"test":"synthetic"})
         with patch.object(p,"_inputs",return_value=inputs),patch.object(p,"enabled",return_value=True),patch.object(bank,"enabled",return_value=True),patch.object(p,"_now",return_value=cutoff),patch.object(p.recorder_storage,"allow",return_value=True),patch.object(p.recorder_storage,"saved"):
-            self.assertEqual(p._record(cutoff),5)
+            self.assertEqual(p._record(cutoff),7)
             self.assertEqual(p._record(cutoff),0)
             self.assertEqual(p._record(cutoff-timedelta(minutes=1)),0)
         target=cutoff+timedelta(minutes=1)
@@ -70,6 +70,10 @@ class ProspectiveTests(TestCase):
         self.assertEqual(r["summary"]["paired_vs_ema"]["pressure"]["difference"],1)
         self.assertIsNone(r["summary"]["paired_vs_ema"]["pressure"]["session_bootstrap_95"])
         self.assertEqual(p.report(5)["summary"]["pending"],1)
+        self.assertEqual(p.report(15)["summary"]["pending"],1)
+        self.assertEqual(p.report(0)["summary"]["pending"],1)
+        self.assertEqual(p.report(0)["latest"][0]["target_utc"],p._iso(p.target_for(cutoff,0)))
+        self.assertNotEqual(p.report(15)["protocol_sha256"],p.report(5)["protocol_sha256"])
 
     def test_ema_original_cutoff_and_missing_labels(self):
         # 35 completed consecutive bars from 09:15 IST; the current
@@ -86,7 +90,7 @@ class ProspectiveTests(TestCase):
         self.assertIn("completed_bars_sha256",features)
         # A missing reference is recorded as unavailable, not a fabricated label.
         with patch.object(p,"_inputs",return_value=(None,"UP","UP","UP",{})),patch.object(p,"enabled",return_value=True),patch.object(bank,"enabled",return_value=True),patch.object(p,"_now",return_value=self.cut),patch.object(p.recorder_storage,"allow",return_value=True),patch.object(p.recorder_storage,"saved"):
-            self.assertEqual(p._record(self.cut),5)
+            self.assertEqual(p._record(self.cut),7)
         out=p.report(5)
         self.assertEqual(out["summary"]["unverifiable"],1)
         self.assertEqual(out["summary"]["methods"]["pressure"]["unavailable"],1)

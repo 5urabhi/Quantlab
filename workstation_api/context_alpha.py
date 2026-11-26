@@ -27,6 +27,9 @@ POLICY={"version":VERSION,"base_policy":a.POLICY_HASH,"context_version":m.VERSIO
         "fit":"fixed logistic and histogram boosting configurations from base study; calibration only on calibration sessions"}
 POLICY_HASH=sha256(json.dumps(POLICY,sort_keys=True).encode()).hexdigest()
 
+def policy_for(horizon):
+    return POLICY_HASH if horizon in a.ORIGINAL_HORIZONS else sha256(json.dumps([POLICY_HASH,a.policy_for(horizon)],sort_keys=True).encode()).hexdigest()
+
 def _attach(db,rows,timelines,scope):
     matched=[];counts=Counter();coverage=Counter()
     for r in rows:
@@ -186,7 +189,7 @@ def run(*,horizon=30,scope="combined",mode="receipt",cohort="original",progress=
         if not registered:
             raise ValueError("Register the forward cohort before running research")
     status=a.readiness(horizon,now=now,start_session=registered["start_session"]) if registered else a.readiness(horizon,now=now)
-    status.update(cohort=cohort,cohort_registration=registered,version=VERSION,policy_sha256=POLICY_HASH,context_scope=scope,context_mode=mode)
+    status.update(cohort=cohort,cohort_registration=registered,version=VERSION,policy_sha256=policy_for(horizon),context_scope=scope,context_mode=mode)
     dates=status["training_dates"]+status["calibration_dates"]+status["holdout_dates"]
     samples=[];counts=Counter();audit=[];coverage=Counter();meta={"rows":0,"ambiguous_factors":[]}
     if dates:
@@ -211,7 +214,7 @@ def run(*,horizon=30,scope="combined",mode="receipt",cohort="original",progress=
         "Participant reports are aggregate index derivatives, not BANKNIFTY-specific retail orders. Option OI is two-sided, not dealer gamma or trade direction. "
         "Official event counts and release dates use actual local receipts, not inferred sentiment or surprise values, including in archive mode. "
         "The fixed 5 bps index cost proxy is hypothetical. No model is promoted to live trading. Descriptive holdout gates are not significance or profit guarantees.")
-    if len(dates)<a.REQUIRED:
+    if len(dates)<status.get("required_sessions",a.REQUIRED):
         status["state"]="awaiting_recorded_sessions"
     elif not (a._supported(train,60,20,train=True) and a._supported(cal,20,7) and a._supported(test,40,12)):
         status["state"]="insufficient_matched_evidence"
@@ -222,11 +225,11 @@ def run(*,horizon=30,scope="combined",mode="receipt",cohort="original",progress=
                       run_id=a._save(records),prediction_rows=len(records))
     records=[{"day":"RUN_SUMMARY","state":status["state"],"context_scope":scope,"context_mode":mode,
         "counts_json":json.dumps(dict(counts),sort_keys=True),"factor_coverage_json":json.dumps({"coverage":dict(coverage),"cohort":registered},sort_keys=True),
-        "support_json":json.dumps(status["support"],sort_keys=True),"policy_sha256":POLICY_HASH}]
+        "support_json":json.dumps(status["support"],sort_keys=True),"policy_sha256":policy_for(horizon)}]
     for row in audit:
         records.append({"day":row["day"],"state":"recorded_session","context_scope":scope,"context_mode":mode,
             "counts_json":json.dumps({k:v for k,v in row.items() if k!="day"},sort_keys=True),
-            "factor_coverage_json":"","support_json":"","policy_sha256":POLICY_HASH})
+            "factor_coverage_json":"","support_json":"","policy_sha256":policy_for(horizon)})
     status["audit_id"]=a._save(records,audit=True)
     if progress:
         progress(100,"Matched context research report saved")
