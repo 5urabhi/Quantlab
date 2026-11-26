@@ -190,7 +190,7 @@ def ingest(csv_text,source,mode,confirm_reviewed,*,now=None,original_report=None
             "note":"Archive availability is reviewed but not independently verified. Receipt mode cannot backdate the import."}
 
 
-def ingest_participant(csv_text,report_day,available_utc,report_type,mode,confirm_reviewed,*,now=None):
+def ingest_participant(csv_text,report_day,available_utc,report_type,mode,confirm_reviewed,*,now=None,source_identity='NSE'):
     """Normalize reviewed NSE report long/short sides, preserving raw CSV."""
     from datetime import time
     if not isinstance(csv_text,str) or not 0<len(csv_text.encode())<=64_000:
@@ -241,7 +241,9 @@ def ingest_participant(csv_text,report_day,available_utc,report_type,mode,confir
     for c in ("FII","DII","CLIENT","PRO"):
         for i,name in enumerate(("INDEX_FUT_NET","INDEX_CALL_NET","INDEX_PUT_NET")):
             writer.writerow((c+"_"+name+suffix,_iso(event),_iso(known),data[c][2*i]-data[c][2*i+1]))
-    return ingest(out.getvalue(),"NSE participant-wise "+report_type,mode,confirm_reviewed,
+    if not isinstance(source_identity,str) or not 3<=len(source_identity.strip())<=200:
+        raise ValueError("Invalid reviewed participant source identity")
+    return ingest(out.getvalue(),source_identity.strip()+" participant-wise "+report_type,mode,confirm_reviewed,
                   now=now,original_report=csv_text)
 
 

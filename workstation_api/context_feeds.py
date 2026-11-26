@@ -24,7 +24,7 @@ from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHand
 from urllib.error import HTTPError, URLError
 
 from . import service, market_context as m, context_events as events, advanced_options as ao
-from . import shared_market_data, recorder_storage
+from . import shared_market_data, recorder_storage, participant_inbox
 
 FRED_URL="https://api.stlouisfed.org/fred/"
 TWELVE_URL="https://api.twelvedata.com/time_series"
@@ -346,6 +346,11 @@ def _loop():
         _WAKE.clear()
         with _LOCK:
             requested=_REQUESTED;_REQUESTED=False
+        # Local delivery intake is independent of external feed consent.
+        try:
+            participant_inbox.scan()
+        except (OSError,ValueError,TypeError):
+            _record("participant_inbox","unavailable","Local authorized inbox unavailable")
         try:
             config=_config()
             if config["enabled"] or requested:

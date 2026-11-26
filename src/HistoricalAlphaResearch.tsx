@@ -1,0 +1,48 @@
+import {useEffect,useState} from 'react'
+import {marketApi,marketPost,readableError} from './tradingCockpitApi'
+type Batch={id:string;status:string;from_date:string;to_date:string;total:number;processed:number;errors:number;index_spot?:{status:string};historical_unresolved?:unknown[]}
+type Method={directional_calls:number;eligible_samples:number;directional_hit_pct:number|null;brier:number|null;mean_net_index_proxy_bps:number|null;call_sessions:number}
+type Result={state:string;recorded_sessions:number;required_sessions:number;observed_index_dates:number;weight_mode:string;horizon_minutes:number;source_hashes:Record<string,string>;source_failures:Record<string,string>;evidence_counts:Record<string,number>;support:Record<string,{samples:number;sessions:number}>;methods:Record<string,Method>;session_audit:Record<string,unknown>[];run_id:string|null;audit_id:string;warning:string}
+type Job={status:string;stage?:string;percent?:number;error?:string;result?:Result}
+const base='/api/market-intelligence/historical-alpha'
+const downloadBase='/api/trading-cockpit/constituents/alpha'
+const dateIST=(d:Date)=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(d)
+const fmt=(v:number|null|undefined)=>v==null?'—':v.toLocaleString('en-IN',{maximumFractionDigits:3})
+const key='quantlab-historical-alpha-job'
+function restore(){try{return sessionStorage.getItem(key)||''}catch{return ''}}
+function remember(v:string){try{if(v)sessionStorage.setItem(key,v);else sessionStorage.removeItem(key)}catch{/* optional */}}
+export default function HistoricalAlphaResearch(){
+ const [batches,setBatches]=useState<Batch[]>([]),[batch,setBatch]=useState(''),[revision,setRevision]=useState(0)
+ const [start,setStart]=useState(()=>dateIST(new Date(Date.now()-200*86400000))),[end,setEnd]=useState(()=>dateIST(new Date()))
+ const [horizon,setHorizon]=useState(30),[weights,setWeights]=useState<'unweighted'|'verified_weights'>('unweighted'),[consent,setConsent]=useState(false)
+ const [job,setJob]=useState(restore),[acquisition,setAcquisition]=useState(''),[result,setResult]=useState<Result|null>(null),[error,setError]=useState(''),[stage,setStage]=useState(''),[percent,setPercent]=useState(0),[busy,setBusy]=useState(false)
+ useEffect(()=>{let alive=true;marketApi<{batches:Batch[]}>(base+'/batches').then(r=>{if(alive){setBatches(r.batches);setBatch(v=>r.batches.some(b=>b.id===v)?v:r.batches[0]?.id||'')}}).catch(e=>{if(alive)setError(readableError(e))});return()=>{alive=false}},[revision])
+ useEffect(()=>{if(!job)return;let alive=true,polling=false
+ const poll=async()=>{if(polling)return;polling=true;try{const r=await marketApi<Job>('/api/jobs/'+encodeURIComponent(job));if(!alive)return;setStage(r.stage||r.status);setPercent(r.percent??0)
+ if(r.status==='complete'){if(r.result?.support)setResult(r.result);else setStage('Job completed; refresh historical batches.');setJob('');remember('');setRevision(v=>v+1)}
+ else if(['error','cancelled','interrupted'].includes(r.status)){setError(r.error||r.stage||r.status);setJob('');remember('')}}catch(e){if(alive)setError(readableError(e))}finally{polling=false}}
+ void poll();const timer=window.setInterval(()=>void poll(),2000);return()=>{alive=false;window.clearInterval(timer)}},[job])
+ useEffect(()=>{if(!acquisition)return;let alive=true,polling=false
+ const poll=async()=>{if(polling)return;polling=true;try{const r=await marketApi<Job>('/api/jobs/'+encodeURIComponent(acquisition));if(!alive)return;setStage(r.stage||r.status);setPercent(r.percent??0);if(['complete','error','cancelled','interrupted'].includes(r.status)){if(r.status!=='complete')setError(r.error||r.stage||r.status);setAcquisition('');setRevision(v=>v+1)}}catch(e){if(alive)setError(readableError(e))}finally{polling=false}}
+ void poll();const timer=window.setInterval(()=>void poll(),2000);return()=>{alive=false;window.clearInterval(timer)}},[acquisition])
+ const active=busy||!!job||!!acquisition
+ const download=async()=>{if(active||!consent)return;setBusy(true);setError('');setStage('Submitting original Dhan historical batch');setPercent(0)
+ try{const r=await marketPost<{job_id:string;batch:Batch}>('/api/dhan/batches',{selection:'banknifty_pit',from_date:start,to_date:end,interval:1,acknowledged_bulk:false,acknowledged_gaps:true,include_index_spot:true});setAcquisition(r.job_id);setConsent(false);setRevision(v=>v+1)}catch(e){setError(readableError(e))}finally{setBusy(false)}}
+ const run=async()=>{if(active||!batch)return;setBusy(true);setError('');setResult(null);setStage('Submitting historical evidence audit');setPercent(0)
+ try{const r=await marketPost<{job_id:string}>(base,{batch_id:batch,horizon,weight_mode:weights});setJob(r.job_id);remember(r.job_id)}catch(e){setError(readableError(e))}finally{setBusy(false)}}
+ const cancel=async()=>{if(!job)return;try{await marketPost('/api/workspace/jobs/'+encodeURIComponent(job)+'/cancel',{});setStage('Cancellation requested')}catch(e){setError(readableError(e))}}
+ return <details className="bci-note"><summary><strong>Historical Alpha Research · original minute candles</strong></summary><p>Use the existing Dhan downloader and its pinned dated-membership batches. This retrospective study is separate from the live observation ledger. No historical tick, book or option fill is invented.</p>
+ <div className="bci-actions"><label>From (IST)<input type="date" value={start} disabled={active} onChange={e=>{setStart(e.target.value);setConsent(false)}}/></label><label>End exclusive (IST)<input type="date" value={end} disabled={active} onChange={e=>{setEnd(e.target.value);setConsent(false)}}/></label></div>
+ <label><input type="checkbox" checked={consent} disabled={active} onChange={e=>setConsent(e.target.checked)}/> Authorize Dhan read-only historical requests; retain and report unresolved historical members without replacing them.</label>
+ <div className="bci-actions"><button className="ws-button" disabled={active||!consent||!start||!end||start>=end||end>dateIST(new Date())||(Date.parse(end)-Date.parse(start))/86400000>240} onClick={()=>void download()}>Acquire / reuse historical BANKNIFTY batch</button><a className="ws-button" href="#/data">Data Center / existing batch controls →</a><button className="ws-button" disabled={active} onClick={()=>setRevision(v=>v+1)}>Refresh saved batches</button></div>
+ <div className="bci-actions"><label>Historical batch<select aria-label="Historical alpha batch" value={batch} disabled={active} onChange={e=>setBatch(e.target.value)}><option value="">Select saved batch</option>{batches.map(b=><option key={b.id} value={b.id}>{b.from_date} to {b.to_date} · {b.status} · {b.processed}/{b.total} · index {b.index_spot?.status||'unknown'}</option>)}</select></label><label>Horizon<select value={horizon} disabled={active} onChange={e=>setHorizon(Number(e.target.value))}>{[5,10,15,30,60,0].map(h=><option value={h} key={h}>{h===0?'Session close':h+' minutes'}</option>)}</select></label><label>Constituent features<select value={weights} disabled={active} onChange={e=>setWeights(e.target.value as typeof weights)}><option value="unweighted">Unweighted breadth (not official weights)</option><option value="verified_weights">Only genuinely pre-session recorded weights</option></select></label><button className="ws-button primary" disabled={active||!batch} onClick={()=>void run()}>Audit and compare historical models</button></div>
+ <p>First 60 observed index sessions: 30 training, 10 calibration, 20 holdout. Session-close research uses 120 sessions (60/20/40). Missing observations and members remain excluded and counted. Range limit: 240 calendar days.</p>
+ {stage&&<p role="status">{stage} {active&&<progress value={percent} max={100}/>} {job&&<button className="ws-button" onClick={()=>void cancel()}>Cancel research</button>}</p>}{error&&<p className="bci-error" role="alert">{error}</p>}
+ {result&&<><h4>Historical assessment · {result.state.replaceAll('_',' ')}</h4><p>Observed index sessions {result.observed_index_dates}; selected {result.recorded_sessions}/{result.required_sessions}. {result.weight_mode.replaceAll('_',' ')} · {result.horizon_minutes||'Session close'} {result.horizon_minutes?'minutes':''}.</p>
+ <div className="bci-grid">{Object.entries(result.evidence_counts).map(([k,v])=><div className="bci-stat" key={k}><span>{k.replaceAll('_',' ')}</span><strong>{v}</strong></div>)}</div>
+ <p>{Object.entries(result.support).map(([k,v])=>k+': '+v.samples+' samples / '+v.sessions+' sessions').join(' · ')}</p>
+ {Object.keys(result.source_failures).length>0&&<details><summary>Missing / invalid original sources</summary><p>{Object.entries(result.source_failures).map(([k,v])=>k+': '+v).join(' · ')}</p></details>}
+ {Object.keys(result.methods).length>0&&<div className="bci-scroll"><table aria-label="Historical alpha model comparison"><thead><tr><th>Method</th><th>Calls / samples</th><th>Direction hit %</th><th>Brier ↓</th><th>Mean net index proxy bps</th><th>Call sessions</th></tr></thead><tbody>{Object.entries(result.methods).map(([k,v])=><tr key={k}><td>{k.replaceAll('_',' ')}</td><td>{v.directional_calls}/{v.eligible_samples}</td><td>{fmt(v.directional_hit_pct)}</td><td>{fmt(v.brier)}</td><td>{fmt(v.mean_net_index_proxy_bps)}</td><td>{v.call_sessions}</td></tr>)}</tbody></table></div>}
+ <div className="bci-actions"><a className="ws-button" download href={downloadBase+'/audit/'+encodeURIComponent(result.audit_id)}>Download historical coverage audit</a>{result.run_id&&<a className="ws-button" download href={downloadBase+'/results/'+encodeURIComponent(result.run_id)}>Download holdout predictions</a>}</div><p>{result.warning}</p></>}
+ </details>
+}

@@ -172,11 +172,21 @@ def _walk(train,dates,scope,progress=None):
         out.append(item)
     return out
 
-def run(*,horizon=30,scope="combined",mode="receipt",progress=None,now=None):
+def run(*,horizon=30,scope="combined",mode="receipt",cohort="original",progress=None,now=None):
     if scope not in SCOPES or mode not in ("receipt","archive"):
         raise ValueError("Unknown context scope or availability mode")
-    status=a.readiness(horizon,now=now)
-    status.update(version=VERSION,policy_sha256=POLICY_HASH,context_scope=scope,context_mode=mode)
+    if cohort not in ("original","registered"):
+        raise ValueError("Unknown context cohort")
+    registered=None
+    if cohort=="registered":
+        if mode!="receipt":
+            raise ValueError("Forward cohorts require receipt mode")
+        from . import context_cohort
+        registered=context_cohort.get(scope,horizon)
+        if not registered:
+            raise ValueError("Register the forward cohort before running research")
+    status=a.readiness(horizon,now=now,start_session=registered["start_session"]) if registered else a.readiness(horizon,now=now)
+    status.update(cohort=cohort,cohort_registration=registered,version=VERSION,policy_sha256=POLICY_HASH,context_scope=scope,context_mode=mode)
     dates=status["training_dates"]+status["calibration_dates"]+status["holdout_dates"]
     samples=[];counts=Counter();audit=[];coverage=Counter();meta={"rows":0,"ambiguous_factors":[]}
     if dates:
@@ -211,7 +221,7 @@ def run(*,horizon=30,scope="combined",mode="receipt",progress=None,now=None):
         status.update(state="holdout_assessment_available",methods=methods,regimes=regimes,quantiles=q,
                       run_id=a._save(records),prediction_rows=len(records))
     records=[{"day":"RUN_SUMMARY","state":status["state"],"context_scope":scope,"context_mode":mode,
-        "counts_json":json.dumps(dict(counts),sort_keys=True),"factor_coverage_json":json.dumps(dict(coverage),sort_keys=True),
+        "counts_json":json.dumps(dict(counts),sort_keys=True),"factor_coverage_json":json.dumps({"coverage":dict(coverage),"cohort":registered},sort_keys=True),
         "support_json":json.dumps(status["support"],sort_keys=True),"policy_sha256":POLICY_HASH}]
     for row in audit:
         records.append({"day":row["day"],"state":"recorded_session","context_scope":scope,"context_mode":mode,
