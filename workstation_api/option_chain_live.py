@@ -270,6 +270,8 @@ def _save_snapshot(value: dict) -> str:
     _LAST_PERSISTED[key] = now
     if changed:
         recorder_storage.saved("option_chain", value["received_utc"])
+        from . import market_observations
+        market_observations.publish()
     return "saved" if changed else "duplicate"
 
 
