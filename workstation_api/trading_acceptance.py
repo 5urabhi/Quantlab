@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 from hashlib import sha256
+from math import isfinite
 from pathlib import Path
 import json
 import sqlite3
@@ -58,8 +59,7 @@ def _pair_rejection_reason(book: dict | None, feature: dict | None,
             or feature.get("received_utc") != received_utc):
         return "identity_or_timestamp_mismatch"
     if (book.get("collection_mode") != "auto_banknifty_20_level"
-            or book.get("source") != "original_Dhan_full_market_depth_websocket"
-            or not book.get("full_depth")):
+            or book.get("source") != "original_Dhan_full_market_depth_websocket"):
         return "source_provenance_mismatch"
     if not (isinstance(stored_sha, str) and isinstance(derived_sha, str)
             and len(stored_sha) == 64 and stored_sha == derived_sha):
@@ -73,8 +73,12 @@ def _pair_rejection_reason(book: dict | None, feature: dict | None,
         return "packet_pair_digest_mismatch"
     if (not isinstance(book.get("bid"), list)
             or not isinstance(book.get("ask"), list)
-            or len(book["bid"]) != 20 or len(book["ask"]) != 20):
-        return "incomplete_twenty_level_book"
+            or not 1 <= len(book["bid"]) <= 20 or not 1 <= len(book["ask"]) <= 20):
+        return "invalid_depth_level_count"
+    full = len(book["bid"]) == 20 and len(book["ask"]) == 20
+    if (book.get("full_depth") is not full
+            or ("full_20_levels" in feature and feature["full_20_levels"] is not full)):
+        return "depth_completeness_flag_mismatch"
     if feature.get("side") not in ("CE", "PE"):
         return "invalid_feature_side"
     if not isinstance(feature.get("units"), int) or feature["units"] <= 0:
@@ -85,14 +89,18 @@ def _pair_rejection_reason(book: dict | None, feature: dict | None,
                 return "invalid_level_structure"
             price = level.get("price")
             qty = level.get("quantity")
-            if (not isinstance(price, (int, float)) or
-                    not isinstance(qty, int) or price <= 0 or qty < 0):
+            if (type(price) not in (int, float) or not isfinite(price) or
+                    type(qty) is not int or price <= 0 or qty < 0):
                 return "invalid_level_values"
-    if book["bid"][0]["price"] > book["ask"][0]["price"]:
+        prices = [level["price"] for level in book[side]]
+        if prices != sorted(prices, reverse=(side == "bid")) or len(prices) != len(set(prices)):
+            return "invalid_level_order"
+    if book["bid"][0]["price"] >= book["ask"][0]["price"]:
         return "crossed_top_of_book"
     if not isinstance(session_id, str) or not session_id.startswith("auto20_"):
         return "unexpected_session_id"
-    return None
+    # Genuine partial books are observations, not full-depth acceptance passes.
+    return None if full else "partial_original_depth"
 
 
 def _valid_pair(book: dict, feature: dict, stored_sha: str, derived_sha: str,
@@ -112,7 +120,7 @@ def inspect_saved_books(db_path: Path | None = None) -> dict:
     empty = {
         "status": "not_recorded", "total_automatic_books": 0,
         "latest_book_utc": None, "sample_checked": 0,
-        "valid_sample_books": 0, "invalid_sample_books": 0,
+        "valid_sample_books": 0, "partial_sample_books": 0, "invalid_sample_books": 0,
         "valid_ce_books": 0, "valid_pe_books": 0,
         "invalid_reason_counts": {},
         "observed_trading_dates_in_sample": 0,
@@ -153,6 +161,7 @@ def inspect_saved_books(db_path: Path | None = None) -> dict:
         sides = Counter()
         dates = set()
         invalid_reasons = Counter()
+        partial = 0
         for identity, received, session_id, feat_raw, feat_sha, book_raw, book_sha in data:
             try:
                 feature = json.loads(feat_raw)
@@ -163,6 +172,9 @@ def inspect_saved_books(db_path: Path | None = None) -> dict:
             reason = _pair_rejection_reason(
                 book, feature, book_sha, feat_sha,
                 identity, session_id, received)
+            if reason == "partial_original_depth":
+                partial += 1
+                continue
             if reason is not None:
                 invalid_reasons[reason] += 1
                 continue
@@ -170,18 +182,21 @@ def inspect_saved_books(db_path: Path | None = None) -> dict:
             dates.add(received[:10])
         invalid = sum(invalid_reasons.values())
         return {
-            **empty, "status": "verified_sample" if not invalid else "integrity_attention",
+            **empty, "status": ("integrity_attention" if invalid else
+                                "partial_depth_sample" if partial else "verified_sample"),
             "total_automatic_books": int(count),
             "latest_book_utc": _iso(latest),
             "sample_checked": len(data),
-            "valid_sample_books": len(data) - invalid,
+            "valid_sample_books": len(data) - invalid - partial,
+            "partial_sample_books": partial,
             "invalid_sample_books": invalid,
             "valid_ce_books": sides["CE"], "valid_pe_books": sides["PE"],
             "invalid_reason_counts": dict(sorted(invalid_reasons.items())),
             "observed_trading_dates_in_sample": len(dates),
             "note": ("Integrity is verified only for the latest sampled records. "
                      "Saved packets prove historical receipt, not current entitlement, "
-                     "exchange timestamp accuracy or executable broker fills."),
+                     "exchange timestamp accuracy or executable broker fills. "
+                     "Consistent partial original books are counted separately and never pass full-depth acceptance."),
         }
     except (sqlite3.Error, OSError, ValueError):
         return {**empty, "status": "inspection_unavailable",
@@ -289,8 +304,17 @@ def report() -> dict:
         detail = (f"{books['invalid_sample_books']} of the latest "
                   f"{books['sample_checked']} original book receipts failed integrity checks."
                   + (f" Causes: {causes}." if causes else ""))
+        if books.get("partial_sample_books"):
+            detail += f" Separately, {books['partial_sample_books']} consistent partial original books lacked full 20+20 depth."
         action = ("Inspect Data Manager > Activity & recovery. Preserve original "
                   "records; do not discard or reconstruct failed order books.")
+    elif books["status"] == "partial_depth_sample":
+        state = "partial"
+        detail = (f"{books['valid_sample_books']}/{books['sample_checked']} sampled receipts "
+                  f"passed full 20+20 depth checks; {books['partial_sample_books']} were "
+                  "consistent partial original books, not provenance failures.")
+        action = ("Preserve partial originals and keep collecting genuine depth. "
+                  "Never fill absent levels or use a partial receipt as verified full depth.")
     elif books["status"] == "inspection_unavailable":
         state = "not_verified"
         detail = "The local shared database could not be read safely."
