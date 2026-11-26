@@ -18,7 +18,7 @@ class SpreadSpeedTests(TestCase):
                     exit_received_utc=p._iso(decision+timedelta(seconds=h+4)),
                     entries=[{"requested_units":30,"original_best_bid":99.,"cashflow":-3030.}])
             return out
-        with patch.object(s.replay,"replay",side_effect=simulate),patch.object(s,"_coverage",return_value={}):
+        with patch.object(s.replay,"replay",side_effect=simulate),patch.object(s,"_coverage",return_value={}),patch.object(s,"_worker_count",return_value=1):
             result=s.run(day="2026-11-26",strategy="LONG_OPTION",identities=["NSE_FNO:123"],now=now)
         self.assertGreater(result["decision_count"],0)
         self.assertEqual(len(calls),result["decision_count"]*len(s.HORIZONS))
@@ -52,7 +52,7 @@ class SpreadSpeedTests(TestCase):
                     "exit_decision_utc":p._iso(decision+timedelta(milliseconds=d,seconds=h)),
                     "exit_received_utc":p._iso(decision+timedelta(milliseconds=2*d,seconds=h)),
                     "entries":[{"requested_units":30,"original_best_bid":99.,"cashflow":-3030.}]}
-        with patch.object(s.replay,"replay",side_effect=simulate),patch.object(s,"_coverage",return_value={}):
+        with patch.object(s.replay,"replay",side_effect=simulate),patch.object(s,"_coverage",return_value={}),patch.object(s,"_worker_count",return_value=1):
             result=s.run(day="2026-11-26",strategy="LONG_OPTION",identities=["NSE_FNO:123"],now=now,compare_delays=True)
         n=result["decision_count"]
         self.assertGreater(n,1)
@@ -97,3 +97,57 @@ class SpreadSpeedTests(TestCase):
         with self.assertRaises(ValueError):
             s.run(day="2026-11-27",strategy="LONG_OPTION",identities=["NSE_FNO:123"],
                   now=datetime(2026,11,26,4,30,tzinfo=timezone.utc))
+
+
+    def test_worker_budget_reserves_resources_and_caps_work(self):
+        with patch.object(s,"_available_cpus",return_value=12),patch.object(s,"_available_memory",return_value=4096*s.MIB):
+            self.assertEqual(s._worker_count(100),6)
+            self.assertEqual(s._worker_count(2),2)
+            self.assertEqual(s._worker_count(0),0)
+        with patch.object(s,"_available_cpus",return_value=2),patch.object(s,"_available_memory",return_value=4096*s.MIB):
+            self.assertEqual(s._worker_count(100),1)
+        with patch.object(s,"_available_cpus",return_value=12),patch.object(s,"_available_memory",return_value=768*s.MIB):
+            self.assertEqual(s._worker_count(100),1)
+        with patch.object(s,"_available_memory",return_value=None):
+            self.assertEqual(s._worker_count(100),1)
+
+    def test_parallel_matches_serial_and_progress_is_monotonic(self):
+        now=datetime(2026,11,26,4,30,tzinfo=timezone.utc)
+        def simulate(**kwargs):
+            h=kwargs["hold_seconds"];d=kwargs["latency_ms"]
+            decision=datetime.fromisoformat(kwargs["decision_utc"])
+            if h==15:
+                return {"state":"entry_unobservable","entry_complete":False,"exit_complete":False,"net_pnl_inr":None}
+            return {"state":"complete_conditional_quote_replay","entry_complete":True,"exit_complete":True,
+                "net_pnl_inr":float(h-d/1000),"total_fees_inr":50.,
+                "entry_received_utc":p._iso(decision+timedelta(milliseconds=d)),
+                "exit_decision_utc":p._iso(decision+timedelta(milliseconds=d,seconds=h)),
+                "exit_received_utc":p._iso(decision+timedelta(milliseconds=2*d,seconds=h)),
+                "entries":[{"requested_units":30,"original_best_bid":99.,"cashflow":-3030.}]}
+        params=dict(day="2026-11-26",strategy="LONG_OPTION",identities=["NSE_FNO:123"],now=now,compare_delays=True)
+        progress=[]
+        with patch.object(s.replay,"replay",side_effect=simulate),patch.object(s,"_coverage",return_value={}):
+            with patch.object(s,"_worker_count",return_value=1):
+                serial=s.run(**params)
+            with patch.object(s,"_worker_count",return_value=3):
+                parallel=s.run(**params,progress=lambda n,stage:progress.append(n))
+        self.assertEqual(serial.pop("worker_count"),1)
+        self.assertEqual(parallel.pop("worker_count"),3)
+        self.assertEqual(serial,parallel)
+        self.assertEqual(progress,sorted(progress))
+        self.assertEqual(progress[-1],100)
+
+    def test_parallel_cancellation_stops_refilling(self):
+        from threading import Lock
+        started=[]
+        lock=Lock()
+        def evaluate(anchor,stop):
+            with lock:
+                started.append(anchor)
+            stop.wait(.05)
+            return anchor
+        def cancel(percent,stage):
+            raise RuntimeError("cancelled")
+        with self.assertRaisesRegex(RuntimeError,"cancelled"):
+            s._parallel_anchors(list(range(50)),evaluate,3,cancel)
+        self.assertLessEqual(len(started),3)
