@@ -1,0 +1,20 @@
+# BANKNIFTY constituent intelligence and remaining trading closeout
+
+## Design and data source
+- The existing Dhan options Quote/OI socket has a total documented instrument budget of 5,000. Original option contracts and IDX_I ticker slots retain priority. Exact NSE_EQ constituents are subscribed only when the full dated membership can fit in remaining slots and the user enabled collection.
+- No additional socket, order endpoint, option displacement, forced reconnect or price-history invention. A rejected mixed equity subscription falls back to the existing option feed for the remainder of the worker session. Local enablement is stored separately, applies on the next natural connection, and disabling stops accepting new constituent packets.
+- Original cash-equity quote frames are sampled (at most once per two seconds per instrument) in an independent bounded queue; sampled, stale, dropped and successfully saved observations are distinct counters. Raw source SHA-256 and membership SHA are retained with each scalar row in the existing shared_market.sqlite3. Data Centre exposes this source and its date extents, previews and calendar activity.
+- Constituent membership comes from installed dated PIT membership evidence and exact current master IDs. An unavailable or ambiguous source blocks subscriptions rather than silently hardcoding current members.
+- Reviewed weights are entered from an authorized dated report with exact CSV columns symbol,weight_pct. Every dated member is required, positive percentage weights must sum to 100% within 0.1pp, original text is preserved and hashed. Saved weight evidence must be received before the analysis cutoff and no more than 35 days old with the same membership; reported weights are not independently certified live weights.
+
+## Directional Trading UI
+The page separates aligned underlying pressure from the existing Greek/IV/liquidity/cost-based option scenario tools. Select 1/5/10/30/60 minutes and a current or saved IST cutoff. Returns require actual original quotes no later than both endpoints (30s age bound); volume changes use nondecreasing cumulative traded volume; relative volume uses at least five same-time prior observed intervals. Reported ATP and aggregate displayed quantities are not aggressor flow or exchange-certified VWAP. Weight x return is an approximate contribution in percentage points; approximate index points require an actual aligned BANKNIFTY tick. Full weighted movement/breadth is withheld if any member is missing.
+
+## Recorded market review
+Saved replay now includes retrospective scored/unverifiable outcomes and directional accuracy; recorded books have timestamped spread, best bid/ask, displayed quantity share and selected per-level quantities. Gaps are explicit; no inferred fills.
+
+## Acceptance and nonclaims
+Offline tests cover mixed packet parsing, socket capacity, stale/duplicate sampling, persistence, dated weights and source cutoffs, relative volume, missing weights and missing current quotes. Browser fixtures exercise populated desktop/mobile directional views and partial coverage. Live vendor entitlement and mixed subscription behavior still need the authenticated local run. No ML/RL, futures or stock-specific derivatives collection, true aggressor flow, calibrated forward probabilities, signed dealer gamma exposure, or profitable execution is claimed. Forward directional comparisons against EMA need prospective recorded data and a separately frozen evaluation protocol.
+
+## Legacy branch audit
+Do not bulk-merge the two legacy research histories: they diverged hundreds of commits and overlap the current V3 implementation. Preserve as research history pending per-file reconciliation. The older local-backup/execution-stress and multi-provider branches contain unique modules. Do not enable an unrequested third broker or unsafe restore operations; audit and port validated features separately.
