@@ -215,3 +215,6 @@ usable minute observations; empty receipts and incomplete historical contract
 identity remain limitations. The inventory distinguishes a bounded count
 failure with a confirmed sample row from an unknown count. No recorder is
 restarted, historical depth fabricated, or broker order submitted.
+
+### DH-905 compatibility recovery
+Dhan's REST example uses string interval while its official Python SDK sends an integer interval; securityId is documented as a string but shown as a number. The downloader preserves the canonical request and expiry/strike/side semantics, trying equivalent encodings only on explicit HTTP 400/DH-905. Accepted encoding is reused during the job and recorded as wire_request on new receipts. Bulk acquisition splits a rejected window once into shorter requests, saves accepted subwindows separately, and resumes from their SHA-verified intervals. Persistent input errors, authentication and rate limits are surfaced, never replaced by zero prices. Live account validation remains necessary.

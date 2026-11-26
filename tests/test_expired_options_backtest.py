@@ -504,14 +504,14 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
     def test_dhan_dh905_http400_reports_contract_context_without_exposing_access_token(self):
         body = exp._request_body(date(2026, 11, 12), date(2026, 11, 13),
                                  "MONTH", 0, "ATM+1", "CALL")
-        bad_response = BytesIO(
+        bad_response = (
             b'{"errorType":"Input_Exception","errorCode":"DH-905",'
             b'"errorMessage":"expiryCode is required"}')
         def rejected(request, timeout):
             self.assertEqual(request.get_method(), "POST")
             self.assertEqual(body["expiryCode"], 1)
             raise HTTPError(
-                exp.ENDPOINT, 400, "Bad Request", {}, bad_response)
+                exp.ENDPOINT, 400, "Bad Request", {}, BytesIO(bad_response))
         with patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": "SECRET-FOR-TEST-ONLY"}):
             with self.assertRaisesRegex(ValueError, "Dhan expired-options HTTP 400") as caught:
                 exp._original_response(body, opener=rejected)
@@ -521,6 +521,41 @@ class ExpiredOptionsBacktestTests(unittest.TestCase):
         self.assertIn("expiry=1", public_message)
         self.assertIn("ATM+1", public_message)
         self.assertNotIn("SECRET-FOR-TEST-ONLY", public_message)
+
+    def test_rolling_input_encoding_retry_remembers_success(self):
+        import json
+        calls=[]
+        body=exp._request_body(date(2025,11,26),date(2025,12,26),"MONTH",0,"ATM","CALL")
+        class Reply(BytesIO):
+            pass
+        def opener(request,timeout):
+            wire=json.loads(request.data)
+            calls.append(wire)
+            if isinstance(wire["interval"],str):
+                raise HTTPError(exp.ENDPOINT,400,"Bad Request",{},BytesIO(
+                    b'{"errorCode":"DH-905","errorMessage":"Missing required fields"}'))
+            return Reply(b'{"data":{"ce":{"timestamp":[]}}}')
+        state={}
+        with patch.dict("os.environ",{"DHAN_ACCESS_TOKEN":"TEST-TOKEN-ONLY"}):
+            payload=exp._original_response(body,opener=opener,wire_state=state)
+            exp._original_response(body,opener=opener,wire_state=state)
+        self.assertEqual(len(calls),3)
+        self.assertEqual(calls[0],body)
+        self.assertEqual(calls[1],{**body,"interval":1})
+        self.assertEqual(calls[1],calls[2])
+        self.assertEqual(state["wire_request"],calls[1])
+        self.assertEqual(payload,{"data":{"ce":{"timestamp":[]}}})
+
+    def test_rolling_auth_failure_is_not_retried(self):
+        body=exp._request_body(date(2025,11,26),date(2025,12,26),"MONTH",0,"ATM","CALL")
+        calls=[]
+        def opener(request,timeout):
+            calls.append(request)
+            raise HTTPError(exp.ENDPOINT,401,"Unauthorized",{},BytesIO(b'{}'))
+        with patch.dict("os.environ",{"DHAN_ACCESS_TOKEN":"TEST-TOKEN-ONLY"}):
+            with self.assertRaisesRegex(ValueError,"access denied"):
+                exp._original_response(body,opener=opener)
+        self.assertEqual(len(calls),1)
 
     def test_partial_active_vendor_failure_preserves_other_contract_candles(self):
         """One Dhan 400 on a newly listed CE must not discard valid PE data."""
