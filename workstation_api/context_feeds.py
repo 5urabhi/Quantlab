@@ -143,7 +143,28 @@ def _http(url,params=None):
                     raise ValueError("Credential echoed by provider; response discarded")
             return body
     except HTTPError as exc:
-        raise ValueError("Provider HTTP "+str(exc.code)) from None
+        # Classify bounded FRED errors locally. Never include the raw message,
+        # request URL, or credential in an exception or report.
+        category=""
+        if url==FRED_URL+"series/observations" and exc.code==400:
+            try:
+                body=json.loads(exc.read(8192))
+                msg=str(body.get("error_message","")).casefold()
+                if "does not exist in alfred" in msg:
+                    category=" [historical_vintages_unavailable]"
+                elif "does not exist" in msg:
+                    category=" [series_unavailable]"
+                elif "realtime" in msg or "real-time" in msg or "vintage" in msg:
+                    category=" [vintage_parameters_rejected]"
+                elif "api_key" in msg or "api key" in msg:
+                    category=" [key_rejected]"
+                elif "copyright" in msg or "permission" in msg:
+                    category=" [source_restriction]"
+                else:
+                    category=" [other_bad_request]"
+            except (OSError,ValueError,TypeError,AttributeError):
+                category=" [unclassified_bad_request]"
+        raise ValueError("Provider HTTP "+str(exc.code)+category) from None
     except (URLError,TimeoutError,OSError):
         raise ValueError("Provider network unavailable") from None
 

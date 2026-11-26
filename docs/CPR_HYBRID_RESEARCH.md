@@ -320,3 +320,65 @@ are not overwritten.
 Enable reviewed automatic context feeds in Global Markets for future
 receipt-time observations. FRED is only a daily context subset, not the
 complete global market, participant, or intraday futures universe.
+
+
+## Source recovery and 15:20 IST square-off (v6)
+
+The FRED archive loader classifies HTTP 400 responses without logging raw
+provider text or secrets. It attempts real-time-period history, then a
+bounded period, then initial-release-only history where supported. It
+does not substitute today's revised observations into historical
+availability. Failed factors remain unavailable. Existing successful
+imports are preserved.
+
+An optional independent Alpaca source provides daily raw US-listed ETF
+proxy series (SPY, QQQ, KBE, EWJ, FXI, TLT, GLD). EWJ/FXI are US-traded
+Japan/China exposure proxies, not actual Asian exchange indices or
+intraday feeds. TLT is a bond-price proxy, not a Treasury yield. Each
+series has a distinct factor identity and explicit IEX or SIP source.
+The global feature schema is versioned; older contextual models must
+not be reused with a different input schema.
+
+Use local ignored .env credentials:
+```text
+APCA_API_KEY_ID=...
+APCA_API_SECRET_KEY=...
+```
+
+Then, after reviewing the source terms and archive assumptions:
+```bash
+bash run.sh cpr-context-check --fetch-fred --fetch-alpaca --confirm-reviewed
+```
+The default Alpaca feed is IEX; select `--alpaca-feed sip` only if
+entitled and before creating a series with IEX identity. No trading
+endpoint is used. Daily proxy timestamps are New York midnight;
+availability is assumed no earlier than 00:15 New York time on the
+following day. This is deliberately conservative retrospective evidence,
+not provider-vintage proof; raw historical bars may be corrected later.
+Unfinished days and incomplete response pages are rejected or excluded.
+Missing observations are not generated.
+
+The preflight also reports the locally documented membership source's
+coverage date. If the chosen BANKNIFTY batch ends before the validation
+or holdout period, refresh the dated membership source and run existing
+automatic market-library maintenance with index and constituents enabled,
+outside Indian market priority hours. It reuses checked Dhan caches and
+does not extend membership beyond documented coverage. A stale provider
+membership reconstruction remains a blocker even after price downloads.
+
+All CPR paper strategies now have a hard scheduled square-off at
+15:20 IST. A 60-minute policy must fit before that cutoff. Use
+`--hold 0` for the separate session-hold experiment: no fixed duration,
+minimum 15 minutes reserved before square-off, normal target and policy
+stops still active. The no-stop comparator may hold until target or
+square-off. Missing monitoring bars trigger a conservative exit request;
+a missing requested exit open retries the first later observed open
+of the same strike/side/expiry family through 15:29 IST only. This is
+a conditional proxy for a pending exit, not evidence of actual broker
+execution. Never choose a better later price, use a different strike,
+or carry to the next session. A missing entry remains unverified; if
+all later same-session exit observations are unavailable, the exit
+remains censored. Q fitting continues to require complete original
+decision and exact delayed-open trajectories. Reports separate unverified
+entries/exits, recovered delayed exits, max delay and exits after 15:20.
+The strategy is still paper-only and no live broker square-off is certified.

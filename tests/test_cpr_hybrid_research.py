@@ -366,3 +366,62 @@ class CprHybridTests(TestCase):
         self.assertAlmostEqual(result["trailing_floor_return"],.06)
         self.assertAlmostEqual(result["max_observed_mark_return"],.08)
         self.assertAlmostEqual(result["net"],59.)
+
+
+    def test_exit_retries_first_observed_open_and_never_uses_better_later_price(self):
+        s={"session":DAY,"minute":4,"side":"CALL","spot":100.,
+           "features":[0.]*11,"decision_utc":r._stamp(DAY,5)}
+        table={r._stamp(DAY,4):{("CALL",100):bar(20)},
+               r._stamp(DAY,6):{("CALL",100):bar(20)},
+               r._stamp(DAY,7):{("CALL",100):bar(40)},
+               r._stamp(DAY,8):{("CALL",100):bar(40)},
+               r._stamp(DAY,10):{("CALL",100):bar(19)},
+               r._stamp(DAY,11):{("CALL",100):bar(80)}}
+        ep=r._episode(s,table,index(100),hold=15,lot_size=30,max_lots=1,risk_budget=4250,bps=35)
+        out=r._exit(ep,"no_stop")
+        self.assertEqual(out["reason"],"target")
+        self.assertEqual(out["exit_request_utc"],r._stamp(DAY,9))
+        self.assertEqual(out["exit_utc"],r._stamp(DAY,10))
+        self.assertEqual(out["exit_delay_minutes"],1)
+        self.assertLess(out["net"],0)
+
+    def test_monitoring_gap_requests_exit_and_censors_if_no_same_session_bar(self):
+        s={"session":DAY,"minute":4,"side":"CALL","spot":100.,
+           "features":[0.]*11,"decision_utc":r._stamp(DAY,5)}
+        table={r._stamp(DAY,4):{("CALL",100):bar(20)},
+               r._stamp(DAY,6):{("CALL",100):bar(20)},
+               r._stamp(DAY,11):{("CALL",100):bar(20)}}
+        ep=r._episode(s,table,index(100),hold=15,lot_size=30,max_lots=1,risk_budget=4250,bps=35)
+        out=r._exit(ep,"no_stop")
+        self.assertEqual(out["reason"],"monitoring_gap_exit")
+        self.assertEqual(out["exit_utc"],r._stamp(DAY,11))
+        self.assertEqual(out["exit_delay_minutes"],2)
+        del table[r._stamp(DAY,11)]
+        table[r._stamp("2026-10-07",0)]={("CALL",100):bar(100,day="2026-10-07")}
+        ep=r._episode(s,table,index(100),hold=15,lot_size=30,max_lots=1,risk_budget=4250,bps=35)
+        self.assertEqual(r._exit(ep,"no_stop")["state"],"exit_censored")
+
+    def test_squareoff_hold_zero_and_late_retry(self):
+        s={"session":DAY,"minute":340,"side":"CALL","spot":100.,
+           "features":[0.]*11,"decision_utc":r._stamp(DAY,341)}
+        table={r._stamp(DAY,m):{("CALL",100):bar(20)}
+               for m in range(340,365)}
+        table[r._stamp(DAY,366)]={("CALL",100):bar(20)}
+        ep=r._episode(s,table,index(100),hold=0,lot_size=30,max_lots=1,risk_budget=4250,bps=35)
+        out=r._exit(ep,"no_stop")
+        self.assertEqual(ep["scheduled_exit_utc"],r._stamp(DAY,365))
+        self.assertEqual(out["reason"],"squareoff_1520")
+        self.assertEqual(out["exit_request_utc"],r._stamp(DAY,365))
+        self.assertEqual(out["exit_utc"],r._stamp(DAY,366))
+        self.assertTrue(out["exit_after_squareoff"])
+        self.assertEqual(out["exit_delay_minutes"],1)
+
+    def test_no_new_signal_reserves_position_beyond_squareoff(self):
+        rows,_=r._signals(DAY,index(105),PREV,index(100),frame=5,hold=60,
+                          max_signals=375,entry_mode="daily_scan")
+        self.assertTrue(rows)
+        self.assertTrue(all(s["minute"]+2+60<=r.SQUAREOFF_MINUTE for s in rows))
+        rows,_=r._signals(DAY,index(105),PREV,index(100),frame=5,hold=0,
+                          max_signals=375,entry_mode="daily_scan")
+        self.assertTrue(all(s["target_utc"]==r._stamp(DAY,365) for s in rows))
+        self.assertTrue(all(s["minute"]+2+15<=r.SQUAREOFF_MINUTE for s in rows))

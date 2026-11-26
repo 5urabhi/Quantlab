@@ -13,7 +13,9 @@ import json
 from . import historical_alpha as h, predictive_option_research as p
 from . import alpha_retraining, liquidity_spreads as fees
 
-VERSION = "cpr_ml_offline_q_v5"
+VERSION = "cpr_ml_offline_q_v6"
+SQUAREOFF_MINUTE = 365  # 15:20 IST, minutes from 09:15
+LAST_SESSION_MINUTE = 374  # last regular minute open, 15:29 IST
 ENTRY_MODES = ("crossover", "daily_scan", "regime_scan")
 SCAN_MINUTES = 15
 MAX_DAILY_ATTEMPTS = 3
@@ -32,7 +34,7 @@ METHODS = ("no_stop", "fixed_stop", "ml_fixed", "offline_q", "ml_offline_q",
            "fixed_emergency_stop", "offline_q_emergency_stop",
            "trailing_stop", "trailing_emergency_stop", "volatility_trailing_stop", "no_trade")
 FRAMES = (1, 3, 5, 15)
-HOLDS = (15, 30, 60, 120)
+HOLDS = (0, 15, 30, 60, 120)  # zero means hold until square-off unless exited earlier
 MIN_STATE_EPISODES = 5
 MIN_STATE_DAYS = 3
 WARNING = (
@@ -53,6 +55,8 @@ WARNING = (
     "Previously viewed evaluation dates are exploratory, not a new untouched confirmation set. "
     "Trailing floors use completed net marks only; delayed exits can realize losses beyond those floors. "
     "Open-position risk diagnostics are sampled marks through the exit decision, not intrabar or fill-time maxima. "
+    "Mandatory 15:20 IST square-off; pending exits retry first observed same-session open through 15:29. "
+    "Missing monitoring triggers an exit; absent fills remain unresolved. "
     "No-stop and wider-stop modes are paper comparators only; full premium may be lost. No live approval."
 )
 
@@ -95,10 +99,11 @@ def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learnin
         return [], "ema_warmup_unavailable"
     fast,slow=h._ema(seed,9),h._ema(seed,21)
     rows=[]
-    last=-hold-10
+    minimum_hold=hold or 15
+    last=-minimum_hold-10
     # Earlier training only: a fixed calendar grid of nonoverlapping CPR/EMA
     # aligned continuation windows, independent of returns and future availability.
-    stride=((max(hold+3,60)+frame-1)//frame)*frame
+    stride=((max((hold or 120)+3,60)+frame-1)//frame)*frame
     first=((30+frame-1)//frame)*frame-1
     grid=set(range(first,375,stride)) if learning_grid else set()
     daily=entry_mode in ("daily_scan","regime_scan") and not learning_grid
@@ -124,7 +129,7 @@ def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learnin
             opening_complete=True
         # The daily scanner reserves overlapping *opportunities*, never
         # overlapping positions. Account policies enforce that separately.
-        if m+2+hold>374 or (not daily and m<=last+hold+2) or len(rows)>=max_signals:
+        if m+2+minimum_hold>SQUAREOFF_MINUTE or (not daily and m<=last+minimum_hold+2) or len(rows)>=max_signals:
             continue
         cross="CALL" if old<=0<gap and price>top else "PUT" if old>=0>gap and price<bottom else None
         entry_type=None
@@ -179,8 +184,8 @@ def _signals(day, bars, prev_day, previous, *, frame, hold, max_signals, learnin
                      "side":side,"spot":price,"features":x,
                      "entry_type":entry_type or ("crossover" if side==cross else "scheduled_continuation"),
                      "decision_utc":_stamp(day,m+1),"entry_utc":_stamp(day,m+2),
-                     "target_utc":_stamp(day,m+2+hold)})
-        last=m
+                     "target_utc":_stamp(day,m+2+hold if hold else SQUAREOFF_MINUTE)})
+        last=m if hold or daily else SQUAREOFF_MINUTE
     return rows,"complete_clock"
 
 
@@ -225,6 +230,17 @@ def _candidate_pool(signal,table,*,lot_size,max_lots,bps):
         "minimum_funding_inr":min((x[4] for x in candidates),default=None)}
 
 
+def _next_open_exit(table,day,side,strike,earliest,entry,units,bps):
+    """First eligible observed same-contract open, never best future price."""
+    for minute in range(earliest,LAST_SESSION_MINUTE+1):
+        row=_observed(table,day,minute,side,strike)
+        if row is not None:
+            net,charges=_net(entry,row["open"],units,bps)
+            return {"exit_net":net,"exit_fees":charges,"exit_utc":_stamp(day,minute),
+                    "exit_delay_minutes":minute-earliest}
+    return None
+
+
 def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
              candidate=None,learning=False):
     day,m,side,spot=(signal[k] for k in ("session","minute","side","spot"))
@@ -254,14 +270,18 @@ def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
     debit=entry["open"]*units*(1+bps/10000)
     ep.update(state="entered",entry=entry["open"],funding=funding,debit=debit)
     peak=None
-    # A mark at close j can cause an exit at open j+2. Last such exit is
-    # the deadline. Missing marks or fills terminate the observed trajectory.
-    for j in range(first,first+hold-1):
+    deadline=min(first+hold,SQUAREOFF_MINUTE) if hold else SQUAREOFF_MINUTE
+    ep["scheduled_exit_utc"]=_stamp(day,deadline)
+    ep["squareoff_utc"]=_stamp(day,SQUAREOFF_MINUTE)
+    # Missing monitoring triggers a conservative exit, not a fictitious fill.
+    for j in range(first,deadline-1):
         bar=_observed(table,day,j,side,strike)
         future=_observed(table,day,j+2,side,strike)
         spot_bar=index.get(j)
         if bar is None or spot_bar is None:
             ep["path_gap_minute"]=j
+            ep["gap_exit_request_utc"]=_stamp(day,j+2)
+            ep["gap_recovery"]=_next_open_exit(table,day,side,strike,j+2,ep["entry"],units,bps)
             break
         mark,_=_net(ep["entry"],bar["close"],units,bps)
         # The availability of a counterfactual exit does not decide whether
@@ -270,10 +290,14 @@ def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
         r=mark/debit
         peak=r if peak is None else max(peak,r)
         trend=(1 if side=="CALL" else -1)*(spot_bar[3]/spot-1)
+        recovery=_next_open_exit(table,day,side,strike,j+3,ep["entry"],units,bps) if future is None else None
+        if recovery is not None:
+            recovery["exit_delay_minutes"]+=1
         ep["path"].append({"minute":j,"elapsed":j-first+1,"mark_return":r,
                            "drawdown":peak-r,"trend":trend,
                            "exit_net":net,"exit_fees":charges,
-                           "exit_utc":_stamp(day,j+2),"terminal":j==first+hold-2})
+                           "exit_utc":_stamp(day,j+2),"terminal":j==deadline-2,
+                           "squareoff":j+2==SQUAREOFF_MINUTE,"recovery":recovery})
     return ep
 
 
@@ -305,7 +329,7 @@ def _forced(step, *, stop, stop_mark=STOP):
     if stop and step["mark_return"]<=stop_mark:
         return "stop"
     if step["terminal"]:
-        return "timeout"
+        return "squareoff_1520" if step.get("squareoff") else "timeout"
     return None
 
 
@@ -344,13 +368,25 @@ def _exit(ep, policy, q=None, *, stop_mark=STOP):
             if values is not None and values[0]>values[1]:
                 reason="learned_exit"
         if reason:
-            if step["exit_net"] is None:
-                return {"state":"exit_censored","reason":"missing_chosen_exit","trigger":reason,**diagnostics}
-            return {"state":"complete","reason":reason,"net":step["exit_net"],
-                    "fees":step["exit_fees"],"exit_utc":step["exit_utc"],
-                    "net_return":step["exit_net"]/ep["debit"],
-                    "target_realized":step["exit_net"]/ep["debit"]>=TARGET,**diagnostics}
+            return _resolve_exit(ep,reason,step["exit_utc"],step if step["exit_net"] is not None else step.get("recovery"),diagnostics)
+    if "gap_exit_request_utc" in ep:
+        return _resolve_exit(ep,"monitoring_gap_exit",ep["gap_exit_request_utc"],
+                             ep.get("gap_recovery"),diagnostics)
     return {"state":"exit_censored",**diagnostics}
+
+
+def _resolve_exit(ep,reason,request_utc,fill,diagnostics):
+    if fill is None:
+        return {"state":"exit_censored","reason":"missing_chosen_exit","trigger":reason,
+                "exit_request_utc":request_utc,**diagnostics}
+    delay=fill.get("exit_delay_minutes",0)
+    return {"state":"complete","reason":reason,"net":fill["exit_net"],
+            "fees":fill["exit_fees"],"exit_utc":fill["exit_utc"],
+            "exit_request_utc":request_utc,"exit_delay_minutes":delay,
+            "exit_after_squareoff":bool(ep.get("squareoff_utc") and fill["exit_utc"]>ep["squareoff_utc"]),
+            "net_return":fill["exit_net"]/ep["debit"],
+            "target_realized":fill["exit_net"]/ep["debit"]>=TARGET,**diagnostics}
+
 
 
 def _label(result):
@@ -501,6 +537,7 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
     daily=defaultdict(lambda:{"conditional_net_inr":0.,"scored":0,"unresolved":0})
     counts=Counter();journal=[];net=0.;charges=0.;winners=0;targets=0
     exit_reasons=Counter();worst_mark=None;open_dd=None
+    exit_delays=[];late_squareoffs=0
     daily_coverage={d:{"opportunities":0,"affordable_observed_entries":0,"entry_attempts":0,
                         "entered_positions":0,"scored_trades":0,"states":{}} for d in (dates or [])}
     active_until=None;attempts=0
@@ -554,6 +591,8 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             open_dd=dd_open if open_dd is None else max(open_dd,dd_open)
         if state=="complete":
             exit_reasons[result["reason"]]+=1
+            exit_delays.append(result.get("exit_delay_minutes",0))
+            late_squareoffs+=int(result.get("exit_after_squareoff",False))
             active_until=result["exit_utc"]
             coverage["scored_trades"]+=1
             value=result["net"];net+=value;charges+=result["fees"];balance+=value
@@ -589,7 +628,11 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
                 "days_with_scored_trade":sum(d["scored_trades"]>0 for d in daily_coverage.values()),
                 "days_without_entry":sum(d["entered_positions"]==0 for d in daily_coverage.values()),
                 "by_session":daily_coverage},
-            "unresolved_trades":unresolved,"full_account_pnl_certified":False},journal
+            "unresolved_trades":unresolved,"unverified_entries":counts["missing_entry"],
+            "unverified_exits":counts["exit_censored"],
+            "recovered_delayed_exits":sum(v>0 for v in exit_delays),
+            "max_exit_delay_minutes":max(exit_delays,default=None),
+            "exits_after_1520":late_squareoffs,"full_account_pnl_certified":False},journal
 
 
 def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
@@ -632,9 +675,10 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
             if entry_mode=="regime_scan":
                 # Earlier regime candidates only, selected on signal type and
                 # timestamp, not observed returns. Bounded one per hold window.
-                last_rejection=-hold-3
+                gap=hold or 120
+                last_rejection=-gap-3
                 for s in rows:
-                    if s["entry_type"]=="sideways_cpr_rejection" and s["minute"]>=last_rejection+hold+3:
+                    if s["entry_type"]=="sideways_cpr_rejection" and s["minute"]>=last_rejection+gap+3:
                         train_crossovers.append(s);last_rejection=s["minute"]
         counts[status]+=1
         day_audit[day]={"state":status,"signals":len(rows),"prior_session":prior,
@@ -647,8 +691,12 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     all_signals=signals+train_signals
     from . import cpr_context_features as cx
     context_audit=cx.attach(all_signals,mode=context_mode,batch_id=context_batch)
-    needed={_stamp(s["session"],m) for s in all_signals
-            for m in range(s["minute"],s["minute"]+hold+3)}
+    # Read each relevant session through 15:29, for pending exit retries.
+    earliest={}
+    for s in all_signals:
+        d=s["session"];earliest[d]=min(earliest.get(d,375),s["minute"])
+    needed={_stamp(d,m) for d,first in earliest.items()
+            for m in range(first,LAST_SESSION_MINUTE+1)}
     table,meta=p._load_options(all_signals,wings,progress,needed_stamps=needed)
     if progress:progress(52,"Constructing fixed-strike delayed execution trajectories")
     # Use adverse penalty for all primary training and evaluation, not ex-post
@@ -660,7 +708,8 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
     broad_train=_learning_episodes(train_signals,table,index,hold=hold,lot_size=lot_size,bps=bps)
     broad_val=_learning_episodes(val_signals,table,index,hold=hold,lot_size=lot_size,bps=bps)
     report={"version":VERSION,"settings":{"from_date":from_date,"to_exclusive":to_date,"timeframe":frame,
-             "hold_minutes":hold,"entry_mode":entry_mode,"scan_interval_minutes":SCAN_MINUTES,
+             "hold_minutes":hold if hold else None,"hold_until_squareoff":hold==0,
+             "squareoff_ist":"15:20","last_retry_ist":"15:29","entry_mode":entry_mode,"scan_interval_minutes":SCAN_MINUTES,
              "max_daily_entry_attempts":MAX_DAILY_ATTEMPTS,"capital_inr":capital,
              "context_mode":context_mode,"context_batch":context_batch,"rank_entries":rank_entries,"full_premium_and_fee_budget_inr":risk_budget,
              "historical_lot_size_assumed":lot_size,"max_lots":max_lots,"strike_wings":wings,
