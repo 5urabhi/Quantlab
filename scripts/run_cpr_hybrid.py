@@ -25,6 +25,11 @@ def main():
     parser.add_argument("--debit-spreads",action="store_true",help="Compare paired debit spread gross-funding and net-debit paper lanes")
     parser.add_argument("--dynamic-q",action="store_true",help="Compare five-minute in-position bank/global context Q with static and technical exits")
     parser.add_argument("--context-q",action="store_true",help="Compare matched technical and contextual offline-Q exits")
+    parser.add_argument("--regimes",action="store_true",help="Compare causal trend, reversal and volatility regime features")
+    parser.add_argument("--utility-research",action="store_true",help="Direct net-return and execution-risk research; implies --regimes")
+    forward=parser.add_mutually_exclusive_group()
+    forward.add_argument("--freeze-utility",action="store_true",help="Freeze only a development-qualified regime utility model for reserved later-date replay")
+    forward.add_argument("--forward-utility",type=Path,help="Evaluate frozen JSON policy after its fixed window closes, using only its reserved dates and settings")
     parser.add_argument("--sequences",action="store_true",help="Add longer completed candle sequences and detailed bank features to matched ML")
     parser.add_argument("--derivatives",action="store_true",help="Add observed same-strike OI/raw IV/relative volume to matched ML")
     parser.add_argument("--patterns",action="store_true",help="Study and compare completed-candle pattern models")
@@ -41,6 +46,27 @@ def main():
     parser.add_argument("--wings",type=int,default=3)
     parser.add_argument("--penalty-bps",type=float,default=25,help="Base adverse premium penalty per side; primary study adds 10bps")
     a=parser.parse_args()
+    if a.forward_utility:
+        from workstation_api import cpr_forward_utility as forward
+        try:
+            if a.from_date is not None or a.to_date!=today.isoformat():
+                raise ValueError("Forward replay uses only the frozen reservation; do not supply a new date range")
+            root=Path("results");root.mkdir(exist_ok=True)
+            _,digest=forward.load(a.forward_utility)
+            dest=root/("utility_forward_evaluation_"+digest+".json")
+            if dest.exists():
+                raise ValueError("Forward evaluation already saved; inspect that immutable result")
+            result=forward.replay(a.forward_utility,progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
+            with dest.open("x",encoding="utf-8") as file:
+                json.dump(result,file,indent=2,sort_keys=True,allow_nan=False)
+            print("Forward replay:",json.dumps({k:v for k,v in result.items() if k not in ("journal","index_sources","option_sources")}))
+            print("Report:",dest.resolve())
+            return 0
+        except (ValueError,RuntimeError,OSError,KeyError,TypeError) as exc:
+            print("Forward replay unavailable:",str(exc)[:200])
+            return 2
+    if a.freeze_utility:
+        a.utility_research=True
     if a.from_date is None:
         a.from_date=(datetime.fromisoformat(a.to_date).date()-timedelta(days={60:100,90:150,120:200}[a.sessions])).isoformat()
     try:
@@ -49,9 +75,14 @@ def main():
             context_mode=a.context_mode,context_batch=a.context_batch,rank_entries=a.rank_entries,
             pattern_research=a.patterns,fixed_panel=a.fixed_panel,context_q=a.context_q,debit_spreads=a.debit_spreads,
             sessions=a.sessions,dense_training=a.dense_training,sequence_research=a.sequences,derivative_research=a.derivatives,dynamic_q=a.dynamic_q,
+            regime_research=a.regimes,utility_research=a.utility_research,freeze_utility=a.freeze_utility,
             lot_size=a.lot_size,max_lots=a.max_lots,wings=a.wings,premium_penalty_bps=a.penalty_bps,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
+        if a.freeze_utility:
+            from workstation_api import cpr_forward_utility as forward
+            report["forward_policy"]=forward.freeze(report,root)
+            report.get("utility_research",{}).pop("frozen_candidate",None)
         path=root/("cpr_hybrid_"+uuid.uuid4().hex+".json")
         temp=path.with_suffix(".tmp")
         try:
@@ -107,6 +138,19 @@ def main():
         print("Debit spread lane:",lane,json.dumps({k:v for k,v in item.items() if k!="methods"}))
         for name,result in item["methods"].items():
             print(name,json.dumps({k:v for k,v in result.items() if k not in ("daily","daily_coverage")} | {"days_with_entry":result["daily_coverage"]["days_with_entry"]}))
+    if a.regimes or a.utility_research:
+        print("Observed regime anchors:",json.dumps(report["regime_anchor_counts"]))
+    if a.utility_research:
+        utility=report["utility_research"]
+        for name,info in utility.get("models",{}).items():
+            print("Direct utility model:",name,json.dumps(info))
+        for name,result in utility.get("methods",{}).items():
+            summary={k:v for k,v in result.items() if k not in ("daily","daily_coverage")}
+            if "daily_coverage" in result:
+                summary["daily_coverage"]={k:v for k,v in result["daily_coverage"].items() if k!="by_session"}
+            print("Direct utility method:",name,json.dumps(summary))
+    if a.freeze_utility:
+        print("Forward policy:",json.dumps(report.get("forward_policy",{})))
     print("Report:",path.resolve())
     print("No actual fills, profitability, or live RL approval certified.")
     return 0

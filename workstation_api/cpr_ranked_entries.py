@@ -157,7 +157,7 @@ def _matched(episodes,scope):
 
 def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capital,risk_budget,
            context_audit,q=None,pattern_research=False,fixed_panel=False,context_q=False,
-           sequence_research=False,derivative_research=False,progress=None):
+           sequence_research=False,derivative_research=False,regime_research=False,progress=None):
     val_days,test_days=map(set,dates)
     val_signals=[s for s in signals if s["session"] in val_days]
     test_signals=[s for s in signals if s["session"] in test_days]
@@ -182,6 +182,8 @@ def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capita
         scopes.append("derivatives")
         if sequence_research:
             scopes.append("sequence_derivatives")
+    if regime_research:
+        scopes.append("regimes")
     # 'val' contains capital-independent learning trajectories; nearest actual
     # candidate episodes are built separately to match the trading account.
     nearest_val=[r._episode(s,table,index[s["session"]],hold=hold,lot_size=lot_size,
