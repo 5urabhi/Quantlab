@@ -198,3 +198,75 @@ class HistoricalPolicyTests(TestCase):
                 rows=list(csv.DictReader(f))
             self.assertEqual(len(rows),4)
             self.assertEqual(json.loads(rows[1]["rejections"]),{"missing_fresh_original_book":20})
+
+
+    def test_funded_profiles_never_increase_cash_or_continue_after_loss_allowance(self):
+        cfg={**engine.DEFAULTS,"capital":17000.,"max_loss":4250.}
+        account={"cash":17000.,"gross_loss":0.,"entry_profile":"strict"}
+        self.assertEqual(research._budget(account,cfg),4250.)
+        account["entry_profile"]="capital_funded"
+        self.assertEqual(research._budget(account,cfg),17000.)
+        account["cash"]=12000.
+        account["gross_loss"]=1000.
+        self.assertEqual(research._budget(account,cfg),12000.)
+        account["cash"]=20000.
+        self.assertEqual(research._budget(account,cfg),17000.)
+        account["gross_loss"]=4250.
+        self.assertEqual(research._budget(account,cfg),0.)
+        account["entry_profile"]="capital_funded_no_target_gate"
+        self.assertEqual(research._budget(account,cfg),0.)
+
+    def test_target_gate_ablation_does_not_bypass_capital_or_default_selector(self):
+        from collections import Counter
+        item={**book(NOW,200.),"sigma":.20,"years":.1,"greeks":{"delta":.5},
+              "oi":1000,"volume":2000,"activity":{"receipts_120s":20}}
+        cfg={**engine.DEFAULTS,"capital":17000.,"max_loss":4250.,
+             "max_lots":1,"hold_seconds":300,"target_net":100.,"slippage_bps":0.}
+        report={"direction":"UP","scenario_move_points":100.,"spot":63000.}
+        with patch.object(select,"_scenario_exit",return_value=7000.):
+            rejected=Counter()
+            self.assertIsNone(select._candidate("LONG_OPTION",[item],cfg,report,rejected))
+            self.assertEqual(rejected["risk_or_budget_ceiling"],1)
+            funded={**cfg,"max_loss":17000.}
+            pick=select._candidate("LONG_OPTION",[item],funded,report,Counter())
+            self.assertIsNotNone(pick)
+            self.assertTrue(pick["scenario_target_met"])
+            self.assertGreater(pick["modeled_risk_inr"],4250.)
+        with patch.object(select,"_scenario_exit",return_value=6000.):
+            self.assertIsNone(select._candidate("LONG_OPTION",[item],funded,report,Counter()))
+            ablation={**funded,"_research_without_target_gate":True}
+            pick=select._candidate("LONG_OPTION",[item],ablation,report,Counter())
+            self.assertIsNotNone(pick)
+            self.assertFalse(pick["scenario_target_met"])
+            self.assertFalse(pick["target_gate_applied"])
+            self.assertIsNone(select._candidate("LONG_OPTION",[item],{**ablation,"capital":4000.},report,Counter()))
+
+    def test_entry_profile_comparison_keeps_diagnostics_and_accounts_separate(self):
+        def signals(day,anchors,end,*,snapshot_sink):
+            directions={}
+            for i,t in enumerate(anchors):
+                if t==NOW:
+                    snapshot_sink[i]={"direction":"UP"}
+                    directions[i]="UP"
+            return directions,{"state":"available","valid":1,"up":1,"down":0,"neutral":0,"ticks":100}
+        evaluations=[]
+        def picks(report,books,reason,cfg,caps):
+            evaluations.append((caps["directional"],cfg["_research_without_target_gate"]))
+            return report,{"directional":{"action":"NO_TRADE","reason":"no_candidate_passed",
+                                          "rejections":{"fixture_gate":1}}}
+        with TemporaryDirectory() as tmp, \
+             patch.object(research,"_root",return_value=Path(tmp)), \
+             patch.object(research.batch,"signal_cohorts",side_effect=signals), \
+             patch.object(select,"_source",return_value=({"direction":"UP","valid_contracts":1},[],None)), \
+             patch.object(select,"from_source",side_effect=picks), \
+             patch.object(research.replay.ao,"_read_database",side_effect=lambda:sqlite3.connect(":memory:")):
+            result=research.run(day="2026-11-26",now=NOW+timedelta(seconds=5),hold_seconds=60,
+                                include_spreads=False,compare_entry_profiles=True)
+            self.assertEqual(len(result["policies"]),15)
+            self.assertEqual(evaluations,[(4250.,False),(17000.,False),(17000.,True)])
+            for profile in research.ENTRY_PROFILES:
+                d=result["entry_diagnostics"]["profiles"][profile]["directional"]
+                self.assertEqual(d["evaluations"],1)
+                self.assertEqual(d["rejections"],{"fixture_gate":1})
+            self.assertEqual(result["journal_count"],0)
+            self.assertFalse(result["broker_orders_enabled"])
