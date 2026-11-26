@@ -65,6 +65,16 @@ def main():
             else:
                 print("Horizon:",horizon,json.dumps({k:v for k,v in item.items() if k!="pattern_library"}))
                 print("Holdout pattern outcomes:",json.dumps(item["pattern_library"]["holdout"]))
+        if a.first_passage:
+            print("Individual bank targets:",report["bank_target_state"])
+            for horizon,scope in report["bank_directions"].items():
+                print("Bank horizon:",horizon,json.dumps(scope["matched_coverage"]))
+                for task,result in scope["augmented"]["tasks"].items():
+                    chosen=result["selected_on_validation"]
+                    metric=result["holdout"][chosen]
+                    print(task,json.dumps({"selected":chosen,"brier":metric["brier"],"accuracy":metric["accuracy"],
+                        "predicted":metric["predicted"],"observed":metric["observed"],
+                        "matched_brier_difference":scope["selected_model_comparison"].get(task)}))
         print("Report:",dest.resolve())
         print("Exploratory direction forecasts, not verified execution or profits.")
         return 0
