@@ -79,12 +79,12 @@ def _predict(r,model,means,ep):
 
 def rank(r,model,means,candidates,nearest):
     by_anchor=defaultdict(list)
-    for ep in candidates:
-        # Candidate construction reserves only signal-time affordable single
-        # lots. Crucially do not filter missing_entry or entry_limit_exceeded.
-        if "planned_funding" not in ep:
-            continue
-        ev,target=_predict(r,model,means,ep)
+    # Predict in batches for CPU efficiency. No state/outcome filters.
+    valid=[ep for ep in candidates if "planned_funding" in ep]
+    probs=model.predict_proba([ep["features"] for ep in valid]) if valid else []
+    for ep,row in zip(valid,probs):
+        pr=dict(zip(model.classes_,map(float,row)))
+        ev=sum(pr[c]*means[c] for c in r.CLASSES);target=pr["target"]
         admissible=ev>0 and target>=model.target_threshold
         by_anchor[key(ep)].append((admissible,ev,target,-abs(ep["strike"]-ep["spot"]),
                                   -ep["strike"],ep))
@@ -96,6 +96,9 @@ def rank(r,model,means,candidates,nearest):
             continue
         _,ev,target,_,_,choice=max(ranked,key=lambda v:v[:-1])
         selected.append({**choice,"entry_type":ep.get("entry_type"),
+                         "observed_side_quotes":ep.get("observed_side_quotes"),
+                         "qualified_contracts":ep.get("qualified_contracts"),
+                         "minimum_funding_inr":ep.get("minimum_funding_inr"),
                          "ranked_expected_return":ev,"ranked_target_probability":target,
                          "ranked_candidate_count":len(ranked)})
     return selected
@@ -189,7 +192,15 @@ def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capita
             if model is None:
                 continue
             item["state"]="exploratory_assessment"
-            info["matched_candidate_holdout"]=r._holdout_ml(model,ntv)
+            info["matched_nearest_holdout"]=r._holdout_ml(model,ntv)
+            scored=r._training_rows(ntv)
+            if scored:
+                prior=info["calibration"]["training_prior"]
+                prior_brier=float(np.mean([sum((prior[c]-float(r._label(out)==c))**2
+                                               for c in r.CLASSES) for _,out in scored]))
+                score=info["matched_nearest_holdout"]["brier"]
+                info["matched_nearest_holdout"].update(training_prior_brier=prior_brier,
+                    brier_skill_vs_training_prior=1-score/prior_brier if prior_brier>0 else None)
             chosen=rank(r,model,means,tpv,ntv)
             for method in ("ml_fixed","ml_trailing_stop"):
                 name=scope+":"+variant+":"+method
@@ -205,6 +216,11 @@ def assess(r,*,signals,table,index,train,val,test,dates,hold,lot_size,bps,capita
             # comparator, not a comparison of differing market days.
             metrics,rows=r._evaluate(nt,method="fixed_stop",capital=capital,risk_budget=risk_budget,dates=dates[1])
             name=scope+":matched_fixed_stop"
+            item["methods"][name]=metrics
+            journal.extend({**row,"method":name} for row in rows)
+            metrics,rows=r._evaluate(nt,method="fixed_stop",capital=capital,risk_budget=risk_budget,
+                                    dates=dates[1],context_filter=lambda e:cx.rule_accept(e,scope))
+            name=scope+":context_rule_fixed_stop"
             item["methods"][name]=metrics
             journal.extend({**row,"method":name} for row in rows)
     return results,journal
