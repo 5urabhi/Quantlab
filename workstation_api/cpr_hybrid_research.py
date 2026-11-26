@@ -735,8 +735,8 @@ def _evaluate(episodes,*,method,capital,risk_budget,model=None,means=None,q=None
             winners+=int(value>0);targets+=int(result["target_realized"])
             daily[day]["conditional_net_inr"]+=value;daily[day]["scored"]+=1
             if strict_execution:
-                from .cpr_direct_utility import MAX_DELAY
-                bad=result.get("exit_delay_minutes",0)>MAX_DELAY or result.get("exit_after_squareoff",False)
+                from .cpr_direct_utility import _timely
+                bad=not _timely(result)
                 stress_net+=min(value,-ep["planned_funding"]) if bad else value
                 if bad:
                     stress_failures+=1;execution_halts+=1;halted=True
