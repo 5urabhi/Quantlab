@@ -12,9 +12,10 @@ import fcntl
 import json
 import os
 import sqlite3
+from time import monotonic
 
 from . import auto_paper_selection as select, depth_replay as replay
-from . import paper_execution as paper, service, dynamic_exit_policy as policy
+from . import paper_execution as paper, service, dynamic_exit_policy as policy, market_observations
 
 DEFAULTS={"enabled":False,"capital":17000.,"max_loss":4250.,"target_net":100.,
           "max_lots":3,"hold_seconds":900,"broker_profile":"zerodha",**policy.DEFAULTS}
@@ -91,6 +92,7 @@ def configure(config):
     cfg=validate(config)
     with _db() as db:
         db.execute("INSERT OR REPLACE INTO settings VALUES(1,?)",(_encode(cfg),))
+    market_observations.publish()
     return status()
 
 
@@ -202,7 +204,7 @@ def _mark(row,now,*,book_lookup=None):
             "liquidity_bad":any(b["spread_bps"]>250 for b in books)}
 
 
-def _monitor(row,now,*,update=None,mark_lookup=None,signal_lookup=None):
+def _monitor(row,now,*,update=None,mark_lookup=None,signal_lookup=None,actual_clock=False):
     update=update or _update
     cfg=row["config"]
     entry=replay.ao.timestamp(row["entry_received_utc"])
@@ -227,8 +229,12 @@ def _monitor(row,now,*,update=None,mark_lookup=None,signal_lookup=None):
     if reason:
         # Use the actual observation/processing time, never an invented
         # earlier exit after a restart or delayed monitoring cycle.
-        update(row,"awaiting_exit",**changes,exit_decision_utc=paper._iso(now),exit_trigger=reason,
-               trigger_processed_utc=paper._iso(now))
+        decision=paper._now() if actual_clock else now
+        if decision>=close:
+            update(row,"exit_censored",exit_reason="monitoring_missed_session_close",finished_utc=paper._iso(decision))
+            return
+        update(row,"awaiting_exit",**changes,exit_decision_utc=paper._iso(decision),exit_trigger=reason,
+               trigger_processed_utc=paper._iso(decision))
     elif changes:
         update(row,"paper_open",**changes)
 
@@ -272,16 +278,17 @@ def _exit(row,now,*,update=None,first_book=None):
         hold_realized_seconds=(max(stamps)-replay.ao.timestamp(row["entry_received_utc"])).total_seconds())
 
 
-def _advance(now):
+def _advance(now,*,actual_clock=False):
     with _db() as db:
         pending=_records(db,"SELECT "+FIELDS+" FROM decisions WHERE state IN (?,?,?) ORDER BY id",PENDING)
     for row in pending:
+        stamp=paper._now() if actual_clock else now
         if row["state"]=="awaiting_entry":
-            _entry(row,now)
+            _entry(row,stamp)
         elif row["state"]=="paper_open":
-            _monitor(row,now)
+            _monitor(row,stamp,actual_clock=actual_clock)
         elif row["state"]=="awaiting_exit":
-            _exit(row,now)
+            _exit(row,stamp)
 
 
 def _available_lanes(db,now):
@@ -301,7 +308,7 @@ def _remaining_budget(db,now,cfg,lane):
     return replay.fees._money(max(0.,min(cfg["capital"],cfg["max_loss"])-gross_losses))
 
 
-def cycle(now=None):
+def cycle(now=None,*,allow_entries=True):
     # now override is for deterministic offline tests only. Production
     # records a decision timestamp AFTER source acquisition and computation.
     fixed=now is not None
@@ -309,7 +316,11 @@ def cycle(now=None):
     if not LOCK.acquire(blocking=False):
         return
     try:
-        _advance(now)
+        _advance(now,actual_clock=not fixed)
+        if not allow_entries:
+            return
+        if not fixed:
+            now=paper._now()
         with _db() as db:
             cfg=_settings(db)
             lanes=_available_lanes(db,now) if cfg["enabled"] else []
@@ -403,9 +414,19 @@ def _worker():
         except BlockingIOError:
             HEALTH.update(state="other_local_worker")
             return
+        seen=-1
+        last_scan=0.
         while not STOP.is_set():
             try:
-                cycle()
+                generation=market_observations.generation()
+                fresh=generation!=seen or monotonic()-last_scan>=15
+                if fresh:
+                    seen=generation
+                    last_scan=monotonic()
+                # Coalesce receipt events into bounded five-second checks;
+                # periodically inspect external-process writes too. Always
+                # advance open positions even without new source events.
+                cycle(allow_entries=fresh)
                 HEALTH.update(state="monitoring",last_cycle_utc=paper._iso(paper._now()),last_error=None)
             except Exception as exc:
                 # No provider/credential text is logged or surfaced.
