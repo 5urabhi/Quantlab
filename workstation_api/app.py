@@ -57,14 +57,14 @@ MAX_ACTIVE_LOCAL_JOBS = 6  # Shared admission bound; general writes remain seria
 
 
 def _job_lane(kind):
-    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","predictive_option_research","forecast_depth_research"} else "research"
+    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","predictive_option_research","forecast_depth_research","alpha_candidate_monitor"} else "research"
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","predictive_option_research","forecast_depth_research","market_library_maintenance","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","predictive_option_research","forecast_depth_research","alpha_candidate_monitor","market_library_maintenance","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -5683,6 +5683,29 @@ def empirical_iv_research(body:ImpliedVolatilityEvidenceRequest):
 def realized_volatility_research(body:RealizedVolatilityEvidenceRequest):
     from . import volatility_evidence
     return _spawn("volatility_evidence_research",volatility_evidence.rv_run,**body.model_dump())
+
+
+class AlphaCandidateMonitorRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    model_id: str=Field(pattern=r"^[0-9a-f]{64}$")
+
+
+@app.get("/api/market-intelligence/model-registry")
+def alpha_model_registry_list():
+    from . import alpha_model_registry
+    return {"models":alpha_model_registry.list_candidates(),"live_promotion_enabled":False}
+
+
+@app.post("/api/market-intelligence/model-registry/monitor")
+def alpha_model_candidate_monitor(body:AlphaCandidateMonitorRequest):
+    from . import alpha_model_registry
+    try:
+        candidate=alpha_model_registry.load(body.model_id)
+        if candidate["source"]!="prospective":
+            raise ValueError("Historical candidates cannot be applied to the different prospective feature schema")
+    except (ValueError,OSError,TypeError,KeyError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+    return _spawn("alpha_candidate_monitor",alpha_model_registry.monitor,**body.model_dump())
 
 
 class ForecastDepthResearchRequest(BaseModel):
