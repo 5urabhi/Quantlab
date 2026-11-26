@@ -13,7 +13,9 @@ from workstation_api.historical_alpha import IST
 def main():
     today=datetime.now(IST).date()
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--from-date",default=(today-timedelta(days=100)).isoformat())
+    parser.add_argument("--from-date",default=None,help="Start inclusive; default expands with requested sessions")
+    parser.add_argument("--sessions",type=int,choices=tuple(research.SESSION_SPLITS),default=60)
+    parser.add_argument("--dense-training",action="store_true",help="Earlier scanner anchors every 15-minute bin; session-balanced ML and Q")
     parser.add_argument("--to-date",default=today.isoformat(),help="End exclusive; completed sessions only")
     parser.add_argument("--entry-mode",choices=research.ENTRY_MODES,default="crossover",
                         help="Original crossover baseline or daily scheduled CPR/EMA opportunity scan")
@@ -36,11 +38,14 @@ def main():
     parser.add_argument("--wings",type=int,default=3)
     parser.add_argument("--penalty-bps",type=float,default=25,help="Base adverse premium penalty per side; primary study adds 10bps")
     a=parser.parse_args()
+    if a.from_date is None:
+        a.from_date=(datetime.fromisoformat(a.to_date).date()-timedelta(days={60:100,90:150,120:200}[a.sessions])).isoformat()
     try:
         report,journal,sources=research.run(from_date=a.from_date,to_date=a.to_date,
             frame=a.frame,hold=a.hold,capital=a.capital,risk_budget=a.risk_budget,entry_mode=a.entry_mode,
             context_mode=a.context_mode,context_batch=a.context_batch,rank_entries=a.rank_entries,
             pattern_research=a.patterns,fixed_panel=a.fixed_panel,context_q=a.context_q,debit_spreads=a.debit_spreads,
+            sessions=a.sessions,dense_training=a.dense_training,
             lot_size=a.lot_size,max_lots=a.max_lots,wings=a.wings,premium_penalty_bps=a.penalty_bps,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
