@@ -5449,6 +5449,15 @@ def download_constituent_alpha(run_id:str):
     return FileResponse(path,filename="quantlab_constituent_alpha_"+run_id+".csv",media_type="text/csv")
 
 
+@app.get("/api/trading-cockpit/constituents/alpha/audit/{run_id}")
+def download_constituent_alpha_audit(run_id:str):
+    try:
+        path=constituent_alpha.result_path(run_id,audit=True)
+    except (ValueError,FileNotFoundError) as exc:
+        raise HTTPException(404,str(exc)) from exc
+    return FileResponse(path,filename="quantlab_constituent_alpha_"+run_id+"_audit.csv",media_type="text/csv")
+
+
 from . import constituent_calibration
 
 @app.get("/api/trading-cockpit/constituents/prospective/calibration")
