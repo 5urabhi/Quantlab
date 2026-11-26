@@ -275,3 +275,94 @@ class CprHybridTests(TestCase):
         self.assertEqual(r._signals(DAY,index(105),PREV,prev,frame=5,hold=60,
                                     max_signals=375,entry_mode="daily_scan"),
                          ([],"prior_complete_session_unavailable"))
+
+    def test_context_constituents_use_dated_members_and_no_future_bars(self):
+        from workstation_api import cpr_context_features as cx
+        intervals=[{"symbol":s,"valid_from":"2026-01-01","valid_to":None}
+                   for s in ("HDFCBANK","ICICIBANK")]
+        s={"session":DAY,"minute":30,"side":"CALL"}
+        stocks={name:{DAY:{i:(100.,101.,99.,100.+slope*i,100.) for i in range(31)}}
+                for name,slope in (("HDFCBANK",.1),("ICICIBANK",.2))}
+        w={"weights_pct":{"HDFCBANK":60.,"ICICIBANK":40.},"source_csv_sha256":"abc"}
+        v,d=cx._bank_vector(s,stocks,intervals,[],w)
+        self.assertEqual(d["matched"],2)
+        self.assertEqual(d["weight_mode"],"verified")
+        self.assertGreater(v[6],0)
+        stocks["HDFCBANK"][DAY][31]=(100.,100.,1.,1.,10000.)
+        self.assertEqual(cx._bank_vector(s,stocks,intervals,[],w)[0],v)
+        del stocks["ICICIBANK"][DAY][28]
+        self.assertIsNone(cx._bank_vector(s,stocks,intervals,[],w)[0])
+
+    def test_global_context_excludes_late_available_observation(self):
+        from datetime import datetime,timedelta
+        from workstation_api import cpr_context_features as cx,market_context as m
+        cutoff=datetime.fromisoformat(r._stamp(DAY,30))
+        def timeline():
+            a=cutoff-timedelta(days=2);b=cutoff-timedelta(days=1)
+            return m.Timeline([(a,a,100.,"test","a"),(b,b,101.,"test","b"),
+                 (cutoff+timedelta(minutes=1),cutoff-timedelta(minutes=1),500.,"test","c")])
+        signal={"session":DAY,"minute":29,"side":"CALL","decision_utc":cutoff.isoformat()}
+        timelines={k:timeline() for k in ("SP500_CLOSE","NIKKEI_CLOSE","USDINR_CLOSE")}
+        v,d=cx._global_vector(timelines,signal)
+        self.assertIsNotNone(v)
+        self.assertAlmostEqual(d["factors"]["SP500_CLOSE"]["change_feature"],100.)
+        self.assertEqual(d["factors"]["SP500_CLOSE"]["receipt_sha256"],"b")
+        del timelines["USDINR_CLOSE"]
+        self.assertIsNone(cx._global_vector(timelines,signal)[0])
+
+    def test_context_rule_requires_same_direction_and_missing_scope_is_not_filled(self):
+        from workstation_api import cpr_context_features as cx
+        e=episode(DAY,[step(0,.12,120,True)])
+        self.assertEqual(cx.view([e],"constituents"),[])
+        e["context_vectors"]={"constituents":[.5,5.,1.,10.,.5,.8,4.,.5,0.,0.,1.,0.,1.,0.,1.]}
+        self.assertTrue(cx.rule_accept(e,"constituents"))
+        self.assertFalse(cx.rule_accept(e,"combined"))
+        e["context_vectors"]["constituents"][6]=-1.
+        self.assertFalse(cx.rule_accept(e,"constituents"))
+        matched=cx.view([e],"constituents")
+        self.assertEqual(len(matched[0]["features"]),len(e["features"])+15)
+        out,_=r._evaluate(matched,method="fixed_stop",capital=17000,risk_budget=4250,
+                         context_filter=lambda x:cx.rule_accept(x,"constituents"))
+        self.assertEqual(out["states"],{"context_abstain":1})
+
+    def test_rank_keeps_selected_missing_entry_instead_of_switching_with_hindsight(self):
+        import numpy as np
+        from workstation_api import cpr_ranked_entries as ranked
+        class Model:
+            classes_=np.asarray(["target","stop","other"])
+            target_threshold=.15
+            def predict_proba(self,X):
+                return np.asarray([[x[0],.1, .9-x[0]] for x in X])
+        a=episode(DAY,[step(0,.12,120,True)])
+        a.update(spot=100.,strike=100.,features=[.4])
+        b={**a,"strike":101.,"features":[.8],"state":"missing_entry","path":[]}
+        model=Model();means={"target":.10,"stop":-.05,"other":0.}
+        choice=ranked.rank(r,model,means,[a,b],[a])[0]
+        self.assertEqual(choice["strike"],101.)
+        self.assertEqual(choice["state"],"missing_entry")
+        self.assertEqual(choice["ranked_candidate_count"],2)
+
+    def test_calibrated_model_respects_probabilities_and_gate(self):
+        import numpy as np
+        from workstation_api import cpr_ranked_entries as ranked
+        class Model:
+            classes_=np.asarray(["target","stop","other"])
+            def predict_proba(self,X):
+                return np.tile([.2,.5,.3],(len(X),1))
+        raw=Model();w=ranked.Calibrated(raw,2.,[.5,0.,0.],threshold=.10)
+        p=w.predict_proba([[0.]])[0]
+        self.assertAlmostEqual(float(p.sum()),1.)
+        self.assertGreater(p[0],.2)
+        e=episode(DAY,[step(0,.12,120,True)])
+        self.assertTrue(r._ml_accept(w,{"target":.2,"stop":-.02,"other":0.},e))
+        w.target_threshold=1.1
+        self.assertFalse(r._ml_accept(w,{"target":.2,"stop":-.02,"other":0.},e))
+
+    def test_volatility_trailing_is_causal_and_ratchets(self):
+        marks=[.04,.05,.06,.07,.08,.075,.059,.12]
+        ep=episode(DAY,[step(i,v,v*1000,i==7) for i,v in enumerate(marks)])
+        result=r._exit(ep,"volatility_trailing")
+        self.assertEqual(result["reason"],"trailing_stop")
+        self.assertAlmostEqual(result["trailing_floor_return"],.06)
+        self.assertAlmostEqual(result["max_observed_mark_return"],.08)
+        self.assertAlmostEqual(result["net"],59.)
