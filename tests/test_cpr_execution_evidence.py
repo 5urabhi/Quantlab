@@ -49,9 +49,9 @@ class ExecutionEvidenceTests(TestCase):
 
     def test_only_chosen_exit_and_monitoring_gap_are_audited(self):
         s=signal()
-        table={r._stamp(DAY,34):{("CALL",100):bar(20)},
-               r._stamp(DAY,36):{("CALL",100):bar(20)},
-               r._stamp(DAY,39):{("CALL",100):bar(19)}}
+        table={r._stamp(DAY,34):{("CALL",100):bar(200)},
+               r._stamp(DAY,36):{("CALL",100):bar(200)},
+               r._stamp(DAY,39):{("CALL",100):bar(199)}}
         ix=index([DAY])
         ep=r._episode(s,table,ix[DAY],hold=15,lot_size=30,max_lots=1,risk_budget=12000,bps=35)
         result=r._exit(ep,"fixed_stop")
