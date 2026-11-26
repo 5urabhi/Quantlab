@@ -228,14 +228,18 @@ class Capture:
             self.last[identity] = (received.timestamp(),event["packet_sha256"],event["trade_epoch"])
 
     def writer(self, stop):
+        initialized = False
         while not stop.is_set() or not self.queue.empty():
             try:
                 batch = [self.queue.get(timeout=.5)]
             except Empty:
                 continue
-            while len(batch)<128:
+            # Coalesce writes for a short bounded interval instead of opening
+            # SQLite for every quote. This never blocks the socket receiver.
+            until = time.monotonic()+.20
+            while len(batch)<128 and time.monotonic()<until:
                 try:
-                    batch.append(self.queue.get_nowait())
+                    batch.append(self.queue.get(timeout=max(.001,until-time.monotonic())))
                 except Empty:
                     break
             try:
@@ -245,7 +249,9 @@ class Capture:
                     continue
                 with live_market._database() as db:
                     db.execute("PRAGMA busy_timeout=500")
-                    _setup(db)
+                    if not initialized:
+                        _setup(db)
+                        initialized = True
                     prior = db.total_changes
                     db.executemany("INSERT OR IGNORE INTO banknifty_constituent_quotes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",batch)
                     count = db.total_changes-prior
@@ -256,6 +262,7 @@ class Capture:
                     if self.connected:
                         self.state = "recording_sampled_quotes"
             except (OSError,sqlite3.Error,ValueError):
+                initialized = False
                 recorder_storage.failure(STREAM,"constituent_write_failed",dropped=len(batch))
                 with self.lock:
                     self.dropped += len(batch)
@@ -306,13 +313,13 @@ def save_weights(snapshot_date, text, source, confirm):
     if set(weights)!=set(info["symbols"]) or abs(total-100)>.1:
         raise ValueError("Weights must contain every dated member exactly once and sum to 100% within 0.1 percentage point")
     body = {"snapshot_date":day.isoformat(),"source":source.strip(),"recorded_utc":_iso(_now()),
-            "source_csv_sha256":sha256(text.encode()).hexdigest(),"membership_sha256":info["source_sha256"],
+            "source_csv_sha256":sha256(text.encode()).hexdigest(),"original_csv":text,"membership_sha256":info["source_sha256"],
             "weights_pct":weights,"reported_weight_sum_pct":total,
             "independently_verified":False}
     # Preserve each version and its actual receipt time; never replace past evidence.
     key = sha256(json.dumps(body,sort_keys=True).encode()).hexdigest()[:16]
     _write_json(_safe_folder()/("weights_"+day.isoformat()+"_"+key+".json"),body)
-    return body
+    return {k:v for k,v in body.items() if k!='original_csv'}
 
 
 def _weights_for(day, asof, members):
@@ -326,18 +333,18 @@ def _weights_for(day, asof, members):
                 if i>=1000:
                     # Refuse incomplete searches rather than pretend latest.
                     return None
-                if not re.fullmatch(r"weights_\d{4}-\d{2}-\d{2}_[0-9a-f]{16}\.json",entry.name) or not entry.is_file(follow_symlinks=False) or entry.stat().st_size>16000:
+                if not re.fullmatch(r"weights_\d{4}-\d{2}-\d{2}_[0-9a-f]{16}\.json",entry.name) or not entry.is_file(follow_symlinks=False) or entry.stat().st_size>50000:
                     continue
                 value = json.loads(Path(entry.path).read_text())
                 snapshot = date.fromisoformat(value["snapshot_date"])
                 recorded = datetime.fromisoformat(value["recorded_utc"])
                 w = value["weights_pct"]
-                if not 0<=(day-snapshot).days<=35 or recorded>asof or set(w)!=set(members):
+                if not 0<=(day-snapshot).days<=35 or recorded>asof or set(w)!=set(members) or sha256(value["original_csv"].encode()).hexdigest()!=value["source_csv_sha256"]:
                     continue
                 if any(type(x) not in (int,float) or not math.isfinite(x) or not 0<x<=100 for x in w.values()) or abs(sum(w.values())-100)>.1:
                     continue
                 candidates.append(value)
-        return max(candidates,key=lambda x:(x["snapshot_date"],x["recorded_utc"])) if candidates else None
+        return {k:v for k,v in max(candidates,key=lambda x:(x["snapshot_date"],x["recorded_utc"])).items() if k!='original_csv'} if candidates else None
     except (OSError,ValueError,TypeError,KeyError,AttributeError):
         return None
 
@@ -436,7 +443,7 @@ def analyze(horizon=5, as_of=""):
                     for previous in prior:
                         shift = timedelta(days=(day-previous).days)
                         c,a = _quote(db,symbol,previous,target-shift),_quote(db,symbol,previous,start-shift)
-                        if c and a and c["identity"]==a["identity"] and c["volume"]>=a["volume"]:
+                        if current and c and a and c["identity"]==a["identity"]==current["identity"] and c["volume"]>=a["volume"]:
                             baseline.append(c["volume"]-a["volume"])
                     rows.append({"symbol":symbol,"weight_pct":weights.get(symbol),"current":current,"anchor":anchor,
                                  **calculate_row(current,anchor,baseline,weights.get(symbol),index)})
