@@ -797,3 +797,32 @@ checked scopes retain the 24-hour interval. Legacy productive checkpoints
 resume promptly without requiring a manual check. The maintenance card
 and status API expose the retry reason. A gap may remain despite a
 successful original-source request; no prices or membership are inferred.
+
+
+### Continuous automatic backfill (v4)
+
+Automatic opted-in history maintenance no longer waits for the Indian
+market to close. During the weekday 08:30–16:00 IST priority window it
+uses at most 32 expired-option requests per pass, one planned index
+window per index and one audited equity repair date per instrument
+(the initial equity history windows retain their existing bounded
+provider size). Historical date scopes still exclude the active day
+until the usual completed-session boundary, and expired-option eligibility
+checks remain unchanged. The same serialized queue and existing pacing
+remain in effect.
+
+At each supported request boundary the worker checks disk reserve,
+live quote queue pressure (10% of capacity), and recent recorder
+storage gaps/drops. It pauses rather than initiating the next request
+when pressure is observed; a current request or write may finish.
+A two-minute retry rechecks resources. An ordinary off-market pass
+yields on entering the live-priority window. Provider errors retain
+normal backoff, and equity batches now stop on provider rate limits.
+Only dates whose repair request was actually initiated receive the
+existing seven-day per-date cooldown. No guarantee of zero impact on
+live latency or complete original market observations is implied.
+
+This supersedes the earlier automatic-maintenance-only time restriction.
+The separate heavy research commands and standalone repair launcher
+retain their off-market guards. Existing saved consent and scope
+are unchanged; no new live feed or order permission is granted.
