@@ -61,6 +61,36 @@ def normalize(factor,raw,start,stop,received):
     return buf.getvalue(),len(observations),rejected
 
 
+def _fetch_vintages(key,series,left,stop):
+    params={"api_key":key,"file_type":"json","series_id":series,
+            "output_type":1,"realtime_start":VINTAGE_FLOOR,
+            "realtime_end":m._now().date().isoformat(),
+            "observation_start":left.isoformat(),
+            "observation_end":(stop-timedelta(days=1)).isoformat(),
+            "limit":MAX_ROWS,"offset":0}
+    attempts=[]
+    # A bounded real-time interval can avoid asking for pre-history vintages.
+    # Initial-release-only is a distinct, documented output format.
+    # Never substitute today's latest revised values into an archive.
+    for method,overrides in (("all_vintages",{}),
+                             ("bounded_vintages",{"realtime_start":left.isoformat()}),
+                             ("initial_release_only",{"output_type":4,"realtime_start":left.isoformat()})):
+        if not alpha_retraining.safe_window(m._now()):
+            raise ValueError("Historical requests paused for market priority")
+        try:
+            raw=feeds._http(feeds.FRED_URL+"series/observations",{**params,**overrides})
+            attempts.append({"method":method,"state":"response_received"})
+            return raw,method,attempts
+        except ValueError as exc:
+            message=str(exc)
+            if not message.startswith("Provider HTTP 400"):
+                raise
+            attempts.append({"method":method,"state":"unavailable","reason":message})
+            if any(x in message for x in ("key_rejected","source_restriction","series_unavailable")):
+                break
+    return None,None,attempts
+
+
 def backfill(start,stop,*,confirmed=False):
     now=m._now()
     if confirmed is not True:
@@ -79,13 +109,11 @@ def backfill(start,stop,*,confirmed=False):
             result[factor]={"state":"paused_market_priority"}
             continue
         try:
-            raw=feeds._http(feeds.FRED_URL+"series/observations",{
-                "api_key":key,"file_type":"json","series_id":series,
-                "output_type":1,"realtime_start":VINTAGE_FLOOR,
-                "realtime_end":m._now().date().isoformat(),
-                "observation_start":left.isoformat(),
-                "observation_end":(stop-timedelta(days=1)).isoformat(),
-                "limit":MAX_ROWS,"offset":0})
+            raw,method,attempts=_fetch_vintages(key,series,left,stop)
+            if raw is None:
+                result[factor]={"state":"unavailable","reason":"No supported historical vintage response",
+                                "attempts":attempts}
+                continue
             received=m._now()
             csv_text,n,rejected=normalize(factor,raw,left,stop,received)
             if not n:
@@ -99,7 +127,8 @@ def backfill(start,stop,*,confirmed=False):
             if saved["inserted"]:
                 recorder_storage.saved("market_context",m._iso(received),n)
             result[factor]={"state":"saved" if saved["inserted"] else "already_present",
-                            "rows":n,"rejected":rejected,"receipt_sha256":saved["receipt_sha256"]}
+                            "rows":n,"rejected":rejected,"receipt_sha256":saved["receipt_sha256"],
+                            "method":method,"attempts":attempts}
         except (ValueError,OSError,KeyError,TypeError,OverflowError,sqlite3.Error) as exc:
             # Never emit raw provider exceptions or credential-bearing URLs.
             detail=str(exc) if isinstance(exc,ValueError) and str(exc).startswith(
