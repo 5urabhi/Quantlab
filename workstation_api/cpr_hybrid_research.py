@@ -712,7 +712,7 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
                 __import__(__name__,fromlist=["run"]),signals=signals,table=table,index=index,
                 train=broad_train,val=broad_val,test=test,dates=(splits[1],splits[2]),
                 hold=hold,lot_size=lot_size,bps=bps,capital=capital,risk_budget=risk_budget,
-                context_audit=context_audit,progress=progress)
+                context_audit=context_audit,q=q,progress=progress)
             report["ranked_entry_research"]=ranked_results
             journal.extend(ranked_rows)
     else:
