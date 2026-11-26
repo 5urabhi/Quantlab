@@ -19,7 +19,7 @@ function SummaryTable({rows}:{rows:Summary[]}){
 export default function ScalpingValidation(){
  const [start,setStart]=useState(()=>dateBefore(30)),[end,setEnd]=useState(()=>dateBefore(1))
  const [capital,setCapital]=useState('17000'),[lots,setLots]=useState('3'),[premium,setPremium]=useState('180')
- const [hold,setHold]=useState('5'),[fee,setFee]=useState('50'),[loss,setLoss]=useState('10')
+ const [hold,setHold]=useState('5'),[fee,setFee]=useState('0'),[loss,setLoss]=useState('10')
  const [job,setJob]=useState(''),[progress,setProgress]=useState(''),[error,setError]=useState('')
  const [study,setStudy]=useState<Study|null>(null)
  const [starting,setStarting]=useState(false)

@@ -20,7 +20,7 @@ import math
 import os
 import time
 
-from . import service, cockpit_sources, trading_cockpit, options_research_audit
+from . import service, cockpit_sources, trading_cockpit, options_research_audit, liquidity_spreads as option_fees
 
 IST = ZoneInfo("Asia/Kolkata")
 ENDPOINT = "https://api.dhan.co/v2/charts/rollingoption"
@@ -48,7 +48,9 @@ def _validate_params(*, limit: int, expiry_flag: str, expiry_code: int,
                      target_pct: float, slippage_bps: float,
                      fee_per_side: float, hold_rule: str,
                      hold_minutes: int, reversal_cap_minutes: int,
-                     signal_model: str = "ema_rsi") -> None:
+                     signal_model: str = "ema_rsi", fee_mode: str = "flat") -> None:
+    if fee_mode not in ("flat","zerodha","zerodha_debit_balance"):
+        raise ValueError("Choose flat costs or current Zerodha tariff")
     if signal_model not in SIGNAL_MODELS:
         raise ValueError("Choose EMA/RSI or EMA 9/21 crossover for BANKNIFTY index signals")
     if limit not in (500, 1500, 3000, 5000):
@@ -753,7 +755,8 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
                      lot_size: int = 30, lots: int = 3,
                      starting_capital: float = 50_000,
                      stop_pct: float = 2.5, target_pct: float = 5,
-                     slippage_bps: float = 5, fee_per_side: float = 20) -> dict:
+                     slippage_bps: float = 5, fee_per_side: float = 20,
+                     fee_mode: str = "flat") -> dict:
     """Select a contract at completed SIGNAL candle close; trade next open.
 
     One position at a time. On a confirmed opposite BANKNIFTY signal,
@@ -843,7 +846,9 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
         used_lot_size = int(chosen.get("lot_size_verified") or lot_size)
         units = lots * used_lot_size
         outlay = entry_premium * units
-        if outlay + fee_per_side > balance:
+        entry_charge = (fee_per_side if fee_mode=="flat" else
+            option_fees.fee_schedule(outlay,0.,broker_profile=fee_mode)["buy_leg"]["fees_total"])
+        if outlay + entry_charge > balance:
             note_skip("insufficient_capital", flip=same_open_flip)
             continue
         exit_at, reason = _exit_decision(
@@ -881,7 +886,8 @@ def simulate_options(events: list[dict], spot_rows: list[dict], option_rows: dic
             continue
         exit_premium = exit_quote["open"] * (1 - slippage_bps / 10_000)
         gross = (exit_premium - entry_premium) * units
-        charges = 2 * fee_per_side
+        charges = (2 * fee_per_side if fee_mode=="flat" else
+            option_fees.fee_schedule(outlay,exit_premium*units,broker_profile=fee_mode)["total_estimated"])
         net = gross - charges
         balance += net
         peak = max(peak, balance)
@@ -969,7 +975,7 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
                  slippage_bps: float = 5, fee_per_side: float = 20,
                  hold_rule: str = "fixed", hold_minutes: int = 5,
                  reversal_cap_minutes: int = 10,
-                 signal_model: str = "ema_rsi",
+                 signal_model: str = "ema_rsi", fee_mode: str = "flat",
                  fetcher=None, active_fetcher=None, throttle=None,
                  master_refresher=None, progress=None) -> dict:
     """One-click original BANKNIFTY signals -> option-contract P&L proxy.
@@ -986,7 +992,7 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
                      fee_per_side=fee_per_side, hold_rule=hold_rule,
                      hold_minutes=hold_minutes,
                      reversal_cap_minutes=reversal_cap_minutes,
-                     signal_model=signal_model)
+                     signal_model=signal_model, fee_mode=fee_mode)
     if progress:
         progress(2, "Verifying original BANKNIFTY index minute candles")
     acquired_spot = False
@@ -1148,7 +1154,7 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
             target_ltp=target_ltp, tolerance=tolerance,
             lots=lots, lot_size=lot_size, starting_capital=starting_capital,
             stop_pct=stop_pct, target_pct=target_pct,
-            slippage_bps=slippage_bps, fee_per_side=fee_per_side)
+            slippage_bps=slippage_bps, fee_per_side=fee_per_side,fee_mode=fee_mode)
         is_selected = (policy == hold_rule and h == hold_minutes
                        and (policy not in ("signal_reversal_or_cap", "hybrid")
                             or cap == reversal_cap_minutes))
@@ -1204,7 +1210,9 @@ def run_backtest(*, limit: int = 1500, expiry_flag: str = "MONTH",
             "lots": lots, "historical_lot_size_units": lot_size,
             "lot_size_basis": "USER_INPUT_NOT_VERIFIED_FOR_EXPIRED_CONTRACTS",
             "slippage_bps_per_side": slippage_bps,
-            "brokerage_inr_per_side": fee_per_side,
+            "brokerage_inr_per_side": fee_per_side if fee_mode=="flat" else option_fees.BROKER_PROFILES[fee_mode]["brokerage"],
+            "fee_mode":fee_mode,"fee_tariff_version":option_fees.FEE_VERSION if fee_mode!="flat" else None,
+            "fee_basis":"Current tariff counterfactual on all historical dates; not historical contract-note reconstruction" if fee_mode!="flat" else "User-specified flat all-in cost per side",
             "profit_target_pct": target_pct, "stop_loss_pct": stop_pct,
             "spot_signal_is_not_option_fill": True,
         },
