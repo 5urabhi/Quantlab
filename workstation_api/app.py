@@ -57,14 +57,14 @@ MAX_ACTIVE_LOCAL_JOBS = 6  # Shared admission bound; general writes remain seria
 
 
 def _job_lane(kind):
-    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research"} else "research"
+    return "spread_replay" if kind in {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","predictive_option_research"} else "research"
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = Lock()
 JOB_FUTURES: dict[str, object] = {}
 JOB_RETRY_SPECS: dict[str, tuple] = {}
 JOB_STOP_SIGNALS: dict[str, Event] = {}
-CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","market_library_maintenance","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
+CANCELLABLE_TASKS = {"spread_speed_study","spread_batch_study","spread_batch_validation","dynamic_strategy_research","constituent_alpha_research","historical_alpha_research","volatility_evidence_research","predictive_option_research","market_library_maintenance","expired_option_history_acquisition","year_scalping_grid","user_notebook","user_snapshot_chart","workspace_parameter_sweep","workspace_grid_sweep","workspace_validation","workspace_learning","lab_shared_data_extension","lab_shared_data_extension_and_run"}
 # Only idempotent, local calculations may be explicitly retried after a restart.
 # Never serialize or replay Dhan access, order activity, or single-use frozen tests.
 RECOVERABLE_ACTIONS = {
@@ -5683,6 +5683,31 @@ def empirical_iv_research(body:ImpliedVolatilityEvidenceRequest):
 def realized_volatility_research(body:RealizedVolatilityEvidenceRequest):
     from . import volatility_evidence
     return _spawn("volatility_evidence_research",volatility_evidence.rv_run,**body.model_dump())
+
+
+class PredictiveOptionResearchRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    batch_id: str=Field(pattern=r"^batch_[0-9a-f]{16}$")
+    horizon: Literal[5,10,15,30,60]=15
+    capital: float=Field(default=17000,ge=1000,le=10000000)
+    max_loss: float=Field(default=4250,gt=0,le=10000000)
+    lot_size: int=Field(default=30,ge=1,le=1000,strict=True)
+    max_lots: int=Field(default=3,ge=1,le=3,strict=True)
+    wings: int=Field(default=3,ge=0,le=3,strict=True)
+    premium_penalty_bps: float=Field(default=25,ge=0,le=200)
+    broker_profile: Literal["zerodha","dhan"]="zerodha"
+
+
+@app.post("/api/market-intelligence/predictive-options")
+def run_predictive_option_research(body:PredictiveOptionResearchRequest):
+    from . import predictive_option_research, historical_alpha
+    if body.max_loss>body.capital:
+        raise HTTPException(400,"Modeled loss allowance cannot exceed capital")
+    try:
+        historical_alpha._batch(body.batch_id)
+    except (ValueError,OSError,TypeError,KeyError) as exc:
+        raise HTTPException(400,str(exc)) from exc
+    return _spawn("predictive_option_research",predictive_option_research.run,**body.model_dump())
 
 
 class HistoricalAlphaRequest(BaseModel):
