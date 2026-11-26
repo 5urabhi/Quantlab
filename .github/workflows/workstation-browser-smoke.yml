@@ -89,6 +89,10 @@ jobs:
         if: ${{ !cancelled() && steps.local_services.outcome == 'success' }}
         run: node tests/browser-journal-strategies.mjs
 
+      - name: Exercise BANKNIFTY constituent intelligence
+        if: ${{ !cancelled() && steps.local_services.outcome == 'success' }}
+        run: node tests/browser-constituent-intelligence.mjs
+
       - name: Validate source-labeled demo recorder
         run: node --check scripts/record_quantlab_demo.mjs
 
