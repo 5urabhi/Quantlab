@@ -143,7 +143,7 @@ def _prioritize(requests,offset_rank,priority_sessions):
         left=date.fromisoformat(body["fromDate"])
         right=date.fromisoformat(body["toDate"])
         observed=any((left+timedelta(days=i)).isoformat() in priority for i in range((right-left).days+1))
-        return (not observed,-left.toordinal(),offset_rank[body["strike"]],body["drvOptionType"])
+        return (not observed,offset_rank[body["strike"]]>10,-left.toordinal(),offset_rank[body["strike"]],body["drvOptionType"])
     return sorted(requests,key=key)
 
 
