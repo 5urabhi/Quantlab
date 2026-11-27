@@ -626,12 +626,14 @@ def run(*,progress=None,now=None):
             return report
         profile=dhan_auth.check_profile()
         if not profile.get("ok"):
+            report["profile_code"]=profile.get("code") or "profile_unverified"
             if profile.get("code")=="profile_unreachable":
                 report.update(state="blocked",reason="Dhan profile connection unavailable; check local network",transient_connection_failure=True)
             elif profile.get("code")=="profile_http_error" and _rate_limit_message(profile.get("message")):
                 report.update(state="blocked",reason="Dhan profile rate limit (429)",provider_rate_limited=True)
             else:
-                report.update(state="blocked",reason="Dhan token or historical data permission requires attention")
+                report.update(state="blocked",reason=job_safety.scrub(
+                    profile.get("message") or "Dhan token or historical data permission requires attention",limit=200))
             return report
         if cfg["index"]:
             # Legacy spot sync uses the same guard and yields while the
