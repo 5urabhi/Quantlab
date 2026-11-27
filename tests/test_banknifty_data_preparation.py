@@ -156,3 +156,22 @@ class PreparationTests(TestCase):
             with self.assertRaises(m.Pause):m.job("/api/dhan/batches",{},record,lambda:None,parallel_live=True)
         self.assertEqual(record["state"],"batch_incomplete")
         self.assertEqual(record["batch_progress"]["status"],"paused")
+
+    def test_fred_stops_at_first_provider_rate_limit(self):
+        with patch.dict(m.os.environ,{"FRED_API_KEY":"OFFLINE_TEST"}), \
+             patch.object(m.fred,"_fetch_vintages",side_effect=ValueError("Provider HTTP 429")) as fetch:
+            result=m.fred.backfill(date(2025,1,1),date(2025,1,5),confirmed=True,live_guard=lambda:None)
+        self.assertEqual(fetch.call_count,1)
+        self.assertEqual(result["state"],"provider_rate_limited")
+        states=[v["state"] for v in result["factors"].values()]
+        self.assertEqual(states.count("unavailable"),1)
+        self.assertEqual(states.count("deferred_provider_rate_limit"),len(states)-1)
+
+    def test_archive_windows_defers_remaining_fred_windows_after_rate_limit(self):
+        with TemporaryDirectory() as tmp,patch.dict(m.os.environ,{"FRED_API_KEY":"OFFLINE_TEST"}), \
+             patch.object(m.alpaca,"credentials",return_value=None), \
+             patch.object(m,"require_priority"),patch.object(m.fred,"backfill",return_value={"state":"provider_rate_limited","factors":{"SP500_CLOSE":{"state":"unavailable","reason":"Provider HTTP 429"}}}) as fetch:
+            report={"context":[]}
+            m.archive_windows(date(2025,1,1),date(2025,12,31),Path(tmp),report,lambda:None,"iex",parallel_live=True)
+            self.assertEqual(fetch.call_count,1)
+            self.assertTrue(any(x.get("state")=="remaining_windows_deferred_provider_rate_limit" for x in report["context"]))
