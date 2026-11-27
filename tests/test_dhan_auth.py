@@ -140,6 +140,7 @@ class DhanAuthTests(TestCase):
             ("DH-902", "data_plan_inactive"),
             ("DH-904", "profile_rate_limited"),
             ("DH-905", "profile_input_error"),
+            ("DH-906", "profile_http_error"),
             ("807", "token_expired"),
             (809, "auth_rejected"),
             ("PRIVATE_UNKNOWN", "profile_http_error"),
@@ -158,6 +159,20 @@ class DhanAuthTests(TestCase):
                     self.assertEqual(result["provider_retry_after_seconds"], 1800)
                 if expected == "profile_http_error":
                     self.assertIsNone(result["provider_error_code"])
+
+    def test_dh906_read_only_invalid_token_is_classified_only_with_explicit_message(self):
+        for detail, expected in (("Invalid Token", "auth_rejected"),
+                                 ("PRIVATE_UNKNOWN_DETAIL", "profile_http_error")):
+            with self.subTest(detail=detail):
+                def opener(req, timeout):
+                    body = json.dumps({"errorCode": "DH-906", "errorMessage": detail}).encode()
+                    raise HTTPError(req.full_url, 400, "Bad Request", {}, BytesIO(body))
+                result = dhan_auth.check_profile(opener=opener, token_override="PRIVATE_TOKEN")
+                self.assertEqual(result["code"], expected)
+                self.assertEqual(result["provider_error_code"], "DH-906")
+                self.assertIs(result["token_valid"], False if expected == "auth_rejected" else None)
+                self.assertFalse(result["ok"])
+                self.assertNotIn("PRIVATE", str(result))
 
     def test_http_429_respects_retry_after_even_without_json(self):
         def opener(req, timeout):
