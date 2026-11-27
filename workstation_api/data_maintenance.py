@@ -323,7 +323,7 @@ def status():
     return {"version":VERSION,"coverage_sources":sources,"option_progress":active_counts if cfg["enabled"] and last.get("state")=="running" else None,"config":cfg,"last_run":state.get("last_run"),"target":_target(now),
             "next_due_utc":due_at,"next_due_reason":due_reason,
             "connection_failure_count":state.get("connection_failure_count",0),"batch_id":state.get("batch_id"),
-            "safe_window":safe_window(now),"backfill_mode":"standard" if safe_window(now) else "live_priority",
+            "safe_window":safe_window(now),"backfill_mode":last.get("backfill_mode","standard") if last.get("state")=="running" and safe_window(now) else "standard" if safe_window(now) else "live_priority",
             "live_pressure":live_pressure(now) if cfg["enabled"] else None,
             "worker_running":bool(THREAD and THREAD.is_alive()),
             "due":_due(cfg,state,now),"error":error,
@@ -765,11 +765,14 @@ def run(*,progress=None,now=None):
                 if key in result:
                     report[key]=result[key]
 
+        def bank_stop():
+            return bool(history_budget.BUDGET.remaining_cooldown()) or should_stop()
+
         def bank_pass(progress):
             if cfg["constituents"] and not provider_limited() and not should_stop():
                 if progress:progress(30,"Checking dated banking constituents")
                 try:
-                    report["sources"]["constituents"]=_equity_pass(cfg,state,now,stop,progress,should_stop)
+                    report["sources"]["constituents"]=_equity_pass(cfg,state,now,stop,progress,bank_stop)
                 except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
                     if progress:progress(49,"Constituent history remains partially unavailable")
                     report["sources"]["constituents"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
@@ -777,7 +780,7 @@ def run(*,progress=None,now=None):
             if cfg["bank_panel"] and not provider_limited() and not should_stop():
                 if progress:progress(49,"Checking fixed major-bank research panel")
                 try:
-                    report["sources"]["bank_panel"]=_panel_pass(cfg,state,now,stop,progress,should_stop)
+                    report["sources"]["bank_panel"]=_panel_pass(cfg,state,now,stop,progress,bank_stop)
                 except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
                     report["sources"]["bank_panel"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
                 _save_state(state)
@@ -792,6 +795,7 @@ def run(*,progress=None,now=None):
             # coverage depend on it. Bank files and expired-option receipts have
             # distinct canonical writers, so these two lanes may overlap.
             report["backfill_mode"]="parallel_history"
+            _save_state(state)
             progress_lock=RLock()
             lane_pct={"banks":25.0,"options":0.0}
             lane_stage={"banks":"bank history queued","options":"option history queued"}
