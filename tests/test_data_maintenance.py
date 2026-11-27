@@ -273,6 +273,22 @@ class MaintenanceTests(TestCase):
         with patch.object(feed.WRITES,"qsize",return_value=0),patch.dict(feed.STATUS,{"storage_last_drop_utc":None,"storage_gap_started_utc":None}),patch.object(m.recorder_storage,"status",return_value={"last_drop_utc":(live-timedelta(minutes=3)).isoformat()}):
             self.assertIsNone(m.live_pressure(live))
 
+    def test_bank_minute_coverage_and_closing_gap_are_distinct_from_complete_sessions(self):
+        days=["2026-08-03","2026-08-04","2026-08-05"]
+        candles={days[0]:dict.fromkeys(range(375)),days[1]:dict.fromkeys(range(360))}
+        identity="NSE_EQ:1333"
+        state={"repairs":{identity+"|"+days[1]:self.now.isoformat()}}
+        evidence,eligible=m._bank_minute_evidence(days,candles,identity,state,self.now)
+        self.assertEqual(evidence["complete_sessions"],1)
+        self.assertEqual(evidence["observed_minute_slots"],735)
+        self.assertEqual(evidence["expected_minute_slots"],1125)
+        self.assertEqual(evidence["incomplete_session_minute_counts"],{"360":1,"0":1})
+        self.assertEqual(evidence["cooldown_sessions"],1)
+        self.assertEqual(evidence["next_repair_utc"],(self.now+m.REPAIR_COOLDOWN).isoformat())
+        self.assertEqual(eligible,[days[2]])
+        self.assertIn({"from":"15:15","through":"15:29","sessions":1},evidence["common_missing_intervals"])
+        self.assertIn({"from":"09:15","through":"15:29","sessions":1},evidence["common_missing_intervals"])
+
     def test_unattempted_equity_repairs_remain_eligible(self):
         state={}
         callback,attempted=m._repair_request_callback(state,{"NSE_EQ:1333":["2026-11-23","2026-11-24"]})
