@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 import csv
 import json
+import os
 from math import isfinite
 from pathlib import Path
 import uuid
@@ -63,7 +64,7 @@ def _select(day,minute,spot,table):
         yield from sorted(candidates,key=lambda q:(abs(q["strike"]-spot),q["strike"]))[:MAX_PER_SIDE]
 
 
-def decision_rows(day,minute,a,table,index_values):
+def decision_rows(day,minute,a,table,index_values,*,extended=False):
     """Return candidate observations, including unresolved outcome states."""
     if minute not in MINUTES or not np.isfinite(a[minute-59:minute+1,:4]).all():
         return []
@@ -78,6 +79,8 @@ def decision_rows(day,minute,a,table,index_values):
              np.log1p(_optional(q,"oi")),_optional(q,"iv"),
              100*_change(q,prior,"close"),_change(q,prior,"oi"),
              _optional(q,"iv")-_optional(prior,"iv"),(minute+1)/375.]
+        if extended:
+            raw.extend([100*(_optional(q,k)/price-1) for k in ("open","high","low")])
         x=np.asarray(raw+list(index_values),dtype=np.float32)
         row={"session":day,"minute":minute,"side":side,"strike":strike,
              "expiry_family":"MONTH:1","signal_close":price,"index_close":spot,
@@ -98,24 +101,40 @@ def decision_rows(day,minute,a,table,index_values):
                 row.update(state="scored_conditional_ohlc",exit_open=end,
                            target=np.asarray([100*(end-price)/price,
                                               100*(end-row["entry_open"])/price],float))
+        if extended:
+            row["iv_target"]=None;row["iv_exit_reference_utc"]=r._stamp(day,minute+2+DELAY+HOLD)
+            if row["state"]=="scored_conditional_ohlc":
+                iv0=_optional(q,"iv");iv1=_optional(exit_,"iv")
+                if isfinite(iv0) and isfinite(iv1):row["iv_target"]=float(iv1-iv0)
         result.append(row)
     return result
 
 
-def assemble(index,table,progress=None):
-    rows=[];coverage={}
+def assemble(index,table,progress=None,*,extended=False,archive=None):
+    rows=[];coverage={};history=[];last_complete=None
     for i,(day,a) in enumerate(sorted(index.items())):
         if progress and (i%25==0 or i+1==len(index)):
             progress(f"Building same-strike premium outcomes {i+1}/{len(index)} {day}")
-        names,features=m.f.price_features(a,index=True)
-        cols=[names.index(k) for k in INDEX_FEATURES]
+        if extended:
+            from scripts import benchmark_market_dynamics as dynamics
+            from scripts import option_dynamics as neural
+            prev=dynamics.direction.prior_weekday(day)
+            features=dynamics.full_asset_features(a,index.get(prev),history)
+            dynamics.add_clock_context(features,a,day,last_complete,375)
+            cols=list(range(len(dynamics.ASSET_FIELDS)))
+            if dynamics.prefix(a)==375:last_complete=(day,(a[0,0],a[:,1].max(),a[:,2].min(),a[-1,3]))
+            history.append(dynamics.daily_close(a,375))
+            if archive is not None:table=neural.near_month_table(archive,day)
+        else:
+            names,features=m.f.price_features(a,index=True)
+            cols=[names.index(k) for k in INDEX_FEATURES]
         counts=Counter()
         for minute in MINUTES:
             counts["reserved_decisions"]+=1
             if not np.isfinite(a[minute-59:minute+1,:4]).all():
                 counts["missing_index_history"]+=1
                 continue
-            candidates=decision_rows(day,minute,a,table,features[minute,cols])
+            candidates=decision_rows(day,minute,a,table,features[minute,cols],extended=extended)
             if not candidates:counts["no_signal_candidates"]+=1
             counts["signal_candidates"]+=len(candidates)
             for row in candidates:
@@ -163,7 +182,8 @@ def _metrics(rows,pred,prob,prior):
             "probability":m.probability_metrics(prob,(y[:,1]>0).astype(int),days,prior)}
 
 
-def assess(rows,splits,progress=None):
+def assess(rows,splits,progress=None,*,neural_artifacts=None,device_name='cuda',epochs=12,
+           feature_names=FEATURES,index_names=INDEX_FEATURES):
     reserved={label:set(dates) for label,dates in zip(("training","validation","evaluation"),splits)}
     parts={label:[r for r in rows if r["session"] in dates and r["state"]=="scored_conditional_ohlc"]
            for label,dates in reserved.items()}
@@ -194,7 +214,7 @@ def assess(rows,splits,progress=None):
     actual=(ye[:,1]>0).astype(int)
     for mode in MODES:
         if progress:progress("Fitting "+mode+" fixed ridge/logistic")
-        width=len(FEATURES) if mode=="option_only" else len(FEATURES)+len(INDEX_FEATURES)
+        width=len(feature_names) if mode=="option_only" else len(feature_names)+len(index_names)
         keep=np.flatnonzero(np.isfinite(xt[:,:width]).mean(axis=0)>=.05)
         if not len(keep):raise ValueError("No supported training features")
         reg=m.train_model("ridge",xt[:,keep],yt,weights)
@@ -204,7 +224,7 @@ def assess(rows,splits,progress=None):
         eprob=cls.predict_proba(xe[:,keep])[:,1]
         calibrated,state=m._calibrate_probability(vprob,(yv[:,1]>0).astype(int),dv,eprob)
         metrics=_metrics(test,ep,calibrated,prior)
-        record={"features_retained":[(FEATURES+INDEX_FEATURES)[i] for i in keep],
+        record={"features_retained":[(tuple(feature_names)+tuple(index_names))[i] for i in keep],
                 "calibration_state":state,"validation_raw":_metrics(val,vp,vprob,prior),
                 "evaluation":metrics,"evaluation_raw_probability":m.probability_metrics(eprob,actual,de,prior)}
         def diff(other,other_prob):
@@ -229,7 +249,37 @@ def assess(rows,splits,progress=None):
                 "minus_no_change":record["minus_no_change"],
                 "minus_historical_bucket":record["minus_historical_bucket"],
                 "minus_option_only":record.get("minus_option_only")}))
-    journal=[];test_i=0
+    evaluation_candidates=[r for r in rows if r['session'] in reserved['evaluation']]
+    neural_outputs={}
+    if neural_artifacts is not None:
+        from scripts import option_dynamics as neural
+        for mode in MODES:
+            name='neural_'+mode
+            width=len(feature_names) if mode=='option_only' else len(feature_names)+len(index_names)
+            result=neural.fit(train,val,evaluation_candidates,width,device_name=device_name,epochs=epochs,progress=progress)
+            neural_outputs[name]=result['predictions'];neural_artifacts[name]=result['checkpoint']
+            scored=np.asarray([r['state']=='scored_conditional_ohlc' for r in evaluation_candidates])
+            ep,raw,cal,iv=(x[scored] for x in result['predictions'])
+            metrics=_metrics(test,ep,cal,prior)
+            def diff(other,op):
+                sig=np.asarray([r['signal_close'] for r in test]);truth=np.asarray([r['exit_open'] for r in test])
+                price=lambda x:np.maximum(.01,sig*(1+x[:,0]/100))
+                return {'exit_mae_points':m.paired_day_interval(np.abs(price(ep)-truth)-np.abs(price(other)-truth),de),
+                        'delayed_change_mae_pct_of_signal':m.paired_day_interval(np.abs(ep[:,1]-ye[:,1])-np.abs(other[:,1]-ye[:,1]),de),
+                        'brier':m.paired_day_interval((cal-actual)**2-(op-actual)**2,de)}
+            iv_truth=np.asarray([r.get('iv_target') if r.get('iv_target') is not None else np.nan for r in test])
+            iv_ok=np.isfinite(iv_truth)&np.isfinite(iv)
+            record={'evaluation':metrics,'evaluation_raw_probability':m.probability_metrics(raw,actual,de,prior),
+                    'minus_no_change':diff(fixed,fixed_p),'minus_historical_bucket':diff(bucket,bucket_p),
+                    'minus_matched_linear':diff(outputs[mode][0],outputs[mode][2]),
+                    'iv_change_rows':int(iv_ok.sum()),'iv_change_mae_vendor_units':float(m._avg(np.abs(iv[iv_ok]-iv_truth[iv_ok]),de[iv_ok])) if iv_ok.any() else None,
+                    'iv_change_minus_zero':m.paired_day_interval(np.abs(iv[iv_ok]-iv_truth[iv_ok])-np.abs(iv_truth[iv_ok]),de[iv_ok]) if iv_ok.any() else None,
+                    **result['diagnostics']}
+            if mode=='option_plus_index':
+                old=neural_outputs['neural_option_only'];record['minus_neural_option_only']=diff(old[0][scored],old[2][scored])
+            report['models'][name]=record
+            if progress:progress('OPTION_DYNAMICS '+name+' '+json.dumps(record))
+    journal=[];test_i=0;candidate_i=0
     # Preserve all evaluation candidates, not only those with later observations.
     for row in rows:
         if row["session"] not in reserved["evaluation"]:continue
@@ -249,13 +299,18 @@ def assess(rows,splits,progress=None):
             test_i+=1
         # Keep CSV schema stable across unresolved candidates.
         item.setdefault("entry_open",None);item.setdefault("exit_open",None)
-        journal.append(item)
+        for name,(pred,raw,cal,iv) in neural_outputs.items():
+            item.update({name+"_predicted_exit_premium":float(max(.01,row["signal_close"]*(1+pred[candidate_i,0]/100))),
+                         name+"_predicted_change_pct_of_signal":float(pred[candidate_i,1]),
+                         name+"_raw_up_probability":float(raw[candidate_i]),name+"_calibrated_up_probability":float(cal[candidate_i]),
+                         name+"_predicted_iv_change_vendor_units":float(iv[candidate_i]) if np.isfinite(iv[candidate_i]) else None})
+        candidate_i+=1;journal.append(item)
     if test_i!=len(test):raise RuntimeError("Evaluation candidate order changed")
     report["state"]="assessed_conditional_premium_only"
     return report,journal
 
 
-def run(root,stop,days=365,progress=print):
+def run(root,stop,days=365,progress=print,*,neural_artifacts=None,device_name='cuda',epochs=12):
     if type(days) is not int or not 120<=days<=400 or stop>datetime.now(h.IST).date():
         raise ValueError("Use completed dates and 120-400 calendar days")
     service.DATA=root/"data"
@@ -264,25 +319,41 @@ def run(root,stop,days=365,progress=print):
     index,*_,meta=m.load_sources(start,stop,wings=None,index_only=True,progress=progress)
     dates=sorted(index)
     splits=m.split_days(dates)
-    stamps={r._stamp(day,minute+offset) for day in dates for minute in MINUTES
-            for offset in (-5,0,1+DELAY,1+DELAY+HOLD)}
     progress("Verifying original rolling option receipts; no provider calls")
-    table,options=p._load_options([{"session":d} for d in dates],WINGS,needed_stamps=stamps)
-    rows,coverage=assemble(index,table,progress)
+    extended=neural_artifacts is not None
+    if extended:
+        from scripts import benchmark_market_dynamics as dynamics
+        from scripts import market_dynamics_history as hist
+        archive=hist.load_options(index,splits[0],progress)
+        options=archive.evidence;table={}
+        rows,coverage=assemble(index,table,progress,extended=True,archive=archive)
+        del archive
+        feature_names=FEATURES+("open_relative_pct","high_relative_pct","low_relative_pct")
+        index_names=dynamics.ASSET_FIELDS
+    else:
+        stamps={r._stamp(day,minute+offset) for day in dates for minute in MINUTES
+                for offset in (-5,0,1+DELAY,1+DELAY+HOLD)}
+        table,options=p._load_options([{"session":d} for d in dates],WINGS,needed_stamps=stamps)
+        rows,coverage=assemble(index,table,progress)
+        feature_names=FEATURES;index_names=INDEX_FEATURES
     del table,index
-    report,journal=assess(rows,splits,progress)
-    report.update(version=VERSION,from_inclusive=start.isoformat(),to_exclusive=stop.isoformat(),
+    report,journal=assess(rows,splits,progress,neural_artifacts=neural_artifacts,device_name=device_name,
+                          epochs=epochs,feature_names=feature_names,index_names=index_names)
+    report.update(version="option_dynamics_v1" if extended else VERSION,trade_qualified=False,from_inclusive=start.isoformat(),to_exclusive=stop.isoformat(),
                   observed_sessions=len(dates),horizon_minutes=HOLD,decision_delay_minutes=DELAY,
-                  strike_wings=WINGS,max_per_side=MAX_PER_SIDE,
+                  strike_wings="all_saved_near_month_offsets" if extended else WINGS,max_per_side=MAX_PER_SIDE,
                   training_dates=splits[0],validation_dates=splits[1],evaluation_dates=splits[2],
                   index_sources=meta["index"],option_sources=options,session_coverage=coverage,
-                  features=list(FEATURES),index_features=list(INDEX_FEATURES),
+                  features=list(feature_names),index_features=list(index_names),
                   warning=("Retrospective conditional rolling monthly family, not exact exchange contracts. "
                            "Completed signal bars, one-minute delay, then five-minute open-to-open premium "
                            "observations; positive gross change is NOT net profitability. "
                            "Later positive-volume bars establish observations, not fills; scored subset may be selective. "
                            "No exact expiry/lot, spread, fees, execution, IV-change forecast or trading policy. "
                            "Earlier examined dates are not prospective confirmation. No provider calls, orders or deployment."))
+    if extended:
+        report["warning"]+=" Separate OptionDynamics MLP benchmark (not the underlying direction model); all verified near-month offset receipts, nearest three observed strikes per side within 2%, 5-minute decision stride after 60 completed index bars, fixed 5-minute outcome. Vendor IV change is signal close to completed exit candle IV (one minute AFTER exit-open reference), optional training mask, not an executable IV quote. No exact expiry ID, Greeks, conditional forecasts from V3 or executable P&L. Neural predictions are recorded even when later outcomes are unavailable."
+        report["device"]=device_name
     return report,journal
 
 
@@ -291,10 +362,15 @@ def main():
     ap.add_argument("--shared-root",type=Path,default=service.ROOT)
     ap.add_argument("--days",type=int,default=365)
     ap.add_argument("--to-date",default="2026-11-27",help="Exclusive IST end date")
+    ap.add_argument("--neural",action="store_true",help="Train separate OptionDynamics neural premium/IV models")
+    ap.add_argument("--device",choices=("cpu","cuda"),default="cuda")
+    ap.add_argument("--epochs",type=int,default=12)
     args=ap.parse_args()
     try:
         root=args.shared_root.resolve()
-        report,journal=run(root,date.fromisoformat(args.to_date),args.days,lambda s:print(s,flush=True))
+        artifacts={} if args.neural else None
+        report,journal=run(root,date.fromisoformat(args.to_date),args.days,lambda s:print(s,flush=True),
+                            neural_artifacts=artifacts,device_name=args.device,epochs=args.epochs)
         folder=root/"results";folder.mkdir(exist_ok=True)
         stem="banknifty_option_response_"+uuid.uuid4().hex
         path=folder/(stem+".json");csv_path=folder/(stem+"_predictions.csv")
@@ -303,6 +379,14 @@ def main():
                 w=csv.DictWriter(out,fieldnames=list(journal[0]));w.writeheader();w.writerows(journal)
             write_atomic(csv_path,writer)
         report["prediction_csv"]=csv_path.name if journal else None
+        if artifacts:
+            import torch
+            weights=folder/(stem+"_research_only.pt");tmp=weights.with_suffix(".tmp")
+            try:torch.save({"research_only":True,"trade_qualified":False,"models":artifacts,"features":report["features"],
+                             "index_features":report["index_features"]},tmp);os.replace(tmp,weights)
+            finally:tmp.unlink(missing_ok=True)
+            report["research_checkpoint"]=weights.name
+            print("RESEARCH_CHECKPOINT",weights)
         write_atomic(path,lambda out:json.dump(report,out,sort_keys=True,indent=2,allow_nan=False))
         print("COVERAGE",json.dumps(report["coverage"]))
         print("BASELINES",json.dumps(report.get("baselines",{})))

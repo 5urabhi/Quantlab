@@ -623,7 +623,7 @@ def journal_rows(data,te,models,probs):
 def run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="cpu",progress=print,all_history=False,
         v3=False,include_options=False,pretrain_epochs=2,accumulate=4,width=128):
     if v3 and not all_history:raise ValueError("V3 requires --all-history")
-    if include_options and not v3:raise ValueError("--include-options is the optional V3 ablation; V2 already includes options")
+    if include_options and (not v3 or index_only):raise ValueError("--include-options is the optional V3 ablation; V2 already includes options")
     if all_history:
         root=Path(root).resolve();folder=root/"results";folder.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="market_dynamics_scratch_",dir=folder) as scratch:
@@ -743,11 +743,12 @@ def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="c
                                 "pretrain_horizons":[5,30],"pretrain_stride":5,"pretrain_epochs":pretrain_epochs,
                                 "gradient_accumulation":accumulate,"batch_size":batch,"options_included":include_options}
         report["snapshot_policy"]="streaming_logistic_sgd_constant_lr_3passes"
-        report["pretraining_labels_per_asset"]={asset:counts for asset,counts in zip(data["identities"],data["pretrain_counts"])}
+        report["available_pretraining_labels_per_asset"]={asset:counts for asset,counts in zip(data["identities"],data["pretrain_counts"])}
         for name,result in models.items():
             report["models"][name].update(pretraining=result["pretraining"],precision=result["precision"],
+                                          used_pretraining_labels=result["used_pretraining_labels"],
                                           memory_dimensions=result["memory_dimensions"])
-        report["warning"]+=" V3 uses a 30-minute raw local window, completed 15-minute session blocks and 60 prior observed-session tokens; long memory tokens contain index features and cross-sectional mean/dispersion/coverage, not all instruments raw at all times. Pretraining uses 5/30m instrument-specific observed labels on earlier five-minute anchors; fine-tuning uses every eligible resolved minute. Movement and conditional direction have separate supervised losses; validation rank averages their Brier scores. Optional options lane is a separate fixed ablation, not a trading decision. Previously inspected evaluation dates remain exploratory. Raw and calibrated probability comparisons are both reported."
+        report["warning"]=(report["warning"].replace("MarketDynamics v2","MarketDynamics v3").replace("All verified rolling family/offset streams with training support, not exact exchange contracts.","All verified rolling family/offset streams with training support, not exact exchange contracts." if include_options else "Underlying-only primary model: all rolling option inputs explicitly excluded."))+" V3 uses a 30-minute raw local window, completed 15-minute session blocks and 60 prior observed-session tokens; long memory tokens contain index features and cross-sectional mean/dispersion/coverage, not all instruments raw at all times. Pretraining uses 5/30m instrument-specific observed labels on earlier five-minute anchors; fine-tuning uses every eligible resolved minute. Movement and conditional direction have separate supervised losses; validation rank averages their Brier scores. Optional options lane is a separate fixed ablation, not a trading decision. Previously inspected evaluation dates remain exploratory. Raw and calibrated probability comparisons are both reported."
     checkpoint={"version":version,"full_history":all_history,"research_only":True,"trade_qualified":False,"assets":data["identities"],
                 "asset_fields":list(ASSET_FIELDS),"auxiliary_fields":list(data["aux_names"]),
                 "aux_fit":{k:v.tolist() for k,v in fit.items()},"horizons":list(HORIZONS),
@@ -803,7 +804,7 @@ def main():
         print("AVAILABILITY",json.dumps(report["availability"]))
         if args.v3:
             print("ARCHITECTURE",json.dumps(report["architecture"]))
-            print("PRETRAIN_LABELS",json.dumps(report["pretraining_labels_per_asset"]))
+            print("PRETRAIN_LABELS",json.dumps(report["available_pretraining_labels_per_asset"]))
             print("MODELS",json.dumps(report["models"]))
         for horizon,s in report["evaluation"].items():
             summary={key:s[key] for key in ("evaluation_rows","unresolved_evaluation_rows","adaptive_mae_bps",

@@ -141,6 +141,9 @@ def fit(data,tr,va,te,aux_fit,*,joint,epochs,batch,device,progress,pretrain_epoc
     pre=tr[(data["minutes"][tr]+1)%5==0]
     if not len(pre):raise ValueError("No pretraining anchors")
     optimizer=torch.optim.AdamW(model.parameters(),lr=.0005,weight_decay=.01)
+    used=np.zeros((example[0].shape[2],2),np.int64)
+    for part in hist.batches(pre):
+        _,mask=pretraining_targets(data,part,joint);used+=mask.sum(axis=0,dtype=np.int64)
     prehistory=[]
     for e in range(1,pretrain_epochs+1):
         loss=epoch(pre,optimizer,e,pretrain_epochs,True)
@@ -166,7 +169,7 @@ def fit(data,tr,va,te,aux_fit,*,joint,epochs,batch,device,progress,pretrain_epoc
     model.load_state_dict(best["state"])
     vp,vr=predict(va);ep,er=predict(te)
     return {"validation":(vp,vr),"evaluation":(ep,er),"state":best["state"],"selected_epoch":best["epoch"],
-            "history":history,"pretraining":prehistory,"precision":"bf16_projections_fp32_gru" if amp else "float32",
+            "history":history,"pretraining":prehistory,"used_pretraining_labels":{identity:row.tolist() for identity,row in zip(data["identities"],used)},"precision":"bf16_projections_fp32_gru" if amp else "float32",
             "parameters":sum(p.numel() for p in model.parameters()),
             "input_dimensions":[example[0].shape[2],example[0].shape[3],example[1].shape[2]],
             "memory_dimensions":example[2].shape[2]}
