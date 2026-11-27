@@ -46,6 +46,10 @@ def main():
         print("PARTITION WINDOWS",json.dumps(report["partition_windows"]))
         print("ASSETS",json.dumps(report["assets"]))
         print("FEATURE COVERAGE",json.dumps(report["feature_coverage"]))
+        print("BANK MEMBERSHIP AUDIT",json.dumps({part:{"reserved_days":len(report[part+"_dates"]),
+            "missing_dated_membership":[day for day in report[part+"_dates"] if not report["session_bank_coverage"][day]["dated_membership"]],
+            "verified_weight_days":sum(report["session_bank_coverage"][day]["verified_weights"] for day in report[part+"_dates"])}
+            for part in ("training","validation","evaluation")}))
         print("SELECTED",json.dumps(report["selected"]))
         print("VALIDATION MODELS",json.dumps([{k:v for k,v in row.items() if k!="history"} for row in report["validation_models"]]))
         print("EVALUATION ADAPTIVE",json.dumps(report["adaptive_baselines"]["evaluation"]))
