@@ -18,6 +18,7 @@ import sqlite3
 import time
 
 from . import banknifty_constituents as bank, dhan_workspace, option_chain_live, live_market, market_inventory, recorder_storage, shared_market_data
+from . import nse_session_policy as sessions
 
 ID=re.compile(r"^NSE_FNO:[0-9]{1,12}$")
 MAX_OPTIONS=50
@@ -234,7 +235,7 @@ class Capture:
             if kind not in ("quote","oi"):
                 return
             local=received.astimezone(live_market.IST)
-            if local.weekday()>=5 or not 555<=local.hour*60+local.minute<930 or local.date().isoformat()>row["expiry"]:
+            if local.weekday()>=5 or not sessions.OPEN_MINUTE<=local.hour*60+local.minute<sessions.OPEN_MINUTE+sessions.derivatives_segment_minutes(local.date()) or local.date().isoformat()>row["expiry"]:
                 self.stale+=1
                 return
             trade=None
