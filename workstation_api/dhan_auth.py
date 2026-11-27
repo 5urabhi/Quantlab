@@ -6,6 +6,7 @@ tokens, names, or raw vendor response bodies to the React interface.
 from __future__ import annotations
 import json
 import logging
+import math
 import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -13,6 +14,74 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 LOG = logging.getLogger("quantlab.dhan.auth")
+
+
+# Documented Dhan error codes only. Never expose arbitrary provider messages,
+# unknown code values, account IDs or response bodies.
+_PROFILE_ERRORS = {
+    "DH-901": ("auth_rejected", False, None, "Dhan rejected the credentials (invalid or expired). Generate a fresh token."),
+    "DH-902": ("data_plan_inactive", None, None, "Dhan denied API access. Check the Data API subscription and account permissions."),
+    "DH-903": ("profile_account_error", None, None, "Dhan reports an account or segment permission issue."),
+    "DH-904": ("profile_rate_limited", None, None, "Dhan rate limit reached. Respect the provider cooldown."),
+    "DH-905": ("profile_input_error", None, None, "Dhan rejected a request parameter. Check the documented profile request format."),
+    "DH-907": ("profile_http_error", None, None, "Dhan could not retrieve the requested data."),
+    "DH-908": ("profile_unreachable", None, None, "Dhan reports a temporary internal server error."),
+    "DH-909": ("profile_unreachable", None, None, "Dhan reports a temporary upstream network error."),
+    "800": ("profile_unreachable", None, None, "Dhan reports an internal server error."),
+    "805": ("profile_rate_limited", None, None, "Dhan rate limit reached. Respect the provider cooldown."),
+    "806": ("data_plan_inactive", None, False, "Dhan reports that Data APIs are not subscribed."),
+    "807": ("token_expired", False, None, "Dhan reports an expired access token. Generate a fresh token."),
+    "808": ("auth_rejected", False, None, "Dhan reports invalid credentials. Verify the token and client ID."),
+    "809": ("auth_rejected", False, None, "Dhan reports an invalid access token. Generate a fresh token."),
+    "810": ("client_id_mismatch", None, None, "Dhan reports an invalid client ID."),
+    "814": ("profile_input_error", None, None, "Dhan reports an invalid request."),
+}
+
+
+def _provider_error_code(payload):
+    if not isinstance(payload, dict):
+        return None
+    for key in ("errorCode", "error_code", "code"):
+        value = payload.get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            candidate = str(value).strip().upper()
+            if candidate in _PROFILE_ERRORS:
+                return candidate
+    return None
+
+
+def _profile_error(status, payload=None, headers=None):
+    vendor_code = _provider_error_code(payload)
+    # A 429 takes precedence even when an inconsistent vendor code is sent.
+    if status == 429:
+        code, valid, plan, message = _PROFILE_ERRORS["DH-904"]
+    elif vendor_code:
+        code, valid, plan, message = _PROFILE_ERRORS[vendor_code]
+    elif status in (401, 403):
+        code, valid, plan, message = "auth_rejected", False, None, "Dhan rejected this access token. Enter a fresh token in QuantLab's Dhan connection panel."
+    elif status >= 500:
+        code, valid, plan, message = "profile_unreachable", None, None, "Dhan profile service is temporarily unavailable."
+    else:
+        code, valid, plan, message = "profile_http_error", None, None, "Token status not verified; Dhan did not return a recognized error code."
+    result = {"ok": False, "token_present": True, "token_valid": valid,
+              "data_plan_active": plan, "code": code, "http_status": status,
+              "provider_error_code": vendor_code,
+              "message": f"Dhan profile HTTP {status}" + (f" ({vendor_code})" if vendor_code else "") + ": " + message}
+    if code == "profile_rate_limited":
+        retry = str(headers.get("Retry-After", "")).strip() if headers else ""
+        seconds = 0
+        if retry.isdigit() and len(retry) <= 9:
+            seconds = int(retry)
+        elif retry:
+            try:
+                from email.utils import parsedate_to_datetime
+                when = parsedate_to_datetime(retry)
+                if when.tzinfo is not None:
+                    seconds = max(0, math.ceil((when - datetime.now(timezone.utc)).total_seconds()))
+            except (ValueError, TypeError, OverflowError):
+                pass
+        result["provider_retry_after_seconds"] = seconds
+    return result
 
 
 def check_profile(opener=urlopen, *, token_override: str | None = None,
@@ -33,13 +102,11 @@ def check_profile(opener=urlopen, *, token_override: str | None = None,
             payload = json.loads(response.read(65536))
     except HTTPError as exc:
         LOG.warning("Dhan profile preflight HTTP failure: endpoint=GET /v2/profile status=%s", exc.code)
-        if exc.code in (401, 403):
-            return {"ok": False, "token_present": True, "token_valid": False,
-                    "data_plan_active": False, "code": "auth_rejected",
-                    "message": "Dhan rejected this access token. Enter a fresh token in QuantLab's Dhan connection panel."}
-        return {"ok": False, "token_present": True, "token_valid": None,
-                "data_plan_active": None, "code": "profile_http_error",
-                "message": f"Dhan profile endpoint returned HTTP {exc.code}; token status not verified."}
+        try:
+            payload = json.loads(exc.read(4096))
+        except (OSError, ValueError, TypeError, AttributeError):
+            payload = None
+        return _profile_error(exc.code, payload, exc.headers)
     except (URLError, TimeoutError, OSError, ValueError, TypeError) as exc:
         LOG.warning("Dhan profile preflight failed: endpoint=GET /v2/profile category=%s", type(exc).__name__)
         return {"ok": False, "token_present": True, "token_valid": None,
@@ -50,6 +117,8 @@ def check_profile(opener=urlopen, *, token_override: str | None = None,
         return {"ok": False, "token_present": True, "token_valid": None,
                 "data_plan_active": None, "code": "invalid_profile",
                 "message": "Dhan returned an unrecognized profile response."}
+    if _provider_error_code(payload):
+        return _profile_error(200, payload)
     # Dhan V2 documents tokenValidity, dataPlan and dataValidity.
     # Never emit dhanClientId, UCC, account details or token content.
     state = str(payload.get("dataPlan", "")).strip().lower()
