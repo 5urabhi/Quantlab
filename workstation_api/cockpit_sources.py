@@ -46,6 +46,14 @@ def _candidates(identity: str) -> list[tuple[Path, Path, dict]]:
         if root.is_symlink() or root.parent.is_symlink() or not root.is_dir():
             continue
         folders.extend(p for p in root.iterdir() if p.is_dir() and not p.is_symlink() and pattern.fullmatch(p.name))
+    raw_sid = None
+    if any(p.name.startswith("download_") for p in folders):
+        mode=index_spot.CORE_RESEARCH_MODES.get(identity,identity)
+        try:
+            resolved=index_spot.resolve(mode)
+            raw_sid=resolved.security_id if resolved is not None else None
+        except (OSError,ValueError,KeyError,TypeError):
+            pass
     for folder in sorted(folders, reverse=True):
         source = folder / (basename + "_intraday_1m.csv")
         manifest = folder / (basename + "_intraday_1m.manifest.json")
@@ -67,6 +75,8 @@ def _candidates(identity: str) -> list[tuple[Path, Path, dict]]:
                 or not isinstance(metadata.get("row_count"), int)
                 or not 0 < metadata["row_count"] <= MAX_CSV_ROWS
                 or not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("sha256", "")))):
+            continue
+        if folder.name.startswith("download_") and (raw_sid is None or str(inst["security_id"])!=str(raw_sid)):
             continue
         results.append((source, manifest, metadata))
     return results
