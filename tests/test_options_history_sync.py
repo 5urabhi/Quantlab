@@ -169,5 +169,19 @@ class OptionsHistorySyncTests(unittest.TestCase):
             self.assertEqual(result["checked_offset_date_pairs"],4)
 
 
+    def test_profile_disconnect_keeps_verified_progress_before_provider_request(self):
+        day="2026-10-01"
+        body=exp._request_body(date(2026,10,1),date(2026,10,2),"MONTH",0,"ATM","CALL")
+        exp._save_cache(body,{"data":{}})
+        seen=[]
+        with patch.object(sync.dhan_auth,"check_profile",return_value={"ok":False,"code":"profile_unreachable"}),patch.object(exp,"_original_response_once") as request:
+            with self.assertRaises(exp.RollingConnectionError):
+                sync.run(start_date=day,end_date="2026-10-02",wings=0,today=self.today,on_counts=seen.append)
+            request.assert_not_called()
+        self.assertEqual(seen[-1]["checked_offset_date_pairs"],2)
+        self.assertEqual(seen[-1]["eligible_offset_date_pairs"],4)
+        self.assertEqual(seen[-1]["remaining_planned_requests"],1)
+
+
 if __name__=="__main__":
     unittest.main()
