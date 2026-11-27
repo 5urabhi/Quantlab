@@ -186,6 +186,10 @@ def _request_body(start: date, end: date, flag: str, code: int,
     }
 
 
+class RollingConnectionError(ValueError):
+    """Temporary connectivity failure; distinct from authorization and input errors."""
+
+
 class RollingInputError(ValueError):
     """The provider explicitly rejected a rolling-option request (DH-905)."""
 
@@ -274,8 +278,8 @@ def _original_response_once(body: dict, *, opener=None) -> dict:
             "If the expiry is still active, refresh the Dhan instrument master "
             "and use the active-contract history; no option prices have been invented."
         ) from None
-    except (URLError, TimeoutError) as exc:
-        raise ValueError("Dhan expired-options data connection unavailable; check local network") from None
+    except (URLError, TimeoutError, OSError):
+        raise RollingConnectionError("Dhan expired-options data connection unavailable; check local network") from None
     if not raw or len(raw) > MAX_RESPONSE_BYTES:
         raise ValueError("Dhan expired-options response was empty or exceeded size limit")
     try:
