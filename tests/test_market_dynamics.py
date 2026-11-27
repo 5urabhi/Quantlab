@@ -70,6 +70,31 @@ class DynamicsDataTests(TestCase):
         np.testing.assert_array_equal(fit["mean"],d.fit_aux(data,rows)["mean"])
 
 
+    def test_all_horizon_scoring_matches_labels_and_reports_unresolved(self):
+        dates=[(date(2025,1,1)+timedelta(days=i)).isoformat() for i in range(6)]
+        grid=np.zeros((6,375,2,len(d.ASSET_FIELDS)),np.float32);grid[:,:,0,0]=1
+        di=np.repeat(np.arange(6),3);minutes=np.tile([19,24,29],6)
+        classes=np.tile(np.arange(3),6)[:,None].repeat(6,axis=1)
+        y=np.zeros((18,6,3),np.float32)
+        y[:,:,0]=(classes-1)*10
+        y[:,:,1]=np.maximum(y[:,:,0],0);y[:,:,2]=np.maximum(-y[:,:,0],0)
+        ok=np.ones((18,6),bool);ok[-1,-1]=False
+        data={"grid":grid,"aux":np.zeros((6,375,1),np.float32),"days":np.asarray(dates)[di],
+              "day_index":di,"minutes":minutes,"y":y,"classes":classes,"mask":ok,
+              "scheduled":np.ones_like(ok),"available":np.zeros((6,375,5),bool)}
+        tr=np.arange(12);va=np.arange(12,15);te=np.arange(15,18)
+        prob=np.full((3,6,3),1/3)
+        result={"validation":(prob,y[va]),"evaluation":(prob,y[te])}
+        report,cal=d.score_all(data,tr,va,te,{"index_only":result,"joint":result},True,None)
+        self.assertEqual(set(report),set(map(str,d.HORIZONS)))
+        self.assertEqual(report["60"]["evaluation_rows"],2)
+        self.assertEqual(report["60"]["unresolved_evaluation_rows"],1)
+        self.assertFalse(report["5"]["trade_qualified"])
+        self.assertEqual(report["5"]["paired_brier"]["index_only"]["mean_difference"],0.)
+        self.assertEqual(cal["joint"].shape,(3,6,3))
+        self.assertTrue(np.isfinite(cal["snapshot"]).all())
+
+
 @skipIf(torch is None,"Optional PyTorch dependency not installed")
 class DynamicsModelTests(TestCase):
     @classmethod
