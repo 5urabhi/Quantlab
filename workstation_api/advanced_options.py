@@ -17,7 +17,7 @@ import json
 import sqlite3
 
 from . import option_chain_live, shared_market_data, liquidity_spreads as fees
-from . import spread_scanner
+from . import spread_scanner, nse_session_policy as sessions
 
 IST = option_chain_live.IST
 YEAR_SECONDS = 365.25 * 86400
@@ -382,12 +382,15 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
     spot=positive(chain["underlying_spot"])
     if spot is None:
         raise ValueError("No observed BANKNIFTY spot")
-    expiry_at=datetime.combine(date.fromisoformat(chain["expiry"]),time(15,30),IST)
+    expiry_day=date.fromisoformat(chain["expiry"])
+    expiry_at=datetime.combine(expiry_day,sessions.index_expiry_close(expiry_day),IST)
     years=(expiry_at-captured).total_seconds()/YEAR_SECONDS
     rate,dividend=rate_pct/100,dividend_pct/100
     age=(now-captured).total_seconds()
     local=now.astimezone(IST)
-    recent=0<=age<=MAX_RECEIPT_AGE and local.weekday()<5 and time(9,15)<=local.time()<time(15,30)
+    contract_close=sessions.index_contract_close(local.date(),expiry_day) if expiry_day>=local.date() else None
+    recent=bool(contract_close is not None and 0<=age<=MAX_RECEIPT_AGE and local.weekday()<5 and time(9,15)<=local.time()<contract_close)
+    horizon_in_session=bool(contract_close is not None and local+timedelta(minutes=horizon_minutes)<datetime.combine(local.date(),contract_close,IST))
     h=_history(chain,now,selected)
     rows=[]
     for c in chain["contracts"]:
@@ -428,6 +431,7 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
         lots=min(max_lots,risk_lots,top_lots) if risk_lots is not None and top_lots is not None else 0
         reasons=[]
         if not recent: reasons.append("Snapshot not current regular-session receipt")
+        if not horizon_in_session: reasons.append("Scenario horizon reaches scheduled contract session close")
         if not verified: reasons.append("Unverified contract / lot")
         if not valid: reasons.append("Missing or crossed bid/ask")
         if valid and (bid<20 or spread_bps>max_spread_bps): reasons.append("Low premium or wide relative spread")
@@ -572,7 +576,7 @@ def analyze(chain, *, capital=50000., max_lots=3, direction="BOTH", move_points=
           "Fit score components: reward/risk up to 50, spread up to 20, preferred premium proximity up to 15, favorable return up to 15. Reward/risk denominator includes adverse/flat losses and favorable-move IV contraction drag. It is a heuristic, not predicted return.",
           "Rank is a conditional long-option comparison, NOT a buy signal, forecast or win probability. UP means a user-assumed rise, DOWN a user-assumed fall; BOTH compares each side under its own favorable move.",
           "Chain receipt time is local, not exchange quote time. Original 20-level books and trade timestamps are checked separately; even recent depth is not an order fill. Only up to 60 leading candidates and selected ID receive indexed depth checks. Highest evidence tier requires fresh book prices agreeing with the chain within max(₹0.05, 0.1% of mid), sufficient top size and narrow spread.",
-          "Expiry at 15:30 IST, 365.25-day year, assumed rate/dividend and constant IV shock. Special sessions and exchange holidays are not certified.",
+          "Expiry time uses the dated NSE scheduled index-contract trading cutoff, not a verified settlement timestamp; 365.25-day year, assumed rate/dividend and constant IV shock. Special sessions and exchange holidays are not certified.",
           "Scenario exit = theoretical midpoint less current half-spread and slippage. Future spreads, fills and IV are unknown. Fees are indicative existing Zerodha/Dhan schedule; settlement/exercise and other levies excluded.",
           "IV history uses same-expiry nearest paired strike provider IV, not a constant-tenor index. Realized vol uses at least 30 contiguous observed BANKNIFTY one-minute log returns, annualized sqrt(252 x 375); gaps not bridged.",
           "Gamma × reported OI × spot² × 1% is unsigned, per reported OI unit; dealer inventory sign and OI contract/quantity convention are not established. Max pain and PCR are descriptive, not directional forecasts.",
