@@ -3,7 +3,8 @@ import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 
 type Config={enabled:boolean;index:boolean;constituents:boolean;options:boolean;bank_panel:boolean;index_days:number;constituent_days:number;option_days:number;wings:number}
 type IndexStatus={state:string;complete_observed_sessions:number;partial_observed_sessions:number;uncovered_request_windows:number;missing_other_index_observed_sessions:number;rejected_receipts:number}
-type EquityStatus={state:string;reason?:string;batch_id?:string;documented_through?:string;actual_end_exclusive?:string;requested_end_exclusive?:string;unresolved?:{symbol:string;reason:string}[];observed_member_session_gaps?:number;unavailable_sources?:number;members?:Record<string,{expected_observed_index_sessions:number;complete_sessions:number|null;missing_or_partial_sessions:number|null;example_dates?:string[];incomplete_session_minute_counts?:Record<string,number>;example_gap_minutes?:Record<string,number>}>}
+type BankMember={expected_observed_index_sessions:number;complete_sessions:number|null;missing_or_partial_sessions:number|null;example_dates?:string[];incomplete_session_minute_counts?:Record<string,number>;example_gap_minutes?:Record<string,number>;observed_minute_slots?:number;expected_minute_slots?:number;retryable_sessions?:number;cooldown_sessions?:number;next_repair_utc?:string|null;common_missing_intervals?:{from:string;through:string;sessions:number}[]}
+type EquityStatus={state:string;reason?:string;batch_id?:string;documented_through?:string;actual_end_exclusive?:string;requested_end_exclusive?:string;unresolved?:{symbol:string;reason:string}[];observed_member_session_gaps?:number;unavailable_sources?:number;repair_dates_attempted?:number;retryable_member_session_gaps?:number;members?:Record<string,BankMember>}
 type OptionCounters={coverage_as_of?:string;progress_stale?:boolean;scope_start?:string;scope_end?:string;scope_wings?:number;known_observed_minute_slots?:number;known_expected_minute_slots?:number;known_market_dates?:number;eligible_offset_date_pairs?:number;checked_offset_date_pairs?:number;missing_offset_date_pairs?:number;remaining_planned_requests?:number;batch_limit?:number;batch_attempted?:number;batch_completed?:number;active_receipts_per_minute?:number|null;new_receipts?:number;rejected_windows?:number;planned_missing_requests?:number;existing_verified_receipts?:number}
 type OptionStatus=OptionCounters&{state:string;reason?:string;existing_verified_receipts?:number;new_receipts?:number;planned_missing_requests?:number;unattempted_requests?:number;rejected_windows?:number;empty_processed_receipts?:number;empty_verified_receipts?:number;observed_rolling_minute_slots?:number;observed_session_dates?:number;excluded_active_calendar_days?:number}
 type Report={state:string;reason?:string;profile_code?:string;started_utc:string;finished_utc?:string;sources:{index?:Record<string,IndexStatus>;constituents?:EquityStatus;bank_panel?:EquityStatus;options?:OptionStatus}}
@@ -22,12 +23,37 @@ function CoverageBar({label,done,total,note}:{label:string;done:number|null|unde
   <small>{known?`${fmt(done)} / ${fmt(total)}`:'Awaiting verified scope'}{note?' · '+note:''}</small>
  </div>
 }
+const SESSION_MINUTES=375
+function bankMinutes(v:BankMember):number|null{
+ const expected=v.expected_observed_index_sessions*SESSION_MINUTES
+ if(v.complete_sessions===null||!Number.isSafeInteger(expected)||expected<0)return null
+ if(v.observed_minute_slots!==undefined&&v.expected_minute_slots===expected){
+  return Number.isSafeInteger(v.observed_minute_slots)&&v.observed_minute_slots>=0&&v.observed_minute_slots<=expected?v.observed_minute_slots:null
+ }
+ // Backward compatible with previously verified audits; no assumed bars.
+ const complete=v.complete_sessions
+ if(!Number.isSafeInteger(complete)||complete<0||complete>v.expected_observed_index_sessions)return null
+ let observed=complete*SESSION_MINUTES,partial=0
+ for(const [minuteText,count] of Object.entries(v.incomplete_session_minute_counts||{})){
+  const minutes=Number(minuteText)
+  if(!Number.isSafeInteger(minutes)||minutes<0||minutes>=SESSION_MINUTES||!Number.isSafeInteger(count)||count<0)return null
+  partial+=count;observed+=minutes*count
+ }
+ return complete+partial===v.expected_observed_index_sessions&&observed<=expected?observed:null
+}
 function BankCoverage({source,label}:{source:EquityStatus;label:string}){
  const rows=Object.entries(source.members||{}),total=rows.reduce((s,[,v])=>s+v.expected_observed_index_sessions,0)
  const known=rows.reduce((s,[,v])=>s+(v.complete_sessions??0),0)
- const unknown=rows.filter(([,v])=>v.complete_sessions===null).length
- return <><CoverageBar label={label} done={rows.length?known:null} total={rows.length?total:null} note={unknown?`${unknown} unverified banks; verified lower bound`:'Complete bank-session pairs'}/>
- {rows.length>0&&<details><summary>Individual bank progress</summary><div className="mi-maintenance-bank-grid">{rows.map(([name,v])=><CoverageBar key={name} label={name} done={v.complete_sessions} total={v.expected_observed_index_sessions} note={v.incomplete_session_minute_counts?Object.entries(v.incomplete_session_minute_counts).sort((a,b)=>b[1]-a[1]).map(([minutes,days])=>`${days} sessions × ${minutes}/375 minutes`).join(' · '):undefined}/> )}</div></details>}</>
+ const minutes=rows.map(([,v])=>bankMinutes(v))
+ const observed=minutes.reduce<number>((s,n)=>s+(n??0),0)
+ const unknown=minutes.filter(v=>v===null).length
+ const expected=total*SESSION_MINUTES
+ const waiting=source.retryable_member_session_gaps===0&&(source.observed_member_session_gaps??0)>0
+ const repairDates=rows.flatMap(([,v])=>v.next_repair_utc?[v.next_repair_utc]:[]).sort()
+ return <><CoverageBar label={label+' · observed minutes'} done={rows.length&&unknown<rows.length?observed:null} total={rows.length?expected:null} note={unknown?unknown+' unverified banks; verified lower bound':fmt(expected-observed)+' missing minute slots · known regular sessions'}/>
+ <CoverageBar label={label+' · complete sessions'} done={rows.length?known:null} total={rows.length?total:null} note="Strict 375/375 minutes per bank-session"/>
+ {waiting&&<small className="mi-caption">No eligible session repairs now. Previously attempted gaps are on repair cooldown{repairDates.length?' · next eligible '+local(repairDates[0]):''}. Missing minutes are not filled synthetically.</small>}
+ {rows.length>0&&<details><summary>Individual bank progress</summary><div className="mi-maintenance-bank-grid">{rows.map(([name,v])=><div key={name}><CoverageBar label={name+' · observed minutes'} done={bankMinutes(v)} total={v.expected_observed_index_sessions*SESSION_MINUTES}/><CoverageBar label={name+' · complete sessions'} done={v.complete_sessions} total={v.expected_observed_index_sessions} note={v.incomplete_session_minute_counts?Object.entries(v.incomplete_session_minute_counts).sort((a,b)=>b[1]-a[1]).map(([minutes,days])=>days+' sessions × '+minutes+'/375 minutes').join(' · '):undefined}/>{v.common_missing_intervals?.length?<small className="mi-caption">Common missing intervals (IST): {v.common_missing_intervals.map(x=>x.from+'–'+x.through+' · '+x.sessions+' sessions').join('; ')}</small>:null}</div>)}</div></details>}</>
 }
 export default function MarketMaintenance({onDone}:{onDone:()=>void}){
  const [status,setStatus]=useState<Status|null>(null),[config,setConfig]=useState<Config|null>(null),[approved,setApproved]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('')
@@ -59,7 +85,7 @@ export default function MarketMaintenance({onDone}:{onDone:()=>void}){
     <CoverageBar label="Expired options · authorized request scope" done={counts?.checked_offset_date_pairs} total={counts?.eligible_offset_date_pairs} note="Distinct eligible side / offset / calendar-date pairs; empty replies may count as checked"/>
     {counts?.scope_start&&<small className="mi-caption">{counts.scope_start} – {counts.scope_end} · ATM ±{counts.scope_wings} · near-month CE/PE</small>}
     <CoverageBar label="Expired options · observed rolling-minute coverage" done={counts?.known_observed_minute_slots} total={counts?.known_expected_minute_slots} note={`${fmt(counts?.known_market_dates)} known index dates · 375 regular-session minutes per side/offset; not exact-contract fill coverage`}/>
-    <div className="mi-maintenance-metrics"><div><small>Requests remaining (planned)</small><strong>{fmt(remaining)}</strong></div><div><small>New receipts this pass</small><strong>{fmt(counts?.new_receipts)}</strong></div><div><small>Active download pace</small><strong>{profileBlocked?'Paused':pace!=null?pace.toFixed(1)+' / min':running&&!liveCounts?'Checking saved data':'Measuring'}</strong></div><div><small>Estimated active download time</small><strong>{eta===null?'Not available':eta===0?'0 min':eta+' min'}</strong></div></div>
+    <div className="mi-maintenance-metrics"><div><small>Requests remaining (planned)</small><strong>{fmt(remaining)}</strong></div><div><small>New receipts this pass</small><strong>{fmt(counts?.new_receipts)}</strong></div><div><small>Active download pace</small><strong>{remaining===0?'Scope checked':profileBlocked?'Paused':pace!=null?pace.toFixed(1)+' / min':running&&!liveCounts?'Checking saved data':'Measuring'}</strong></div><div><small>Estimated active download time</small><strong>{eta===null?'Not available':eta===0?'0 min':eta+' min'}</strong></div></div>
     <small className="mi-caption">Estimate uses the latest measured receipt rate; excludes scans, pauses, rate limits and future scope changes. It is not a market-data completeness estimate.</small>
     {liveCounts&&<CoverageBar label="Current option batch · requests attempted" done={liveCounts.batch_attempted} total={liveCounts.batch_limit} note={`${fmt(liveCounts.batch_completed)} verified · ${fmt(liveCounts.rejected_windows)} rejected`}/>}
   </div>}
