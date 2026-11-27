@@ -68,6 +68,32 @@ def require_offhours():
     if not offhours():raise Pause("Heavy history acquisition paused during 08:30–16:00 IST weekday priority window; rerun outside it")
 
 
+def priority_blocker(parallel_live,*,dhan=True):
+    if not parallel_live:
+        return None if offhours() else "Market-priority window began"
+    # Always respect the backend's shared cooldown; do not start a separate
+    # Dhan process to bypass either queue admission or the historical budget.
+    if offhours() and not dhan:return None
+    status=api("/api/data-manager/maintenance")
+    if status.get("error"):return "Maintenance pressure status unavailable"
+    if not offhours():
+        if (status.get("config") or {}).get("enabled") is not True or "live_pressure" not in status:
+            return "Live recorder pressure monitoring unavailable; enable authorized automatic maintenance"
+        if status["live_pressure"]:
+            return "Recorder pressure: "+str(status["live_pressure"])[:100]
+    if dhan and status.get("next_due_reason")=="provider_rate_limit" and status.get("next_due_utc"):
+        try:
+            due=datetime.fromisoformat(status["next_due_utc"].replace("Z","+00:00"))
+            if due>datetime.now(timezone.utc):return "Provider cooldown until "+due.isoformat()
+        except (TypeError,ValueError):return "Provider cooldown schedule unverified"
+    return None
+
+
+def require_priority(parallel_live,*,dhan=True):
+    reason=priority_blocker(parallel_live,dhan=dhan)
+    if reason:raise Pause(reason)
+
+
 def live_priority_request():
     """Use only the already-authorized, recorder-aware maintenance worker.
 
@@ -128,21 +154,30 @@ def chunks(start,stop,width):
         start=end
 
 
-def wait_idle():
-    deadline=time.monotonic()+180
+def wait_idle(parallel_live=False):
+    # A bounded wait is for existing work/actual pressure, not the clock.
+    deadline=time.monotonic()+900
+    last=None
     while True:
-        require_offhours()
+        reason=priority_blocker(parallel_live)
+        if reason:
+            if not parallel_live or not reason.startswith("Recorder pressure:"):
+                raise Pause(reason)
+            if time.monotonic()>=deadline:raise Pause(reason)
+            if reason!=last:print("YIELD",reason,flush=True);last=reason
+            time.sleep(5);continue
         jobs=api("/api/workspace/jobs").get("jobs",[])
         active=[j for j in jobs if j.get("status") in ("queued","running")]
         if not active:return
         if time.monotonic()>=deadline:
             raise Pause("Existing workstation jobs are active; rerun after they finish. No other jobs cancelled.")
-        print("Waiting for existing local data job:",active[0].get("kind","unknown"),flush=True)
-        time.sleep(10)
+        reason="Waiting for existing local data job: "+str(active[0].get("kind","unknown"))
+        if reason!=last:print(reason,flush=True);last=reason
+        time.sleep(5)
 
 
-def job(path,body,record,flush,*,cancel_path=None):
-    wait_idle()
+def job(path,body,record,flush,*,cancel_path=None,parallel_live=False):
+    wait_idle(parallel_live)
     created=api(path,body,post=True)
     jid=created["job_id"]
     record.update(job_id=jid,state="submitted")
@@ -150,7 +185,7 @@ def job(path,body,record,flush,*,cancel_path=None):
         record["batch_id"]=created["batch"]["id"]
     flush()
     print("LOCAL JOB",jid,path,flush=True)
-    last=None;cancelled=False
+    last=None;cancelled=False;yield_reason=None
     deadline=time.monotonic()+48*3600
     while time.monotonic()<deadline:
         status=api("/api/jobs/"+jid)
@@ -162,7 +197,8 @@ def job(path,body,record,flush,*,cancel_path=None):
             result=status.get("result") or {}
             record.update(state="job_complete",result=result);flush()
             if result.get("status") in ("paused","cancelled","interrupted"):
-                raise Pause("Acquisition stopped in existing batch "+str(record.get("batch_id",jid))+"; inspect provider/market-priority status before rerun")
+                raise Pause("Acquisition stopped at a saved checkpoint "+str(record.get("batch_id",jid))+"; "+(yield_reason or "inspect provider status before rerun"))
+            if yield_reason:raise Pause(yield_reason+"; submitted job completed, saved receipts retained")
             return result
         if status["status"] not in ("queued","running"):
             record.update(state=status["status"]);flush()
@@ -170,7 +206,9 @@ def job(path,body,record,flush,*,cancel_path=None):
             if status["status"]!="error" or any(s in detail for s in ("429","401","403","rate limit","rate-limit","token","credential","entitlement")):
                 raise Pause("Job "+jid+" ended "+status["status"]+"; inspect Jobs. Original completed receipts remain saved.")
             raise Failed("Job "+jid+" failed; inspect Jobs for source details")
-        if not offhours() and not cancelled:
+        if not cancelled and yield_reason is None:
+            yield_reason=priority_blocker(parallel_live)
+        if yield_reason and not cancelled:
             # Cancel only this command's own cancellable job, never the
             # recorder or a different user's background job.
             target=cancel_path
@@ -178,9 +216,14 @@ def job(path,body,record,flush,*,cancel_path=None):
                 target="/api/dhan/batches/"+record["batch_id"]+"/cancel"
             if target=="job":target="/api/workspace/jobs/"+jid+"/cancel"
             if target:
-                api(target,post=True);cancelled=True
+                try:api(target,post=True)
+                except (Pause,Failed):
+                    # A completed job may race with cancellation. Poll its
+                    # terminal state, not another job or recorder.
+                    print("Cancellation unavailable; waiting for submitted job checkpoint",flush=True)
+                cancelled=True
             else:
-                raise Pause("Market-priority window began; submitted job "+jid+" may finish in the existing queue. No further submissions.")
+                print("YIELD after current bounded job:",yield_reason,flush=True);cancelled=True
         time.sleep(5)
     raise Pause("Submitted job "+jid+" is still running; inspect Jobs before resuming")
 
@@ -226,7 +269,7 @@ def index_plan(audit,known,start,stop):
     return sorted(set(gaps+repairs),reverse=True)
 
 
-def equity_batch(start,stop,interval,plan,record,flush):
+def equity_batch(start,stop,interval,plan,record,flush,*,parallel_live=False):
     # Source-hash-matched batch reuse. Existing _fetch_history validates and
     # skips checked canonical windows even when a newer dated batch is needed.
     matching=[]
@@ -241,12 +284,12 @@ def equity_batch(start,stop,interval,plan,record,flush):
         counts=item.get("counts",{})
         if item["status"]=="completed" and counts.get("complete",0)+counts.get("cached",0)==item["total"]:
             record.update(state="existing_completed_batch",counts=counts);flush();return
-        job("/api/dhan/batches/"+item["id"]+"/resume",{},record,flush)
+        job("/api/dhan/batches/"+item["id"]+"/resume",{},record,flush,parallel_live=parallel_live)
     else:
         body={"selection":"banknifty_pit","ids":[],"tickers":[],"from_date":start.isoformat(),
               "to_date":stop.isoformat(),"interval":interval,"acknowledged_bulk":False,
               "acknowledged_gaps":True,"include_index_spot":False}
-        job("/api/dhan/batches",body,record,flush)
+        job("/api/dhan/batches",body,record,flush,parallel_live=parallel_live)
 
 
 def equity_audit(plan,stop,bank_days):
@@ -288,7 +331,7 @@ def option_field_audit(start,stop,dates):
         return {"state":"unavailable","reason":type(exc).__name__}
 
 
-def archive_windows(start,stop,root,report,flush,feed):
+def archive_windows(start,stop,root,report,flush,feed,*,parallel_live=False):
     # Durable receipt-hash journal. On resume, skip only completed windows
     # whose import receipts still exist in the canonical database.
     import sqlite3
@@ -305,14 +348,15 @@ def archive_windows(start,stop,root,report,flush,feed):
                 return all(db.execute("SELECT 1 FROM market_context_imports WHERE receipt_sha256=?",(sha,)).fetchone()
                            and db.execute("SELECT 1 FROM market_context_raw_reports WHERE receipt_sha256=?",(sha,)).fetchone() for sha in hashes)
         except sqlite3.Error:return False
+    guard=(lambda:require_priority(True,dhan=False)) if parallel_live else None
     providers=[]
-    if os.getenv("FRED_API_KEY","").strip():providers.append(("fred",lambda a,b:fred.backfill(a,b,confirmed=True)))
+    if os.getenv("FRED_API_KEY","").strip():providers.append(("fred",lambda a,b:fred.backfill(a,b,confirmed=True,live_guard=guard)))
     else:report["context"].append({"provider":"fred","state":"credentials_missing"})
-    if alpaca.credentials():providers.append(("alpaca:"+feed,lambda a,b:alpaca.backfill(a,b,feed=feed,confirmed=True)))
+    if alpaca.credentials():providers.append(("alpaca:"+feed,lambda a,b:alpaca.backfill(a,b,feed=feed,confirmed=True,live_guard=guard)))
     else:report["context"].append({"provider":"alpaca","state":"credentials_missing"})
     for name,fetch in providers:
         for a,b in reversed(list(chunks(start,stop,120))):
-            require_offhours()
+            require_priority(parallel_live,dhan=False)
             key=f"{name}|{a}|{b}"
             if verified(key):
                 report["context"].append({"scope":key,"state":"existing_receipts"});continue
@@ -336,6 +380,7 @@ def main():
     p.add_argument("--max-index-windows",type=int,default=240)
     p.add_argument("--alpaca-feed",choices=("iex","sip"),default="iex")
     p.add_argument("--audit-only",action="store_true")
+    p.add_argument("--parallel-live",action="store_true",help="Allow full history preparation alongside live recording, guarded by backend recorder pressure and shared Dhan budget")
     p.add_argument("--confirm-reviewed",action="store_true",help="Authorize existing provider read-only downloads and reviewed archive assumptions")
     args=p.parse_args()
     if not 1<=args.option_days<=366 or not 1<=args.context_days<=1825 or not 0<=args.wings<=10 or not 1<=args.max_index_windows<=250:
@@ -347,7 +392,7 @@ def main():
     load_dotenv(root/".env",override=False)
     stop=local_now().date();start=stop-timedelta(days=365*args.years)
     option_start=stop-timedelta(days=args.option_days)
-    report={"version":"banknifty_data_preparation_v1","from_inclusive":str(start),"to_exclusive":str(stop),
+    report={"version":"banknifty_data_preparation_v2","parallel_live":args.parallel_live,"from_inclusive":str(start),"to_exclusive":str(stop),
             "index":{},"index_jobs":[],"equity_jobs":[],"options":[],"context":[],
             "blocked_sources":{"historical_weights":"Exact dated official/reviewed weight files required; no fabricated weights",
              "expired_futures":"Exact contract identity, expiry and authorized historical futures source required; no reconstructed futures",
@@ -365,7 +410,7 @@ def main():
         flush()
         say("INDEX COVERAGE",{k:{x:v[x] for x in ("complete_sessions","first_complete_session","last_complete_session","verified_receipts")} for k,v in report["index"].items()})
     try:
-        if not args.audit_only and not offhours():
+        if not args.audit_only and not args.parallel_live and not offhours():
             live=live_priority_request()
             report["live_priority"]=live
             report["state"]="live_priority_only_bulk_deferred"
@@ -373,18 +418,19 @@ def main():
             print("Five-year bulk downloads and external historical archives remain deferred until outside 08:30–16:00 IST. Run the same command again then.",flush=True)
             return 0 if live["state"] in ("maintenance_check_requested","maintenance_already_active") else 2
         if not args.audit_only:
-            require_offhours()
             health=api("/api/health")
             if not health.get("ok") or health.get("mode")!="local" or health.get("read_only_market_data") is not True or health.get("broker_orders_enabled") is not False:
                 raise Pause("Expected local read-only QuantLab API; no writes submitted")
+            if args.parallel_live:print("PARALLEL LIVE: full requested backfill; shared backend queue and recorder-pressure checks active",flush=True)
             for label,path in (("master","/api/dhan/instruments/refresh"),("membership","/api/indices/sync")):
                 record={};report[label+"_refresh"]=record
-                try:job(path,{},record,flush)
+                try:job(path,{},record,flush,parallel_live=args.parallel_live)
                 except Failed as exc:
                     record["state"]="refresh_failed";record["reason"]=str(exc);flush()
         audit_all()
         known=set().union(*(set(x["complete_dates"]) for x in report["index"].values()))
         if not args.audit_only:
+            require_priority(args.parallel_live)
             auth=api("/api/dhan/credentials/check")
             report["dhan_profile"]={"ok":bool(auth.get("ok")),"code":auth.get("code")};flush()
             if auth.get("ok"):
@@ -402,7 +448,7 @@ def main():
                         record={"identity":identity,"from":str(a),"to_exclusive":str(b)}
                         report["index_jobs"].append(record)
                         total+=1
-                        try:job("/api/dhan/download",{"instruments":[asdict(inst)],"from_date":str(a),"to_date":str(b),"interval":1},record,flush)
+                        try:job("/api/dhan/download",{"instruments":[asdict(inst)],"from_date":str(a),"to_date":str(b),"interval":1},record,flush,parallel_live=args.parallel_live)
                         except Failed as exc:
                             record.update(state="source_unavailable",reason=str(exc));flush()
                             break
@@ -423,21 +469,23 @@ def main():
                     for interval in (1,None):
                         record={"interval":interval,"from":str(a),"to_exclusive":str(b)}
                         report["equity_jobs"].append(record)
-                        try:equity_batch(a,b,interval,plan,record,flush)
+                        try:equity_batch(a,b,interval,plan,record,flush,parallel_live=args.parallel_live)
                         except Failed as exc:record.update(state="source_unavailable",reason=str(exc));flush()
                 report["equities"]=equity_audit(plan,b,sorted(d for d in known if a.isoformat()<=d<b.isoformat()))
         if not args.audit_only and report.get("dhan_profile",{}).get("ok"):
-            for a,b in reversed(list(chunks(option_start,stop,90))):
+            # Shorter option scopes during live-parallel work bound each
+            # queued job and give other maintenance a chance between jobs.
+            for a,b in reversed(list(chunks(option_start,stop,7 if args.parallel_live else 90))):
                 record={"from":str(a),"through":str(b-timedelta(days=1)),"wings":args.wings}
                 report["options"].append(record)
                 try:
                     job("/api/data-manager/options-history/start",
                         {"start_date":record["from"],"end_date":record["through"],"wings":args.wings,"confirm_readonly":True},
-                        record,flush,cancel_path="job")
+                        record,flush,cancel_path="job",parallel_live=args.parallel_live)
                 except Failed as exc:record.update(state="source_unavailable",reason=str(exc));flush();break
         report["option_fields_recent_sample"]=option_field_audit(option_start,stop,known);flush()
         if not args.audit_only:
-            archive_windows(stop-timedelta(days=args.context_days),stop,root,report,flush,args.alpaca_feed)
+            archive_windows(stop-timedelta(days=args.context_days),stop,root,report,flush,args.alpaca_feed,parallel_live=args.parallel_live)
         report["context_inventory"]=fred.inventory()
         report["configured_context_feeds"]={k:v for k,v in context_feeds.status().items() if k in ("fred_key_configured","alpaca_credentials_configured","twelve_key_configured","fred_catalog")}
         report["live_inventory"]=market_inventory.collect()["sources"]
