@@ -20,8 +20,9 @@ from . import banknifty_math_target as math_target, cpr_hybrid_research as r
 from . import historical_alpha as h, predictive_option_research as p
 from . import cpr_execution_evidence as evidence, shared_market_data as shared
 from .cpr_direct_utility import _timely
+from . import verified_equity_context as equity
 
-VERSION="banknifty_target_capped_ml_v1"
+VERSION="banknifty_target_capped_ml_v2_verified_equities"
 HOLDS=(30,60)
 POLICIES=("raw","capped","capped_liquid","iv_robust","ml","ml_daily")
 COST=math_target.ORDER_COST_INR
@@ -39,14 +40,12 @@ DAILY_FEATURES=("prior_market_median_return","prior_up_fraction","prior_cross_se
                 "prior_20_session_volatility","prior_volatility_historical_percentile")
 
 
-def daily_context(dates):
-    """Hash-verified shared equity view, never a reconstructed BANKNIFTY.
-    Missing observations are not filled. Current-day closes are forbidden.
-    """
+def _shared_daily_panel(stop):
+    """Verify the existing derived shared view without publishing or mutating it."""
     folder=shared.shared_folder()
     manifest=folder/"SHARED_MARKET_PROVENANCE.json"
     source=folder/"daily_prices.csv"
-    meta={"state":"unavailable","feature_names":list(DAILY_FEATURES)}
+    meta={"source":"shared_daily_view","state":"unavailable"}
     try:
         if manifest.is_symlink() or source.is_symlink() or not manifest.is_file() or not source.is_file():
             raise ValueError("Shared daily view or provenance absent")
@@ -56,49 +55,100 @@ def daily_context(dates):
         payload=source.read_bytes()
         digest=sha256(payload).hexdigest()
         if digest!=provenance.get("daily_sha256"):raise ValueError("Shared daily hash mismatch; may be updating")
-        columns=[x["column"] for x in provenance["columns"] if x["exchange_segment"]=="NSE_EQ"]
-        if len(columns)<20 or len(set(columns))!=len(columns):
-            raise ValueError("Insufficient or duplicate NSE equity identities")
+        entries=[x for x in provenance["columns"] if x["exchange_segment"]=="NSE_EQ"]
+        columns=[x["column"] for x in entries]
+        identities=[x.get("identity",x["column"].replace("NSE_EQ_","NSE_EQ:",1)) for x in entries]
+        meta.update(nse_equity_columns=len(columns),sha256=digest,
+                    source_origins=provenance.get("source_origins",[]))
+        if len(set(columns))!=len(columns) or len(set(identities))!=len(identities):
+            raise ValueError("Duplicate NSE equity identities")
+        if len(columns)<equity.MIN_EQUITIES:
+            raise ValueError("Fewer than 20 distinct NSE equities in the shared daily view")
         frame=pd.read_csv(BytesIO(payload),usecols=["date",*columns])
         clock=pd.to_datetime(frame.pop("date"),errors="raise")
         if clock.isna().any() or clock.duplicated().any() or not clock.is_monotonic_increasing:
             raise ValueError("Invalid daily session dates")
         frame.index=clock.dt.strftime("%Y-%m-%d")
-        frame=frame.loc[frame.index<max(dates)]
-        values=frame.apply(pd.to_numeric,errors="coerce")
-        values=values.where(np.isfinite(values)&(values>0))
-        # Use only adjacent published sessions with observed prices on both.
-        # Clip extraordinary single-stock moves to reduce unadjusted split artifacts.
-        ret=(values/values.shift(1)-1).clip(-.2,.2)
-        counts=ret.notna().sum(axis=1)
-        median=ret.median(axis=1).where(counts>=20)
-        breadth=(ret.gt(0).sum(axis=1)/counts.where(counts>=20))
-        mad=ret.sub(median,axis=0).abs().median(axis=1).where(counts>=20)
-        vol=median.rolling(20,min_periods=20).std()
-        context={};history=[];prior={}
-        for day in values.index:
-            v=vol.loc[day]
-            if isfinite(v):
-                if len(history)>=60:
-                    vector=[median.loc[day],breadth.loc[day],mad.loc[day],v,float(np.mean(np.asarray(history)<=v))]
-                    if all(isfinite(x) for x in vector):
-                        prior[day]=[float(x) for x in vector]
-                history.append(float(v))
-        # Require the immediately preceding published day to have valid context.
-        clocks=list(values.index)
-        for day in dates:
-            i=bisect_left(clocks,day)-1
-            if i>=0 and clocks[i] in prior and 0<(date.fromisoformat(day)-date.fromisoformat(clocks[i])).days<=7:
-                context[day]=prior[clocks[i]]
-        meta.update(state="loaded" if context else "insufficient_prior_context",
-                    sha256=digest,first_session=clocks[0] if clocks else None,last_session=clocks[-1] if clocks else None,
-                    sessions=len(clocks),nse_equity_columns=len(columns),matched_days=len(context),
-                    requested_days=len(dates),source_origins=provenance.get("source_origins",[]),
-                    note="Available-observation broad NSE equity context, not PIT BANKNIFTY weights or certified adjusted returns. Historical coverage and survivorship limitations remain.")
-        return context,meta
+        frame=frame.loc[frame.index<stop]
+        meta["state"]="loaded"
+        return frame,meta
     except (OSError,ValueError,TypeError,KeyError,pd.errors.ParserError) as exc:
         meta["reason"]=str(exc)[:200]
-        return {},meta
+        return pd.DataFrame(),meta
+
+
+def _context_features(frame,dates):
+    """Prior-only features; never carry an absent close forward."""
+    if frame.shape[1]<equity.MIN_EQUITIES or frame.empty:return {},{}
+    values=frame.apply(pd.to_numeric,errors="coerce")
+    values=values.where(np.isfinite(values)&(values>0))
+    ret=(values/values.shift(1)-1).clip(-.2,.2)
+    counts=ret.notna().sum(axis=1)
+    median=ret.median(axis=1).where(counts>=equity.MIN_EQUITIES)
+    breadth=ret.gt(0).sum(axis=1)/counts.where(counts>=equity.MIN_EQUITIES)
+    mad=ret.sub(median,axis=0).abs().median(axis=1).where(counts>=equity.MIN_EQUITIES)
+    vol=median.rolling(20,min_periods=20).std()
+    context={};history=[];prior={}
+    clocks=list(values.index)
+    # When a known index session is absent from the equity panel, do not
+    # bridge it to manufacture an adjacent-session return or volatility.
+    known=set(dates)
+    missing=known-set(clocks)
+    for i,day in enumerate(clocks):
+        if i and any(clocks[i-1]<d<day for d in missing):
+            median.iloc[i]=np.nan
+    vol=median.rolling(20,min_periods=20).std()
+    for day in clocks:
+        v=vol.loc[day]
+        if isfinite(v):
+            if len(history)>=60:
+                vector=[median.loc[day],breadth.loc[day],mad.loc[day],v,float(np.mean(np.asarray(history)<=v))]
+                if all(isfinite(x) for x in vector):prior[day]=[float(x) for x in vector]
+            history.append(float(v))
+    ordered=sorted(set(dates))
+    used={}
+    for j,day in enumerate(ordered):
+        i=bisect_left(clocks,day)-1
+        if i<0 or clocks[i] not in prior:continue
+        if j and clocks[i]!=ordered[j-1]:continue
+        if 0<(date.fromisoformat(day)-date.fromisoformat(clocks[i])).days<=7:
+            context[day]=prior[clocks[i]];used[day]=clocks[i]
+    return context,{"first_session":clocks[0] if clocks else None,
+                    "last_session":clocks[-1] if clocks else None,
+                    "sessions":len(clocks),"nse_equity_columns":int(frame.shape[1]),
+                    "sessions_with_20_paired_equities":int((counts>=equity.MIN_EQUITIES).sum()),
+                    "matched_days":len(context),"requested_days":len(dates),
+                    "context_source_dates":used}
+
+
+def daily_context(dates,*,progress=None):
+    """Prefer the verified original history if the shared view is inadequate.
+
+    No price files are written; the raw adapter is an in-memory research view
+    over existing canonical sources. All daily features precede their decision day.
+    """
+    if not dates:return {},{"state":"unavailable","reason":"No study dates"}
+    frame,shared_meta=_shared_daily_panel(max(dates))
+    context,detail=_context_features(frame,dates)
+    # The source choice depends on coverage, never future option outcomes.
+    if len(context)<.9*len(dates):
+        if progress:progress("Shared daily coverage inadequate; verifying original stock history")
+        raw,raw_meta=equity.original_panel(max(dates),progress=progress)
+        raw_context,raw_detail=_context_features(raw,dates)
+        if raw_context and len(raw_context)>=len(context):
+            context,detail=raw_context,raw_detail
+            meta={**raw_meta,"shared_view":shared_meta}
+        elif context:
+            meta={**shared_meta,"original_view":raw_meta}
+        else:
+            meta={**raw_meta,"shared_view":shared_meta}
+    else:
+        meta=shared_meta
+    meta.update(detail)
+    meta.update(state="loaded" if context else "insufficient_prior_context" if meta.get("state")=="loaded" else "unavailable",
+                feature_names=list(DAILY_FEATURES),matched_days=len(context),requested_days=len(dates),
+                note="Available-observation broad NSE equity context, not PIT BANKNIFTY weights or certified adjusted returns. Historical coverage, unadjusted prices and survivorship limitations remain.")
+    return context,meta
 
 
 def candidate_features(c,index_day,m):
@@ -196,8 +246,9 @@ def fit(examples,*,daily=False):
     regressor=make_pipeline(StandardScaler(),Ridge(alpha=20.))
     classifier.fit(X,y,logisticregression__sample_weight=weights)
     regressor.fit(X,u,ridge__sample_weight=weights)
-    info["state"]="fitted"
-    return (classifier,regressor),info
+    prior=float(np.average(y,weights=weights))
+    info.update(state="fitted",training_day_weighted_base_rate=prior)
+    return (classifier,regressor,prior),info
 
 
 def predict(model,item,day,context,*,daily=False):
@@ -267,7 +318,7 @@ def evaluate(rows,dates,policy,models,context,*,capital,budget,table=None):
             if pred is None:
                 counts["missing_context"]+=1;continue
             target,_,_=label(ep)
-            scores.append((day,target,forecast["realized_target_probability"],pred[0]))
+            scores.append((day,target,forecast["realized_target_probability"],pred[0],models[policy][2]))
             if pred[0]<math_target.PROB_FLOOR or pred[1]<=0:
                 counts["ml_abstain"]+=1;continue
             ep={**ep,"ranked_target_probability":pred[0],"ranked_expected_return":pred[1]}
@@ -286,12 +337,15 @@ def evaluate(rows,dates,policy,models,context,*,capital,budget,table=None):
     calibration={}
     if scores:
         per_day=defaultdict(list)
-        for day,target,raw,ml in scores:
-            per_day[day].append(((raw-target)**2,(ml-target)**2,target,raw,ml))
+        for day,target,raw,ml,prior in scores:
+            per_day[day].append(((raw-target)**2,(ml-target)**2,target,raw,ml,(prior-target)**2,prior))
         day_means=np.asarray([np.mean(v,axis=0) for v in per_day.values()])
         calibration={"candidate_rows":len(scores),"days":len(per_day),"day_weighted_raw_brier":float(day_means[:,0].mean()),
                      "day_weighted_ml_brier":float(day_means[:,1].mean()),"observed_target_rate":float(day_means[:,2].mean()),
-                     "raw_target_probability":float(day_means[:,3].mean()),"ml_target_probability":float(day_means[:,4].mean())}
+                     "raw_target_probability":float(day_means[:,3].mean()),"ml_target_probability":float(day_means[:,4].mean()),
+                     "day_weighted_training_base_rate_brier":float(day_means[:,5].mean()),
+                     "training_base_rate_probability":float(day_means[:,6].mean()),
+                     "ml_beats_training_base_rate":bool(day_means[:,1].mean()<day_means[:,5].mean())}
     # Stress gate remains separate from actual conditional P&L. Do not
     # select a strategy whose capped profit depends on one best session.
     passed=(metrics["scored_trades"]>=math_target.MIN_VALID_TRADES
@@ -316,8 +370,8 @@ def run(*,sessions=90,to_date=None,capital=17000.,budget=12000.,lot_size=30,max_
     if len(dates)!=sessions:raise ValueError("Insufficient saved BANKNIFTY sessions")
     ntrain,nval,_=r.SESSION_SPLITS[sessions]
     train,val,test=dates[:ntrain],dates[ntrain:ntrain+nval],dates[ntrain+nval:]
-    context,context_meta=daily_context(dates)
-    if progress:progress("Daily stock context: "+json.dumps(context_meta))
+    context,context_meta=daily_context(dates,progress=progress)
+    if progress:progress("Daily stock context: "+json.dumps({k:v for k,v in context_meta.items() if k not in ("sources","context_source_dates","rejected_sources","original_view")}))
     needed=train[WARMUP:]+val+test
     clocks={r._stamp(d,m) for d in needed for m in range(375)}
     coverage={}
