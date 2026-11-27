@@ -157,5 +157,33 @@ class OriginalDhanCheckpointTests(unittest.TestCase):
         self.assertFalse(self.pending.exists())
 
 
+    def test_multiwindow_checkpoint_keeps_source_rejects_and_resumes_cached(self):
+        def with_rejects(inst,first,last,**kwargs):
+            frame=self.candles(inst,first,last,**kwargs).head(2).copy()
+            rejected=frame.iloc[:1].copy()
+            rejected["open"]=0
+            rejected["reason"]="nonpositive_open"
+            frame.attrs={"total_provider_bars":3,"rejected_provider_bars":1,
+                         "rejected_provider_rows":rejected}
+            return frame
+        with patch.object(dw,"download_candles",side_effect=with_rejects) as vendor:
+            done=dw._fetch_history(self.row,"2023-01-01","2025-02-01",None)
+            self.assertEqual(vendor.call_count,3)
+        self.assertEqual(done["status"],"complete")
+        self.assertEqual(done["rows"],6)
+        self.assertEqual(done["rejected_provider_bars"],3)
+        receipt=json.loads(self.manifest.read_text())
+        self.assertEqual(len(receipt["coverage"]),3)
+        self.assertEqual(len(receipt["rejected_windows"]),3)
+        for item in receipt["rejected_windows"]:
+            path=service.DATA/item["file"]
+            self.assertEqual(dhan_checkpoint.digest(path),item["sha256"])
+        original=self.target.read_bytes()
+        with patch.object(dw,"download_candles",side_effect=AssertionError("No repeated request")):
+            self.assertEqual(dw._fetch_history(self.row,"2023-01-01","2025-02-01",None)["status"],"cached")
+        self.assertEqual(self.target.read_bytes(),original)
+
+
+
 if __name__ == "__main__":
     unittest.main()

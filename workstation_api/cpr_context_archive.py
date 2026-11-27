@@ -105,8 +105,12 @@ def backfill(start,stop,*,confirmed=False,live_guard=None):
     if not key:
         return {"state":"fred_key_not_configured","factors":{}}
     result={}
+    rate_limited=False
     left=start-timedelta(days=10)
     for factor,series in feeds.FRED_SERIES.items():
+        if rate_limited:
+            result[factor]={"state":"deferred_provider_rate_limit"}
+            continue
         if live_guard is not None:live_guard()
         elif not alpha_retraining.safe_window(m._now()):
             result[factor]={"state":"paused_market_priority"}
@@ -138,7 +142,9 @@ def backfill(start,stop,*,confirmed=False,live_guard=None):
                 ("Provider HTTP ","Provider network unavailable","Source differs from existing series",
                  "Incomplete bounded real-time","Conflicting values")) else type(exc).__name__
             result[factor]={"state":"unavailable","reason":detail}
-    return {"state":"archive_attempt_finished","factors":result,
+            if detail.startswith("Provider HTTP 429"):
+                rate_limited=True
+    return {"state":"provider_rate_limited" if rate_limited else "archive_attempt_finished","factors":result,
             "warning":"Provider vintage date + one day at noon UTC is a conservative assumed availability; "
                       "not verified intraday release time. No GIFT NIFTY or live futures history is fabricated."}
 

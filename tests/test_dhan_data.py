@@ -185,5 +185,22 @@ class DhanOfflineTests(unittest.TestCase):
         self.assertEqual(len(frame.attrs["rejected_provider_rows"]),1)
 
 
+    def test_equal_size_daily_chunks_preserve_rejects_without_attrs_comparison(self):
+        def fake_post(endpoint, request, token):
+            first=pd.Timestamp(request["fromDate"],tz="Asia/Kolkata")
+            raw=response(2)
+            raw["timestamp"]=[int((first+pd.Timedelta(days=i)).timestamp()) for i in (1,2)]
+            raw["open"][0]=0
+            return raw
+        result=download_candles(Instrument("A","1333"),"2024-01-01","2025-02-01",
+                                token="TEST",post=fake_post,pause_seconds=0)
+        self.assertEqual(len(result),2)
+        self.assertEqual(result.attrs["total_provider_bars"],4)
+        self.assertEqual(result.attrs["rejected_provider_bars"],2)
+        self.assertEqual(len(result.attrs["rejected_provider_rows"]),2)
+        self.assertFalse(result.datetime.duplicated().any())
+
+
+
 if __name__=="__main__":
     unittest.main()
