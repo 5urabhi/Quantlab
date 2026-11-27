@@ -81,13 +81,14 @@ def normalize(factor,rows,start,stop,received):
     return buf.getvalue(),len(values)
 
 
-def backfill(start,stop,*,feed="iex",confirmed=False):
+def backfill(start,stop,*,feed="iex",confirmed=False,live_guard=None):
     if confirmed is not True:
         raise ValueError("Review Alpaca source permissions and archive assumptions")
     if feed not in ("iex","sip"):
         raise ValueError("Unsupported Alpaca equity feed")
     now=m._now()
-    if not alpha_retraining.safe_window(now) or not 0<(stop-start).days<=120 or stop>now.astimezone(feeds.IST).date():
+    if live_guard is not None:live_guard()
+    if (live_guard is None and not alpha_retraining.safe_window(now)) or not 0<(stop-start).days<=120 or stop>now.astimezone(feeds.IST).date():
         raise ValueError("Use a completed bounded range outside Indian market priority hours")
     auth=credentials()
     if not auth:
@@ -111,6 +112,7 @@ def backfill(start,stop,*,feed="iex",confirmed=False):
         return {"state":"alpaca_archive_unavailable","reason":reason,"factors":{}}
     received=m._now();out={}
     for factor,(symbol,_,_) in m.ALPACA_PROXIES.items():
+        if live_guard is not None:live_guard()
         try:
             text,n=normalize(factor,bars.get(symbol,[]),left,stop,received)
             if not n:
