@@ -16,6 +16,8 @@ SEED=42
 BANK_DROPOUT=.25
 OPTION_DROPOUT=.15
 PATIENCE=2
+CONVERGENCE_PATIENCE=6
+CONVERGENCE_CONFIGS=(("transformer",15),)
 
 
 def _torch():
@@ -153,17 +155,22 @@ def _predict(model,data,rows,lookback,fit,batch,device):
     return _decode(data,rows,candle),prob,_price_interval(data,rows,quantile)
 
 
-def fit_one(data,train,val,fit,kind,lookback,benchmark,*,epochs,batch,device,progress=None):
+def fit_one(data,train,val,fit,kind,lookback,benchmark,*,epochs,batch,device,progress=None,convergence=False):
     torch,net=_torch()
     torch.manual_seed(SEED)
     if device.type=="cuda":torch.cuda.manual_seed_all(SEED)
     rng=np.random.default_rng(SEED)
     model=net.MarketSequence(kind,len(data["identities"]),len(d.CHANNELS),int(fit["keep"].sum())*2).to(device)
     optimizer=torch.optim.AdamW(model.parameters(),lr=.001,weight_decay=.01)
+    scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,mode="min",factor=.5,patience=1,
+        threshold=1e-6,threshold_mode="abs",min_lr=1e-5) if convergence else None
+    patience=CONVERGENCE_PATIENCE if convergence else PATIENCE
     weights=np.zeros(len(data["days"]),np.float32);weights[train]=base.day_weights(data["days"][train])
-    best=None;history=[];stale=0
+    best=None;history=[];stale=0;stop_reason="epoch_budget"
     for epoch in range(1,epochs+1):
         model.train();order=rng.permutation(train);running=0.;seen=0
+        parts_running={k:0. for k in ("candle","direction_bce","tail_bce","quantile")}
+        epoch_lr=float(optimizer.param_groups[0]["lr"])
         for i in range(0,len(order),batch):
             rows=order[i:i+batch]
             # Train on every eligible minute, including overlapping windows
@@ -177,19 +184,26 @@ def fit_one(data,train,val,fit,kind,lookback,benchmark,*,epochs,batch,device,pro
             ev=torch.from_numpy(d.event_targets(data,rows)).to(device)
             w=torch.from_numpy(weights[rows]).to(device)
             optimizer.zero_grad(set_to_none=True)
-            loss=net.objective(model(x,c),y,ev,w)
+            loss,parts=net.objective(model(x,c),y,ev,w,return_parts=True)
             if not bool(torch.isfinite(loss)):raise ValueError("Nonfinite neural loss")
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(),1.)
             optimizer.step()
             running+=float(loss.detach().cpu())*len(rows);seen+=len(rows)
+            for key,value in parts.items():parts_running[key]+=float(value.cpu())*len(rows)
             if progress and i and i%(batch*200)==0:
                 progress(f"TRAIN {kind} {lookback}m epoch {epoch}/{epochs} {seen}/{len(order)} windows")
         pred,prob,interval=_predict(model,data,val,lookback,fit,batch,device)
         metrics=score(data,val,pred,prob,interval);rank=_rank(metrics,benchmark)
-        history.append({"epoch":epoch,"training_loss":running/seen,"validation_objective":rank})
+        if scheduler is not None:scheduler.step(rank)
+        entry={"epoch":epoch,"training_loss":running/seen,"validation_objective":rank,
+               "learning_rate":epoch_lr,"next_learning_rate":float(optimizer.param_groups[0]["lr"]),
+               "training_loss_components":{k:v/seen for k,v in parts_running.items()},
+               "validation_close_mae_points":metrics["day_weighted_mae_points"]["close"],
+               "validation_direction_brier":metrics["direction_brier"]}
+        history.append(entry)
         if progress:progress("VALIDATION "+kind+" "+str(lookback)+"m "+json.dumps({
-            "epoch":epoch,"training_loss":running/seen,"objective":rank,
+            **entry,"objective":rank,
             "close_mae_points":metrics["day_weighted_mae_points"]["close"],
             "range_mae_points":metrics["range_mae_points"],"direction_brier":metrics["direction_brier"]}))
         if best is None or rank<best["rank"]-1e-6:
@@ -198,8 +212,9 @@ def fit_one(data,train,val,fit,kind,lookback,benchmark,*,epochs,batch,device,pro
             stale=0
         else:
             stale+=1
-            if stale>=PATIENCE:break
-    return {**best,"kind":kind,"lookback":lookback,"history":history,
+            if stale>=patience:
+                stop_reason="validation_early_stop";break
+    return {**best,"stop_reason":stop_reason,"training_policy":"reduce_lr_on_plateau" if convergence else "fixed_lr","kind":kind,"lookback":lookback,"history":history,
             "parameters":sum(x.numel() for x in model.parameters())}
 
 
@@ -211,10 +226,11 @@ def _skill(model,benchmark):
             "tail_brier_skill":1-model["tail_mean_brier"]/max(benchmark["tail_mean_brier"],1e-12)}
 
 
-def run(*,days=365,to_date=None,wings=3,epochs=6,batch=96,device_name="cpu",full_grid=False,progress=None):
+def run(*,days=365,to_date=None,wings=3,epochs=6,batch=96,device_name="cpu",full_grid=False,convergence=False,progress=None):
     torch,net=_torch()
     if not 120<=days<=400 or not 1<=epochs<=20 or not 16<=batch<=256 or (wings is not None and not 0<=wings<=10):
         raise ValueError("Invalid bounded research parameters")
+    if convergence and full_grid:raise ValueError("Convergence mode and full grid are mutually exclusive")
     if device_name not in ("cpu","cuda"):raise ValueError("Use cpu or cuda")
     if device_name=="cuda" and not torch.cuda.is_available():raise ValueError("Requested CUDA unavailable")
     device=torch.device(device_name)
@@ -240,11 +256,11 @@ def run(*,days=365,to_date=None,wings=3,epochs=6,batch=96,device_name="cpu",full
     tabular=fit_tabular(data,train,val,test,announce)
     del data["v1_tabular"]
     if progress:progress("MATCHED BASELINE "+json.dumps({"validation":baselines["validation"],"evaluation":baselines["evaluation"]}))
-    configurations=ALL_CONFIGS if full_grid else CONFIGS
+    configurations=CONVERGENCE_CONFIGS if convergence else ALL_CONFIGS if full_grid else CONFIGS
     best=None;validation=[]
     for kind,lookback in configurations:
         announce(f"Fitting {kind} {lookback}m, {len(train)} rolling training windows on {device_name}")
-        result=fit_one(data,train,val,fit,kind,lookback,baselines["validation"],epochs=epochs,batch=batch,device=device,progress=announce)
+        result=fit_one(data,train,val,fit,kind,lookback,baselines["validation"],epochs=epochs,batch=batch,device=device,progress=announce,convergence=convergence)
         validation.append({k:v for k,v in result.items() if k!="state"})
         if best is None or result["rank"]<best["rank"]:best=result
     kind,lookback=best["kind"],best["lookback"]
@@ -283,6 +299,8 @@ def run(*,days=365,to_date=None,wings=3,epochs=6,batch=96,device_name="cpu",full
             "validation_skill_vs_adaptive":skill_val,"evaluation_skill_vs_adaptive":skill_test,"evaluation_skill_vs_v1":vs_tab,
             "validation_interval_expansion_in_volatility_units":expansion,"seed":SEED,"epochs_max":epochs,"batch_size":batch,
             "device":device_name,"torch_version":str(torch.__version__),"training_stride":1,
+            "convergence_mode":convergence,"early_stop_patience":CONVERGENCE_PATIENCE if convergence else PATIENCE,
+            "scheduler":{"factor":.5,"patience":1,"min_lr":1e-5,"threshold":1e-6} if convergence else None,
             "state":"exploratory_primary_skill_positive" if improved else "no_confirmed_directional_improvement",
             "warning":"Retrospective research; previously examined evaluation dates are exploratory, not fresh confirmation. All lookbacks compared on identical complete 120-minute input windows, excluding earlier minutes; engineered indicators can use earlier past bars. Training windows overlap within training sessions only; session weighting does not establish independence. Dated bank membership/weights only, missing later memberships masked, never backfilled from today's list. No global news, exact historical order books, trade fills, option-profit or live approval. Rolling option observations and nominal expiry are proxies. Validation used for early stopping, architecture selection and descriptive interval expansion; one selected neural model evaluated, fixed reference baselines evaluated on same rows. No orders or data downloads."}
     predictions=[]
@@ -299,5 +317,6 @@ def run(*,days=365,to_date=None,wings=3,epochs=6,batch=96,device_name="cpu",full
                 "channels":list(d.CHANNELS),"context_names":data["context_names"],
                 "context_fit":{k:v.tolist() for k,v in fit.items()},"width":net.WIDTH,
                 "validation_interval_expansion":expansion,"training_dates":splits[0],
-                "validation_dates":splits[1],"research_only":True,"qualification_state":report["state"]}
+                "validation_dates":splits[1],"research_only":True,"qualification_state":report["state"],
+                "training_policy":"reduce_lr_on_plateau" if convergence else "fixed_lr"}
     return report,predictions,checkpoint
