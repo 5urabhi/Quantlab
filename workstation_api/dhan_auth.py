@@ -24,9 +24,11 @@ _PROFILE_ERRORS = {
     "DH-903": ("profile_account_error", None, None, "Dhan reports an account or segment permission issue."),
     "DH-904": ("profile_rate_limited", None, None, "Dhan rate limit reached. Respect the provider cooldown."),
     "DH-905": ("profile_input_error", None, None, "Dhan rejected a request parameter. Check the documented profile request format."),
+    "DH-906": ("profile_http_error", None, None, "Dhan returned an unexpected order-error code on the read-only profile endpoint. Token status is unverified; check the session or contact Dhan."),
     "DH-907": ("profile_http_error", None, None, "Dhan could not retrieve the requested data."),
     "DH-908": ("profile_unreachable", None, None, "Dhan reports a temporary internal server error."),
     "DH-909": ("profile_unreachable", None, None, "Dhan reports a temporary upstream network error."),
+    "DH-910": ("profile_http_error", None, None, "Dhan returned an unspecified provider error."),
     "800": ("profile_unreachable", None, None, "Dhan reports an internal server error."),
     "805": ("profile_rate_limited", None, None, "Dhan rate limit reached. Respect the provider cooldown."),
     "806": ("data_plan_inactive", None, False, "Dhan reports that Data APIs are not subscribed."),
@@ -57,6 +59,13 @@ def _profile_error(status, payload=None, headers=None):
         code, valid, plan, message = _PROFILE_ERRORS["DH-904"]
     elif vendor_code:
         code, valid, plan, message = _PROFILE_ERRORS[vendor_code]
+        # DH-906 is documented as an order error, but read-only endpoints
+        # also return it with an explicit Invalid Token message. Only use
+        # exact known messages for classification; never echo vendor text.
+        if vendor_code == "DH-906":
+            detail = payload.get("errorMessage", payload.get("error_message", ""))
+            if isinstance(detail, str) and detail.strip().casefold().rstrip(".") in {"invalid token", "invalid access token", "access token is invalid"}:
+                code, valid, plan, message = "auth_rejected", False, None, "Dhan reports an invalid token on the read-only profile endpoint. Generate a fresh access token."
     elif status in (401, 403):
         code, valid, plan, message = "auth_rejected", False, None, "Dhan rejected this access token. Enter a fresh token in QuantLab's Dhan connection panel."
     elif status >= 500:
