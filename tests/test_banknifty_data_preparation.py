@@ -69,3 +69,56 @@ class PreparationTests(TestCase):
             with patch.object(m,"api",side_effect=[health,{**base,**extra}]) as api:
                 self.assertEqual(m.live_priority_request()["state"],state)
                 self.assertEqual(api.call_count,2)
+
+    def test_parallel_live_uses_actual_pressure_not_time_gate(self):
+        with patch.object(m,"offhours",return_value=False):
+            status={"config":{"enabled":True},"live_pressure":None}
+            with patch.object(m,"api",return_value=status) as api:
+                self.assertIsNone(m.priority_blocker(True))
+                self.assertEqual(m.priority_blocker(False),"Market-priority window began")
+                self.assertEqual(api.call_count,1)
+            with patch.object(m,"api",return_value={**status,"live_pressure":"live_quote_queue_backlog"}):
+                self.assertEqual(m.priority_blocker(True),"Recorder pressure: live_quote_queue_backlog")
+            with patch.object(m,"api",return_value={**status,"config":{"enabled":False}}):
+                self.assertIn("monitoring unavailable",m.priority_blocker(True))
+            limited={**status,"next_due_reason":"provider_rate_limit","next_due_utc":"2099-01-01T00:00:00+00:00"}
+            with patch.object(m,"api",return_value=limited):
+                self.assertTrue(m.priority_blocker(True).startswith("Provider cooldown until"))
+                self.assertIsNone(m.priority_blocker(True,dhan=False))
+
+    def test_parallel_live_job_completes_during_market_hours(self):
+        record={}
+        with patch.object(m,"offhours",return_value=False),patch.object(m,"wait_idle") as idle, \
+             patch.object(m,"priority_blocker",return_value=None),patch.object(m.time,"sleep"), \
+             patch.object(m,"api",side_effect=[{"job_id":"job1"},{"status":"running"},{"status":"complete","result":{"rows":123}}]) as api:
+            result=m.job("/api/dhan/download",{},record,lambda:None,parallel_live=True)
+        idle.assert_called_once_with(True)
+        self.assertEqual(result,{"rows":123})
+        self.assertEqual(record["state"],"job_complete")
+        self.assertEqual(api.call_count,3)
+
+    def test_parallel_live_pressure_cancels_only_own_cancellable_job(self):
+        record={}
+        with patch.object(m,"wait_idle"),patch.object(m.time,"sleep"), \
+             patch.object(m,"priority_blocker",return_value="Recorder pressure: backlog"), \
+             patch.object(m,"api",side_effect=[{"job_id":"job1"},{"status":"running"},{},{"status":"cancelled"}]) as api:
+            with self.assertRaises(m.Pause):
+                m.job("/api/data-manager/options-history/start",{},record,lambda:None,
+                      cancel_path="job",parallel_live=True)
+        self.assertEqual(api.call_args_list[2].args,("/api/workspace/jobs/job1/cancel",))
+        self.assertEqual(record["state"],"cancelled")
+
+    def test_external_archives_require_default_offhours_or_explicit_guard(self):
+        a=date(2025,1,1);b=date(2025,1,2)
+        with patch.object(m.fred.alpha_retraining,"safe_window",return_value=False), \
+             patch.dict(m.os.environ,{"FRED_API_KEY":""}),patch.object(m.alpaca,"credentials",return_value=None):
+            with self.assertRaises(ValueError):m.fred.backfill(a,b,confirmed=True)
+            with self.assertRaises(ValueError):m.alpaca.backfill(a,b,confirmed=True)
+            calls=[]
+            guard=lambda:calls.append(True)
+            self.assertEqual(m.fred.backfill(a,b,confirmed=True,live_guard=guard)["state"],"fred_key_not_configured")
+            self.assertEqual(m.alpaca.backfill(a,b,confirmed=True,live_guard=guard)["state"],"alpaca_credentials_not_configured")
+            self.assertEqual(len(calls),2)
+            def pressure():raise m.Pause("Recorder pressure")
+            with self.assertRaises(m.Pause):m.fred.backfill(a,b,confirmed=True,live_guard=pressure)
+            with self.assertRaises(m.Pause):m.alpaca.backfill(a,b,confirmed=True,live_guard=pressure)
