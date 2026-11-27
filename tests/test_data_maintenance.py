@@ -140,6 +140,7 @@ class MaintenanceTests(TestCase):
         self.assertTrue(m._due(cfg,state,self.now))
         self.assertFalse(m._due({**cfg,"enabled":False},state,datetime(2026,11,26,5,tzinfo=timezone.utc)))
         state["next_due_reason"]="source_error_backoff"
+        state["schedule_version"]=7
         self.assertFalse(m._due(cfg,state,self.now))
 
     def test_productive_pass_persists_finished_time_schedule(self):
@@ -234,7 +235,7 @@ class MaintenanceTests(TestCase):
         for failures,minutes in ((1,2),(2,4),(3,8),(4,16),(5,30),(99,30)):
             self.assertEqual(m._next_schedule({**base,"connection_failure_count":failures}),
                              (timedelta(minutes=minutes),"connection_retry"))
-        self.assertEqual(m._next_schedule({"state":"partial","sources":{"options":{"state":"blocked","reason":"HTTP 429"}}})[0],m.RETRY)
+        self.assertEqual(m._next_schedule({"state":"partial","sources":{"options":{"state":"blocked","reason":"HTTP 429"}}})[0],m.RATE_LIMIT_RETRY)
         self.assertEqual(m._next_schedule({**base,"sources":{**base["sources"],"bank_panel":{"state":"partial","batch_errors":True}}})[0],m.RETRY)
         cfg={**m.DEFAULT,"enabled":True}
         state={"target":m._target(self.now),"next_due_utc":(self.now+timedelta(hours=3)).isoformat(),
@@ -272,3 +273,25 @@ class MaintenanceTests(TestCase):
             result=m.run(now=self.now)
             self.assertNotIn("transient_connection_failure",result)
             self.assertEqual(m._state()["next_due_reason"],"normal_backoff")
+
+
+    def test_no_legacy_four_hour_fallback_and_provider_cooldown(self):
+        self.assertEqual(m.RETRY,timedelta(minutes=5))
+        cfg={**m.DEFAULT,"enabled":True}
+        m.configure(cfg,True)
+        finished=self.now-timedelta(minutes=6)
+        old={"target":m._target(self.now),"next_due_utc":(finished+timedelta(hours=4)).isoformat(),
+             "next_due_reason":"source_blocked_or_paused",
+             "last_run":{"state":"partial","finished_utc":finished.isoformat(),
+                         "sources":{"options":{"state":"blocked","reason":"Unavailable source"}}}}
+        self.assertTrue(m._due(cfg,old,self.now))
+        self.assertEqual(m._effective_schedule(old)[0],(finished+timedelta(minutes=5)).isoformat())
+        report={"state":"partial","provider_rate_limited":True,"provider_retry_after_seconds":1800}
+        self.assertEqual(m._next_schedule(report),(timedelta(minutes=30),"provider_rate_limit"))
+        state={"target":m._target(self.now-timedelta(days=1)),"schedule_version":7,
+               "next_due_reason":"provider_rate_limit","next_due_utc":(self.now+timedelta(minutes=15)).isoformat()}
+        m._save_state(state)
+        self.assertFalse(m._due(cfg,state,self.now))
+        with patch.object(m,"_now",return_value=self.now):
+            m.request_check()
+        self.assertEqual(m._state()["next_due_utc"],state["next_due_utc"])
