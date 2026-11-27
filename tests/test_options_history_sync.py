@@ -128,6 +128,24 @@ class OptionsHistorySyncTests(unittest.TestCase):
         self.assertEqual(final["remaining_planned_requests"],0)
         self.assertFalse(final["continuous_coverage_certified"])
 
+    def test_observed_minute_coverage_is_not_request_coverage(self):
+        day="2026-10-01"
+        stamp=datetime(2026,10,1,4,0,tzinfo=timezone.utc).timestamp()
+        def fetch(body):
+            if body["drvOptionType"]=="PUT":
+                return {"data":{}}
+            return {"data":{"ce":{"timestamp":[stamp],"open":[10],"high":[11],"low":[9],
+                                   "close":[10],"strike":[60000],"volume":[0]}}}
+        args=dict(start_date=day,end_date="2026-10-02",wings=0,today=self.today,priority_sessions=[day])
+        first=sync.run(**args,fetcher=fetch)
+        second=sync.run(**args,fetcher=lambda _:self.fail("unexpected request"))
+        for report in (first,second):
+            self.assertEqual(report["checked_offset_date_pairs"],4)
+            self.assertEqual(report["known_expected_minute_slots"],750)
+            self.assertEqual(report["known_observed_minute_slots"],1)
+            self.assertEqual(report["known_market_dates"],1)
+            self.assertFalse(report["continuous_coverage_certified"])
+
     def test_unchanged_receipts_skip_reparse_but_changed_and_deleted_revalidate(self):
         args=dict(start_date="2026-10-01",end_date="2026-10-02",wings=0,today=self.today)
         sync.run(**args,fetcher=lambda _:{"data":{}})
