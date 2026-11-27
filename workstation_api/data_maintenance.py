@@ -19,7 +19,8 @@ from . import (service, market_patterns as mp, cockpit_sources, dhan_workspace a
 IST=ZoneInfo("Asia/Kolkata")
 DEFAULT={"enabled":False,"index":True,"constituents":True,"options":True,"bank_panel":False,
          "index_days":365,"constituent_days":240,"option_days":365,"wings":3}
-VERSION="automatic_market_library_v7"
+VERSION="automatic_market_library_v8"
+SCHEDULE_VERSION=8
 INDEX_IDENTITIES=("INDEX:BANKNIFTY","INDEX:NIFTY50")
 MAX_INDEX_WINDOWS=5
 MAX_OPTION_REQUESTS=440
@@ -118,7 +119,7 @@ def configure(cfg,confirm):
             if reason=="provider_rate_limit" and due and datetime.fromisoformat(due)>_now():
                 state["next_due_utc"]=due
                 state["next_due_reason"]=reason
-                state["schedule_version"]=7
+                state["schedule_version"]=SCHEDULE_VERSION
             else:
                 state["next_due_utc"]=None
                 state["next_due_reason"]="configuration_changed"
@@ -195,12 +196,16 @@ def _rate_limit_message(value):
 
 def _effective_schedule(state):
     """Apply the shorter policy to old saved checkpoints on startup.
+    Migrate v7 cross-source backoff only when a productive lane can resume.
     Do not shorten an explicit provider cooldown already recorded by v7.
     """
     due=state.get("next_due_utc")
     reason=state.get("next_due_reason")
     last=state.get("last_run") or {}
-    if not due or state.get("schedule_version")==7:
+    version=state.get("schedule_version")
+    if not due or version==SCHEDULE_VERSION or reason=="provider_rate_limit":
+        return due,reason
+    if version==7 and reason not in ("source_error_backoff","source_blocked_or_paused"):
         return due,reason
     finished=last.get("finished_utc")
     if not finished:
@@ -213,6 +218,8 @@ def _effective_schedule(state):
     if last.get("state") not in ("partial","blocked","paused","interrupted","checked"):
         return due,reason
     delay,new_reason=_next_schedule(last)
+    if version==7 and delay!=PRODUCTIVE_RETRY:
+        return due,reason
     revised=datetime.fromisoformat(finished)+delay
     original=datetime.fromisoformat(due)
     return (revised.isoformat(),new_reason) if revised<original else (due,reason)
@@ -237,8 +244,9 @@ def _connection_delay(failures):
 
 def _next_schedule(report):
     """Only accelerate bounded batches that made progress and have more work.
-    Persistent source errors, unavailable identities and cooldown-only gaps
-    retain normal backoff; never bypass the market or storage guard.
+    Independent productive lanes must not inherit unrelated source errors.
+    Shared throttling, connection failures and market/storage guards take
+    precedence. Failed lanes retain their existing bounded repair policies.
     """
     state=report["state"]
     sources=report.get("sources",{})
@@ -263,19 +271,32 @@ def _next_schedule(report):
         or any(v.get("state") in ("blocked","paused") or v.get("batch_errors") or v.get("unavailable_sources",0) or v.get("unresolved") or v.get("batch_status") not in (None,"completed") for v in equity)
         or option.get("rejected_windows",0) or option.get("unreadable_receipts_encountered",0)):
         return _connection_delay(report.get("connection_failure_count",1)),"connection_retry"
-    if any(v.get("state") in ("blocked","paused") for v in [*index,*equity,option]):
+    def blocked(v):
+        return v.get("state") in ("blocked","paused")
+    def index_error(v):
+        return blocked(v) or any(v.get(k,0) for k in ("failed_windows","rejected_receipts","omitted_receipts"))
+    def equity_error(v):
+        return blocked(v) or v.get("batch_errors") or v.get("unavailable_sources",0) or v.get("unresolved") or v.get("batch_status") not in (None,"completed")
+    # A verified full batch can keep filling missing windows even if the
+    # local scan found a separate unreadable historical receipt. Never
+    # accelerate a rejected, interrupted or stale provider batch.
+    full_option_batch=(option.get("batch_limit",0)>0
+                       and option.get("batch_attempted")==option.get("batch_limit")
+                       and option.get("batch_completed")==option.get("batch_limit"))
+    option_error=(blocked(option) or option.get("progress_stale")
+                  or option.get("rejected_windows",0)
+                  or (option.get("unreadable_receipts_encountered",0) and not full_option_batch))
+    if not report.get("transient_connection_failure"):
+        if not option_error and option.get("new_receipts",0)>0 and option.get("unattempted_requests",0)>0:
+            return PRODUCTIVE_RETRY,"more_option_requests"
+        if any(not equity_error(v) and v.get("repair_dates_attempted",0)>0 and v.get("retryable_member_session_gaps",0)>0 for v in equity):
+            return PRODUCTIVE_RETRY,"more_unattempted_equity_repairs"
+        if any(not index_error(v) and v.get("downloaded_windows",0)>0 and v.get("uncovered_request_windows",0)>0 for v in index):
+            return PRODUCTIVE_RETRY,"more_index_windows"
+    if any(blocked(v) for v in [*index,*equity,option]):
         return RETRY,"source_blocked_or_paused"
-    if (any(v.get("failed_windows",0) or v.get("rejected_receipts",0) or v.get("omitted_receipts",0) for v in index)
-        or any(v.get("batch_errors") or v.get("unavailable_sources",0) or v.get("unresolved")
-               or v.get("batch_status") not in (None,"completed") for v in equity)
-        or option.get("rejected_windows",0) or option.get("unreadable_receipts_encountered",0)):
+    if any(index_error(v) for v in index) or any(equity_error(v) for v in equity) or option_error or option.get("unreadable_receipts_encountered",0):
         return RETRY,"source_error_backoff"
-    if option.get("new_receipts",0)>0 and option.get("unattempted_requests",0)>0:
-        return PRODUCTIVE_RETRY,"more_option_requests"
-    if any(v.get("repair_dates_attempted",0)>0 and v.get("retryable_member_session_gaps",0)>0 for v in equity):
-        return PRODUCTIVE_RETRY,"more_unattempted_equity_repairs"
-    if any(v.get("downloaded_windows",0)>0 and v.get("uncovered_request_windows",0)>0 for v in index):
-        return PRODUCTIVE_RETRY,"more_index_windows"
     return RETRY,"no_more_immediately_actionable_work"
 
 
@@ -351,7 +372,7 @@ def credentials_verified():
         state["next_due_utc"]=None
         state["next_due_reason"]="credentials_verified"
         state["connection_failure_count"]=0
-        state["schedule_version"]=7
+        state["schedule_version"]=SCHEDULE_VERSION
         _write("state",state)
     WAKE.set()
     return True
@@ -627,7 +648,7 @@ def run(*,progress=None,now=None):
     stop,option_end=target_dates(now)
     report={"started_utc":now.isoformat(),"state":"running","sources":{},
             "backfill_mode":"live_priority" if during_priority else "standard"}
-    state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),next_due_reason="pass_running",last_run=report,schedule_version=7)
+    state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),next_due_reason="pass_running",last_run=report,schedule_version=SCHEDULE_VERSION)
     _save_state(state)
     def provider_limited():
         sources=report["sources"]
@@ -763,7 +784,7 @@ def run(*,progress=None,now=None):
         delay,reason=_next_schedule(report)
         state["next_due_utc"]=(finished+delay).isoformat()
         state["next_due_reason"]=reason
-        state["schedule_version"]=7
+        state["schedule_version"]=SCHEDULE_VERSION
         with LOCK:
             # Preserve a concurrently saved request to disable/reconfigure;
             # its new settings take effect at the next safe boundary.
