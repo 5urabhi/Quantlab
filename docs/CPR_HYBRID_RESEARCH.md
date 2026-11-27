@@ -826,3 +826,36 @@ This supersedes the earlier automatic-maintenance-only time restriction.
 The separate heavy research commands and standalone repair launcher
 retain their off-market guards. Existing saved consent and scope
 are unchanged; no new live feed or order permission is granted.
+
+
+### Faster sequential backfill and live progress meters (v5)
+
+Automatic backfill now uses up to 440 option requests per standard
+pass and 64 during live-priority hours. The existing sequential 0.45 s
+pre-request pacing and provider error backoff remain unchanged. The
+productive continuation interval is 30 seconds; recording-pressure
+pauses retain the two-minute cooldown. Disk protection and closed/
+expired-session eligibility remain. The provider's authenticated rolling
+endpoint evidence supports only two inclusive consecutive calendar
+dates per request, so thousands of requests may still be needed.
+
+The receipt planner reuses process-local verified compact summaries of
+unchanged files (device, inode, size, modification and change timestamps).
+Changed files are revalidated, removed files disappear from the plan,
+and a restart re-verifies receipts. No raw price cache or second data
+store is introduced. Historical research still validates original
+receipts. The first scan after restart may therefore take longer.
+
+The Market Library reports an overall request-scope bar based on
+distinct eligible side/rolling-offset/calendar-date pairs, not a sum
+of overlapping receipt counts. Verified empty receipts contribute to
+request coverage but not price observations. A separate observed
+minute meter uses only known index dates, with 375 regular-session
+minutes per side/offset as its reference, not exact-contract coverage.
+Show current pass attempted/verified/rejected counts, remaining planned
+requests and the measured active receipt rate. The active-time estimate
+excludes scans, pauses, provider backoff and changing scope. It is not a
+completion guarantee. Index and bank bars use audited known session
+counts and refresh after the respective audit. Detailed audit text is
+collapsed by default. Previously verified coverage remains visible
+during subsequent passes; no prediction model is promoted.
