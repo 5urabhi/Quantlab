@@ -278,6 +278,17 @@ class MaintenanceTests(TestCase):
             self.assertEqual(m._state()["next_due_reason"],"normal_backoff")
 
 
+    def test_documented_profile_rate_limit_blocks_every_lane(self):
+        m.configure({**m.DEFAULT,"enabled":True},True)
+        profile={"ok":False,"code":"profile_rate_limited","provider_retry_after_seconds":1800}
+        with patch.object(m,"_now",return_value=self.now),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value=profile),patch.object(m,"_index_pass") as index,patch.object(m.options,"run") as options:
+            result=m.run(now=self.now)
+            self.assertTrue(result["provider_rate_limited"])
+            self.assertEqual(m._state()["next_due_reason"],"provider_rate_limit")
+            self.assertEqual(m._state()["next_due_utc"],(self.now+timedelta(minutes=30)).isoformat())
+            index.assert_not_called()
+            options.assert_not_called()
+
     def test_no_legacy_four_hour_fallback_and_provider_cooldown(self):
         self.assertEqual(m.RETRY,timedelta(minutes=5))
         cfg={**m.DEFAULT,"enabled":True}
