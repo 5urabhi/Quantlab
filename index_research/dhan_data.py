@@ -322,10 +322,16 @@ def download_candles(instrument: Instrument, from_date: str, to_date: str,
         provider_total+=int(df.attrs.get("total_provider_bars",len(df)))
         rejected_frame=df.attrs.get("rejected_provider_rows")
         if isinstance(rejected_frame,pd.DataFrame) and not rejected_frame.empty:
-            discarded_parts.append(rejected_frame)
+            # Keep audit payloads separate from candle-frame attrs. Pandas
+            # concat compares attrs across frames; DataFrame-valued attrs
+            # have no scalar equality truth value.
+            clean_rejected=rejected_frame.copy()
+            clean_rejected.attrs={}
+            discarded_parts.append(clean_rejected)
         if not df.empty:
             local_dates=df.datetime.dt.date
             df=df.loc[(local_dates>=first)&(local_dates<last)].copy()
+            df.attrs={}
             parts.append(df)
         if pause_seconds and post is None:
             time.sleep(pause_seconds)
