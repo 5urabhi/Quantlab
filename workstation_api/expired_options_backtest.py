@@ -272,6 +272,8 @@ def _original_response_once(body: dict, *, opener=None) -> dict:
             failure = json.loads(exc.read(4096))
             if isinstance(failure, dict):
                 vendor_code = str(failure.get("errorCode", "")).strip()
+                if vendor_code in ("DH-904","805"):
+                    raise RollingRateLimitError(_retry_after_seconds(exc.headers))
                 if vendor_code in ("DH-905", "DH-907", "DH-902",
                                    "805", "806", "811", "812", "813", "814"):
                     detail = f" (Dhan {vendor_code})"
@@ -288,6 +290,8 @@ def _original_response_once(body: dict, *, opener=None) -> dict:
                         and not any(len(word) > 32
                                     for word in message.split())):
                     detail += f": {message}"
+        except RollingRateLimitError:
+            raise
         except (ValueError, TypeError, UnicodeError, OSError):
             pass
         context = (f"{body['expiryFlag'].lower()} {body['drvOptionType']} "
@@ -308,6 +312,8 @@ def _original_response_once(body: dict, *, opener=None) -> dict:
         result = json.loads(raw)
     except (ValueError, UnicodeError) as exc:
         raise ValueError("Dhan expired-options response was not valid JSON") from None
+    if isinstance(result,dict) and str(result.get("errorCode","")).strip() in ("DH-904","805"):
+        raise RollingRateLimitError()
     if not isinstance(result, dict) or not isinstance(result.get("data"), dict):
         raise ValueError("Dhan returned no valid rolling option data; check segment, expiry, and entitlement")
     return result
