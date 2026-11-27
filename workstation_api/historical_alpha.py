@@ -17,7 +17,7 @@ import re
 
 import numpy as np
 from . import constituent_alpha as a, cockpit_sources, intraday_parquet as pq
-from . import dhan_workspace as dw, banknifty_constituents as bank, service
+from . import dhan_workspace as dw, banknifty_constituents as bank, service, nse_session_policy as sessions
 
 VERSION="historical_minute_alpha_v3"
 IST=ZoneInfo("Asia/Kolkata")
@@ -29,7 +29,7 @@ MAX_TOTAL=900*1024*1024
 POLICY={"version":VERSION,"horizons":HORIZONS,"splits":[30,10,20],"session_close_splits":[60,20,40],
         "sampling":"first 60 observed completed index dates (120 for session-close); reserve predetermined windows before source or label gates; no substitutions",
         "weight_modes":["unweighted","verified_weights"],
-        "target":"close of completed decision bar to close of future bar; 0 = session close",
+        "target":"close of completed decision bar to close of future bar; 0 = fixed 15:29 index comparison bar, not official settlement",
         "source":"pinned Dhan batch membership and newest verified shared original index minute receipts",
         "features":"index returns 5/15/30m, realized volatility, EMA gap, RSI, time, EWMA volatility, rolling ADX-like proxy, causal CUSUM, opening range; constituent returns, breadth, dispersion and past-only relative volume",
         "advanced_models":"training-only 3-state GMM and diagonal Gaussian HMM; forward-only held-out filter; optional LightGBM/XGBoost; same matched chronological windows"}
@@ -172,7 +172,8 @@ def _sources(batch_id,raw,start,stop,resolved,progress):
             if not sig:
                 raise ValueError("Original one-minute cache missing")
             file,_=pq._raw(identity)
-            stocks[symbol]=_read_file(file,sig["source_sha256"],start,stop,budget)
+            original=_read_file(file,sig["source_sha256"],start,stop,budget)
+            stocks[symbol]={day:{m:bar for m,bar in bars.items() if m<sessions.cash_bank_minutes(day,identity,symbol)} for day,bars in original.items()}
             sources[identity]=sig["source_sha256"]
         except (ValueError,OSError,KeyError,TypeError,OverflowError) as exc:
             failures[symbol]=str(exc)[:160]
