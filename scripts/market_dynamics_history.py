@@ -70,7 +70,7 @@ def allocate(shape,scratch,name):
     if scratch is None:return np.full(shape,np.nan,np.float32)
     if size==0:return np.full(shape,np.nan,np.float32)
     used=sum(p.stat().st_size for p in Path(scratch).glob("*.bin"))
-    if used+size>MAX_GRID_BYTES or shutil.disk_usage(scratch).free<size+512*1024**2:
+    if used+size>MAX_GRID_BYTES or shutil.disk_usage(scratch).free<used+size+512*1024**2:
         raise ValueError(f"Insufficient bounded feature scratch space for {name}: {size} bytes")
     return np.memmap(Path(scratch)/(name+".bin"),mode="w+",dtype=np.float32,shape=shape)
 
@@ -119,7 +119,7 @@ class RollingArchive:
             day in training and np.isfinite(values[:,0]).any() for day,(values,_) in days.items())))
         self.names=tuple(m.f.OPTION_NAMES)+tuple(
             "rolling:"+group_name(key)+":"+field for key in self.keys for field in OPTION_FIELDS)
-        evidence["observed_groups"]={group_name(key):{"sessions":sum(np.isfinite(v[:,0]).any() for v,_ in days.values()),
+        evidence["observed_groups"]={group_name(key):{"sessions":int(sum(bool(np.isfinite(v[:,0]).any()) for v,_ in days.values())),
              "observed_minutes":sum(int(np.isfinite(v[:,0]).sum()) for v,_ in days.values()),
              "training_supported":key in self.keys}
              for key,days in sorted(groups.items())}

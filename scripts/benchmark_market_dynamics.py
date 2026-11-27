@@ -20,14 +20,14 @@ from threadpoolctl import threadpool_limits
 from scripts import benchmark_direction_gate as direction
 from scripts import benchmark_ema_first_passage as passage
 from scripts import benchmark_ema_levels as levels
-from scripts import market_dynamics_history as history
+from scripts import market_dynamics_history as histdata
 from scripts.run_banknifty_candle_forecast import write_atomic
 from workstation_api import banknifty_candle_forecast as m, historical_alpha as h
 from workstation_api import banknifty_sequence_forecast as seq
 from workstation_api import cpr_hybrid_research as r, predictive_option_research as opt
 from workstation_api import nse_session_policy as sessions, service
 
-VERSION="market_dynamics_v1"
+VERSION="market_dynamics_v1_1"
 FULL_VERSION="market_dynamics_full_history_v2"
 HORIZONS=(1,5,10,15,30,60)
 LOOKBACK=30
@@ -43,12 +43,14 @@ VOL=(5,15,30)
 DAILY=(5,20,60)
 ASSET_FIELDS=("observed","open_pct","high_pct","low_pct","close_pct","log_volume",
               "relative_log_volume_20m","prior_complete","clock_fraction",
-              "log_open","log_high","log_low","log_close","session_prefix_complete","dated_bank_member"
+              "log_open","log_high","log_low","log_close","session_prefix_complete","dated_bank_member","weekday_scaled","prior_observed_gap_days"
               )+tuple(f"return_{n}m_pct" for n in LAGS)+tuple(f"vol_{n}m_pct" for n in VOL)+tuple(
               f"ema{n}_distance_pct" for n in EMA)+("ema9_minus_21_pct","ema_cross","ema9_slope_5m_pct","ema21_slope_5m_pct",
               "ema_last_cross","ema_cross_age_scaled",
               "opening_gap_pct","cpr_width_pct")+tuple(name+"_distance_pct" for name in levels.LEVEL_NAMES)+tuple(
-              f"prior_{n}d_{kind}" for n in DAILY for kind in ("return_scaled","rms_pct"))
+              f"prior_{n}d_{kind}" for n in DAILY for kind in ("return_scaled","rms_pct"))+tuple(
+              "last_observed_"+key+"_distance_pct" for key in ("open","high","low","close"))+tuple(
+              f"completed_{n}m_{key}_distance_pct" for n in (5,15,30,60) for key in ("open","high","low","close"))
 BANK_AUX=("dated_membership","scheduled_count","observed_fraction","mean_5m_pct",
           "dispersion_5m_pct","up_fraction","verified_weighted_5m_pct")
 AVAILABILITY=("banks","peers","options","global_daily","overnight")
@@ -89,7 +91,8 @@ def asset_features(a,previous,history,*,n=MINUTES,q=MINUTES,seed_prior=True):
     anchor=np.r_[prior[-1,3] if prior is not None and seed_prior else o[0],c[:-1]]
     values={"observed":np.ones(count),"prior_complete":np.full(count,float(prior is not None)),
             "clock_fraction":(np.arange(count)+1)/MINUTES,
-            "session_prefix_complete":np.ones(count),"dated_bank_member":np.full(count,np.nan)}
+            "session_prefix_complete":np.ones(count),"dated_bank_member":np.full(count,np.nan),
+            "weekday_scaled":np.full(count,np.nan),"prior_observed_gap_days":np.full(count,np.nan)}
     for name,x in zip(("open","high","low","close"),(o,hi,lo,c)):
         values[name+"_pct"]=100*(x/anchor-1)
         values["log_"+name]=np.log(x)/10
@@ -147,7 +150,7 @@ def asset_features(a,previous,history,*,n=MINUTES,q=MINUTES,seed_prior=True):
         supported=len(past)==k+1 and np.isfinite(past).all() and np.all(past>0)
         values[f"prior_{k}d_return_scaled"]=np.full(count,10*(past[-1]/past[0]-1) if supported else np.nan)
         values[f"prior_{k}d_rms_pct"]=np.full(count,100*np.sqrt(np.mean(np.diff(np.log(past))**2)) if supported else np.nan)
-    out[:count]=np.column_stack([values[name] for name in ASSET_FIELDS]).astype(np.float32)
+    out[:count]=np.column_stack([np.broadcast_to(values.get(name,np.nan),(count,)) for name in ASSET_FIELDS]).astype(np.float32)
     return out
 
 
@@ -188,6 +191,29 @@ def full_asset_features(a,previous,earlier,*,n=MINUTES,q=MINUTES):
                     values[known,col[name+"_distance_pct"]]=100*(a[run[known],3]-price)/a[run[known],3]
         out[run]=values
     return out
+
+
+def add_clock_context(features,a,day,last_complete,n):
+    """Exact completed exchange-clock aggregates and separately aged last
+    observed complete-session levels. No incomplete block or future OHLC.
+    """
+    if a is None:return
+    col={name:i for i,name in enumerate(ASSET_FIELDS)}
+    present=features[:,0]>0
+    features[present,col["weekday_scaled"]]=date.fromisoformat(day).weekday()/4
+    if last_complete is not None:
+        previous_day,ohlc=last_complete
+        features[present,col["prior_observed_gap_days"]]=(date.fromisoformat(day)-date.fromisoformat(previous_day)).days
+        for key,value in zip(("open","high","low","close"),ohlc):
+            features[present,col["last_observed_"+key+"_distance_pct"]]=100*(a[present,3]-value)/a[present,3]
+    for duration in (5,15,30,60):
+        for end in range(duration-1,n,duration):
+            raw=a[end-duration+1:end+1,:4]
+            if not np.isfinite(raw).all() or np.any(raw<=0):continue
+            ohlc=(raw[0,0],raw[:,1].max(),raw[:,2].min(),raw[-1,3])
+            at=np.arange(end,min(end+duration,n));at=at[present[at]]
+            for key,value in zip(("open","high","low","close"),ohlc):
+                features[at,col[f"completed_{duration}m_{key}_distance_pct"]]=100*(a[at,3]-value)/a[at,3]
 
 
 def labels_for_session(a,*,all_minutes=False):
@@ -238,13 +264,14 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
     size=len(dates)*MINUTES*len(identities)*channels*4
     if not all_history and size>900_000_000:raise ValueError("Feature grid exceeds 900MB research bound")
     if all_history and scratch is None:raise ValueError("Full-history mode requires bounded disk-backed scratch")
-    grid=history.allocate((len(dates),MINUTES,len(identities),channels),scratch,"assets")
+    grid=histdata.allocate((len(dates),MINUTES,len(identities),channels),scratch,"assets")
     option_names=option_archive.names if option_archive is not None else m.f.OPTION_NAMES
     if global_archive is not None:dn,on=global_archive.names,global_archive.overnight_names
     aux_names=() if index_only else tuple(BANK_AUX)+tuple(option_names)+tuple(dn)+tuple(on)
-    aux=history.allocate((len(dates),MINUTES,len(aux_names)),scratch,"auxiliary")
+    aux=histdata.allocate((len(dates),MINUTES,len(aux_names)),scratch,"auxiliary")
     avail=np.zeros((len(dates),MINUTES,len(AVAILABILITY)),bool)
-    histories=[[] for _ in identities];audit={}
+    histories=[[] for _ in identities];last_complete=[None for _ in identities];audit={}
+    availability_names=(*AVAILABILITY[:3],"global_context",AVAILABILITY[4]) if all_history else AVAILABILITY
     di=[];minutes=[];targets=[];classes=[];masks=[];scheduled=[]
     retcol=ASSET_FIELDS.index("return_5m_pct")
     for i,day in enumerate(dates):
@@ -259,10 +286,13 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
             if all_history or not bank or identity in active:
                 function=full_asset_features if all_history else asset_features
                 grid[i,:,j]=function(a,source.get(prev),histories[j],n=n,q=q)
+                add_clock_context(grid[i,:,j],a,day,last_complete[j],n)
                 if bank and day in membership:
                     observed=grid[i,:,j,0]>0
                     grid[i,observed,j,ASSET_FIELDS.index("dated_bank_member")]=float(identity in active)
             histories[j].append(daily_close(a,n))
+            if prefix(a,n)==n:
+                last_complete[j]=(day,(float(a[0,0]),float(a[:n,1].max()),float(a[:n,2].min()),float(a[n-1,3])))
         a=index[day]
         if not index_only:
             nbank=len(bank_ids);mat=grid[i,:,1:1+nbank,retcol].copy()
@@ -309,13 +339,13 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
                     "observed_equity_streams":sum(bool(np.isfinite(grid[i,:,j,0]).any()) for j in range(1,1+len(bank_ids))),
                     "dated_membership":day in membership,"active_members":len(active),
                     "training_known_members":len(active&set(bank_ids)),"verified_weights":day in weights,
-                    "available_minutes":{name:int(avail[i,ms,k].sum()) for k,name in enumerate(AVAILABILITY)}}
+                    "available_minutes":{name:int(avail[i,ms,k].sum()) for k,name in enumerate(availability_names)}}
     if not minutes:raise ValueError("No supported completed decision minutes")
     di=np.asarray(di,dtype=int)
     if isinstance(grid,np.memmap):grid.flush()
     if isinstance(aux,np.memmap):aux.flush()
     return {"grid":grid,"aux":aux,"aux_names":aux_names,"identities":identities,"days":np.asarray(dates)[di],
-            "all_history":all_history,"equity_identities":bank_ids,
+            "all_history":all_history,"equity_identities":bank_ids,"availability_names":availability_names,
             "day_index":di,"minutes":np.asarray(minutes,dtype=int),"y":np.concatenate(targets),
             "classes":np.concatenate(classes),"mask":np.concatenate(masks),"scheduled":np.concatenate(scheduled),
             "available":avail,"audit":audit}
@@ -323,7 +353,7 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
 
 def fit_aux(data,train):
     if data.get("all_history"):
-        return history.stats(lambda rows:data["aux"][data["day_index"][rows],data["minutes"][rows]],train)
+        return histdata.stats(lambda rows:data["aux"][data["day_index"][rows],data["minutes"][rows]],train)
     x=data["aux"][data["day_index"][train],data["minutes"][train]].astype(float)
     valid=np.isfinite(x);n=valid.sum(axis=0);clean=np.where(valid,x,0.)
     mean=np.divide(clean.sum(axis=0),n,out=np.zeros(x.shape[1]),where=n>0)
@@ -396,7 +426,7 @@ def fit_neural(data,tr,va,te,fit,*,joint,epochs,batch,device,progress):
     best=None;history=[];stale=0
     mode="joint" if joint else "index_only"
     for epoch in range(1,epochs+1):
-        model.train();order=(history.shuffled_sessions(tr,data["day_index"],rng) if data.get("all_history")
+        model.train();order=(histdata.shuffled_sessions(tr,data["day_index"],rng) if data.get("all_history")
                               else rng.permutation(tr));total=0.;seen=0
         for i in range(0,len(order),batch):
             rows=order[i:i+batch];x,z=windows(data,rows,joint,fit)
@@ -459,7 +489,7 @@ def score_all(data,tr,va,te,models,joint,progress):
     full=data.get("all_history",False)
     if full:
         getter=lambda rows:snapshot(data,rows,joint)
-        stream_fit=history.stats(getter,tr)
+        stream_fit=histdata.stats(getter,tr)
     else:tx=snapshot(data,tr,joint);vx=snapshot(data,va,joint);ex=snapshot(data,te,joint)
     reports={};predictions={name:np.zeros((len(te),len(HORIZONS),3),float)
                            for name in ("constant_prior","clock_prior","snapshot",*models)}
@@ -475,7 +505,7 @@ def score_all(data,tr,va,te,models,joint,progress):
             if choose.sum()>=30 and len(set(dt[choose]))>=10:bucket[clock]=m._avg(np.eye(3)[yt[choose]],dt[choose])
         def clock(rows):return np.stack([bucket.get(int(j)//30,prior) for j in data["minutes"][rows]])
         if full:
-            vl,el=history.streaming_snapshot(getter,tr[mt],va,te,data["classes"][:,k],data["days"],
+            vl,el=histdata.streaming_snapshot(getter,tr[mt],va,te,data["classes"][:,k],data["days"],
                                                data["day_index"],stream_fit,seed=SEED)
         else:
             keep=np.isfinite(tx[mt]).mean(axis=0)>=.05
@@ -558,7 +588,7 @@ def journal_rows(data,te,models,probs):
             for name,model in models.items():
                 for n,key in enumerate(("return","up_excursion","down_excursion")):
                     row[name+"_predicted_"+key+"_bps"]=float(model["evaluation"][1][i,k,n])
-            for n,name in enumerate(AVAILABILITY):
+            for n,name in enumerate(data.get("availability_names",AVAILABILITY)):
                 row[name+"_available"]=bool(data["available"][data["day_index"][j],minute,n])
             yield row
 
@@ -583,15 +613,15 @@ def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="c
     device=torch.device(device_name)
     service.DATA=root/"data"
     if not service.DATA.is_dir():raise ValueError("Shared data directory missing")
-    start=history.archive_start(stop) if all_history else stop-timedelta(days=days)
+    start=histdata.archive_start(stop) if all_history else stop-timedelta(days=days)
     index,stocks,membership,weights,peers,_,meta=m.load_sources(start,stop,wings=None,index_only=index_only,progress=progress)
-    dates=sorted(index);splits=history.full_splits(dates) if all_history else m.split_days(dates)
+    dates=sorted(index);splits=histdata.full_splits(dates) if all_history else m.split_days(dates)
     table={};daily={};overnight={};dn=();on=();option_archive=None;global_archive=None
     if all_history and not index_only:
-        stocks,meta["all_equities"]=history.load_equities(start,stop,dates,stocks,progress)
-        option_archive=history.load_options(index,splits[0],progress)
+        stocks,meta["all_equities"]=histdata.load_equities(start,stop,dates,stocks,progress)
+        option_archive=histdata.load_options(index,splits[0],progress)
         meta["all_rolling_options"]=option_archive.evidence
-        global_archive=history.load_global(start,stop,dates,progress)
+        global_archive=histdata.load_global(start,stop,dates,progress)
         meta["all_global"]=global_archive.evidence
     elif not index_only:
         try:
@@ -634,7 +664,7 @@ def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="c
             "partition_rows":{"training":len(tr),"validation":len(va),"evaluation":len(te)},
             "availability":{name:{key:int(data["available"][data["day_index"][rows],data["minutes"][rows],k].sum())
                            for key,rows in (("training",tr),("validation",va),("evaluation",te))}
-                           for k,name in enumerate(AVAILABILITY)},
+                           for k,name in enumerate(data.get("availability_names",AVAILABILITY))},
             "horizons":list(HORIZONS),"delay_minutes":DELAY,"lookback_minutes":LOOKBACK,"minimum_history":1 if all_history else MIN_HISTORY,
             "training_stride":1 if all_history else 5,"deadband_bps":DEADBAND_BPS,"confidence":CONFIDENCE,"seed":SEED,
             "models":{name:{key:result[key] for key in ("selected_epoch","history","parameters","input_dimensions")}
