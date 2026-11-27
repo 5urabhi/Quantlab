@@ -19,24 +19,26 @@ from . import (service, market_patterns as mp, cockpit_sources, dhan_workspace a
 IST=ZoneInfo("Asia/Kolkata")
 DEFAULT={"enabled":False,"index":True,"constituents":True,"options":True,"bank_panel":False,
          "index_days":365,"constituent_days":240,"option_days":365,"wings":3}
-VERSION="automatic_market_library_v4"
+VERSION="automatic_market_library_v5"
 INDEX_IDENTITIES=("INDEX:BANKNIFTY","INDEX:NIFTY50")
 MAX_INDEX_WINDOWS=5
-MAX_OPTION_REQUESTS=112
+MAX_OPTION_REQUESTS=440
 MAX_EQUITY_REPAIRS=2
 LIVE_INDEX_WINDOWS=1
-LIVE_OPTION_REQUESTS=32
+LIVE_OPTION_REQUESTS=64
 LIVE_EQUITY_REPAIRS=1
 LIVE_RECORDER_DROP_COOLDOWN=timedelta(minutes=2)
 LIVE_QUOTE_QUEUE_FRACTION=.10
 REPAIR_COOLDOWN=timedelta(days=7)
 RETRY=timedelta(hours=4)
-PRODUCTIVE_RETRY=timedelta(minutes=2)
+PRODUCTIVE_RETRY=timedelta(seconds=30)
+PRESSURE_RETRY=timedelta(minutes=2)
 CHECKED_RETRY=timedelta(hours=24)
 LOCK=RLock()
 STOP=Event()
 WAKE=Event()
 THREAD=None
+OPTION_PROGRESS=None
 
 def _now():
     return datetime.now(timezone.utc)
@@ -113,6 +115,8 @@ def configure(cfg,confirm):
             state["next_due_utc"]=None
             state["next_due_reason"]="configuration_changed"
             state["target"]=None
+            state.pop("coverage_sources",None)
+            state.pop("coverage_config",None)
             _write("state",state)
     # Transfer the old index-only policy to this one master control.
     if cfg["enabled"]:
@@ -200,7 +204,7 @@ def _next_schedule(report):
     if state=="checked":
         return CHECKED_RETRY,"all_authorized_scopes_checked"
     if state=="paused" and report.get("pause_reason","").startswith(("live_","recent_live_","market_priority_transition")):
-        return PRODUCTIVE_RETRY,"live_recording_priority"
+        return PRESSURE_RETRY,"live_recording_priority"
     if state!="partial":
         return RETRY,"normal_backoff"
     sources=report.get("sources",{})
@@ -227,11 +231,16 @@ def status():
     try:
         with LOCK:
             cfg=config();state=_state()
+            active_counts=dict(OPTION_PROGRESS) if OPTION_PROGRESS is not None else None
         error=None
     except (OSError,ValueError,TypeError):
-        cfg=dict(DEFAULT);state={};error="Maintenance configuration or checkpoint unreadable"
+        cfg=dict(DEFAULT);state={};active_counts=None;error="Maintenance configuration or checkpoint unreadable"
     now=_now()
-    return {"version":VERSION,"config":cfg,"last_run":state.get("last_run"),"target":_target(now),
+    last=state.get("last_run") or {}
+    coverage=state.get("coverage_sources",{}) if state.get("coverage_config")==cfg else {}
+    # Retain last verified source audit while another pass is in progress.
+    sources={**coverage,**last.get("sources",{})}
+    return {"version":VERSION,"coverage_sources":sources,"option_progress":active_counts if cfg["enabled"] and last.get("state")=="running" else None,"config":cfg,"last_run":state.get("last_run"),"target":_target(now),
             "next_due_utc":state.get("next_due_utc"),"next_due_reason":state.get("next_due_reason"),"batch_id":state.get("batch_id"),
             "safe_window":safe_window(now),"backfill_mode":"standard" if safe_window(now) else "live_priority",
             "live_pressure":live_pressure(now) if cfg["enabled"] else None,
@@ -240,7 +249,7 @@ def status():
             "limits":{"option_requests_per_pass":MAX_OPTION_REQUESTS,"equity_repairs_per_instrument":MAX_EQUITY_REPAIRS,
                       "live_option_requests_per_pass":LIVE_OPTION_REQUESTS,"live_equity_repairs_per_instrument":LIVE_EQUITY_REPAIRS,
                       "live_index_windows_per_instrument":LIVE_INDEX_WINDOWS,
-                      "productive_retry_seconds":int(PRODUCTIVE_RETRY.total_seconds()),"normal_retry_seconds":int(RETRY.total_seconds())},
+                      "productive_retry_seconds":int(PRODUCTIVE_RETRY.total_seconds()),"live_pressure_retry_seconds":int(PRESSURE_RETRY.total_seconds()),"normal_retry_seconds":int(RETRY.total_seconds())},
             "note":"Runs while the backend is open, including during Indian market hours with smaller batches and live-recorder pressure checks. In-flight requests may finish before a pause. Verified request coverage is not proof of every minute. Global feeds, approved report deliveries and live capture retain their own source permissions. Historical missed ticks/books, unknown membership, unavailable provider history and missing dated weights cannot be fabricated."}
 
 def request_check():
@@ -496,12 +505,17 @@ def _panel_pass(cfg,state,now,stop,progress,should_stop):
 
 
 def run(*,progress=None,now=None):
+    global OPTION_PROGRESS
     now=now or _now();cfg=config()
     if not cfg["enabled"]:
         return {"state":"paused","reason":"Automatic maintenance disabled"}
     during_priority=not safe_window(now)
     with LOCK:
         state=_state()
+        OPTION_PROGRESS=None
+        if state.get("coverage_config")!=cfg:
+            state["coverage_sources"]={} if state.get("coverage_config") else (state.get("last_run") or {}).get("sources",{})
+            state["coverage_config"]=cfg
     stop,option_end=target_dates(now)
     report={"started_utc":now.isoformat(),"state":"running","sources":{},
             "backfill_mode":"live_priority" if during_priority else "standard"}
@@ -568,19 +582,26 @@ def run(*,progress=None,now=None):
                                     if bars and option_start.isoformat()<=d<=option_end.isoformat())
                 except (ValueError,OSError,RuntimeError,KeyError,TypeError):
                     pass
+                def on_counts(counts):
+                    global OPTION_PROGRESS
+                    with LOCK:
+                        OPTION_PROGRESS=dict(counts)
                 opt=options.run(start_date=option_start.isoformat(),
                     end_date=option_end.isoformat(),wings=cfg["wings"],request_limit=LIVE_OPTION_REQUESTS if during_priority else MAX_OPTION_REQUESTS,
-                    priority_sessions=priority,
+                    priority_sessions=priority,on_counts=on_counts,
                     should_stop=should_stop,progress=(lambda pct,msg:progress(55+.44*pct,msg)) if progress else None)
                 report["sources"]["options"]={k:opt[k] for k in ("state","existing_verified_receipts","new_receipts",
                     "planned_missing_requests","unattempted_requests","empty_processed_receipts","usable_rows_in_processed_receipts",
                     "unreadable_receipts_encountered","excluded_active_calendar_days","continuous_coverage_certified",
                     "empty_verified_receipts","observed_rolling_minute_slots","observed_offset_session_pairs","observed_session_dates")}
+                report["sources"]["options"].update({k:opt[k] for k in ("eligible_offset_date_pairs","checked_offset_date_pairs",
+                    "missing_offset_date_pairs","remaining_planned_requests","batch_limit","batch_attempted","batch_completed",
+                    "active_receipts_per_minute") if k in opt})
                 report["sources"]["options"]["rejected_windows"]=len(opt["rejected_requests"])
                 report["sources"]["options"]["state"]="partial" if opt["state"]=="partial_requests" or opt["unreadable_receipts_encountered"] else "checked"
             except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
                 if progress:progress(99,"Option history remains partially unavailable")
-                report["sources"]["options"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
+                report["sources"]["options"]={**(OPTION_PROGRESS or {}),"state":"blocked","reason":job_safety.scrub(exc)[:200]}
         states=[v["state"] for k,v in report["sources"].items() if k!="index"]
         states.extend(v["state"] for v in report["sources"].get("index",{}).values())
         report["state"]="paused" if should_stop() else "partial" if not states or any(x!="checked" for x in states) else "checked"
@@ -598,8 +619,13 @@ def run(*,progress=None,now=None):
         with LOCK:
             # Preserve a concurrently saved request to disable/reconfigure;
             # its new settings take effect at the next safe boundary.
+            OPTION_PROGRESS=None
             if config()!=cfg:
                 state["target"]=None;state["next_due_utc"]=None;state["next_due_reason"]="configuration_changed"
+                state.pop("coverage_sources",None);state.pop("coverage_config",None)
+            else:
+                state["coverage_sources"]={**state.get("coverage_sources",{}),**report["sources"]}
+                state["coverage_config"]=cfg
             state["last_run"]=report
             _save_state(state)
 
