@@ -93,6 +93,10 @@ class DynamicsDataTests(TestCase):
         self.assertEqual(report["5"]["paired_brier"]["index_only"]["mean_difference"],0.)
         self.assertEqual(cal["joint"].shape,(3,6,3))
         self.assertTrue(np.isfinite(cal["snapshot"]).all())
+        data["all_history"]=True
+        streamed,cal=d.score_all(data,tr,va,te,{"index_only":result,"joint":result},True,None)
+        self.assertEqual(streamed["60"]["unresolved_evaluation_rows"],1)
+        self.assertTrue(np.isfinite(cal["snapshot"]).all())
 
 
 @skipIf(torch is None,"Optional PyTorch dependency not installed")
@@ -130,6 +134,7 @@ class DynamicsModelTests(TestCase):
               "day_index":di,"minutes":minutes,"y":y,"classes":cl,"mask":ok,
               "scheduled":np.ones_like(ok),"available":np.zeros((6,375,5),bool)}
         tr=np.arange(12);va=np.arange(12,15);te=np.arange(15,18)
+        data["all_history"]=True
         fit=d.fit_aux(data,tr)
         result=d.fit_neural(data,tr,va,te,fit,joint=True,epochs=1,batch=3,device=torch.device("cpu"),progress=None)
         self.assertEqual(result["selected_epoch"],1)
