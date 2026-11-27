@@ -214,13 +214,13 @@ def ingest(csv_text,source,mode,confirm_reviewed,*,now=None,original_report=None
 
 def ingest_participant(csv_text,report_day,available_utc,report_type,mode,confirm_reviewed,*,now=None,source_identity='NSE'):
     """Normalize reviewed NSE report long/short sides, preserving raw CSV."""
-    from datetime import time
+    from . import nse_session_policy as sessions
     if not isinstance(csv_text,str) or not 0<len(csv_text.encode())<=64_000:
         raise ValueError("Provide an original participant CSV up to 64 KB")
     if report_type not in ("oi","volume"):
         raise ValueError("Choose open interest or trading volume")
     day=date.fromisoformat(report_day)
-    event=datetime.combine(day,time(15,30),p.live_market.IST).astimezone(timezone.utc)
+    event=datetime.combine(day,sessions.derivatives_close(day),p.live_market.IST).astimezone(timezone.utc)
     known=_stamp(available_utc)
     now=now or _now()
     if day.weekday()>=5 or not event<=known<=now:

@@ -38,14 +38,16 @@ def build(index,stocks,membership,weights,peers,table,splits,*,progress=None):
         present=0
         for j,identity in enumerate(bank_ids,1):
             if identity in active and day in stocks.get(identity,{}):
-                grid[i,:,j]=stocks[identity][day]
+                grid[i,:,j]=f.continuous_stock(day,identity,stocks[identity][day])
                 present+=1
         for j,identity in enumerate(f.PEERS,1+len(bank_ids)):
             if day in peers.get(identity,{}):
                 grid[i,:,j,:4]=peers[identity][day][:,:4]
         audit[day]={"dated_membership":day in membership,"active_members":len(active),
                     "training_known_members":len(active&set(bank_ids)),
-                    "member_sources_present":present,"verified_weights":day in weights}
+                    "member_sources_present":present,"verified_weights":day in weights,
+                    "scheduled_cash_minute_counts":{identity:f.sessions.cash_bank_minutes(day,identity) for identity in sorted(active)},
+                    "session_policy":f.sessions.BANK_POLICY}
     di=np.asarray([day_lookup[d] for d in data["days"]],np.int32)
     minute=data["minutes"]
     # 120 complete index observations plus 5 complete target bars are required

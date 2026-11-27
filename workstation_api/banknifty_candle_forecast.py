@@ -76,7 +76,7 @@ def assemble(index,stocks,membership,weights,peers,table,*,progress=None):
     buffers={key:[] for key in ("index","banks","peers","options")}
     names={};availability={key:[] for key in ("banks","peers","options")}
     all_days=[];all_minutes=[];all_ref=[];all_y=[];all_real=[]
-    prior_daily=[];coverage={}
+    prior_daily=[];coverage={};bank_scheduled=[];bank_closed=[]
     for i,day in enumerate(dates):
         if progress and (i==0 or (i+1)%20==0 or i+1==len(dates)):
             progress(f"Building causal feature windows {i+1}/{len(dates)} {day}")
@@ -92,7 +92,13 @@ def assemble(index,stocks,membership,weights,peers,table,*,progress=None):
                                    np.full(len(minutes),(exp._nominal_selected_expiry(date.fromisoformat(day),0)-date.fromisoformat(day)).days)))
             ns+=("weekday","days_to_nominal_monthly_expiry")
             blocks={"index":(ns,np.column_stack((features[minutes],seq,extra)).astype(np.float32))}
-            bn,bv,bok=f.banks_at(day,minutes,ids,stocks,set(membership.get(day,{}).values()),weights.get(day),dates[:i],a[:,3])
+            members=set(membership.get(day,{}).values())
+            scheduled=f.scheduled_bank_counts(day,minutes,members)
+            bank_scheduled.extend((scheduled>0).tolist())
+            bank_closed.extend(((scheduled==0)&bool(members)).tolist())
+            coverage[day]["bank_scheduled_open_windows"]=int((scheduled>0).sum())
+            coverage[day]["bank_scheduled_closed_windows"]=int(((scheduled==0)&bool(members)).sum())
+            bn,bv,bok=f.banks_at(day,minutes,ids,stocks,members,weights.get(day),dates[:i],a[:,3])
             pn,pv,pok=f.peers_at(day,minutes,peers,a[:,3])
             ov=np.stack([f.option_at(table,day,int(m),a[m,3]) for m in minutes]).astype(np.float32)
             ook=np.isfinite(ov[:,1])
@@ -111,7 +117,8 @@ def assemble(index,stocks,membership,weights,peers,table,*,progress=None):
     return {"days":np.asarray(all_days),"minutes":np.asarray(all_minutes,dtype=int),"ref":np.asarray(all_ref),
             "y":np.vstack(all_y),"actual":np.vstack(all_real),
             "blocks":{k:np.vstack(v) for k,v in buffers.items()},"names":names,
-            "available":{k:np.concatenate(v) for k,v in availability.items()},"coverage":coverage}
+            "available":{k:np.concatenate(v) for k,v in availability.items()},"coverage":coverage,
+            "bank_scheduled":np.asarray(bank_scheduled,dtype=bool),"bank_closed":np.asarray(bank_closed,dtype=bool)}
 
 
 def decode(ref,encoded):
@@ -224,6 +231,10 @@ def _coverage(data,masks):
             chosen=ok&mask
             out[key][part]={"available_windows":int(chosen.sum()),"total_windows":int(mask.sum()),
                             "days":len(set(data["days"][chosen].tolist()))}
+            if key=="banks" and "bank_scheduled" in data:
+                out[key][part].update(scheduled_open_windows=int((data["bank_scheduled"]&mask).sum()),
+                                      scheduled_closed_windows=int((data["bank_closed"]&mask).sum()),
+                                      undocumented_membership_windows=int((~data["bank_scheduled"]&~data["bank_closed"]&mask).sum()))
     return out
 
 

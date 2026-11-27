@@ -27,7 +27,7 @@ import struct
 import time
 import uuid
 
-from . import dhan_workspace, live_market, market_inventory, pit_index, recorder_storage, service, shared_market_data
+from . import dhan_workspace, live_market, market_inventory, pit_index, recorder_storage, service, shared_market_data, nse_session_policy as sessions
 
 STREAM = "banknifty_constituent_quotes"
 MAX_MEMBERS = 50
@@ -330,7 +330,7 @@ class Capture:
             age = (received-trade).total_seconds()
             local = trade.astimezone(live_market.IST)
             minute = local.hour*60 + local.minute
-            if not -2<=age<=MAX_AGE or local.date().isoformat()!=self.info["date"] or not 555<=minute<930 or local.weekday()>=5:
+            if not -2<=age<=MAX_AGE or local.date().isoformat()!=self.info["date"] or not sessions.OPEN_MINUTE<=minute<sessions.cash_close_minute(local.date(),identity,self.mapping[identity]) or local.weekday()>=5:
                 self.stale += 1
                 return
             prev = self.last.get(identity)

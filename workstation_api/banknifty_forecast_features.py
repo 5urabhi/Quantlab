@@ -14,6 +14,7 @@ from . import historical_alpha as h, cpr_hybrid_research as r
 from . import index_spot, dhan_checkpoint, banknifty_constituents as bank
 from . import predictive_option_research as options
 from . import banknifty_membership_fallback as membership_fallback
+from . import nse_session_policy as sessions
 
 MINUTES=375
 LOOKBACK=60
@@ -38,6 +39,22 @@ def dense(bars):
                 out[minute,:4]=a[:4]
                 if isfinite(a[4]) and a[4]>=0:out[minute,4]=a[4]
     return out
+
+
+def continuous_stock(day,identity,array):
+    """Keep the fixed index comparison grid, masking scheduled cash closure."""
+    n=sessions.cash_bank_minutes(day,identity)
+    if n==MINUTES:return array
+    out=array.copy()
+    out[n:]=np.nan
+    return out
+
+
+def scheduled_bank_counts(day,minutes,members):
+    counts=np.zeros(len(minutes),dtype=int)
+    for identity in members:
+        counts+=(minutes<sessions.cash_bank_minutes(day,identity))
+    return counts
 
 
 def _series(x):return pd.Series(x,dtype=float)
@@ -232,7 +249,7 @@ def load_membership(dates,start,stop,progress=None):
             receipt=dhan_checkpoint._read_receipt(sidecar,identity=identity,interval=1)
             if sig["source_sha256"]!=receipt["sha256"]:raise ValueError("Source changed during verification")
             original=h._read_file(path,receipt["sha256"],start,stop,budget,receipt["rows"])
-            stocks[identity]={d:dense(bars) for d,bars in original.items()}
+            stocks[identity]={d:continuous_stock(d,identity,dense(bars)) for d,bars in original.items()}
             hashes[identity]=receipt["sha256"]
         except (ValueError,OSError,TypeError,KeyError,OverflowError) as exc:
             failures[identity]=str(exc)[:180]
@@ -253,15 +270,17 @@ def load_membership(dates,start,stop,progress=None):
 def banks_at(day,minutes,ids,stocks,members,weights,prior_days,index_close):
     empty=dense({})
     names0,_=price_features(empty)
-    fields=names0+("relative_volume_5m","member","observed")
+    fields=names0+("relative_volume_5m","member","observed","scheduled_open")
     out=[];names=[];returns=[];observed_ids=[]
     for identity in ids:
         member=identity in members
         array=stocks.get(identity,{}).get(day) if member else None
         if array is None:array=empty
+        else:array=continuous_stock(day,identity,array)
+        scheduled=(minutes<sessions.cash_bank_minutes(day,identity))&member
         _,values=price_features(array)
         previous=stocks.get(identity,{})
-        refs=[_roll(previous[d][:,4],5,"sum") for d in prior_days[-20:] if d in previous] if member else []
+        refs=[_roll(continuous_stock(d,identity,previous[d])[:,4],5,"sum") for d in prior_days[-20:] if d in previous] if member else []
         rel=np.full(MINUTES,np.nan)
         if len(refs)>=5:
             mat=np.asarray(refs);support=np.isfinite(mat).sum(axis=0)
@@ -269,14 +288,15 @@ def banks_at(day,minutes,ids,stocks,members,weights,prior_days,index_close):
                 warnings.simplefilter("ignore",RuntimeWarning);base=np.nanmedian(mat,axis=0)
             rel=np.divide(_roll(array[:,4],5,"sum"),base,out=rel,where=(base>0)&(support>=5))
         obs=np.isfinite(array[minutes,:4]).all(axis=1)
-        out.append(np.column_stack((values[minutes],rel[minutes],np.full(len(minutes),float(member)),obs.astype(float))))
+        out.append(np.column_stack((values[minutes],rel[minutes],np.full(len(minutes),float(member)),obs.astype(float),scheduled.astype(float))))
         names.extend(identity+"_"+v for v in fields)
         if member:returns.append(_ret(array[:,3],5)[minutes]);observed_ids.append(identity)
-    agg=np.full((len(minutes),7),np.nan)
-    agg[:,0]=len(members);agg[:,1]=0
+    agg=np.full((len(minutes),8),np.nan)
+    scheduled=scheduled_bank_counts(day,minutes,members)
+    agg[:,0]=len(members);agg[:,1]=0;agg[:,7]=scheduled
     if returns:
         mat=np.column_stack(returns);count=np.isfinite(mat).sum(axis=1)
-        agg[:,1]=count/max(1,len(members))
+        agg[:,1]=np.divide(count,scheduled,out=np.zeros(len(minutes)),where=scheduled>0)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore",RuntimeWarning)
             agg[:,2]=np.where(count>=3,np.nanmean(mat,axis=1),np.nan)
@@ -284,9 +304,9 @@ def banks_at(day,minutes,ids,stocks,members,weights,prior_days,index_close):
         agg[:,4]=np.divide((mat>0).sum(axis=1),count,out=np.full(len(minutes),np.nan),where=count>=3)
         if weights and set(observed_ids)==set(weights):
             w=np.asarray([weights[k] for k in observed_ids]);w/=w.sum()
-            agg[:,5]=mat@w
+            agg[:,5]=np.where(scheduled==len(members),mat@w,np.nan)
             agg[:,6]=agg[:,5]-_ret(index_close,5)[minutes]
-    names.extend(("bank_member_count","bank_observed_fraction","bank_mean_5m_pct","bank_dispersion_5m_pct","bank_up_fraction","bank_weighted_5m_pct","bank_weighted_minus_index_5m_pct"))
+    names.extend(("bank_member_count","bank_observed_fraction","bank_mean_5m_pct","bank_dispersion_5m_pct","bank_up_fraction","bank_weighted_5m_pct","bank_weighted_minus_index_5m_pct","bank_scheduled_open_count"))
     out.append(agg)
     return tuple(names),np.column_stack(out).astype(np.float32),agg[:,1]>=.8
 

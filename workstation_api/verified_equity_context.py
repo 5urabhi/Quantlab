@@ -11,7 +11,7 @@ import json
 import re
 import numpy as np
 import pandas as pd
-from . import service, dhan_checkpoint
+from . import service, dhan_checkpoint, nse_session_policy as sessions
 
 MIN_EQUITIES=20
 MAX_FILE_BYTES=160*1024*1024
@@ -45,21 +45,28 @@ def _original_daily(path,identity,interval,stop,budget):
     frame=pd.DataFrame({"date":clock.dt.strftime("%Y-%m-%d"),"close":close,"clock":clock})
     frame=frame.loc[(frame["date"]<stop)&(clock.dt.weekday<5)].sort_values("clock")
     if interval==1:
-        # Require all 375 distinct regular-session minute starts, not just
-        # a last observed trade from a truncated or gapped session.
+        # Compare only scheduled continuous-trading minutes. Auction and
+        # post-close prints are not missing CTS bars or official close proxies.
         minute=frame["clock"].dt.hour*60+frame["clock"].dt.minute
-        frame=frame.loc[(minute>=555)&(minute<930)&(frame["clock"].dt.second==0)&
+        days=frame["date"].unique()
+        expected={d:sessions.cash_bank_minutes(d,identity) for d in days}
+        close_minute=frame["date"].map(expected)+sessions.OPEN_MINUTE
+        frame=frame.loc[(minute>=sessions.OPEN_MINUTE)&(minute<close_minute)&(frame["clock"].dt.second==0)&
                         (frame["clock"].dt.microsecond==0)&(frame["clock"].dt.nanosecond==0)]
-        counts=frame.groupby("date").size()
-        complete=counts[counts==375].index
+        counts=frame.groupby("date").size().reindex(days,fill_value=0)
+        required=pd.Series(expected).reindex(counts.index)
+        complete=counts[counts==required].index
         series=frame.loc[frame["date"].isin(complete)].groupby("date")["close"].last()
-        incomplete=int((counts!=375).sum())
+        incomplete=int((counts!=required).sum())
     else:
         if frame["date"].duplicated().any():
             raise ValueError("Duplicate original daily trading dates")
         series=frame.set_index("date")["close"]
         incomplete=0
     return series.astype(float),{"sha256":meta["sha256"],"original_rows":len(clock),
+                                "session_policy":sessions.BANK_POLICY if interval==1 else "native_daily",
+                                "close_kind":"continuous_last_trade" if interval==1 else "provider_daily_close",
+                                "scheduled_session_minute_counts":dict(Counter(str(v) for v in expected.values())) if interval==1 else {},
                                 "observed_sessions":len(series),"incomplete_regular_sessions":incomplete,
                                 "first_session":str(series.index.min()) if len(series) else None,
                                 "last_session":str(series.index.max()) if len(series) else None}
@@ -99,10 +106,17 @@ def original_panel(stop,*,progress=None):
         minute=observations.get("1m",pd.Series(dtype=float))
         daily=observations.get("daily",pd.Series(dtype=float))
         aligned=pd.concat([minute.rename("minute"),daily.rename("daily")],axis=1)
-        both=aligned.notna().all(axis=1)
+        # CAS can produce a different official daily close from the last
+        # continuous trade. Keep native daily data on CAS dates; never replace
+        # a missing auction/daily close with the last continuous minute.
+        cas=pd.Series([sessions.bank_cas_eligible(d,identity) for d in aligned.index],
+                      index=aligned.index,dtype=bool)
+        both=aligned.notna().all(axis=1)&~cas
         disagree=both & ~np.isclose(aligned["minute"],aligned["daily"],rtol=1e-7,atol=1e-5)
         meta["conflicting_daily_closes"]+=int(disagree.sum())
-        values=aligned["minute"].combine_first(aligned["daily"]).mask(disagree).dropna()
+        meta["cas_native_daily_preferred_sessions"]=meta.get("cas_native_daily_preferred_sessions",0)+int((cas&aligned["daily"].notna()).sum())
+        meta["cas_daily_missing_sessions"]=meta.get("cas_daily_missing_sessions",0)+int((cas&aligned["daily"].isna()).sum())
+        values=aligned["minute"].mask(cas).combine_first(aligned["daily"]).mask(disagree).dropna()
         if len(values):series.append(values.rename(identity.replace(":","_")))
     frame=pd.concat(series,axis=1).sort_index() if series else pd.DataFrame()
     meta.update(state="loaded" if frame.shape[1]>=MIN_EQUITIES else "insufficient_verified_equities",
