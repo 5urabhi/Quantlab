@@ -94,7 +94,7 @@ def build(index,stocks,membership,weights,peers,table,splits,*,progress=None):
                     bank_slice=bank_slice,session_audit=audit,
                     feature_coverage=base._coverage(data,{"train":np.isin(data["days"],splits[0])&common,
                         "validation":np.isin(data["days"],splits[1])&common,"evaluation":np.isin(data["days"],splits[2])&common}),
-                    v1_tabular=base.scope_matrix(data,("index","banks","peers","options"))[rows])
+                    v1_tabular=np.column_stack([data["blocks"][g][rows] for g in ("index","banks","peers","options")]).astype(np.float32,copy=False))
     return selected
 
 
