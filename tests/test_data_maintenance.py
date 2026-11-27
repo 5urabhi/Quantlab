@@ -289,6 +289,27 @@ class MaintenanceTests(TestCase):
         self.assertIn({"from":"15:15","through":"15:29","sessions":1},evidence["common_missing_intervals"])
         self.assertIn({"from":"09:15","through":"15:29","sessions":1},evidence["common_missing_intervals"])
 
+    def test_cas_bank_schedule_and_actual_missing_minutes(self):
+        days=["2026-07-31","2026-08-03","2026-11-26","2026-12-07"]
+        candles={days[0]:dict.fromkeys(range(375)),
+                 days[1]:dict.fromkeys(range(360)),
+                 days[2]:dict.fromkeys(range(359)),
+                 days[3]:dict.fromkeys(range(375))}
+        identity="NSE_EQ:1333"
+        evidence,eligible=m._bank_minute_evidence(days,candles,identity,{},self.now,symbol="HDFCBANK")
+        self.assertEqual(evidence["expected_minute_slots"],1470)
+        self.assertEqual(evidence["observed_minute_slots"],1469)
+        self.assertEqual(evidence["complete_sessions"],3)
+        self.assertEqual(evidence["scheduled_session_minute_counts"],{"375":2,"360":2})
+        self.assertEqual(evidence["incomplete_session_minute_counts"],{"359":1})
+        self.assertEqual(eligible,[days[2]])
+        self.assertEqual(evidence["common_missing_intervals"],[{"from":"15:14","through":"15:14","sessions":1}])
+        self.assertEqual(m._bank_expected_minutes("2026-08-03",identity,"UNKNOWN"),375)
+        self.assertEqual(m._bank_expected_minutes("2026-08-03","NSE_FNO:1333","HDFCBANK"),375)
+        self.assertEqual(m._bank_expected_minutes("2026-08-02",identity,"HDFCBANK"),375)
+        self.assertEqual(m._bank_expected_minutes("2026-12-06",identity,"HDFCBANK"),360)
+        self.assertEqual(m._bank_expected_minutes("2026-12-07",identity,"HDFCBANK"),375)
+
     def test_unattempted_equity_repairs_remain_eligible(self):
         state={}
         callback,attempted=m._repair_request_callback(state,{"NSE_EQ:1333":["2026-11-23","2026-11-24"]})
