@@ -37,6 +37,7 @@ def main():
         for hold,part in report["validation"].items():
             for policy,item in part["policies"].items():
                 print("VALIDATION CALIBRATION",hold,policy,json.dumps(item.get("candidate_calibration",{})))
+                print("VALIDATION LIMIT TOUCH",hold,policy,json.dumps(item.get("standing_target_touch_diagnostic",{})))
         print("SELECTED",json.dumps(report["selected"]))
         if report["evaluation"]:
             result=report["evaluation"]["result"]
@@ -47,6 +48,7 @@ def main():
                    "stress_failed_attempts","max_within_day_closed_drawdown_inr","daily_coverage")}))
             print("EVALUATION QUALIFIED",result["qualified"])
             print("EVALUATION CALIBRATION",json.dumps(result.get("candidate_calibration",{})))
+            print("EVALUATION LIMIT TOUCH",json.dumps(result.get("standing_target_touch_diagnostic",{})))
         print("STATE",report["state"])
         print("REPORT",dest)
         print(report["warning"])
