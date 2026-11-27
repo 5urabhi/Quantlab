@@ -157,8 +157,10 @@ class DhanAuthTests(TestCase):
                 self.assertNotIn("PRIVATE", str(result))
                 if expected == "profile_rate_limited":
                     self.assertEqual(result["provider_retry_after_seconds"], 1800)
-                if expected == "profile_http_error":
+                if vendor == "PRIVATE_UNKNOWN":
                     self.assertIsNone(result["provider_error_code"])
+                else:
+                    self.assertEqual(result["provider_error_code"],str(vendor))
 
     def test_dh906_read_only_invalid_token_is_classified_only_with_explicit_message(self):
         for detail, expected in (("Invalid Token", "auth_rejected"),
