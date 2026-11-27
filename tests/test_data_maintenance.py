@@ -129,7 +129,7 @@ class MaintenanceTests(TestCase):
                "batch_status":"completed","batch_errors":False}
         self.assertEqual(m._next_schedule({"state":"partial","sources":{"bank_panel":panel}})[0],m.PRODUCTIVE_RETRY)
         self.assertEqual(m._next_schedule({"state":"partial","sources":{"bank_panel":{**panel,"retryable_member_session_gaps":0}}})[0],m.RETRY)
-        self.assertEqual(m._next_schedule({"state":"partial","sources":{"bank_panel":{**panel,"batch_errors":True},"options":option}})[0],m.RETRY)
+        self.assertEqual(m._next_schedule({"state":"partial","sources":{"bank_panel":{**panel,"batch_errors":True},"options":option}}),(m.PRODUCTIVE_RETRY,"more_option_requests"))
         self.assertEqual(m._next_schedule({"state":"partial","sources":{"index":{"INDEX:BANKNIFTY":{"state":"partial","downloaded_windows":5,"uncovered_request_windows":10}}}})[0],m.PRODUCTIVE_RETRY)
 
     def test_productive_legacy_checkpoint_resumes_and_respects_consent(self):
@@ -141,6 +141,33 @@ class MaintenanceTests(TestCase):
         self.assertFalse(m._due({**cfg,"enabled":False},state,datetime(2026,11,26,5,tzinfo=timezone.utc)))
         state["next_due_reason"]="source_error_backoff"
         state["schedule_version"]=7
+        self.assertTrue(m._due(cfg,state,self.now))
+        state["schedule_version"]=m.SCHEDULE_VERSION
+        self.assertFalse(m._due(cfg,state,self.now))
+
+    def test_successful_full_option_batch_ignores_unrelated_source_errors(self):
+        option={"state":"partial","new_receipts":440,"unattempted_requests":1052,
+                "batch_limit":440,"batch_attempted":440,"batch_completed":440,
+                "rejected_windows":0,"unreadable_receipts_encountered":2}
+        report={"state":"partial","sources":{"options":option,
+                "constituents":{"state":"partial","unresolved":[{"symbol":"MISSING"}]},
+                "bank_panel":{"state":"blocked","reason":"Local source unavailable"},
+                "index":{"INDEX:BANKNIFTY":{"state":"partial","failed_windows":1}}}}
+        self.assertEqual(m._next_schedule(report),(m.PRODUCTIVE_RETRY,"more_option_requests"))
+        cfg={**m.DEFAULT,"enabled":True}
+        state={"schedule_version":7,"target":m._target(self.now),
+               "next_due_utc":(self.now+timedelta(minutes=4)).isoformat(),
+               "next_due_reason":"source_error_backoff",
+               "last_run":{**report,"finished_utc":(self.now-timedelta(minutes=1)).isoformat()}}
+        self.assertTrue(m._due(cfg,state,self.now))
+        for changes in ({"rejected_windows":1},{"state":"blocked"},{"progress_stale":True},
+                        {"batch_completed":439},{"unattempted_requests":0}):
+            broken={**report,"sources":{**report["sources"],"options":{**option,**changes}}}
+            self.assertEqual(m._next_schedule(broken)[0],m.RETRY)
+        self.assertEqual(m._next_schedule({**report,"provider_rate_limited":True})[0],m.RATE_LIMIT_RETRY)
+        self.assertEqual(m._next_schedule({**report,"state":"paused","pause_reason":"live_quote_queue_backlog"})[0],m.PRESSURE_RETRY)
+        self.assertEqual(m._next_schedule({**report,"transient_connection_failure":True})[0],m.RETRY)
+        state.update(next_due_reason="provider_rate_limit")
         self.assertFalse(m._due(cfg,state,self.now))
 
     def test_productive_pass_persists_finished_time_schedule(self):
