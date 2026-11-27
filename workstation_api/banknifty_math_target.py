@@ -113,6 +113,7 @@ def _forecast_returns(op,cl,hold,units,order_cost_inr):
     exits=np.where(found,first+3,hold+1)
     ret=_net_array(entry,op[ix,exits],units,order_cost_inr)
     return {"expected_net_return":float(ret.mean()),
+            "expected_target_capped_return":float(np.minimum(ret,TARGET).mean()),
             "target_probability":float(np.mean(found & (marks[ix,first]>=TARGET))),
             "stop_probability":float(np.mean(found & (marks[ix,first]<=STOP))),
             "realized_target_probability":float(np.mean(ret>=TARGET)),
@@ -134,7 +135,7 @@ def required_move(spot,strike,tau,iv,side,premium,units,order_cost_inr,elapsed=5
     return hi*direction
 
 
-def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget):
+def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget,comparison=False):
     if m+hold+2>r.SQUAREOFF_MINUTE:return None,"too_late"
     scenario=paths(index,train,day,m,hold)
     if scenario is None:return None,"insufficient_past_paths"
@@ -159,6 +160,9 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget):
         iv=implied_vol(spot,strike,tau,premium,side)
         if iv is None:continue
         priced+=1
+        recent=[r._observed(table,day,k,side,strike) for k in range(m-9,m+1)] if comparison else []
+        recent_count=sum(q is not None for q in recent)
+        median_volume=float(np.median([q["volume"] for q in recent if q is not None])) if recent_count else 0.
         op=price(scenario["opens"],strike,open_times,iv,side)
         cl=price(scenario["closes"],strike,close_times,iv,side)
         for lots in affordable_lots:
@@ -171,16 +175,26 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget):
             candidates.append((worst,forecasts[0]["realized_target_probability"],-abs(strike-spot),-lots,
                 {"side":side,"strike":float(strike),"lots":lots,"units":units,"premium":premium,
                  "iv_proxy":iv,"nominal_expiry":expiry.isoformat(),"tau":tau,"forecasts":forecasts,
-                 "planned_funding":planned}))
+                 "planned_funding":planned,**({"recent_observations":recent_count,"median_recent_volume":median_volume} if comparison else {})}))
     if not candidates:
         return None,("no_observed_contract" if not observed else "no_affordable_contract" if not affordable else "no_priceable_contract" if not priced else "no_positive_math_candidate")
-    chosen=max(candidates,key=lambda x:x[:4])[-1]
-    chosen.update(required_spot_move_points=required_move(spot,chosen["strike"],tau,chosen["iv_proxy"],
-                    chosen["side"],chosen["premium"],chosen["units"],COSTS[0],hold),
-                  up_probability=scenario["up_probability"],expected_terminal_move_points=scenario["expected_terminal_move_points"],
-                  scenario_days=scenario["days"],conditional_paths=scenario["conditional"],
-                  candidate_count=len(candidates),spot=spot)
-    return chosen,"selected"
+    def finish(chosen):
+        chosen=dict(chosen)
+        chosen.update(required_spot_move_points=required_move(spot,chosen["strike"],tau,chosen["iv_proxy"],
+                        chosen["side"],chosen["premium"],chosen["units"],COSTS[0],hold),
+                      up_probability=scenario["up_probability"],expected_terminal_move_points=scenario["expected_terminal_move_points"],
+                      scenario_days=scenario["days"],conditional_paths=scenario["conditional"],
+                      candidate_count=len(candidates),spot=spot)
+        return chosen
+    baseline=max(candidates,key=lambda x:x[:4])[-1]
+    if not comparison:return finish(baseline),"selected"
+    def capped_rank(x):
+        return (x[-1]["forecasts"][0]["expected_target_capped_return"],*x[1:4])
+    capped=max(candidates,key=capped_rank)[-1]
+    liquid=[x for x in candidates if x[-1]["recent_observations"]==10 and x[-1]["median_recent_volume"]>=x[-1]["units"]]
+    out={"raw":finish(baseline),"capped":finish(capped)}
+    if liquid:out["liquid"]=finish(max(liquid,key=capped_rank)[-1])
+    return out,"selected"
 
 
 def replay(index,train,table,dates,hold,*,capital,budget,lot_size,max_lots,progress=None):
