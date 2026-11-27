@@ -300,7 +300,9 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
             if not profile.get("ok"):
                 if profile.get("code")=="profile_unreachable":
                     raise exp.RollingConnectionError("Dhan profile connection unavailable; check local network")
-                raise ValueError("Verify Dhan historical-data access in Connections before downloading")
+                if profile.get("code")=="profile_rate_limited":
+                    raise exp.RollingRateLimitError(profile.get("provider_retry_after_seconds",0))
+                raise ValueError(profile.get("message") or "Verify Dhan historical-data access in Connections before downloading")
         begun=time.monotonic()
         for body in requests:
             if (request_limit is not None and attempted>=request_limit) or (should_stop is not None and should_stop()):
