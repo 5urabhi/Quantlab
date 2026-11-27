@@ -28,9 +28,17 @@ class V3DataTests(TestCase):
             self.assertEqual(data["aux_names"],d.BANK_AUX)
             self.assertFalse(data["available"][:,:,2].any())
             self.assertTrue(np.isnan(data["pretrain_targets"][1:]).all())
-            self.assertTrue(np.isfinite(data["pretrain_targets"][0,0,1]).all())
-            # 19 -> gap at 20, not a valid next 5m target.
-            self.assertTrue(np.isnan(data["pretrain_targets"][0,3,1]).all())
+            # Minute 4: entry 6, exit 11 (5m) is observed, but exit 36
+            # (30m) crosses missing minute 20. Mask horizons independently.
+            targets=data["pretrain_targets"]
+            self.assertTrue(np.isfinite(targets[0,0,1,0]).all())
+            self.assertTrue(np.isnan(targets[0,0,1,1]).all())
+            # Minute 19: both outcome intervals cross the gap at minute 20.
+            self.assertTrue(np.isnan(targets[0,3,1]).all())
+            # Minute 24: both horizons recover after the gap.
+            self.assertTrue(np.isfinite(targets[0,4,1]).all())
+            # The unaffected target index retains both first-anchor labels.
+            self.assertTrue(np.isfinite(targets[0,0,0]).all())
             row=np.flatnonzero((data["day_index"]==1)&(data["minutes"]==14))
             fit=d.fit_aux(data,np.flatnonzero(data["day_index"]==0))
             mem=v.memory_grid(data,True)
