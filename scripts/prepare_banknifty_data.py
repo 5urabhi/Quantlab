@@ -119,10 +119,15 @@ def job(path,body,record,flush,*,cancel_path=None):
         if status["status"]=="complete":
             result=status.get("result") or {}
             record.update(state="job_complete",result=result);flush()
+            if result.get("status") in ("paused","cancelled","interrupted"):
+                raise Pause("Acquisition stopped in existing batch "+str(record.get("batch_id",jid))+"; inspect provider/market-priority status before rerun")
             return result
         if status["status"] not in ("queued","running"):
             record.update(state=status["status"]);flush()
-            raise Pause("Job "+jid+" ended "+status["status"]+"; inspect Jobs. Original completed receipts remain saved.")
+            detail=str(status.get("error","")).lower()
+            if status["status"]!="error" or any(s in detail for s in ("429","401","403","rate limit","rate-limit","token","credential","entitlement")):
+                raise Pause("Job "+jid+" ended "+status["status"]+"; inspect Jobs. Original completed receipts remain saved.")
+            raise Failed("Job "+jid+" failed; inspect Jobs for source details")
         if not offhours() and not cancelled:
             # Cancel only this command's own cancellable job, never the
             # recorder or a different user's background job.
@@ -323,7 +328,9 @@ def main():
             api("/api/health")
             for label,path in (("master","/api/dhan/instruments/refresh"),("membership","/api/indices/sync")):
                 record={};report[label+"_refresh"]=record
-                job(path,{},record,flush)
+                try:job(path,{},record,flush)
+                except Failed as exc:
+                    record["state"]="refresh_failed";record["reason"]=str(exc);flush()
         audit_all()
         known=set().union(*(set(x["complete_dates"]) for x in report["index"].values()))
         if not args.audit_only:
@@ -343,8 +350,11 @@ def main():
                         if total>=args.max_index_windows:break
                         record={"identity":identity,"from":str(a),"to_exclusive":str(b)}
                         report["index_jobs"].append(record)
-                        job("/api/dhan/download",{"instruments":[asdict(inst)],"from_date":str(a),"to_date":str(b),"interval":1},record,flush)
                         total+=1
+                        try:job("/api/dhan/download",{"instruments":[asdict(inst)],"from_date":str(a),"to_date":str(b),"interval":1},record,flush)
+                        except Failed as exc:
+                            record.update(state="source_unavailable",reason=str(exc));flush()
+                            break
                 audit_all()
                 known=set(report["index"]["INDEX:BANKNIFTY"]["complete_dates"])
             else:report["blocked_sources"]["dhan"]="Profile unavailable; renew credentials locally in QuantLab"
@@ -362,20 +372,27 @@ def main():
                     for interval in (1,None):
                         record={"interval":interval,"from":str(a),"to_exclusive":str(b)}
                         report["equity_jobs"].append(record)
-                        equity_batch(a,b,interval,plan,record,flush)
+                        try:equity_batch(a,b,interval,plan,record,flush)
+                        except Failed as exc:record.update(state="source_unavailable",reason=str(exc));flush()
                 report["equities"]=equity_audit(plan,b,sorted(d for d in known if a.isoformat()<=d<b.isoformat()))
         if not args.audit_only and report.get("dhan_profile",{}).get("ok"):
             for a,b in reversed(list(chunks(option_start,stop,90))):
                 record={"from":str(a),"through":str(b-timedelta(days=1)),"wings":args.wings}
                 report["options"].append(record)
-                job("/api/data-manager/options-history/start",
-                    {"start_date":record["from"],"end_date":record["through"],"wings":args.wings,"confirm_readonly":True},
-                    record,flush,cancel_path="job")
+                try:
+                    job("/api/data-manager/options-history/start",
+                        {"start_date":record["from"],"end_date":record["through"],"wings":args.wings,"confirm_readonly":True},
+                        record,flush,cancel_path="job")
+                except Failed as exc:record.update(state="source_unavailable",reason=str(exc));flush();break
         report["option_fields_recent_sample"]=option_field_audit(option_start,stop,known);flush()
         if not args.audit_only:
             archive_windows(stop-timedelta(days=args.context_days),stop,root,report,flush,args.alpaca_feed)
         report["context_inventory"]=fred.inventory()
+        report["configured_context_feeds"]={k:v for k,v in context_feeds.status().items() if k in ("fred_key_configured","alpaca_credentials_configured","twelve_key_configured","fred_catalog")}
         report["live_inventory"]=market_inventory.collect()["sources"]
+        known=set().union(*(set(v["complete_dates"]) for v in report["index"].values()))
+        for identity,v in report["index"].items():
+            v["remaining_planned_windows"]=[[str(a),str(b)] for a,b in index_plan(v,known,start,stop)]
         report["state"]="audit_complete" if args.audit_only else "acquisition_attempt_complete_review_gaps"
     except (Pause,Failed,ValueError,OSError,KeyError,TypeError,RuntimeError) as exc:
         report["state"]="paused_or_blocked"
