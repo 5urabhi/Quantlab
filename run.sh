@@ -118,6 +118,14 @@ case "${1:-workstation}" in
     shift
     manual_research -m scripts.run_banknifty_sector_momentum "$@"
     ;;
+  banknifty-sequence)
+    if [ ! -x .venv/bin/python ]; then
+      printf 'Python environment missing. First run: bash run.sh setup\n' >&2
+      exit 2
+    fi
+    shift
+    manual_research -m scripts.run_banknifty_sequence_forecast "$@"
+    ;;
   banknifty-ohlc)
     if [ ! -x .venv/bin/python ]; then
       printf 'Python environment missing. First run: bash run.sh setup\n' >&2
@@ -202,6 +210,7 @@ bash run.sh audit-models     Read-only audit of every model and active dataset
 bash run.sh audit-models --dataset dhan_shared  Audit shared Dhan only
 bash run.sh audit-models --preflight-only  Check inputs without running models
 bash run.sh banknifty-sector  Non-ML BANKNIFTY momentum/reversal with sector confirmation
+bash run.sh banknifty-sequence  Optional PyTorch multi-asset sequence forecast research
 bash run.sh banknifty-ohlc    Rolling five-minute BANKNIFTY OHLC forecast research
 bash run.sh banknifty-capped  Target-capped BANKNIFTY mathematical and supervised comparison
 bash run.sh banknifty-math    Non-ML BANKNIFTY long-option +10% net target research
