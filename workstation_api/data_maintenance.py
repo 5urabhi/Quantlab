@@ -474,6 +474,51 @@ def _batch_for(state,start,stop,plan):
     _save_state(state)
     return raw
 
+def _bank_minute_evidence(days,candles,identity,state,now):
+    """Count original observed slots; never treat a partial session as complete."""
+    histogram=defaultdict(int)
+    patterns=defaultdict(int)
+    observed=0
+    gaps=[]
+    eligible=[]
+    due=[]
+    attempts=state.get("repairs",{})
+    for day in days:
+        present=set(candles.get(day,{})) & set(range(mp.MINUTES))
+        observed+=len(present)
+        if len(present)==mp.MINUTES:
+            continue
+        gaps.append(day)
+        histogram[str(len(present))]+=1
+        missing=sorted(set(range(mp.MINUTES))-present)
+        # Only compact contiguous gap patterns, rather than exposing prices.
+        ranges=[]
+        for minute in missing:
+            if ranges and minute==ranges[-1][1]+1:
+                ranges[-1][1]=minute
+            else:
+                ranges.append([minute,minute])
+        for left,right in ranges:
+            patterns[(left,right)]+=1
+        key=identity+"|"+day
+        if _attempt_allowed(attempts,key,now):
+            eligible.append(day)
+        else:
+            due.append(datetime.fromisoformat(attempts[key])+REPAIR_COOLDOWN)
+    def time_label(minute):
+        minute+=555
+        return f"{minute//60:02d}:{minute%60:02d}"
+    common=[{"from":time_label(a),"through":time_label(b),"sessions":n}
+            for (a,b),n in sorted(patterns.items(),key=lambda item:(-item[1],item[0]))[:5]]
+    return {"observed_minute_slots":observed,"expected_minute_slots":len(days)*mp.MINUTES,
+            "complete_sessions":len(days)-len(gaps),"missing_or_partial_sessions":len(gaps),
+            "retryable_sessions":len(eligible),"cooldown_sessions":len(due),
+            "next_repair_utc":min(due).isoformat() if due else None,
+            "incomplete_session_minute_counts":dict(histogram),"example_dates":gaps[:8],
+            "example_gap_minutes":{d:len(set(candles.get(d,{}))&set(range(mp.MINUTES))) for d in gaps[:8]},
+            "common_missing_intervals":common},eligible
+
+
 def _equity_audit(raw,start,stop,index_days,state,now,*,choose_repairs):
     intervals=raw["historical_index"]["intervals"]
     budget=[ha.MAX_TOTAL]
@@ -490,17 +535,8 @@ def _equity_audit(raw,start,stop,index_days,state,now,*,choose_repairs):
                 raise ValueError("Original minute file absent")
             path,_=pq._raw(identity)
             candles=ha._read_file(path,sig["source_sha256"],start,stop,budget)
-            gaps=[d for d in days if len(candles.get(d,{}))<mp.MINUTES]
-            eligible=[d for d in gaps if _attempt_allowed(state.get("repairs",{}),identity+"|"+d,now)]
-            # Count missing minutes on audited index dates, rather than
-            # describing a 374-bar session and an absent day identically.
-            histogram=defaultdict(int)
-            for day in gaps:
-                histogram[str(len(candles.get(day,{})))]+=1
-            result[symbol]={"expected_observed_index_sessions":len(days),"complete_sessions":len(days)-len(gaps),
-                            "missing_or_partial_sessions":len(gaps),"retryable_sessions":len(eligible),"example_dates":gaps[:8],
-                            "incomplete_session_minute_counts":dict(histogram),
-                            "example_gap_minutes":{d:len(candles.get(d,{})) for d in gaps[:8]}}
+            evidence,eligible=_bank_minute_evidence(days,candles,identity,state,now)
+            result[symbol]={"expected_observed_index_sessions":len(days),**evidence}
             if choose_repairs:
                 if eligible:
                     repairs[identity]=eligible[:MAX_EQUITY_REPAIRS if safe_window(now) else LIVE_EQUITY_REPAIRS]
