@@ -226,3 +226,49 @@ class MaintenanceTests(TestCase):
             self.assertIsNone(m.status()["option_progress"])
             self.assertEqual(m.status()["coverage_sources"]["options"]["checked_offset_date_pairs"],60)
         self.assertEqual(result["state"],"partial")
+
+
+    def test_connection_retry_is_bounded_and_legacy_block_is_released(self):
+        base={"state":"partial","transient_connection_failure":True,
+              "sources":{"options":{"state":"blocked"}}}
+        for failures,minutes in ((1,2),(2,4),(3,8),(4,16),(5,30),(99,30)):
+            self.assertEqual(m._next_schedule({**base,"connection_failure_count":failures}),
+                             (timedelta(minutes=minutes),"connection_retry"))
+        self.assertEqual(m._next_schedule({"state":"partial","sources":{"options":{"state":"blocked","reason":"HTTP 429"}}})[0],m.RETRY)
+        self.assertEqual(m._next_schedule({**base,"sources":{**base["sources"],"bank_panel":{"state":"partial","batch_errors":True}}})[0],m.RETRY)
+        cfg={**m.DEFAULT,"enabled":True}
+        state={"target":m._target(self.now),"next_due_utc":(self.now+timedelta(hours=3)).isoformat(),
+               "next_due_reason":"source_blocked_or_paused",
+               "last_run":{"state":"partial","finished_utc":(self.now-timedelta(minutes=5)).isoformat(),
+                           "sources":{"options":{"state":"blocked","reason":"Dhan expired-options data connection unavailable; check local network"}}}}
+        self.assertTrue(m._due(cfg,state,self.now))
+        state["last_run"]["sources"]["options"]["reason"]="HTTP 429"
+        self.assertFalse(m._due(cfg,state,self.now))
+
+    def test_transient_disconnect_retains_counts_and_retries(self):
+        cfg={**m.DEFAULT,"enabled":True,"index":False,"constituents":False}
+        m.configure(cfg,True)
+        counts={"eligible_offset_date_pairs":100,"checked_offset_date_pairs":60,
+                "remaining_planned_requests":20,"batch_attempted":1,"new_receipts":0}
+        def provider(**kwargs):
+            kwargs["on_counts"](counts)
+            raise opt.exp.RollingConnectionError("connection unavailable")
+        with patch.object(m,"_now",return_value=self.now),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value={"ok":True}),patch.object(m.options,"run",side_effect=provider),patch.object(m.mp,"_history",return_value={"days":{}}):
+            first=m.run(now=self.now)
+            self.assertEqual(first["connection_failure_count"],1)
+            self.assertEqual(m.status()["coverage_sources"]["options"]["checked_offset_date_pairs"],60)
+            self.assertEqual(m._state()["next_due_utc"],(self.now+timedelta(minutes=2)).isoformat())
+            second=m.run(now=self.now)
+            self.assertEqual(second["connection_failure_count"],2)
+            self.assertEqual(m._state()["next_due_utc"],(self.now+timedelta(minutes=4)).isoformat())
+
+    def test_profile_connectivity_retry_does_not_treat_auth_as_network_failure(self):
+        m.configure({**m.DEFAULT,"enabled":True},True)
+        with patch.object(m,"_now",return_value=self.now),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value={"ok":False,"code":"profile_unreachable"}):
+            result=m.run(now=self.now)
+            self.assertTrue(result["transient_connection_failure"])
+            self.assertEqual(m._state()["next_due_reason"],"connection_retry")
+        with patch.object(m,"_now",return_value=self.now),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value={"ok":False,"code":"auth_rejected"}):
+            result=m.run(now=self.now)
+            self.assertNotIn("transient_connection_failure",result)
+            self.assertEqual(m._state()["next_due_reason"],"normal_backoff")
