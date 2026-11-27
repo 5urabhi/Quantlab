@@ -730,7 +730,7 @@ def run(*,progress=None,now=None):
                         OPTION_PROGRESS=dict(counts)
                 opt=options.run(start_date=option_start.isoformat(),
                     end_date=option_end.isoformat(),wings=cfg["wings"],request_limit=LIVE_OPTION_REQUESTS if during_priority else MAX_OPTION_REQUESTS,
-                    priority_sessions=priority,on_counts=on_counts,
+                    priority_sessions=priority,on_counts=on_counts,pipeline=not during_priority,
                     should_stop=should_stop,progress=(lambda pct,msg:progress(55+.44*pct,msg)) if progress else None)
                 report["sources"]["options"]={k:opt[k] for k in ("state","existing_verified_receipts","new_receipts",
                     "planned_missing_requests","unattempted_requests","empty_processed_receipts","usable_rows_in_processed_receipts",
