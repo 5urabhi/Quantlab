@@ -46,7 +46,7 @@ class CappedMathTests(TestCase):
                 manifest.write_text(json.dumps({"daily_sha256":sha256(path.read_bytes()).hexdigest(),
                     "columns":[{"column":s,"exchange_segment":"NSE_EQ"} for s in names]}))
             publish()
-            with patch.object(m.shared,"shared_folder",return_value=folder):
+            with patch.object(m.shared,"shared_folder",return_value=folder), patch.object(m.equity,"original_panel",return_value=(pd.DataFrame(),{"state":"unavailable"})):
                 first,meta=m.daily_context([dates[90],dates[91]])
                 self.assertEqual(meta["state"],"loaded")
                 self.assertIn(dates[90],first)
@@ -66,6 +66,8 @@ class CappedMathTests(TestCase):
                              "daily":[float(day)],"target":y,"utility":.02 if y else -.03})
         model,meta=m.fit(rows)
         self.assertEqual(meta["state"],"fitted")
+        self.assertAlmostEqual(meta["training_day_weighted_base_rate"],.5)
+        self.assertAlmostEqual(model[2],.5)
         self.assertIsNotNone(model)
         daily,meta=m.fit(rows,daily=True)
         self.assertEqual(meta["state"],"fitted")
@@ -104,3 +106,40 @@ class CappedMathTests(TestCase):
         self.assertEqual(m.limit_touch(ep,result,table),"target_traded_through_first")
         table[m.r._stamp(day,6)][("CALL",strike)]=quote(331.,290.)
         self.assertEqual(m.limit_touch(ep,result,table),"monitoring_gap")
+
+    def test_shared_fourteen_columns_uses_verified_original_fallback(self):
+        clocks=[(date(2025,1,1)+timedelta(days=i)).isoformat() for i in range(110)]
+        raw=pd.DataFrame({f"NSE_EQ_{i}":[100.+j*.1+(j%7)*.1+i*.01 for j in range(len(clocks))]
+                          for i in range(22)},index=clocks)
+        raw_meta={"state":"loaded","source":"original_verified_equity_cache"}
+        with patch.object(m,"_shared_daily_panel",return_value=(pd.DataFrame(),{"state":"unavailable","nse_equity_columns":14})), \
+             patch.object(m.equity,"original_panel",return_value=(raw,raw_meta)):
+            context,meta=m.daily_context(clocks[100:105])
+        self.assertEqual(meta["state"],"loaded")
+        self.assertEqual(meta["source"],"original_verified_equity_cache")
+        self.assertEqual(meta["shared_view"]["nse_equity_columns"],14)
+        self.assertEqual(meta["matched_days"],5)
+        self.assertEqual(meta["context_source_dates"][clocks[101]],clocks[100])
+
+    def test_daily_context_refuses_missing_known_index_session(self):
+        clocks=[(date(2025,1,1)+timedelta(days=i)).isoformat() for i in range(110)]
+        frame=pd.DataFrame({f"NSE_EQ_{i}":[100.+j*.1+(j%7)*.1+i*.01 for j in range(len(clocks))]
+                            for i in range(22)},index=clocks)
+        frame=frame.drop(index=clocks[101])
+        context,_=m._context_features(frame,clocks[100:105])
+        self.assertIn(clocks[101],context)
+        self.assertNotIn(clocks[102],context)
+        self.assertNotIn(clocks[103],context)
+
+    def test_training_constant_rate_weights_sessions_not_rows(self):
+        rows=[]
+        for day in range(10):
+            n=20 if day==0 else 10
+            y=1 if day==0 else 0
+            for i in range(n):
+                rows.append({"day":str(day),"x":[float(i),float(day)],"daily":None,
+                             "target":y,"utility":.02 if y else -.03})
+        model,meta=m.fit(rows)
+        self.assertIsNotNone(model)
+        self.assertAlmostEqual(model[2],.1)
+        self.assertAlmostEqual(meta["training_day_weighted_base_rate"],.1)
