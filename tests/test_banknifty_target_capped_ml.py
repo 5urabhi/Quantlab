@@ -79,3 +79,28 @@ class CappedMathTests(TestCase):
         for state,utility in (("missing_entry",-1.),("entry_limit_exceeded",0.)):
             result=m.label({"state":state,"planned_funding":10000.})
             self.assertEqual(result,(0,utility,False))
+
+    def test_iv_stress_leaves_entry_unchanged(self):
+        hold=30
+        scenario={"opens":np.full((2,hold+2),63000.),"closes":np.full((2,hold+2),63000.)}
+        t=np.full(hold+2,10/365)
+        base=math.price(scenario["opens"],63000.,t,.2,"CALL")
+        down,up=math.iv_stress_paths(scenario,63000.,t,t,.2,"CALL",hold)
+        np.testing.assert_allclose(down[0][:,1],base[:,1])
+        np.testing.assert_allclose(up[0][:,1],base[:,1])
+        self.assertTrue(np.all(down[0][:,-1]<base[:,-1]))
+        self.assertTrue(np.all(up[0][:,-1]>base[:,-1]))
+
+    def test_standing_target_touch_does_not_claim_ambiguous_fill(self):
+        day="2026-10-06";strike=63000
+        ep={"state":"entered","entry":300.,"units":30,"session":day,"minute":4,"side":"CALL","strike":strike}
+        result={"state":"complete","exit_request_utc":m.r._stamp(day,9)}
+        def quote(high,low):
+            return {"session_ist":day,"expiry_flag":"MONTH","expiry_code":1,"open":300.,"close":300.,"volume":100,
+                    "high":high,"low":low}
+        table={m.r._stamp(day,6):{("CALL",strike):quote(335.,285.)}}
+        self.assertEqual(m.limit_touch(ep,result,table),"ambiguous_both_touched")
+        table[m.r._stamp(day,6)][("CALL",strike)]=quote(335.,290.)
+        self.assertEqual(m.limit_touch(ep,result,table),"target_traded_through_first")
+        table[m.r._stamp(day,6)][("CALL",strike)]=quote(331.,290.)
+        self.assertEqual(m.limit_touch(ep,result,table),"monitoring_gap")
