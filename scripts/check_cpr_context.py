@@ -29,8 +29,8 @@ def main():
         start,stop=map(date.fromisoformat,(a.from_date,a.to_date))
         if not 0<(stop-start).days<=120 or stop>today:
             raise ValueError("Use a completed historical range up to 120 calendar days")
-        if not alpha_retraining.safe_window(datetime.now(timezone.utc)):
-            raise ValueError("Run context preflight outside Indian market priority hours")
+        if (a.fetch_fred or a.fetch_alpaca) and not alpha_retraining.safe_window(datetime.now(timezone.utc)):
+            raise ValueError("External context backfill remains outside Indian market priority hours; saved-source preflight is available now")
         if (a.fetch_fred or a.fetch_alpaca) and (not a.confirm_reviewed or a.mode!="archive"):
             raise ValueError("Historical backfill requires --confirm-reviewed and archive mode")
         load_dotenv(service.ROOT/".env",override=False)
@@ -76,7 +76,7 @@ def main():
         return 0
     except (ValueError,OSError,sqlite3.Error) as exc:
         print("Context preflight unavailable:",type(exc).__name__)
-        if isinstance(exc,ValueError) and str(exc).startswith(("Use a completed","Run context","Historical backfill","No usable original")):
+        if isinstance(exc,ValueError) and str(exc).startswith(("Use a completed","External context","Historical backfill","No usable original")):
             print(str(exc))
         return 2
 
