@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from datetime import date, datetime, time as clock_time, timedelta, timezone
 from hashlib import sha256
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -190,6 +191,27 @@ class RollingConnectionError(ValueError):
     """Temporary connectivity failure; distinct from authorization and input errors."""
 
 
+class RollingRateLimitError(ValueError):
+    """Provider throttling, with a sanitized Retry-After duration when supplied."""
+    def __init__(self, retry_after_seconds=0):
+        super().__init__("Dhan rate-limited expired-options history (429); retry later using existing cached calls")
+        self.retry_after_seconds=retry_after_seconds
+
+
+def _retry_after_seconds(headers):
+    try:
+        value=str(headers.get("Retry-After","")).strip() if headers is not None else ""
+        if value.isdigit() and len(value)<=9:
+            return int(value)
+        if value:
+            stamp=parsedate_to_datetime(value)
+            if stamp.tzinfo is not None:
+                return max(0,math.ceil((stamp-datetime.now(timezone.utc)).total_seconds()))
+    except (ValueError,TypeError,OverflowError):
+        pass
+    return 0
+
+
 class RollingInputError(ValueError):
     """The provider explicitly rejected a rolling-option request (DH-905)."""
 
@@ -240,7 +262,7 @@ def _original_response_once(body: dict, *, opener=None) -> dict:
         if exc.code in (401, 403):
             raise ValueError("Dhan expired-options data access denied (401/403). Verify your token and expired-options data subscription") from None
         if exc.code == 429:
-            raise ValueError("Dhan rate-limited expired-options history (429); retry later using existing cached calls") from None
+            raise RollingRateLimitError(_retry_after_seconds(exc.headers)) from None
         # Never print the access token or the complete provider response.
         # Dhan can return DH-905 for an invalid expiry code or another
         # invalid request value, and DH-907 for unavailable source history.
