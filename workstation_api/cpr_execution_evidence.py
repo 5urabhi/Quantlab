@@ -223,10 +223,10 @@ def assess(index,splits,signals,table,evidence,*,today,progress=None):
     return report
 
 
-def run(*,sessions=90,to_date=None,wings=WINGS,progress=None,now=None):
+def run(*,sessions=90,to_date=None,wings=WINGS,progress=None,now=None,manual_saved_research=False):
     now=now or datetime.now(timezone.utc)
     today=now.astimezone(h.IST).date()
-    if not alpha_retraining.safe_window(now):
+    if not manual_saved_research and not alpha_retraining.safe_window(now):
         raise ValueError("Run outside Indian market priority hours")
     stop=date.fromisoformat(to_date) if to_date else today
     if type(wings) is not int or not 0<=wings<=10:
