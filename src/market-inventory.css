@@ -18,3 +18,15 @@
 .mi-repair-grid>div{display:grid;gap:5px;align-content:start;min-width:0;padding:10px;border:1px solid var(--ql-border,#343438);border-radius:6px;font-size:12px;overflow-wrap:anywhere}
 .mi-repair-grid small{color:var(--ql-muted,#a5a5ad)}.mi-repair-grid span{color:#e8c777}.mi-repair-consent{display:flex;align-items:flex-start;gap:8px;font-size:13px}
 .mi-repair a.ws-button{text-decoration:none}
+
+/* Maintenance scope meters deliberately separate request and data coverage. */
+.mi-maintenance-overview{display:grid;gap:12px;padding:14px;border:1px solid var(--ql-border,#343438);border-radius:8px;background:var(--ql-panel,#151518);min-width:0}
+.mi-maintenance-option{display:grid;gap:10px;padding:14px;background:var(--ql-raised,#1c1c20);border:1px solid var(--ql-border,#343438);border-radius:7px}
+.mi-maintenance-meter{display:grid;gap:7px;min-width:0;padding:11px;border:1px solid var(--ql-border,#343438);border-radius:7px;background:var(--ql-panel,#151518)}
+.mi-meter-label{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:12px}.mi-meter-label span{color:var(--ql-text,#f1f1f3);font-weight:600}.mi-meter-label strong{color:var(--ql-accent,#f5c542);font-size:13px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.mi-maintenance-meter progress,.mi-meter-unknown{width:100%;height:9px;border:0;border-radius:6px;overflow:hidden;background:#303036;appearance:none;accent-color:var(--ql-accent,#f5c542)}
+.mi-maintenance-meter progress::-webkit-progress-bar{background:#303036;border-radius:6px}.mi-maintenance-meter progress::-webkit-progress-value{background:var(--ql-accent,#f5c542);border-radius:6px}.mi-maintenance-meter progress::-moz-progress-bar{background:var(--ql-accent,#f5c542);border-radius:6px}
+.mi-maintenance-meter small,.mi-maintenance-metrics small{color:var(--ql-muted,#a5a5ad);font-size:11px;line-height:1.45}
+.mi-maintenance-metrics,.mi-maintenance-bank-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0}.mi-maintenance-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}.mi-maintenance-metrics>div{display:grid;gap:4px;padding:8px;min-width:0}.mi-maintenance-metrics strong{font-size:17px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.mi-maintenance-bank-grid details{margin-top:6px}.mi-maintenance-bank-grid details>div{margin-top:8px}
+@media(max-width:1000px){.mi-maintenance-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.mi-maintenance-bank-grid{grid-template-columns:1fr}.mi-maintenance-overview,.mi-maintenance-option{padding:9px}}
