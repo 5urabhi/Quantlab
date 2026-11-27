@@ -114,8 +114,14 @@ def configure(cfg,confirm):
         _write("config",cfg)
         state=_state()
         if old!=cfg:
-            state["next_due_utc"]=None
-            state["next_due_reason"]="configuration_changed"
+            due,reason=_effective_schedule(state)
+            if reason=="provider_rate_limit" and due and datetime.fromisoformat(due)>_now():
+                state["next_due_utc"]=due
+                state["next_due_reason"]=reason
+                state["schedule_version"]=7
+            else:
+                state["next_due_utc"]=None
+                state["next_due_reason"]="configuration_changed"
             state["target"]=None
             state.pop("coverage_sources",None)
             state.pop("coverage_config",None)
@@ -182,7 +188,9 @@ def _target(now):
 
 def _rate_limit_message(value):
     text=str(value or "").lower()
-    return "rate-limit" in text or "rate limit" in text or "http 429" in text or "(429)" in text
+    return ("rate-limit" in text or "rate limit" in text or "http 429" in text
+            or "(429)" in text or "dh-904" in text or "too many requests" in text
+            or text.strip() in ("429","805"))
 
 
 def _effective_schedule(state):
@@ -352,20 +360,24 @@ def _index_pass(cfg,state,now,stop,progress,should_stop):
     start=today-timedelta(days=cfg["index_days"])
     sources={k:mp._history(k,today) for k in INDEX_IDENTITIES}
     result={}
+    provider_rate_limited=False
     for i,identity in enumerate(INDEX_IDENTITIES):
         source=sources[identity];other=sources[INDEX_IDENTITIES[1-i]]
         plan,missing=_index_plan(source,other,start,stop,identity,state,now,
                                  limit=MAX_INDEX_WINDOWS if safe_window(now) else LIVE_INDEX_WINDOWS)
         errors=0;downloaded=0
         for a,b,key in plan:
-            if should_stop():break
-            if key:_mark(state,key,_now())
+            if provider_rate_limited or should_stop():break
             if progress:progress(5+i*10,"Updating original "+identity+" history "+a.isoformat())
             try:
                 cockpit_sources.download_spot(identity,a.isoformat(),b.isoformat())
                 downloaded+=1
-            except (ValueError,OSError,RuntimeError):
+            except (ValueError,OSError,RuntimeError) as exc:
                 errors+=1
+                if _rate_limit_message(exc):
+                    provider_rate_limited=True
+                    break
+            if key:_mark(state,key,_now())
             with mp.LOCK:
                 mp.CACHE.pop(identity,None)
         final=mp._history(identity,today)
@@ -376,11 +388,12 @@ def _index_pass(cfg,state,now,stop,progress,should_stop):
         uncovered=mp.missing_windows(start,stop,final["coverage"])
         uncovered=[(a,b) for a,b in uncovered if any((a+timedelta(days=i)).weekday()<5 for i in range((b-a).days))]
         missing_observed=sum(not final["days"].get(d) for d in missing)
-        result[identity]={"state":"partial" if errors or uncovered or partial or missing_observed or final["rejected_receipts"] or final["omitted_receipts"] else "checked",
+        result[identity]={"state":"partial" if provider_rate_limited or errors or uncovered or partial or missing_observed or final["rejected_receipts"] or final["omitted_receipts"] else "checked",
                           "complete_observed_sessions":complete,"partial_observed_sessions":partial,
                           "uncovered_request_windows":len(uncovered),"missing_other_index_observed_sessions":missing_observed,
                           "rejected_receipts":final["rejected_receipts"],"omitted_receipts":final["omitted_receipts"],
-                          "downloaded_windows":downloaded,"failed_windows":errors}
+                          "downloaded_windows":downloaded,"failed_windows":errors,
+                          "provider_rate_limited":provider_rate_limited}
     return result
 
 def _batch_for(state,start,stop,plan):
@@ -584,7 +597,9 @@ def run(*,progress=None,now=None):
     state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),next_due_reason="pass_running",last_run=report,schedule_version=7)
     _save_state(state)
     def provider_limited():
-        return any(v.get("provider_rate_limited") for k,v in report["sources"].items() if k!="index")
+        sources=report["sources"]
+        lanes=[*sources.get("index",{}).values(),*(v for k,v in sources.items() if k!="index")]
+        return any(v.get("provider_rate_limited") or _rate_limit_message(v.get("reason")) for v in lanes)
     def should_stop():
         # Once paused, do not re-enter the same pass if pressure briefly
         # clears. The next scheduled pass rechecks current resources.
@@ -624,7 +639,7 @@ def run(*,progress=None,now=None):
             with mp.HISTORY_WRITE_LOCK:
                 report["sources"]["index"]=_index_pass(cfg,state,now,stop,progress,should_stop)
             _save_state(state)
-        if cfg["constituents"] and not should_stop():
+        if cfg["constituents"] and not provider_limited() and not should_stop():
             if progress:progress(30,"Checking dated banking constituents")
             try:
                 report["sources"]["constituents"]=_equity_pass(cfg,state,now,stop,progress,should_stop)
@@ -718,7 +733,9 @@ def run(*,progress=None,now=None):
             # its new settings take effect at the next safe boundary.
             OPTION_PROGRESS=None
             if config()!=cfg:
-                state["target"]=None;state["next_due_utc"]=None;state["next_due_reason"]="configuration_changed"
+                state["target"]=None
+                if reason!="provider_rate_limit":
+                    state["next_due_utc"]=None;state["next_due_reason"]="configuration_changed"
                 state.pop("coverage_sources",None);state.pop("coverage_config",None)
                 state.pop("connection_failure_count",None)
             else:
