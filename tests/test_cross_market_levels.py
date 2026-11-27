@@ -50,3 +50,26 @@ class CrossMarketLevelTests(TestCase):
                     self.assertEqual(x[key],y[key])
                 if x["distance_bps"]["count"]:
                     self.assertAlmostEqual(x["distance_bps"]["p50"],y["distance_bps"]["p50"])
+
+    def test_compact_initial_rejection_schema_and_observed_reclaim(self):
+        a=bars()
+        a[11]=[100.,111.,97.,99.,1.]
+        a[12]=[99.,109.,95.,98.,1.]
+        a[13]=[98.,113.,98.,112.,1.]
+        a[14]=[112.,113.,105.,107.,1.]
+        cross={"minute":10,"direction":1,"signal_close":100.,"cpr_zone":"inside"}
+        reverse={"minute":14,"direction":-1}
+        observed=c.l.level_row("2026-11-26",a,cross,reverse,375,"previous_high",110.)
+        summary=c.compact(observed)
+        self.assertTrue(summary["initial_rejection_observed"])
+        self.assertTrue(summary["initial_rejection_reclaimed"])
+        self.assertEqual(summary["initial_rejection_minutes_to_reclaim"],2)
+        self.assertAlmostEqual(summary["initial_rejection_adverse_bps"],40000/99)
+        self.assertTrue(summary["failed"])
+        self.assertFalse(summary["failure_reclaimed"])
+        unobserved=c.l.level_row("2026-11-26",a,cross,reverse,375,"r2",200.)
+        summary=c.compact(unobserved)
+        self.assertFalse(summary["initial_rejection_observed"])
+        self.assertFalse(summary["initial_rejection_reclaimed"])
+        self.assertIsNone(summary["initial_rejection_adverse_bps"])
+        self.assertIsNone(summary["initial_rejection_minutes_to_reclaim"])

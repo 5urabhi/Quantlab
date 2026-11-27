@@ -81,7 +81,7 @@ def compact(row):
             "minutes_to_adverse_extreme":row["minutes_to_adverse_extreme"],
             "minutes_to_reclaim":row["minutes_to_reclaim"],
             "initial_rejection_observed":row["initial_rejection_failure_minute"] is not None,
-            "initial_rejection_reclaimed":row["initial_rejection_followup_state"]=="reclaimed",
+            "initial_rejection_reclaimed":row["initial_rejection_failure_followup_state"]=="reclaimed",
             "initial_rejection_adverse_bps":row["initial_rejection_adverse_bps_from_failure_close"],
             "initial_rejection_minutes_to_reclaim":row["initial_rejection_minutes_to_reclaim"]}
 
