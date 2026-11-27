@@ -806,10 +806,10 @@ def run(*,from_date,to_date,frame=5,hold=60,capital=17000.,risk_budget=4250.,
         context_mode="off",context_batch="auto",rank_entries=False,
         pattern_research=False,fixed_panel=False,context_q=False,debit_spreads=False,
         sessions=60,dense_training=False,sequence_research=False,derivative_research=False,dynamic_q=False,
-        regime_research=False,utility_research=False,freeze_utility=False,progress=None):
+        regime_research=False,utility_research=False,freeze_utility=False,progress=None,manual_saved_research=False):
     start,stop=map(date.fromisoformat,(from_date,to_date))
     now=datetime.now(timezone.utc)
-    if not alpha_retraining.safe_window(now):
+    if not manual_saved_research and not alpha_retraining.safe_window(now):
         raise ValueError("Run CPR research outside Indian market priority hours")
     if not 0<(stop-start).days<=MAX_STUDY_DAYS or stop>now.astimezone(h.IST).date():
         raise ValueError("Select up to 200 calendar days, completed sessions, end exclusive")

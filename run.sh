@@ -3,6 +3,15 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+# Manual historical research can run alongside live recording. Keep CPU and
+# disk priority low and numerical thread pools bounded in these CLI processes.
+manual_research() {
+  export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 BLIS_NUM_THREADS=1
+  if command -v ionice >/dev/null 2>&1; then
+    exec nice -n 15 ionice -c 3 .venv/bin/python "$@"
+  fi
+  exec nice -n 15 .venv/bin/python "$@"
+}
 case "${1:-workstation}" in
   workstation|research|web|both)
     exec bash scripts/run_workstation.sh
@@ -75,7 +84,7 @@ case "${1:-workstation}" in
     fi
     shift
     nice -n 10 .venv/bin/python -m unittest discover -s tests -p "test_cpr*.py" -v
-    exec nice -n 10 .venv/bin/python -m scripts.run_cpr_execution_evidence "$@"
+    manual_research -m scripts.run_cpr_execution_evidence "$@"
     ;;
   cpr-context-check)
     if [ ! -x .venv/bin/python ]; then
@@ -83,7 +92,7 @@ case "${1:-workstation}" in
       exit 2
     fi
     shift
-    exec nice -n 10 .venv/bin/python -m scripts.check_cpr_context "$@"
+    manual_research -m scripts.check_cpr_context "$@"
     ;;
   candle-research)
     if [ ! -x .venv/bin/python ]; then
@@ -91,7 +100,7 @@ case "${1:-workstation}" in
       exit 2
     fi
     shift
-    exec nice -n 10 .venv/bin/python -m scripts.run_candle_patterns "$@"
+    manual_research -m scripts.run_candle_patterns "$@"
     ;;
   cpr-research)
     if [ ! -x .venv/bin/python ]; then
@@ -99,7 +108,7 @@ case "${1:-workstation}" in
       exit 2
     fi
     shift
-    exec nice -n 10 .venv/bin/python -m scripts.run_cpr_hybrid "$@"
+    manual_research -m scripts.run_cpr_hybrid "$@"
     ;;
   validate-trading)
     if [ ! -x .venv/bin/python ]; then

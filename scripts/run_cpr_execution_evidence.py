@@ -1,4 +1,4 @@
-"""Single-command off-market execution evidence study."""
+"""Manually requested saved-source execution evidence study."""
 from pathlib import Path
 import argparse
 import json
@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--to-date",default=None,help="End exclusive; completed dates only")
     args=parser.parse_args()
     try:
-        report=evidence.run(sessions=args.sessions,to_date=args.to_date,
+        report=evidence.run(sessions=args.sessions,to_date=args.to_date,manual_saved_research=True,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
         dest=root/("cpr_execution_evidence_"+uuid.uuid4().hex+".json")

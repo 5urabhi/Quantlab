@@ -76,6 +76,7 @@ def main():
             pattern_research=a.patterns,fixed_panel=a.fixed_panel,context_q=a.context_q,debit_spreads=a.debit_spreads,
             sessions=a.sessions,dense_training=a.dense_training,sequence_research=a.sequences,derivative_research=a.derivatives,dynamic_q=a.dynamic_q,
             regime_research=a.regimes,utility_research=a.utility_research,freeze_utility=a.freeze_utility,
+            manual_saved_research=True,
             lot_size=a.lot_size,max_lots=a.max_lots,wings=a.wings,premium_penalty_bps=a.penalty_bps,
             progress=lambda pct,msg:print(f"{pct:.0f}% {msg}",flush=True))
         root=Path("results");root.mkdir(exist_ok=True)
