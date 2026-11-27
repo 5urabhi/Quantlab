@@ -13,6 +13,7 @@ import pandas as pd
 from . import historical_alpha as h, cpr_hybrid_research as r
 from . import index_spot, dhan_checkpoint, banknifty_constituents as bank
 from . import predictive_option_research as options
+from . import banknifty_membership_fallback as membership_fallback
 
 MINUTES=375
 LOOKBACK=60
@@ -218,6 +219,7 @@ def load_membership(dates,start,stop,progress=None):
     for day,versions in mappings.items():
         if all(x==versions[0] for x in versions):membership[day]=versions[0]
         else:conflicts.append(day)
+    membership,fallback_audit=membership_fallback.supplement(dates,membership,conflicts)
     ids=sorted({identity for values in membership.values() for identity in values.values()})
     if len(ids)>h.MAX_INSTRUMENTS:raise ValueError("Constituent history exceeds bounded universe")
     stocks={};hashes={};failures={};budget=[h.MAX_TOTAL]
@@ -242,6 +244,7 @@ def load_membership(dates,start,stop,progress=None):
             weights[day]={values[s]:w for s,w in snap["weights_pct"].items()}
             weight_hashes[day]=snap["source_csv_sha256"]
     return stocks,membership,weights,{"batches":audit,"rejected_batches":rejected,"conflicting_membership_dates":conflicts,
+           "membership_fallback":fallback_audit,
            "membership_days":len(membership),"identities":ids,"source_hashes":hashes,"failures":failures,
            "weighted_days":len(weights),"weight_hashes":weight_hashes,
            "observed_sessions_by_identity":{k:len(v) for k,v in stocks.items()}}
