@@ -61,7 +61,7 @@ def normalize(factor,raw,start,stop,received):
     return buf.getvalue(),len(observations),rejected
 
 
-def _fetch_vintages(key,series,left,stop):
+def _fetch_vintages(key,series,left,stop,*,live_guard=None):
     params={"api_key":key,"file_type":"json","series_id":series,
             "output_type":1,"realtime_start":VINTAGE_FLOOR,
             "realtime_end":m._now().date().isoformat(),
@@ -75,7 +75,8 @@ def _fetch_vintages(key,series,left,stop):
     for method,overrides in (("all_vintages",{}),
                              ("bounded_vintages",{"realtime_start":left.isoformat()}),
                              ("initial_release_only",{"output_type":4,"realtime_start":left.isoformat()})):
-        if not alpha_retraining.safe_window(m._now()):
+        if live_guard is not None:live_guard()
+        elif not alpha_retraining.safe_window(m._now()):
             raise ValueError("Historical requests paused for market priority")
         try:
             raw=feeds._http(feeds.FRED_URL+"series/observations",{**params,**overrides})
@@ -91,11 +92,12 @@ def _fetch_vintages(key,series,left,stop):
     return None,None,attempts
 
 
-def backfill(start,stop,*,confirmed=False):
+def backfill(start,stop,*,confirmed=False,live_guard=None):
     now=m._now()
     if confirmed is not True:
         raise ValueError("Explicit authorization and review of FRED/ALFRED source terms required")
-    if not alpha_retraining.safe_window(now):
+    if live_guard is not None:live_guard()
+    elif not alpha_retraining.safe_window(now):
         raise ValueError("Run historical downloads outside Indian market priority hours")
     if not 0<(stop-start).days<=MAX_DAYS or stop>now.astimezone(feeds.IST).date():
         raise ValueError("Use a completed range up to 120 calendar days, end exclusive")
@@ -105,11 +107,12 @@ def backfill(start,stop,*,confirmed=False):
     result={}
     left=start-timedelta(days=10)
     for factor,series in feeds.FRED_SERIES.items():
-        if not alpha_retraining.safe_window(m._now()):
+        if live_guard is not None:live_guard()
+        elif not alpha_retraining.safe_window(m._now()):
             result[factor]={"state":"paused_market_priority"}
             continue
         try:
-            raw,method,attempts=_fetch_vintages(key,series,left,stop)
+            raw,method,attempts=_fetch_vintages(key,series,left,stop,**({"live_guard":live_guard} if live_guard is not None else {}))
             if raw is None:
                 result[factor]={"state":"unavailable","reason":"No supported historical vintage response",
                                 "attempts":attempts}
