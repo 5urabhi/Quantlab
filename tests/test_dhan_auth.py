@@ -134,6 +134,47 @@ class DhanAuthTests(TestCase):
         self.assertEqual(result["code"], "auth_rejected")
         self.assertNotIn("PRIVATE", str(result))
 
+    def test_http_400_documented_errors_are_classified_without_raw_body(self):
+        cases = (
+            ("DH-901", "auth_rejected"),
+            ("DH-902", "data_plan_inactive"),
+            ("DH-904", "profile_rate_limited"),
+            ("DH-905", "profile_input_error"),
+            ("807", "token_expired"),
+            (809, "auth_rejected"),
+            ("PRIVATE_UNKNOWN", "profile_http_error"),
+        )
+        for vendor, expected in cases:
+            with self.subTest(vendor=vendor):
+                def opener(req, timeout):
+                    body = json.dumps({"errorCode": vendor, "errorMessage": "PRIVATE_VENDOR_BODY"}).encode()
+                    raise HTTPError(req.full_url, 400, "Bad Request", {"Retry-After": "1800"}, BytesIO(body))
+                result = dhan_auth.check_profile(opener=opener, token_override="PRIVATE_TOKEN")
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["http_status"], 400)
+                self.assertEqual(result["code"], expected)
+                self.assertNotIn("PRIVATE", str(result))
+                if expected == "profile_rate_limited":
+                    self.assertEqual(result["provider_retry_after_seconds"], 1800)
+                if expected == "profile_http_error":
+                    self.assertIsNone(result["provider_error_code"])
+
+    def test_http_429_respects_retry_after_even_without_json(self):
+        def opener(req, timeout):
+            raise HTTPError(req.full_url, 429, "Too Many Requests", {"Retry-After": "900"}, BytesIO(b"PRIVATE"))
+        result = dhan_auth.check_profile(opener=opener, token_override="mock")
+        self.assertEqual(result["code"], "profile_rate_limited")
+        self.assertEqual(result["provider_retry_after_seconds"], 900)
+        self.assertNotIn("PRIVATE", str(result))
+
+    def test_http_200_vendor_failure_not_a_valid_profile(self):
+        result = dhan_auth.check_profile(
+            opener=lambda *a, **kw: MockResponse({"errorCode": "807", "errorMessage": "PRIVATE"}),
+            token_override="mock")
+        self.assertEqual(result["code"], "token_expired")
+        self.assertFalse(result["ok"])
+        self.assertNotIn("PRIVATE", str(result))
+
     def test_loopback_endpoint_missing_credentials(self):
         with patch.dict("os.environ", {}, clear=True):
             response = self.client.get("/api/dhan/credentials/check")
