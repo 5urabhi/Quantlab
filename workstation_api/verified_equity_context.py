@@ -59,7 +59,7 @@ def _original_daily(path,identity,interval,stop,budget):
             raise ValueError("Duplicate original daily trading dates")
         series=frame.set_index("date")["close"]
         incomplete=0
-    return series.astype(float),{"sha256":meta["sha256"],"original_rows":len(payload) and len(clock),
+    return series.astype(float),{"sha256":meta["sha256"],"original_rows":len(clock),
                                 "observed_sessions":len(series),"incomplete_regular_sessions":incomplete,
                                 "first_session":str(series.index.min()) if len(series) else None,
                                 "last_session":str(series.index.max()) if len(series) else None}
