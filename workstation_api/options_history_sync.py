@@ -7,6 +7,7 @@ continuous observed contract/session coverage.
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from threading import Lock
+from hashlib import sha256
 from contextlib import contextmanager
 import fcntl
 import os
@@ -24,6 +25,10 @@ MAX_CONSECUTIVE_REJECTIONS=66
 MAX_REJECTIONS=132
 LOCK=Lock()
 SOURCE="Dhan v2 /charts/rollingoption"
+# Process-local planning summaries only; research continues to verify raw receipts.
+_SCAN_ROOT=None
+_SCAN_CACHE={}
+
 
 
 def _intervals(start,stop,today):
@@ -86,12 +91,47 @@ def _record_observed(audit,rows,start,stop):
             audit[key]=audit.get(key,0)|(1<<minute)
 
 
+def _signature(path):
+    s=path.stat()
+    return s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns
+
+
+def _verified_summary(path,signature):
+    """Read/verify once, keep compact observed-minute masks, not prices."""
+    if path.is_symlink() or not path.is_file() or signature[2]>exp.MAX_RESPONSE_BYTES+5000:
+        raise ValueError("Unsafe or oversized receipt")
+    envelope=json.loads(path.read_text(encoding="utf-8"))
+    body=envelope["request"]
+    # Other original receipt families share this directory.
+    if envelope.get("source")!=SOURCE:
+        return None
+    a,last=date.fromisoformat(body["fromDate"]),date.fromisoformat(body["toDate"])
+    b=last+timedelta(days=1)
+    if not a<last or (last-a).days>30 or path!=exp._cache_path(body):
+        raise ValueError("Receipt identity mismatch")
+    payload=envelope["payload"]
+    raw=json.dumps(payload,sort_keys=True,separators=(",",":")).encode()
+    if sha256(raw).hexdigest()!=envelope["sha256"] or not isinstance(payload.get("data"),dict):
+        raise ValueError("Receipt integrity mismatch")
+    rows=exp._normalize(payload,body)
+    masks={}
+    _record_observed(masks,rows,a,b)
+    if _signature(path)!=signature or path.is_symlink():
+        raise ValueError("Receipt changed during verification")
+    return body,a,b,masks,not bool(rows)
+
+
 def _saved_windows(start,stop,wings,*,observed=None,statistics=None):
+    global _SCAN_ROOT
     root=service.DATA/"dhan_expired_options"
     coverage=defaultdict(list)
     reused=0
     rejected=0
+    if str(root)!=_SCAN_ROOT:
+        _SCAN_CACHE.clear()
+        _SCAN_ROOT=str(root)
     if not root.exists():
+        _SCAN_CACHE.clear()
         return coverage,reused,rejected
     if root.is_symlink() or not root.is_dir():
         raise ValueError("Unsafe expired-option cache location")
@@ -99,39 +139,53 @@ def _saved_windows(start,stop,wings,*,observed=None,statistics=None):
             "MONTH",0,offset,side)) for side in ("CALL","PUT") for offset in exp._offsets(wings)}
     paths=[]
     for p in root.iterdir():
-        if re.fullmatch(r"[0-9a-f]{64}\.json",p.name):
+        if re.fullmatch(r"[0-9a-f]{64}\\.json",p.name):
             paths.append(p)
             if len(paths)>MAX_RECEIPTS:
                 raise ValueError("Expired-option receipt scan limit exceeded; use source inspection")
+    present={p.name for p in paths}
+    for name in list(_SCAN_CACHE):
+        if name not in present:
+            del _SCAN_CACHE[name]
+    left,right=start.isoformat(),stop.isoformat()
     for p in paths:
         try:
-            if p.is_symlink() or not p.is_file() or p.stat().st_size>exp.MAX_RESPONSE_BYTES+5000:
-                raise ValueError("Unsafe or oversized receipt")
-            envelope=json.loads(p.read_text(encoding="utf-8"))
-            body=envelope["request"]
+            if p.is_symlink() or not p.is_file():
+                raise ValueError("Unsafe receipt")
+            signature=_signature(p)
+            cached=_SCAN_CACHE.get(p.name)
+            if cached is not None and cached[0]==signature:
+                summary=cached[1]
+            else:
+                summary=_verified_summary(p,signature)
+                _SCAN_CACHE[p.name]=(signature,summary)
+            if summary is None:
+                continue
+            body,a,b,masks,empty=summary
             key=(body.get("drvOptionType"),body.get("strike"))
-            if key not in keys or _key(body)!=keys[key]:
+            if key not in keys or _key(body)!=keys[key] or b<=start or a>=stop:
                 continue
-            a,last=date.fromisoformat(body["fromDate"]),date.fromisoformat(body["toDate"])
-            b=last+timedelta(days=1)
-            if b<=start or a>=stop:
-                continue
-            if not a<last or (last-a).days>30 or p!=exp._cache_path(body) or envelope.get("source")!=SOURCE:
-                raise ValueError("Receipt identity mismatch")
-            payload=exp._get_cached(body)
-            if payload is None:
-                raise ValueError("Receipt disappeared")
-            # A valid empty response is still request evidence, not proof
-            # of observed price coverage. Never silently replace it.
-            rows=exp._normalize(payload,body)
-            _record_observed(observed,rows,start,stop)
+            if observed is not None:
+                for k,mask in masks.items():
+                    if left<=k[2]<right:
+                        observed[k]=observed.get(k,0)|mask
             if statistics is not None:
-                statistics["empty_verified_receipts"]+=int(not rows)
+                statistics["empty_verified_receipts"]+=int(empty)
             coverage[key].append((a,b))
             reused+=1
         except (ValueError,TypeError,KeyError,OSError,AttributeError,UnicodeError):
+            _SCAN_CACHE.pop(p.name,None)
             rejected+=1
     return coverage,reused,rejected
+
+
+def _eligible_dates(eligible):
+    return {a+timedelta(days=i) for a,b in eligible for i in range((b-a).days)}
+
+
+def _add_checked(checked,key,a,b,eligible):
+    checked.update((key,d) for i in range((b-a).days) if (d:=a+timedelta(days=i)) in eligible)
+
 
 
 def _prioritize(requests,offset_rank,priority_sessions):
@@ -171,7 +225,7 @@ def acquisition_lock():
 
 
 def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,request_limit=None,should_stop=None,
-        priority_sessions=None):
+        priority_sessions=None,on_counts=None):
     today=today or exp._ist_today()
     start,stop,eligible=_scope(start_date,end_date,wings,today)
     priority_sessions=tuple(priority_sessions or ())
@@ -182,6 +236,12 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
             progress(1,"Verifying existing expired-option receipt windows")
         observed={};statistics={"empty_verified_receipts":0}
         coverage,reused,rejected=_saved_windows(start,stop,wings,observed=observed,statistics=statistics)
+        dates=_eligible_dates(eligible)
+        checked=set()
+        for key,windows in coverage.items():
+            for a,b in windows:
+                _add_checked(checked,key,max(a,start),min(b,stop),dates)
+        total_pairs=len(dates)*2*len(exp._offsets(wings))
         requests=[]
         for side in ("CALL","PUT"):
             for offset in exp._offsets(wings):
@@ -211,6 +271,24 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
         attempted=0
         completed=0
         stopped_early=False
+        begun=time.monotonic()
+        scan_counts={"eligible_offset_date_pairs":total_pairs,"checked_offset_date_pairs":len(checked)}
+        def counts():
+            elapsed=max(.001,time.monotonic()-begun)
+            return {**scan_counts,"checked_offset_date_pairs":len(checked),
+                    "missing_offset_date_pairs":total_pairs-len(checked),
+                    "planned_missing_requests":len(requests),"remaining_planned_requests":len(requests)-completed,
+                    "batch_limit":min(len(requests),request_limit or len(requests)),
+                    "batch_attempted":attempted,"batch_completed":completed,"new_receipts":downloaded,
+                    "rejected_windows":len(rejected_requests),"existing_verified_receipts":reused,
+                    "unreadable_receipts_encountered":rejected,
+                    "empty_processed_receipts":empty,"empty_verified_receipts":statistics["empty_verified_receipts"],
+                    "observed_session_dates":len({k[2] for k in observed}),
+                    "active_receipts_per_minute":round(downloaded*60/elapsed,1) if elapsed>=10 and downloaded else None}
+        def emit():
+            if on_counts is not None:
+                on_counts(counts())
+        emit()
         for body in requests:
             if (request_limit is not None and attempted>=request_limit) or (should_stop is not None and should_stop()):
                 stopped_early=True
@@ -239,6 +317,7 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
                                               "code":"DH-905"})
                     # Do not mark rejected windows checked. Avoid flooding
                     # the endpoint on persistent systematic rejection.
+                    emit()
                     if consecutive>=MAX_CONSECUTIVE_REJECTIONS or len(rejected_requests)>=MAX_REJECTIONS:
                         stopped_early=True
                         break
@@ -253,9 +332,12 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
             completed+=1
             empty+=not bool(rows)
             usable+=sum(start_date<=r["session_ist"]<=end_date for r in rows)
+            a,b=date.fromisoformat(body["fromDate"]),date.fromisoformat(body["toDate"])+timedelta(days=1)
+            _add_checked(checked,(body["drvOptionType"],body["strike"]),max(a,start),min(b,stop),dates)
+            emit()
         if progress:
             progress(100,"Saved original receipts; some request windows remain" if rejected_requests or attempted<len(requests) else "Saved original receipts; inspect observed coverage")
-        return {**preview(start_date,end_date,wings,today),
+        return {**preview(start_date,end_date,wings,today),**counts(),
                 "existing_verified_receipts":reused,"unreadable_receipts_encountered":rejected,
                 "empty_verified_receipts":statistics["empty_verified_receipts"],
                 "observed_rolling_minute_slots":sum(v.bit_count() for v in observed.values()),
