@@ -908,3 +908,8 @@ stale batches are not accelerated. Shared provider rate limits and connection
 failures retain their safeguards. Existing v7 source-error schedules migrate
 only when the recorded productive lane qualifies; provider cooldowns are
 preserved. This does not certify continuous historical coverage.
+
+
+### Pipelined expired-option acquisition (v9)
+
+Outside live-priority maintenance, a bounded one-window network prefetch overlaps the next historical option request with verification, normalization, atomic save and coverage accounting of the preceding receipt. Only the existing canonical writer can commit receipts. At most one network request is active; actual provider starts in the pipeline are spaced at least 0.45 seconds apart (about 2.22 starts/s before latency), rather than adding a fixed sleep after each response. Cache hits do not consume a provider request. The original conservative sequential lane remains during live-priority passes. Request caps, authorization, storage checks, closed/expired scope and the existing cross-process acquisition lock are unchanged. On cancellation or local failure at most one already dispatched lookahead may be discarded and remains unverified/eligible; a provider throttle response still propagates. Dhan error codes DH-904 and 805 also trigger cooldown even if delivered as HTTP 400. This is not an account-wide limiter for other apps or every endpoint, and does not guarantee a particular speedup.
