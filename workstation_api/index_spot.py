@@ -21,6 +21,20 @@ from . import pit_index, service
 # https://github.com/dhan-oss/dhanhq-skills/blob/main/skills/dhanhq/references/instruments.md
 # These are published exchange-index identifiers, not guessed equity SIDs.
 PUBLISHED_INDEX_IDS = {"nifty50_pit": "13", "banknifty_pit": "25"}
+# Additional *research* identities. No inferred security IDs or derivatives
+# eligibility, and no change to automatic download or live subscription scope.
+RESEARCH_INDEXES = {
+    "INDEX:NIFTY100": ("NIFTY100_INDEX", "NIFTY 100", {"NIFTY100"}),
+    "INDEX:NIFTYNEXT50": ("NIFTYNEXT50_INDEX", "NIFTY Next 50", {"NIFTYNEXT50","NIFTYNXT50"}),
+    "INDEX:FINNIFTY": ("FINNIFTY_INDEX", "NIFTY Financial Services", {"FINNIFTY","NIFTYFINSERVICE","NIFTYFINANCIALSERVICES"}),
+    "INDEX:MIDCPNIFTY": ("MIDCPNIFTY_INDEX", "NIFTY Midcap Select", {"MIDCPNIFTY","NIFTYMIDCAPSELECT"}),
+    "INDEX:NIFTY500": ("NIFTY500_INDEX", "NIFTY 500", {"NIFTY500"}),
+    "INDEX:NIFTYIT": ("NIFTYIT_INDEX", "NIFTY IT", {"NIFTYIT"}),
+    "INDEX:NIFTYPSUBANK": ("NIFTYPSUBANK_INDEX", "NIFTY PSU Bank", {"NIFTYPSUBANK"}),
+    "INDEX:NIFTYPRIVATEBANK": ("NIFTYPRIVATEBANK_INDEX", "NIFTY Private Bank", {"NIFTYPRIVATEBANK","NIFTYPVTBANK"}),
+    "INDEX:INDIAVIX": ("INDIAVIX_INDEX", "India VIX", {"INDIAVIX"}),
+}
+CORE_RESEARCH_MODES = {"INDEX:NIFTY50":"nifty50_pit","INDEX:BANKNIFTY":"banknifty_pit"}
 PUBLISHED_REFERENCE = (
     "https://github.com/dhan-oss/dhanhq-skills/"
     "blob/main/skills/dhanhq/references/instruments.md"
@@ -28,7 +42,7 @@ PUBLISHED_REFERENCE = (
 
 
 def resolve_with_evidence(mode: str) -> tuple[Instrument | None, str]:
-    if mode not in pit_index.MODES:
+    if mode not in pit_index.MODES and mode not in RESEARCH_INDEXES:
         return None, "unknown_index"
     path = service.DATA / "dhan" / "instrument_master.csv"
     # The constituent downloader itself requires a current master. Requiring
@@ -47,10 +61,14 @@ def resolve_with_evidence(mode: str) -> tuple[Instrument | None, str]:
     labels = [name for name in labels if name]
     if not segment or not instrument or not identifier or not labels:
         return None, "unrecognized_dhan_master"
-    expected = ({"NIFTY", "NIFTY50"} if mode == "nifty50_pit"
-                else {"BANKNIFTY", "NIFTYBANK"})
+    expected = (RESEARCH_INDEXES[mode][2] if mode in RESEARCH_INDEXES else
+                {"NIFTY", "NIFTY50"} if mode == "nifty50_pit" else {"BANKNIFTY", "NIFTYBANK"})
+    label = (RESEARCH_INDEXES[mode][0] if mode in RESEARCH_INDEXES else
+             "NIFTY50_INDEX" if mode == "nifty50_pit" else "BANKNIFTY_INDEX")
     matches = set()
-    for _, row in frame.iterrows():
+    # Scan only index rows; never select a cash-equity or derivative SID.
+    eligible=frame[instrument].str.strip().str.upper().eq("INDEX") & frame[segment].str.strip().str.upper().isin({"I","IDX_I"})
+    for _, row in frame.loc[eligible].iterrows():
         if str(row[instrument]).upper().strip() != "INDEX":
             continue
         if str(row[segment]).upper().strip() not in {"I", "IDX_I"}:
@@ -68,11 +86,13 @@ def resolve_with_evidence(mode: str) -> tuple[Instrument | None, str]:
     if len(matches) == 1:
         sid = next(iter(matches))
         source = "verified_unique_dhan_scrip_master_match"
+    elif mode not in PUBLISHED_INDEX_IDS:
+        return None, "no_unique_master_index_match"
     else:
         sid = PUBLISHED_INDEX_IDS[mode]
         source = "dhan_oss_published_idx_i_reference_fallback"
     return Instrument(
-        label="NIFTY50_INDEX" if mode == "nifty50_pit" else "BANKNIFTY_INDEX",
+        label=label,
         security_id=sid, exchange_segment="IDX_I", instrument="INDEX",
     ), source
 

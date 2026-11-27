@@ -50,3 +50,9 @@ Use Market Library to inspect observed minutes and complete sessions separately.
 - https://www.nseindia.in/static/products-services/closing-auction-session
 - https://zerodha.com/marketintel/bulletin/461085/changes-to-closing-auction-session-cas-from-december-7-2026
 - Existing internal evidence registers: [QUANTLAB_STATUS.md](QUANTLAB_STATUS.md), [QUANTLAB_COMPLETION_AUDIT.md](QUANTLAB_COMPLETION_AUDIT.md), [CPR_HYBRID_RESEARCH.md](CPR_HYBRID_RESEARCH.md).
+
+## Multi-index research extension
+
+`bash run.sh cross-index-research --sessions 90` compares BANKNIFTY and NIFTY 50 on common completed historical sessions. Both targets receive an index-only baseline and a matched peer-index augmented model, with validation-only model selection and day-paired exploratory Brier differences. Tasks include terminal direction, volatility regime, and normalized first touch at 5/15/30-minute horizons. Peer features use only completed observations; missing bars remain missing. This is a forecast study, not an options backtest.
+
+`bash run.sh cross-index-research --list-sources` inventories additional named indices against the existing Dhan master and candidate original receipt files. NIFTY 100, NIFTY Next 50, FINNIFTY, NIFTY Midcap Select, NIFTY 500, NIFTY IT, NIFTY PSU Bank, NIFTY Private Bank and India VIX are research identity candidates. Their actual instrument resolution, minute-history entitlement and saved coverage require local verification. No extra automatic downloads or live subscriptions are enabled by this change. Existing automatic BANKNIFTY/NIFTY 50 scope is unchanged. NIFTY 100 is a broad market context series, not assumed to have listed index options. Generalizing the BANKNIFTY-specific option receipt keys, expiry schedules, lot sizes and execution model to additional listed underlyings remains separate work.

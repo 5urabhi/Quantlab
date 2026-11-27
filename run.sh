@@ -94,6 +94,14 @@ case "${1:-workstation}" in
     shift
     manual_research -m scripts.check_cpr_context "$@"
     ;;
+  cross-index-research)
+    if [ ! -x .venv/bin/python ]; then
+      printf 'Python environment missing. First run: bash run.sh setup\n' >&2
+      exit 2
+    fi
+    shift
+    manual_research -m scripts.run_cross_index_research "$@"
+    ;;
   candle-research)
     if [ ! -x .venv/bin/python ]; then
       printf 'Python environment missing. First run: bash run.sh setup\n' >&2
@@ -149,6 +157,7 @@ bash run.sh research         Same as default
 bash run.sh web              Same as default; NOT the old public showcase
 bash run.sh both             Same workstation (API + React)
 bash run.sh setup            Install local Python and Node dependencies
+bash run.sh cross-index-research  Matched cross-index directional and volatility forecasts
 bash run.sh candle-research    Next-candle pattern library and chronological direction forecasts\nbash run.sh cpr-repair        Test, repair expired option receipts, probe wider strikes and audit saved evidence\nbash run.sh cpr-next          Run CPR regression tests and execution evidence / development horizon screen\nbash run.sh cpr-context-check  Audit historical constituent and global context before option replay\nbash run.sh verify-v3 --scientific  Check isolated execution, scientific imports and local source health without restarting
 bash run.sh python-packages check   Inspect approved scientific packages
 bash run.sh python-packages install Install missing approved packages with local approval; no app restart

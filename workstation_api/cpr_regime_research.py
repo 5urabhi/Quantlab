@@ -139,7 +139,7 @@ def _lookup(train,task,classes,weights,prior,with_pattern):
     return out
 
 
-def _fit(parts,*,panel=False):
+def _fit(parts,*,panel=False,extra_key=None,tasks=TASKS):
     tr,va,te=parts
     counts=[len({r["session"] for r in x}) for x in parts]
     result={"state":"insufficient_support","coverage":[len(x) for x in parts],"sessions":counts,"tasks":{}}
@@ -147,12 +147,12 @@ def _fit(parts,*,panel=False):
         return result
     w=b._weights(tr)*len(tr)/counts[0]
     def x(row):
-        return row["regime_features"]+row["short"]+(row["context_vectors"]["panel_detail"] if panel else [])
+        return row["regime_features"]+row["short"]+(row["context_vectors"]["panel_detail"] if panel else [])+(row[extra_key] if extra_key else [])
     y=np.asarray([r["labels"] for r in tr],dtype=int)
     forest=RandomForestClassifier(n_estimators=100,max_depth=4,min_samples_leaf=20,random_state=91,n_jobs=1)
     forest.fit([x(r) for r in tr],y,sample_weight=w)
     vf=forest.predict_proba([x(r) for r in va]);tf=forest.predict_proba([x(r) for r in te])
-    for i,(task,classes) in enumerate(TASKS):
+    for i,(task,classes) in enumerate(tasks):
         prior=np.ones(len(classes))
         for row,weight in zip(tr,w):
             prior[row["labels"][i]]+=weight
