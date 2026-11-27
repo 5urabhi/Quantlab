@@ -174,3 +174,27 @@ overnight session may start after Japan's cash open, particularly
 during US standard time. These US-listed ETFs are not the local cash
 markets and cannot establish actual Asian cash-opening returns.
 No GIFT NIFTY data or five-year BOATS coverage is claimed.
+
+
+## Stop expanding data: small opening benchmark
+
+Use the existing 90-day archive and Dhan receipts, no new downloads:
+
+    .venv/bin/python -m unittest discover -s tests -p 'test_global_open_baseline.py' -v
+    .venv/bin/python -m scripts.benchmark_global_open
+
+One 09:10 IST decision per observed date; targets are prior observed
+session last minute close to current first minute open, and open to
+09:30/09:45 completed minute close. Fixed 30 reserved training dates,
+then 10-date expanding blocks. Compare training up-rate, domestic,
+global and combined logistic baselines on paired held-out dates.
+Only historical evidence available by cutoff; at least one fresh
+BOATS session-return anchor is required. Missing daily/ETF values
+have explicit indicators. Prior-session constituent breadth and mean
+use one pinned dated membership batch, never extrapolated beyond
+documented coverage. The --index-only flag provides a faster fallback
+if original constituent receipts exceed the bounded read or are absent.
+The report lists missing dates and observed membership coverage.
+Accuracy, Brier score and log loss are exploratory, not a demonstrated
+edge. Index return minus 5 bps is an illustrative cost scenario, not
+executable option P&L; no gap P&L is reported. No orders, no live model.
