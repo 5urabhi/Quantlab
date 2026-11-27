@@ -183,6 +183,60 @@ class OptionsHistorySyncTests(unittest.TestCase):
         self.assertEqual(seen[-1]["remaining_planned_requests"],1)
 
 
+    def test_pipeline_overlaps_next_download_with_current_verification(self):
+        from threading import Event
+        second_started=Event()
+        calls=[]
+        normalize=exp._normalize
+        def fetch(body):
+            calls.append(body)
+            if len(calls)==2:
+                second_started.set()
+            return {"data":{}}
+        def verify(payload,body):
+            if body["drvOptionType"]=="CALL":
+                self.assertTrue(second_started.wait(2),"next request did not overlap verification")
+            return normalize(payload,body)
+        with patch.object(exp,"_normalize",side_effect=verify):
+            result=sync.run(start_date="2026-10-01",end_date="2026-10-02",wings=0,
+                            fetcher=fetch,today=self.today,pipeline=True)
+        self.assertEqual(len(calls),2)
+        self.assertEqual(result["new_receipts"],2)
+        self.assertEqual(result["checked_offset_date_pairs"],4)
+        for body in calls:
+            self.assertIsNotNone(exp._get_cached(body))
+
+    def test_pipeline_never_prefetches_past_batch_limit_or_provider_throttle(self):
+        args=dict(start_date="2026-10-01",end_date="2026-10-05",wings=0,
+                  today=self.today,pipeline=True)
+        calls=[]
+        def fetch(body):
+            calls.append(body)
+            return {"data":{}}
+        first=sync.run(**args,fetcher=fetch,request_limit=1)
+        self.assertEqual(len(calls),1)
+        self.assertEqual(first["new_receipts"],1)
+        calls.clear()
+        def throttled(body):
+            calls.append(body)
+            raise exp.RollingRateLimitError(1800)
+        with self.assertRaises(exp.RollingRateLimitError) as error:
+            sync.run(**args,fetcher=throttled)
+        self.assertEqual(error.exception.retry_after_seconds,1800)
+        self.assertEqual(len(calls),1)
+
+    def test_pipeline_request_starts_remain_paced(self):
+        import time
+        calls=[]
+        def fetch(body):
+            calls.append(time.monotonic())
+            return {"data":{}}
+        with patch.object(sync.dhan_auth,"check_profile",return_value={"ok":True}),patch.object(exp,"_original_response_once",side_effect=fetch):
+            result=sync.run(start_date="2026-10-01",end_date="2026-10-02",wings=0,
+                            today=self.today,pipeline=True)
+        self.assertEqual(result["new_receipts"],2)
+        self.assertGreaterEqual(calls[1]-calls[0],sync.REQUEST_START_SPACING-.01)
+
     def test_provider_retry_after_is_respected(self):
         from urllib.error import HTTPError
         from io import BytesIO
@@ -194,6 +248,14 @@ class OptionsHistorySyncTests(unittest.TestCase):
                 exp._original_response_once(body,opener=opener)
         self.assertEqual(err.exception.retry_after_seconds,1800)
         self.assertEqual(exp._retry_after_seconds({"Retry-After":"invalid"}),0)
+        for code in ("DH-904","805"):
+            def vendor_throttle(*args,**kwargs):
+                raise HTTPError(exp.ENDPOINT,400,"Bad Request",{"Retry-After":"1200"},
+                                BytesIO(('{"errorCode":"'+code+'"}').encode()))
+            with patch.dict(exp.os.environ,{"DHAN_ACCESS_TOKEN":"fixture-token"}):
+                with self.assertRaises(exp.RollingRateLimitError) as err:
+                    exp._original_response_once(body,opener=vendor_throttle)
+                self.assertEqual(err.exception.retry_after_seconds,1200)
 
 
 if __name__=="__main__":

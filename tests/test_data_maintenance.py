@@ -22,6 +22,8 @@ class MaintenanceTests(TestCase):
         m.STOP.clear()
         self.addCleanup(m.STOP.set if self.stop_was_set else m.STOP.clear)
         self.now=datetime(2026,11,26,11,tzinfo=timezone.utc) # 16:30 IST
+        budget=patch.object(m.history_budget,"BUDGET",m.history_budget.HistoryBudget())
+        budget.start();self.addCleanup(budget.stop)
 
     def test_persisted_consent_and_quiet_window(self):
         cfg={**m.DEFAULT,"enabled":True}
@@ -189,6 +191,58 @@ class MaintenanceTests(TestCase):
         self.assertEqual(saved["next_due_reason"],"more_option_requests")
 
 
+    def test_banks_and_options_overlap_after_index_audit(self):
+        from threading import Event
+        cfg={**m.DEFAULT,"enabled":True}
+        m.configure(cfg,True)
+        bank_started,option_started,index_done=Event(),Event(),Event()
+        def index(*args):
+            index_done.set()
+            return {"INDEX:BANKNIFTY":{"state":"checked"}}
+        def banks(*args):
+            self.assertTrue(index_done.is_set())
+            bank_started.set()
+            self.assertTrue(option_started.wait(2),"options did not run alongside banks")
+            return {"state":"checked"}
+        def options(**kwargs):
+            self.assertTrue(index_done.is_set())
+            option_started.set()
+            self.assertTrue(bank_started.wait(2),"banks did not run alongside options")
+            self.assertTrue(kwargs["pipeline"])
+            return {"state":"request_windows_checked","existing_verified_receipts":0,
+                    "new_receipts":2,"planned_missing_requests":2,"unattempted_requests":0,
+                    "empty_processed_receipts":0,"usable_rows_in_processed_receipts":2,
+                    "unreadable_receipts_encountered":0,"excluded_active_calendar_days":0,
+                    "continuous_coverage_certified":False,"empty_verified_receipts":0,
+                    "observed_rolling_minute_slots":2,"observed_offset_session_pairs":2,
+                    "observed_session_dates":1,"rejected_requests":[]}
+        with patch.object(m,"_now",return_value=self.now),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value={"ok":True}),patch.object(m,"_index_pass",side_effect=index),patch.object(m,"_equity_pass",side_effect=banks),patch.object(m.options,"run",side_effect=options),patch.object(m.mp,"_history",return_value={"days":{}}):
+            result=m.run(now=self.now)
+        self.assertEqual(result["backfill_mode"],"parallel_history")
+        self.assertEqual(result["state"],"checked")
+        self.assertEqual(m._state()["last_run"]["sources"]["options"]["new_receipts"],2)
+
+    def test_shared_cooldown_interrupts_other_history_lane(self):
+        from threading import Event
+        cfg={**m.DEFAULT,"enabled":True}
+        m.configure(cfg,True)
+        bank_started,throttled=Event(),Event()
+        def bank(cfg,state,now,stop,progress,should_stop):
+            bank_started.set()
+            self.assertTrue(throttled.wait(2))
+            self.assertTrue(should_stop())
+            return {"state":"partial"}
+        def options(**kwargs):
+            self.assertTrue(bank_started.wait(2))
+            m.history_budget.BUDGET.throttle(1800)
+            throttled.set()
+            raise m.options.exp.RollingRateLimitError(1800)
+        with patch.object(m,"_now",return_value=self.now),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value={"ok":True}),patch.object(m,"_index_pass",return_value={"INDEX:BANKNIFTY":{"state":"checked"}}),patch.object(m,"_equity_pass",side_effect=bank),patch.object(m.options,"run",side_effect=options),patch.object(m.mp,"_history",return_value={"days":{}}):
+            result=m.run(now=self.now)
+        self.assertTrue(result["provider_rate_limited"])
+        self.assertEqual(m._state()["next_due_reason"],"provider_rate_limit")
+        self.assertGreaterEqual(result["provider_retry_after_seconds"],1799)
+
     def test_live_backfill_uses_small_batches_and_closed_dates(self):
         live=datetime(2026,11,26,5,tzinfo=timezone.utc)
         cfg={**m.DEFAULT,"enabled":True,"index":False,"constituents":False}
@@ -204,6 +258,7 @@ class MaintenanceTests(TestCase):
         self.assertEqual(result["state"],"partial")
         self.assertEqual(result["backfill_mode"],"live_priority")
         self.assertEqual(provider.call_args.kwargs["request_limit"],m.LIVE_OPTION_REQUESTS)
+        self.assertFalse(provider.call_args.kwargs["pipeline"])
         self.assertEqual(provider.call_args.kwargs["end_date"],"2026-11-25")
         self.assertEqual(m._state()["next_due_reason"],"more_option_requests")
 
