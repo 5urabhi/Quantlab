@@ -1,3 +1,4 @@
+from contextlib import closing
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -38,7 +39,7 @@ class GlobalMarketArchiveTests(TestCase):
                         archive_lag_minutes=lag,now=self.now)
 
     def features(self,cutoff,mode="archive"):
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db:
             return g.reference_features(db,self.day,cutoff,mode=mode)["JPN.IDX/JPY"]
 
     def test_dedup_and_conflict_atomic(self):
@@ -46,7 +47,7 @@ class GlobalMarketArchiveTests(TestCase):
         self.assertEqual(self.archive()["state"],"already_imported")
         with self.assertRaisesRegex(ValueError,"Conflicting OHLCV"):
             self.archive(self.raw(change=10))
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM global_market_bars").fetchone()[0],12)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM global_market_receipts").fetchone()[0],1)
 
