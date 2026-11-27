@@ -87,8 +87,8 @@ def paths(index,train_dates,day,m,hold):
     return {"spot":float(spot),"opens":np.asarray([x[2] for x in chosen]),
             "closes":np.asarray([x[3] for x in chosen]),"days":[x[0] for x in chosen],
             "conditional":len(conditioned)>=MIN_PATHS,
-            "up_probability":float(np.mean([x[3][hold] > spot for x in chosen])),
-            "expected_terminal_move_points":float(np.mean([x[3][hold]-spot for x in chosen]))}
+            "up_probability":float(np.mean([x[2][hold+1] > spot for x in chosen])),
+            "expected_terminal_move_points":float(np.mean([x[2][hold+1]-spot for x in chosen]))}
 
 
 def _net_array(entry,exit_,units,bps):
@@ -145,7 +145,8 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget):
     # are particularly ambiguous. Exclude rather than invent a duration.
     if expiry<=session:return None,"nominal_expiry_day_excluded"
     tau=((expiry-session).days*1440+375-(m+1))/(365*1440)
-    times=tau-np.arange(1,hold+3)/(365*1440)
+    open_times=tau-np.arange(0,hold+2)/(365*1440)
+    close_times=tau-np.arange(1,hold+3)/(365*1440)
     spot=scenario["spot"]
     candidates=[];observed=0;affordable=0;priced=0
     for (side,strike),row in table.get(r._stamp(day,m),{}).items():
@@ -159,16 +160,16 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget):
         iv=implied_vol(spot,strike,tau,premium,side)
         if iv is None:continue
         priced+=1
-        op=price(scenario["opens"],strike,times,iv,side)
-        cl=price(scenario["closes"],strike,times,iv,side)
+        op=price(scenario["opens"],strike,open_times,iv,side)
+        cl=price(scenario["closes"],strike,close_times,iv,side)
         for lots in affordable_lots:
             units=lots*lot_size
             forecasts=[_forecast_returns(op,cl,hold,units,cost) for cost in COSTS]
             if any(f is None for f in forecasts):continue
-            if any(f["expected_net_return"]<=0 or f["target_probability"]<PROB_FLOOR for f in forecasts):continue
+            if any(f["expected_net_return"]<=0 or f["realized_target_probability"]<PROB_FLOOR for f in forecasts):continue
             worst=min(f["expected_net_return"] for f in forecasts)
             planned=r._fund(premium,units,COSTS[0])
-            candidates.append((worst,forecasts[0]["target_probability"],-abs(strike-spot),-lots,
+            candidates.append((worst,forecasts[0]["realized_target_probability"],-abs(strike-spot),-lots,
                 {"side":side,"strike":float(strike),"lots":lots,"units":units,"premium":premium,
                  "iv_proxy":iv,"nominal_expiry":expiry.isoformat(),"tau":tau,"forecasts":forecasts,
                  "planned_funding":planned}))
@@ -198,7 +199,7 @@ def replay(index,train,table,dates,hold,*,capital,budget,lot_size,max_lots,progr
             signal={"session":day,"minute":m,"side":candidate["side"],"spot":candidate["spot"],"features":[],
                     "decision_utc":r._stamp(day,m+1),"entry_utc":r._stamp(day,m+2),
                     "entry_type":"math_target","ranked_expected_return":candidate["forecasts"][0]["expected_net_return"],
-                    "ranked_target_probability":candidate["forecasts"][0]["target_probability"]}
+                    "ranked_target_probability":candidate["forecasts"][0]["realized_target_probability"]}
             journal.append({"session":day,"minute":m,**candidate})
             for cost in COSTS:
                 planned=r._fund(candidate["premium"],candidate["units"],cost)
