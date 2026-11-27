@@ -719,6 +719,10 @@ def _fetch_history(row: dict, start: str, stop: str, interval: int | None,
                     "coverage was NOT marked complete. Source audit: "
                     +quality_file.relative_to(service.DATA).as_posix())
         incoming = normalize(frame)
+        # The provider reject DataFrame has already been preserved in the
+        # immutable audit file above. Do not propagate nested DataFrames into
+        # concat: pandas compares attrs when adjacent windows have equal counts.
+        incoming.attrs = {}
         incoming = incoming.sort_values("datetime")
         if incoming["datetime"].duplicated().any():
             raise ValueError("Duplicate candle timestamps within Dhan date window")
