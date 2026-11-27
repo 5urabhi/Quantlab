@@ -76,9 +76,10 @@ def _key(body):
     return {k:v for k,v in body.items() if k not in ("fromDate","toDate")}
 
 
-def _record_observed(audit,rows,start,stop):
+def _record_observed(audit,rows,start,stop,*,count_days=None):
     if audit is None:
-        return
+        return 0
+    added=0
     left,right=start.isoformat(),stop.isoformat()
     for row in rows:
         day=row["session_ist"]
@@ -88,7 +89,11 @@ def _record_observed(audit,rows,start,stop):
         minute=stamp.hour*60+stamp.minute-555
         if 0<=minute<375:
             key=(row["side"],row["origin_offset"],day)
-            audit[key]=audit.get(key,0)|(1<<minute)
+            before=audit.get(key,0)
+            audit[key]=before|(1<<minute)
+            if count_days is not None and day in count_days and before!=audit[key]:
+                added+=1
+    return added
 
 
 def _signature(path):
@@ -242,6 +247,9 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
             for a,b in windows:
                 _add_checked(checked,key,max(a,start),min(b,stop),dates)
         total_pairs=len(dates)*2*len(exp._offsets(wings))
+        known_days={d.isoformat() for d in dates}&set(priority_sessions)
+        known_expected=len(known_days)*2*len(exp._offsets(wings))*375
+        known_minutes=sum(mask.bit_count() for key,mask in observed.items() if key[2] in known_days)
         requests=[]
         for side in ("CALL","PUT"):
             for offset in exp._offsets(wings):
@@ -275,7 +283,9 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
         scan_counts={"eligible_offset_date_pairs":total_pairs,"checked_offset_date_pairs":len(checked)}
         def counts():
             elapsed=max(.001,time.monotonic()-begun)
-            return {**scan_counts,"checked_offset_date_pairs":len(checked),
+            return {**scan_counts,"scope_start":start_date,"scope_end":end_date,"scope_wings":wings,
+                    "known_observed_minute_slots":known_minutes,"known_expected_minute_slots":known_expected,
+                    "known_market_dates":len(known_days),"checked_offset_date_pairs":len(checked),
                     "missing_offset_date_pairs":total_pairs-len(checked),
                     "planned_missing_requests":len(requests),"remaining_planned_requests":len(requests)-completed,
                     "batch_limit":min(len(requests),request_limit or len(requests)),
@@ -327,7 +337,7 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
                 rows=exp._normalize(payload,body)
                 exp._save_cache(body,payload)
                 downloaded+=1
-            _record_observed(observed,rows,start,stop)
+            known_minutes+=_record_observed(observed,rows,start,stop,count_days=known_days)
             consecutive=0
             completed+=1
             empty+=not bool(rows)
