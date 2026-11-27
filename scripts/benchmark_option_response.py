@@ -352,7 +352,7 @@ def run(root,stop,days=365,progress=print,*,neural_artifacts=None,device_name='c
                            "No exact expiry/lot, spread, fees, execution, IV-change forecast or trading policy. "
                            "Earlier examined dates are not prospective confirmation. No provider calls, orders or deployment."))
     if extended:
-        report["warning"]+=" Separate OptionDynamics MLP benchmark (not the underlying direction model); all verified near-month offset receipts, nearest three observed strikes per side within 2%, 5-minute decision stride after 60 completed index bars, fixed 5-minute outcome. Vendor IV change is signal close to completed exit candle IV (one minute AFTER exit-open reference), optional training mask, not an executable IV quote. No exact expiry ID, Greeks, conditional forecasts from V3 or executable P&L. Neural predictions are recorded even when later outcomes are unavailable."
+        report["warning"]=report["warning"].replace("IV-change forecast or trading policy","trading policy")+" Separate OptionDynamics MLP benchmark (not the underlying direction model); all verified near-month offset receipts, nearest three observed strikes per side within 2%, 5-minute decision stride after 60 completed index bars, fixed 5-minute outcome. Vendor IV change is signal close to completed exit candle IV (one minute AFTER exit-open reference), optional training mask, not an executable IV quote. No exact expiry ID, Greeks, conditional forecasts from V3 or executable P&L. Neural predictions are recorded even when later outcomes are unavailable."
         report["device"]=device_name
     return report,journal
 

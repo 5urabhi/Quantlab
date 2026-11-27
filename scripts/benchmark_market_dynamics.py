@@ -758,7 +758,9 @@ def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="c
                           for name,result in models.items()},"training_dates":splits[0],"validation_dates":splits[1]}
     # The journal needs only labels, clocks, availability and predictions.
     # Release scratch mappings before the outer TemporaryDirectory exits.
-    if v3:checkpoint["architecture"]=report["architecture"]
+    if v3:
+        checkpoint["architecture"]=report["architecture"]
+        for name,result in models.items():checkpoint["models"][name]["memory_dimensions"]=result["memory_dimensions"]
     if all_history:del data["grid"],data["aux"],data["pretrain_targets"]
     return report,journal_rows(data,te,models,probs),checkpoint
 
