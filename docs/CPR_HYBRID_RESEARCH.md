@@ -875,3 +875,21 @@ the progress card reports the actual pause reason and audit timestamp.
 Equity-session diagnostics now report how many original minutes each
 incomplete session contains, distinguishing missing days from partial
 days without fabricating candles.
+
+
+### Remove the four-hour retry fallback (v7)
+
+The fixed four-hour automatic maintenance retry is replaced with five
+minutes for ordinary errors or no immediately actionable work. Existing
+saved schedules are migrated to the new policy, and status exposes the
+effective next check. Productive passes still continue after 30 seconds;
+live-recorder pressure still retries after two minutes; transient Dhan
+connection failures retry after 2, 4, 8, 16 and at most 30 minutes.
+Explicit provider rate limits use a separate 15-minute fallback or a
+longer valid Retry-After supplied by the rolling endpoint. Automatic
+checks and the manual Check button do not override an active provider
+cooldown. The existing seven-day cooldown for already attempted equity
+repair dates remains separate from the worker's retry schedule; it avoids
+repeated identical requests for persistent source gaps. Checked scopes
+retain their ordinary daily check. No credentials, synthetic candles or
+provider-limit bypass are introduced.
