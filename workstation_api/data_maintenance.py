@@ -324,6 +324,39 @@ def request_check():
     WAKE.set()
     return status()
 
+def credentials_verified():
+    """Wake an already authorized pass after a successful Dhan profile check.
+
+    Do not restart active or completed work, or clear provider, storage or
+    live-recorder guards. This event contains no credentials.
+    """
+    with LOCK:
+        cfg=config()
+        if not cfg["enabled"]:
+            return False
+        state=_state()
+        last=state.get("last_run") or {}
+        due,reason=_effective_schedule(state)
+        if reason=="provider_rate_limit" and due and datetime.fromisoformat(due)>_now():
+            return False
+        if last.get("state") not in ("blocked","partial"):
+            return False
+        # Older checkpoints used only a generic top-level auth blocker.
+        profile_code=last.get("profile_code")
+        auth_or_connection=(bool(profile_code) or
+            last.get("reason")=="Dhan token or historical data permission requires attention" or
+            reason=="connection_retry")
+        if not auth_or_connection or reason in ("provider_rate_limit","live_recording_priority"):
+            return False
+        state["next_due_utc"]=None
+        state["next_due_reason"]="credentials_verified"
+        state["connection_failure_count"]=0
+        state["schedule_version"]=7
+        _write("state",state)
+    WAKE.set()
+    return True
+
+
 def _attempt_allowed(attempts,key,now):
     try:
         return datetime.fromisoformat(attempts[key])+REPAIR_COOLDOWN<=now
@@ -749,6 +782,9 @@ def run(*,progress=None,now=None):
 
 def _worker(submit):
     while not STOP.is_set():
+        # Clear before reading the checkpoint so a wake arriving during a
+        # scheduling check cannot be lost at the end of the iteration.
+        WAKE.clear()
         try:
             with LOCK:
                 cfg=config();state=_state()
@@ -756,7 +792,7 @@ def _worker(submit):
                 submit()
         except (OSError,ValueError,TypeError,RuntimeError):
             pass
-        WAKE.wait(30);WAKE.clear()
+        WAKE.wait(30)
 
 def start(submit):
     global THREAD
