@@ -38,6 +38,20 @@ FEATURES=("return_1m_bps","return_5m_bps","return_15m_bps",
           "rms_1m_5_bps","rms_1m_15_bps","range_5m_bps","range_15m_bps",
           "body_1m_bps","position_in_15m_range","clock_fraction")
 CLASSES=(-1,0,1)
+EMA_CPR_VERSION="direction_ema_cpr_v1"
+LEVELS=("previous_high","previous_low","cpr_bottom","cpr_top","opening_15m_high","opening_15m_low")
+EVENTS=("fresh_ema_cross","level_breakout","level_rejection","failed_breakout")
+CONTEXT_FEATURES=("ema9_distance_bps","ema21_distance_bps","ema9_minus_21_bps",
+                  "ema_cross","last_cross_direction","minutes_since_cross",
+                  "previous_open_distance_bps","previous_close_distance_bps",
+                  "previous_pivot_distance_bps","previous_cpr_width_bps","previous_r1_distance_bps",
+                  "previous_s1_distance_bps","opening_gap_bps","today_open_distance_bps",
+                  "today_running_high_distance_bps","today_running_low_distance_bps",
+                  "today_running_range_bps","developing_pivot_distance_bps",
+                  "developing_cpr_bottom_distance_bps","developing_cpr_top_distance_bps","cpr_zone",
+                  "breakout_ema_alignment","rejection_ema_alignment","failed_breakout_ema_alignment"
+                  )+tuple(level+"_"+field for level in LEVELS
+                          for field in ("distance_bps","cross","rejection","failed_breakout"))
 
 
 def sample(bars,minute):
@@ -74,10 +88,96 @@ def sample(bars,minute):
     return features,(entry,exit_,move,label)
 
 
-def assemble(index,progress=None):
-    rows=[];coverage={}
+def prior_weekday(day):
+    previous=date.fromisoformat(day)-timedelta(days=1)
+    while previous.weekday()>=5:
+        previous-=timedelta(days=1)
+    return previous.isoformat()
+
+
+def ema_cpr_features(bars,previous):
+    """Causal 1m EMA and level events, seeded from complete prior weekday.
+
+    Today's standard daily CPR comes from previous H/L/C. Developing
+    CPR is a distinct provisional feature using only completed bars.
+    Stop at a current-session gap rather than silently skipping it.
+    """
+    context=np.full((len(bars),len(CONTEXT_FEATURES)),np.nan,dtype=np.float32)
+    rules=np.zeros((len(bars),2),dtype=int)
+    events=np.zeros((len(bars),len(EVENTS)),dtype=bool)
+    if previous is None or previous.shape!=(375,5):
+        return context,rules,events
+    prev_ohlc=m.f.daily_ohlc(previous)
+    if prev_ohlc is None or np.any(previous[:,:4]<=0):
+        return context,rules,events
+    op,hi,lo,close=prev_ohlc
+    p=(hi+lo+close)/3;bc=(hi+lo)/2;tc=2*p-bc
+    bottom,top=sorted((bc,tc))
+    fast=h._ema(previous[:,3],9);slow=h._ema(previous[:,3],21)
+    today_open=float(bars[0,0]);running_hi=-np.inf;running_lo=np.inf
+    opening_hi=opening_lo=None
+    last_cross=0;cross_minute=-1;last_price=None
+    previous_crosses=np.zeros(len(LEVELS),dtype=int)
+    for minute,bar in enumerate(bars):
+        o,high,low,price=bar[:4]
+        if not np.isfinite(bar[:4]).all() or np.any(bar[:4]<=0):break
+        old_gap=fast-slow
+        fast+=(price-fast)*2/10
+        slow+=(price-slow)*2/22
+        gap=fast-slow
+        cross=1 if old_gap<=0<gap else -1 if old_gap>=0>gap else 0
+        if cross:
+            last_cross=cross;cross_minute=minute
+        running_hi=max(running_hi,high);running_lo=min(running_lo,low)
+        if minute==14:opening_hi,opening_lo=running_hi,running_lo
+        # Opening-range levels do not exist until the first 15 bars close.
+        levels=(hi,lo,bottom,top,opening_hi,opening_lo)
+        crosses=[];rejections=[];failures=[]
+        for j,level in enumerate(levels):
+            c=q=0
+            if level is not None and last_price is not None and (j<4 or minute>14):
+                c=1 if last_price<=level<price else -1 if last_price>=level>price else 0
+                # Same-side touch/rejection (support retest or resistance rejection).
+                q=1 if last_price>level and low<=level<price else -1 if last_price<level and high>=level>price else 0
+            failed=c if c and previous_crosses[j]==-c else 0
+            crosses.append(c);rejections.append(q);failures.append(failed)
+        previous_crosses=np.asarray(crosses)
+        last_price=price
+        if opening_hi is None:continue
+        running_p=(running_hi+running_lo+price)/3
+        running_bc=(running_hi+running_lo)/2
+        running_bottom,running_top=sorted((running_bc,2*running_p-running_bc))
+        scale=10000/price
+        distances=lambda values:[(price-v)*scale for v in values]
+        zone=1 if price>top else -1 if price<bottom else 0
+        direction=int(np.sign(gap))
+        context[minute]=[
+            *distances((fast,slow)),gap*scale,float(cross),float(last_cross),
+            float(minute-cross_minute if cross_minute>=0 else minute+1),
+            *distances((op,close,p)),(top-bottom)*scale,
+            *distances((2*p-lo,2*p-hi)),10000*(today_open/close-1),
+            *distances((today_open,running_hi,running_lo)),(running_hi-running_lo)*scale,
+            *distances((running_p,running_bottom,running_top)),float(zone),
+            direction*sum(crosses),direction*sum(rejections),direction*sum(failures),
+            *[v for j,level in enumerate(levels) for v in
+              ((price-level)*scale,crosses[j],rejections[j],failures[j])]]
+        # Fixed comparators, not position/fill simulators. A conflicting
+        # level-event set abstains; no future bars determine the call.
+        rules[minute,0]=cross if cross==zone else 0
+        directions={v for v in crosses+rejections+failures if v}
+        rules[minute,1]=next(iter(directions)) if len(directions)==1 else 0
+        events[minute]=[bool(cross),any(crosses),any(rejections),any(failures)]
+    return context,rules,events
+
+
+def assemble(index,progress=None,*,ema_cpr=False):
+    rows=[];coverage={};rule_rows=[];event_rows=[]
     for i,(day,bars) in enumerate(sorted(index.items())):
         counts={"reserved":0,"missing_history":0,"missing_outcome":0,"scored":0}
+        if ema_cpr:
+            previous=index.get(prior_weekday(day))
+            context,rules,events=ema_cpr_features(bars,previous)
+            counts["missing_ema_cpr_context"]=0
         if progress and (i%100==0 or i+1==len(index)):
             progress(f"Building material-direction labels {i+1}/{len(index)} {day}")
         for minute in range(LOOKBACK-1,len(bars)-1-DELAY-HORIZON):
@@ -87,10 +187,16 @@ def assemble(index,progress=None):
                 counts["missing_history"]+=1
                 continue
             features,outcome=result
+            if ema_cpr and not np.isfinite(context[minute]).all():
+                counts["missing_ema_cpr_context"]+=1
+                continue
             if outcome is None:
                 counts["missing_outcome"]+=1
                 continue
             entry,exit_,move,label=outcome
+            if ema_cpr:
+                features=np.concatenate((features,context[minute]))
+                rule_rows.append(rules[minute]);event_rows.append(events[minute])
             rows.append((day,minute,features,entry,exit_,move,label))
             counts["scored"]+=1
         coverage[day]=counts
@@ -101,7 +207,8 @@ def assemble(index,progress=None):
             "entry":np.array([r[3] for r in rows]),
             "exit":np.array([r[4] for r in rows]),
             "move":np.array([r[5] for r in rows]),
-            "label":np.array([r[6] for r in rows])},coverage
+            "label":np.array([r[6] for r in rows]),
+            **({"level_rules":np.stack(rule_rows),"level_events":np.stack(event_rows)} if ema_cpr else {})},coverage
 
 
 def _prob_metrics(prob,labels,days):
@@ -230,7 +337,69 @@ def assess(data,splits,progress=None):
     return report,journal
 
 
-def run(root,stop,days=1825,progress=print):
+def assess_ema_cpr(data,splits,progress=None):
+    """Fixed paired information comparison: same labels, dates, rows, model."""
+    core={**data,"x":data["x"][:,:len(FEATURES)]}
+    if progress:progress("Matched intraday-only comparator")
+    base,base_journal=assess(core,splits,progress)
+    if progress:progress("Matched EMA 9/21 + previous OHLC/CPR + developing levels")
+    report,journal=assess(data,splits,progress)
+    if len(journal)!=len(base_journal):
+        raise RuntimeError("Matched evaluation lengths differ")
+    test=np.isin(data["days"],splits[2])
+    days=data["days"][test];labels=data["label"][test];move=data["move"][test]
+    columns=["model_calibrated_"+k for k in ("down","flat","up")]
+    p=np.asarray([[row[k] for k in columns] for row in journal])
+    q=np.asarray([[row[k] for k in columns] for row in base_journal])
+    calls=np.asarray([row["model_call"] for row in journal])
+    base_calls=np.asarray([row["model_call"] for row in base_journal])
+    if any(x["decision_utc"]!=y["decision_utc"] or x["actual_class"]!=y["actual_class"]
+           for x,y in zip(journal,base_journal)):
+        raise RuntimeError("Matched evaluation anchors differ")
+    one=np.eye(3)[labels+1]
+    inc={"multiclass_brier":m.paired_day_interval(np.sum((p-one)**2-(q-one)**2,axis=1),days)}
+    # Conditional sign discrimination diagnostic on actual material moves.
+    # This is NOT a decision-time filter or a claim that we know a move will occur.
+    material=labels!=0
+    if material.any():
+        y=(labels[material]==1).astype(float)
+        pp=p[material,2]/np.maximum(p[material,0]+p[material,2],1e-12)
+        qq=q[material,2]/np.maximum(q[material,0]+q[material,2],1e-12)
+        inc["conditional_material_direction_brier"]=m.paired_day_interval((pp-y)**2-(qq-y)**2,days[material])
+        inc["conditional_material_direction_rows"]=int(material.sum())
+        inc["conditional_material_direction_model_brier"]=float(m._avg((pp-y)**2,days[material]))
+        inc["conditional_material_direction_core_brier"]=float(m._avg((qq-y)**2,days[material]))
+    else:
+        inc["conditional_material_direction_brier"]={"interval_95":None}
+    model_net=_action_metrics(calls,labels,move,days)[1]
+    core_net=_action_metrics(base_calls,labels,move,days)[1]
+    inc["net_proxy_per_eligible_opportunity"]=m.paired_day_interval(model_net-core_net,days)
+    rules=data["level_rules"][test];events=data["level_events"][test]
+    report["fixed_level_rules"]={name:_action_metrics(rules[:,k],labels,move,days)[0]
+                                 for k,name in enumerate(("ema_cpr_cross","unambiguous_level_event"))}
+    report["event_diagnostics"]={}
+    for k,name in enumerate(EVENTS):
+        mask=events[:,k]
+        report["event_diagnostics"][name]={"rows":int(mask.sum()),"sessions":len(set(days[mask].tolist())),
+             "model":_action_metrics(calls[mask],labels[mask],move[mask],days[mask])[0] if mask.any() else None,
+             "core":_action_metrics(base_calls[mask],labels[mask],move[mask],days[mask])[0] if mask.any() else None}
+    report["matched_intraday_only"]=base
+    report["incremental_comparison"]=inc
+    for name in ("multiclass_brier","conditional_material_direction_brier"):
+        interval=inc[name]["interval_95"]
+        report["retrospective_gate"]["incremental_"+name]=interval is not None and interval[1]<0
+    report["state"]="retrospective_screen_pass_only" if all(report["retrospective_gate"].values()) else "direction_not_qualified"
+    for i,row in enumerate(journal):
+        row["intraday_only_call"]=int(base_calls[i])
+        for k,name in enumerate(("down","flat","up")):
+            row["intraday_only_calibrated_"+name]=float(q[i,k])
+        row["ema_cpr_cross_rule"]=int(rules[i,0])
+        row["level_event_rule"]=int(rules[i,1])
+        for k,name in enumerate(EVENTS):row[name]=bool(events[i,k])
+    return report,journal
+
+
+def run(root,stop,days=1825,progress=print,*,ema_cpr=False):
     if type(days) is not int or not 120<=days<=m.MAX_CORE_DAYS or stop>datetime.now(h.IST).date():
         raise ValueError("Use completed dates and bounded core history")
     service.DATA=root/"data"
@@ -238,20 +407,22 @@ def run(root,stop,days=1825,progress=print):
     start=stop-timedelta(days=days)
     index,*_,meta=m.load_sources(start,stop,wings=None,index_only=True,progress=progress)
     splits=m.split_days(sorted(index))
-    data,coverage=assemble(index,progress)
+    data,coverage=assemble(index,progress,ema_cpr=ema_cpr)
     del index
-    report,journal=assess(data,splits,progress)
-    report.update(version=VERSION,from_inclusive=start.isoformat(),to_exclusive=stop.isoformat(),
+    report,journal=(assess_ema_cpr(data,splits,progress) if ema_cpr else assess(data,splits,progress))
+    report.update(version=EMA_CPR_VERSION if ema_cpr else VERSION,from_inclusive=start.isoformat(),to_exclusive=stop.isoformat(),
                   observed_sessions=sum(map(len,splits)),training_dates=splits[0],validation_dates=splits[1],
                   evaluation_dates=splits[2],sources=meta["index"],session_coverage=coverage,
                   horizon_minutes=HORIZON,delay_minutes=DELAY,lookback_minutes=LOOKBACK,
                   deadband_bps=DEADBAND_BPS,confidence=CONFIDENCE,proxy_cost_bps=PROXY_COST_BPS,
-                  features=list(FEATURES),warning=("Retrospective exploratory direction only. Previously examined dates are "
+                  features=list(FEATURES+(CONTEXT_FEATURES if ema_cpr else ())),warning=("Retrospective exploratory direction only. Previously examined dates are "
                     "not untouched. The first 16 completed bars are required; all eligible minute decisions are "
                     "assessed, targets overlap, and proxy losses are per opportunity, never account P&L. "
                     "Open references are not fills; 5 bps is an assumed index proxy, not option costs. "
                     "No live promotion, broker orders, options pricing or guarantee. A fresh prospective "
                     "receipt-time shadow test and realistic options execution validation remain mandatory."))
+    if ema_cpr:
+        report["warning"]+=" EMA/CPR context requires a complete prior weekday and gap-free current prefix; unverified holidays and missing weekdays exclude dates rather than reuse stale levels. Opening range uses first 15 completed minutes. One-minute EMA 9/21 is seeded by prior session. Developing CPR is not the end-of-day CPR. Event categories can overlap. Matched comparator shares the context-qualified dates and anchors; material-direction diagnostic conditions on realized nonflat outcomes only for scoring, not calls."
     return report,journal
 
 
@@ -259,13 +430,14 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--shared-root",type=Path,default=service.ROOT)
     ap.add_argument("--days",type=int,default=1825)
+    ap.add_argument("--ema-cpr",action="store_true",help="Fixed matched EMA 9/21 + previous-day and current developing level context")
     ap.add_argument("--to-date",default="2026-11-27",help="Exclusive IST end date")
     args=ap.parse_args()
     try:
         root=args.shared_root.resolve()
-        report,journal=run(root,date.fromisoformat(args.to_date),args.days,lambda s:print(s,flush=True))
+        report,journal=run(root,date.fromisoformat(args.to_date),args.days,lambda s:print(s,flush=True),ema_cpr=args.ema_cpr)
         folder=root/"results";folder.mkdir(exist_ok=True)
-        stem="banknifty_direction_gate_"+uuid.uuid4().hex
+        stem=("banknifty_direction_ema_cpr_" if args.ema_cpr else "banknifty_direction_gate_")+uuid.uuid4().hex
         path=folder/(stem+".json");csv_path=folder/(stem+"_predictions.csv")
         def writer(out):
             w=csv.DictWriter(out,fieldnames=list(journal[0]));w.writeheader();w.writerows(journal)
@@ -276,6 +448,12 @@ def main():
         print("ROWS",report["training_rows"],report["validation_rows"],report["evaluation_rows"])
         print("EVALUATION",json.dumps(report["evaluation"]))
         print("PAIRED BRIER",json.dumps(report["paired_brier"]))
+        if args.ema_cpr:
+            print("MATCHED CORE",json.dumps(report["matched_intraday_only"]["evaluation"]["model_calibrated"]))
+            print("INCREMENTAL",json.dumps(report["incremental_comparison"]))
+            print("LEVEL RULES",json.dumps(report["fixed_level_rules"]))
+            print("EVENT DIAGNOSTICS",json.dumps(report["event_diagnostics"]))
+            print("MISSING CONTEXT",sum(v["missing_ema_cpr_context"] for v in report["session_coverage"].values()))
         print("GATE",json.dumps(report["retrospective_gate"]))
         print("STATE",report["state"])
         print("REPORT",path)
