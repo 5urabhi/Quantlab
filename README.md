@@ -97,9 +97,10 @@ Read this at the beginning of every task. Update this same checklist on each evi
 - [x] Pass directional benchmark tests (3/3) and run fixed five-year protocol. 87,191 evaluation anchors, 38 calibrated calls across 17 days; day-weighted material hit 40.29%, mean net proxy -2.981 bps/called opportunity. State direction_not_qualified; see ledger.
 - [x] Implement a fixed matched EMA 9/21 and level-event hypothesis after the owner's observation of BANKNIFTY breakouts/reversals near prior OHLC/CPR and today's ranges. The new optional direction mode seeds one-minute EMAs from the preceding complete weekday, computes prior-day levels and causal developing levels, and encodes breakouts, retests/rejections and one-bar failed breakouts. Original 16-minute direction comparator retained; 5/5 tests passed and matched five-year run completed on fa691f7. Qualification failed.
 - [x] Pass EMA/CPR tests (5/5) and attempt matched five-year study: 81,543 evaluation anchors across 231 supported sessions, 63 calls across 14 sessions, 49.86% day-weighted material hit, -1.70 bps mean proxy per call. Conditional sign Brier worsened vs matched core; not qualified.
-- [x] Implement descriptive five-year fresh EMA 9/21 crossover-to-opposite-crossover path audit: variable duration, favorable/adverse excursion, time to extreme, giveback, CPR zones, censoring and separately delayed open proxy. Implementation committed; tests and actual run pending.
-- [ ] Run EMA path audit, inspect bullish and bearish path distributions and censored coverage; identify whether opposite-cross exits give back material excursions and whether delay is feasible. Do not choose hindsight peaks as exits or infer a strategy from a descriptive result.
-- [ ] If evidence warrants, predeclare a causal breakout/reversal or trailing-exit study with event/first-passage labels and a fixed matched baseline on new evidence. Defer the previously proposed event-only fixed-five-minute ML comparison until path audit is reviewed.
+- [x] Implement descriptive five-year fresh EMA 9/21 crossover-to-opposite-crossover path audit: variable duration, favorable/adverse excursion, time to extreme, giveback, CPR zones, censoring and separately delayed open proxy. All 4 scoped tests passed and five-year audit completed on 8934004.
+- [x] Run EMA path audit: 19,431 paths, 18,316 complete, 1,115 censored, 16,821 delayed index-open references. Median complete favorable excursion 30.55 points, time to extreme 4 minutes, opposite cross 13 minutes, giveback 60.05 points. Only 17.96% of delayed scored references positive after assumed 5bps. Descriptive result, not qualified.
+- [ ] Next: predeclare and implement one causal first-passage crossover study. Distinguish whether a fresh cross is likely to produce a material favorable move BEFORE an adverse move or reverse signal; calculate from delayed entry, not hindsight signal-price extreme. Compare against training-only event priors and a simple exit rule; explicitly retain unfinished/ambiguous outcomes. Proposed initial research design below; parameters require freezing before fitting. No threshold grid or prospective claims.
+- [ ] If first-passage evidence warrants, learn earlier exit decisions using running favorable/adverse excursion, EMA slope/separation, level proximity and completed bars, compared with fixed opposite-cross and simple trailing exits on paired observations. Do not optimize to known peaks.
 - [ ] Audit exact exchange-session continuity, official holiday/special-session gaps and wider multi-day regime context. The new mode conservatively rejects unverified missing prior weekdays and current gaps; do not claim complete multiday sequence coverage.
 - [ ] Establish retrospective directional qualification against simple matched comparators; if no signal qualifies, remain in Phase 1 rather than claim success.
 - [ ] Freeze a qualifying candidate and confirm it on new receipt-time shadow sessions (proposed minimum 60 new sessions and 100 calls, subject to predeclared power/support review); check calibration, coverage, both directions, stable performance and latency. No live use before qualification.
@@ -145,7 +146,7 @@ Read this at the beginning of every task. Update this same checklist on each evi
 - [ ] Confirm calibration, drift, net risk-controlled paper performance and operational integrity. A no-edge conclusion is valid; do not promote automatically.
 - [ ] Only after baseline evidence, evaluate controlled offline retraining, contextual bandits or RL versus simpler policies; keep live order routing disabled.
 
-**Current next command — entire EMA crossover-to-opposite-cross path audit (P0):**
+**Completed EMA crossover-to-opposite-cross path audit command (reproducibility only):**
 
     .venv/bin/python -m unittest discover -s tests -p 'test_ema_cross_paths.py' -v
     nice -n 15 ionice -c 3 .venv/bin/python -m scripts.benchmark_ema_paths --days 1825 --to-date 2026-11-27
@@ -540,9 +541,32 @@ Context-minus-core multiclass Brier -0.00180581 (descriptive 95% five-day block 
 
 Local files results/banknifty_direction_ema_cpr_0eeb3dffed0444738ffd0b4a950f5ccb.json and corresponding _predictions.csv. Console evidence, original hashes not independently reconciled. The owner then requested whole crossover-to-opposite-cross movements, not fixed five-minute outcomes. Retain the negative result, prioritize descriptive path audit before further ML. No event-only fixed-horizon follow-up has been committed in this revision.
 
-### EMA crossover path audit (implementation; actual run pending)
+### EMA crossover path audit (completed; descriptive, not qualified)
 
-scripts/benchmark_ema_paths.py and tests/test_ema_cross_paths.py implement the fixed protocol in the current command above. Each supported fresh bullish/bearish cross has one path to the next opposite cross within the observed session, or an explicit censor. Report complete-path distributions separately from censored observed lower bounds, actual delayed-reference states and CPR-zone partitions. The best high/low after entry is a retrospective label, never a known exit; future study should test only causal signals or trailing/level exits with separate validation. Code committed; tests and actual local empirical outputs pending. No data acquisition, model fit or trading authorization.
+Operator console on 89340045010002e41208a97fa38553db94693641: all 4 scoped tests passed (0.014s). Observed index scope 1,231 sessions, 2021-11-29 to 2026-11-26. Session states: 1,105 complete regular prefixes, 11 current gaps, one unavailable current prefix, 114 unavailable complete prior weekdays. Missing weekday is not proof of a missing trading session (official holidays not certified). Total 19,431 paths: 18,316 completed opposite-cross paths and 1,115 censored; 16,821 scored delayed index-open references, 1,389 reverse signal before/at entry, 106 unobserved references, 1,115 censored not scored. Latest historical evaluation: 3,922 paths, 3,691 complete, 231 censored, 3,391 scored delayed references, 257 canceled before/at entry and 43 unobserved references.
+
+| Complete-path statistic | All five-year dates | Bullish five-year | Bearish five-year | Latest evaluation |
+| --- | ---: | ---: | ---: | ---: |
+| Complete paths | 18316 | 9132 | 9184 | 3691 |
+| Median duration (min) | 13 | 13 | 13 | 14 |
+| Median time to favorable extreme (min) | 4 | 4 | 4 | 5 |
+| MFE p25 (points) | 9.10 | 9.00 | 9.20 | 11.575 |
+| MFE median (points) | 30.5508 | 29.9750 | 31.1016 | 36.55 |
+| MFE p75 (points) | 79.5131 | 78.2274 | 80.9367 | 94.30 |
+| MFE p90 (points) | 163.40 | 162.0936 | 164.3850 | 189.85 |
+| Median MAE (points) | 31.5976 | 31.60 | 31.55 | 35.40 |
+| Median signed opposite-cross close move (points) | -21.20 | -21.20 | -21.20 | -24.00 |
+| Median giveback (points) | 60.0484 | 59.30 | 60.9262 | 69.00 |
+| Median delayed signed open move (points; scored subset) | -18.25 | -18.40 | -18.15 | -21.15 |
+| Median net delayed index proxy (bps; scored subset) | -8.7605 | -8.7782 | -8.7524 | -8.6696 |
+| Positive opposite-cross close move fraction | 24.7762% | 24.7043% | 24.8476% | 25.4403% |
+| Positive delayed net proxy fraction (5bps assumed) | 17.9597% | 18.1829% | 17.7383% | 18.3722% |
+
+Separate percentiles are not the history of a single typical position; no inference about order of favorable/adverse extremes within a minute. Evaluation CPR groups (completed count, median MFE points, positive fraction on delayed scored subset): bullish above (851,34.90,18.04%), bullish inside (197,48.45,21.67%), bullish below (786,35.575,17.93%), bearish above (836,36.10,16.38%), bearish inside (224,39.95,18.54%), bearish below (797,36.75,20.35%). Do not select a subgroup post hoc or infer net expected P&L from hit rates. Same inspected historical periods remain exploratory. Opposite-cross waiting has poor typical signed movement; favorable excursions can occur well before the reversal signal, but the signal-price MFE may include a move before an actual delayed entry. These observations motivate studying the causal order and entry-relative magnitude, not assuming capture of hindsight extrema or immediately trading a 4-minute exit. No account-level or option P&L, no trained predictor, no prospective qualification.
+
+Local files: results/banknifty_ema_cross_paths_ebd96390c23e4edcbd537a7c04c377b2.json and results/banknifty_ema_cross_paths_ebd96390c23e4edcbd537a7c04c377b2_paths.csv. Console supports the above; original files and source hashes not independently inspected. Both CI workflows for 8934004 were still in progress at the documentation check.
+
+**Next research design (proposed, not implemented):** One event-centered first-passage benchmark, not another all-candle direction model. Reuse exact fresh-cross times, same verified contiguous prefixes and chronological reservations. Define a single material favorable barrier and adverse barrier in normalized bps, both fixed before fitting; proposed +10bps/-5bps on signed move from a delayed entry reference (illustrative research values, not verified option break-even or user-approved trading levels). Evaluate which barrier is observed first before the opposite crossover, with no fixed five-minute holding limit. Use completed-candle crossing observations or explicit ambiguous intrabar touch state; never grant a favorable fill when both barriers touch within one minute. Separate canceled, missing, unresolved and end-of-session outcomes; report denominators and coverage. No future extrema, outcome duration, future entry price or next crossover in signal-time model inputs. Compare fixed training-only historical event/clock priors against a small fixed learned classifier using available EMA/CPR distances, recent returns/volatility and prior/current market structure; fit/calibrate on earlier partitions only. The direct target is probability of a sufficiently large continuation before reversal/adverse move, conditional on actual entry and resolvable path; report competing/censored cases and avoid treating conditional probabilities as net-trade probabilities. If testing exits, compare same entry cohort, causal signals and explicit delay/cost, with no favorable selection on future path completion. Freeze protocol and reserve prospective sessions before promotion. Do not repeat the failed five-minute direction or raw crossover study. This is a planned next step, not a committed first-passage implementation or a recommendation to place trades.
 
 ### Global and fixed-time experiments (November 27, exploratory)
 
