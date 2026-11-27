@@ -22,7 +22,7 @@ import math
 import os
 import time
 
-from . import service, cockpit_sources, trading_cockpit, options_research_audit, liquidity_spreads as option_fees
+from . import service, cockpit_sources, trading_cockpit, options_research_audit, liquidity_spreads as option_fees, nse_session_policy as sessions
 
 IST = ZoneInfo("Asia/Kolkata")
 ENDPOINT = "https://api.dhan.co/v2/charts/rollingoption"
@@ -381,7 +381,7 @@ def _save_cache(body: dict, payload: dict, *, wire_request=None) -> None:
     tmp.replace(path)
 
 
-def _normalize(payload: dict, body: dict) -> list[dict]:
+def _normalize(payload: dict, body: dict, *, full_session: bool = False) -> list[dict]:
     which = "ce" if body["drvOptionType"] == "CALL" else "pe"
     segment = payload.get("data", {}).get(which)
     if segment is None:
@@ -407,7 +407,8 @@ def _normalize(payload: dict, body: dict) -> list[dict]:
                 raise ValueError("Dhan option bars are not uniquely ordered")
             previous = timestamp
             local = timestamp.astimezone(IST)
-            if not lower <= local.date() <= upper or not clock_time(9, 15) <= local.time().replace(tzinfo=None) <= clock_time(15, 29):
+            close=sessions.derivatives_close(local.date()) if full_session else clock_time(15,30)
+            if not lower <= local.date() <= upper or not clock_time(9, 15) <= local.time().replace(tzinfo=None) < close:
                 continue
             op, hi, lo, close, strike = (float(segment[name][index])
                                       for name in ("open", "high", "low", "close", "strike"))
