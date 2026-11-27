@@ -146,6 +146,26 @@ class OptionsHistorySyncTests(unittest.TestCase):
             self.assertEqual(report["known_market_dates"],1)
             self.assertFalse(report["continuous_coverage_certified"])
 
+    def test_extended_receipt_audit_does_not_change_comparison_window(self):
+        day="2026-10-01"
+        stamps=[datetime(2026,10,1,9,59,tzinfo=timezone.utc).timestamp(),
+                datetime(2026,10,1,10,0,tzinfo=timezone.utc).timestamp(),
+                datetime(2026,10,1,10,9,tzinfo=timezone.utc).timestamp(),
+                datetime(2026,10,1,10,10,tzinfo=timezone.utc).timestamp()]
+        payload={"data":{"ce":{"timestamp":stamps,"open":[10]*4,"high":[11]*4,
+                                "low":[9]*4,"close":[10]*4,"strike":[60000]*4}}}
+        body=exp._request_body(date(2026,10,1),date(2026,10,2),"MONTH",0,"ATM","CALL")
+        self.assertEqual(len(exp._normalize(payload,body)),1)
+        self.assertEqual(len(exp._normalize(payload,body,full_session=True)),3)
+        args=dict(start_date=day,end_date="2026-10-02",wings=0,today=self.today,priority_sessions=[day])
+        first=sync.run(**args,fetcher=lambda b:payload if b["drvOptionType"]=="CALL" else {"data":{}})
+        second=sync.run(**args,fetcher=lambda _:self.fail("unexpected redownload"))
+        for report in (first,second):
+            self.assertEqual(report["known_observed_minute_slots"],1)
+            self.assertEqual(report["known_expected_minute_slots"],750)
+            self.assertEqual(report["extended_observed_minute_slots"],2)
+            self.assertEqual(report["extended_expected_minute_slots"],20)
+
     def test_unchanged_receipts_skip_reparse_but_changed_and_deleted_revalidate(self):
         args=dict(start_date="2026-10-01",end_date="2026-10-02",wings=0,today=self.today)
         sync.run(**args,fetcher=lambda _:{"data":{}})
@@ -193,10 +213,10 @@ class OptionsHistorySyncTests(unittest.TestCase):
             if len(calls)==2:
                 second_started.set()
             return {"data":{}}
-        def verify(payload,body):
+        def verify(payload,body,**kwargs):
             if body["drvOptionType"]=="CALL":
                 self.assertTrue(second_started.wait(2),"next request did not overlap verification")
-            return normalize(payload,body)
+            return normalize(payload,body,**kwargs)
         with patch.object(exp,"_normalize",side_effect=verify):
             result=sync.run(start_date="2026-10-01",end_date="2026-10-02",wings=0,
                             fetcher=fetch,today=self.today,pipeline=True)

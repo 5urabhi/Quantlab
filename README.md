@@ -192,6 +192,7 @@ or published.
 ## Authoritative status and limits
 
 [Canonical release and evidence status](docs/QUANTLAB_STATUS.md).
+[Current implementation and remaining-work register](docs/QUANTLAB_CURRENT_WORKLIST.md).
 [Source-verified research and release commands](docs/THREE_STUDIES_RESEARCH_ACCEPTANCE.md).
 [Software/browsers tests](.github/workflows/workstation-ci.yml).
 

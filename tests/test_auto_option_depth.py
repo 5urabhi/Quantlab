@@ -68,8 +68,13 @@ class AutomaticDepthRecorderTests(unittest.TestCase):
         self.assertFalse(auto._market_open(at(3, 44)))
         self.assertTrue(auto._market_open(at(3, 45)))
         self.assertTrue(auto._market_open(at(9, 59)))
-        # 10:00 UTC is 15:30 IST
-        self.assertFalse(auto._market_open(at(10, 0)))
+        # 15:30 is still open after the August CAS changes; 15:40 is not.
+        self.assertTrue(auto._market_open(at(10, 0)))
+        self.assertTrue(auto._market_open(at(10, 9)))
+        self.assertFalse(auto._market_open(at(10, 10)))
+        self.assertFalse(auto._market_open(datetime(2026,7,31,10,0,tzinfo=timezone.utc)))
+        self.assertTrue(auto._market_open(datetime(2026,12,7,10,14,tzinfo=timezone.utc)))
+        self.assertFalse(auto._market_open(datetime(2026,12,7,10,15,tzinfo=timezone.utc)))
         self.assertFalse(auto._market_open(at(3, 45, 21)))
 
     def test_both_ce_pe_near_premium_and_verified_master_only(self):
