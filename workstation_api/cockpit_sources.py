@@ -35,15 +35,18 @@ def _root() -> Path:
 def _candidates(identity: str) -> list[tuple[Path, Path, dict]]:
     if identity not in INDEX_IDENTITIES and identity not in index_spot.RESEARCH_INDEXES:
         raise ValueError("Unknown index identity")
-    root = _root()
-    if root.is_symlink() or not root.is_dir():
-        return []
     basename = (INDEX_IDENTITIES[identity][0] if identity in INDEX_IDENTITIES
                 else index_spot.RESEARCH_INDEXES[identity][0])
     results: list[tuple[Path, Path, dict]] = []
-    for folder in sorted(root.iterdir(), reverse=True):
-        if not folder.is_dir() or folder.is_symlink() or not BATCH.fullmatch(folder.name):
+    # The existing serialized generic historical API writes immutable original
+    # receipts under raw/download_*. Reuse those IDX_I receipts in place,
+    # rather than copying them into a second price store.
+    folders = []
+    for root,pattern in ((_root(),BATCH),(service.DATA/"dhan"/"raw",re.compile(r"^download_[a-f0-9]{12}$"))):
+        if root.is_symlink() or root.parent.is_symlink() or not root.is_dir():
             continue
+        folders.extend(p for p in root.iterdir() if p.is_dir() and not p.is_symlink() and pattern.fullmatch(p.name))
+    for folder in sorted(folders, reverse=True):
         source = folder / (basename + "_intraday_1m.csv")
         manifest = folder / (basename + "_intraday_1m.manifest.json")
         if (not source.is_file() or source.is_symlink() or not manifest.is_file()
