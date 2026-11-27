@@ -7,6 +7,8 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone, time as clock
 from pathlib import Path
 from threading import Event, RLock, Thread
+from concurrent.futures import ThreadPoolExecutor
+from index_research import dhan_history_budget as history_budget
 from zoneinfo import ZoneInfo
 import json
 import os
@@ -329,6 +331,7 @@ def status():
                       "live_option_requests_per_pass":LIVE_OPTION_REQUESTS,"live_equity_repairs_per_instrument":LIVE_EQUITY_REPAIRS,
                       "live_index_windows_per_instrument":LIVE_INDEX_WINDOWS,
                       "productive_retry_seconds":int(PRODUCTIVE_RETRY.total_seconds()),"live_pressure_retry_seconds":int(PRESSURE_RETRY.total_seconds()),"normal_retry_seconds":int(RETRY.total_seconds()),"rate_limit_retry_seconds":int(RATE_LIMIT_RETRY.total_seconds())},
+            "historical_request_budget":history_budget.BUDGET.snapshot(),
             "note":"Runs while the backend is open, including during Indian market hours with smaller batches and live-recorder pressure checks. In-flight requests may finish before a pause. Verified request coverage is not proof of every minute. Global feeds, approved report deliveries and live capture retain their own source permissions. Historical missed ticks/books, unknown membership, unavailable provider history and missing dated weights cannot be fabricated."}
 
 def request_check():
@@ -653,7 +656,7 @@ def run(*,progress=None,now=None):
     def provider_limited():
         sources=report["sources"]
         lanes=[*sources.get("index",{}).values(),*(v for k,v in sources.items() if k!="index")]
-        return any(v.get("provider_rate_limited") or _rate_limit_message(v.get("reason")) for v in lanes)
+        return bool(history_budget.BUDGET.remaining_cooldown()) or any(v.get("provider_rate_limited") or _rate_limit_message(v.get("reason")) for v in lanes)
     def should_stop():
         # Once paused, do not re-enter the same pass if pressure briefly
         # clears. The next scheduled pass rechecks current resources.
@@ -689,6 +692,10 @@ def run(*,progress=None,now=None):
             else:
                 report.update(state="blocked",reason=job_safety.scrub(
                     profile.get("message") or "Dhan token or historical data permission requires attention",limit=200))
+            return report
+        if history_budget.BUDGET.remaining_cooldown():
+            report.update(state="blocked",reason="Shared historical Dhan rate limit",provider_rate_limited=True,
+                          provider_retry_after_seconds=history_budget.BUDGET.remaining_cooldown())
             return report
         if cfg["index"]:
             # Legacy spot sync uses the same guard and yields while the
@@ -758,6 +765,10 @@ def run(*,progress=None,now=None):
                 else:
                     evidence={}
                 report["sources"]["options"]={**evidence,"state":"blocked","reason":job_safety.scrub(exc)[:200]}
+        shared_cooldown=history_budget.BUDGET.remaining_cooldown()
+        if shared_cooldown:
+            report["provider_rate_limited"]=True
+            report["provider_retry_after_seconds"]=max(shared_cooldown,report.get("provider_retry_after_seconds",0))
         states=[v["state"] for k,v in report["sources"].items() if k!="index"]
         states.extend(v["state"] for v in report["sources"].get("index",{}).values())
         report["state"]="paused" if should_stop() else "partial" if not states or any(x!="checked" for x in states) else "checked"
