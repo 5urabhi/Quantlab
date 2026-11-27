@@ -183,5 +183,18 @@ class OptionsHistorySyncTests(unittest.TestCase):
         self.assertEqual(seen[-1]["remaining_planned_requests"],1)
 
 
+    def test_provider_retry_after_is_respected(self):
+        from urllib.error import HTTPError
+        from io import BytesIO
+        body=exp._request_body(date(2026,10,1),date(2026,10,2),"MONTH",0,"ATM","CALL")
+        def opener(*args,**kwargs):
+            raise HTTPError(exp.ENDPOINT,429,"rate limit",{"Retry-After":"1800"},BytesIO(b""))
+        with patch.dict(exp.os.environ,{"DHAN_ACCESS_TOKEN":"fixture-token"}):
+            with self.assertRaises(exp.RollingRateLimitError) as err:
+                exp._original_response_once(body,opener=opener)
+        self.assertEqual(err.exception.retry_after_seconds,1800)
+        self.assertEqual(exp._retry_after_seconds({"Retry-After":"invalid"}),0)
+
+
 if __name__=="__main__":
     unittest.main()
