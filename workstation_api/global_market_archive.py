@@ -170,6 +170,12 @@ def ingest(raw, *, mode="receipt", confirm_reviewed=False, archive_lag_minutes=N
         # Bind external CSV with explicit reviewed identity/resolution and
         # keep idempotence even when the import timestamp changes.
         key.extend(["reviewed_direct_bid_csv_v1",rows[0][0],rows[0][1]])
+    return store_validated_rows(rows,original,mode,archive_lag_minutes,now,key)
+
+
+def store_validated_rows(rows, original, mode, archive_lag_minutes, now, key):
+    """Internal storage adapter: callers validate exact provider identity and OHLCV first."""
+    raw_sha=sha256(original).hexdigest()
     receipt = sha256(json.dumps(key,separators=(",",":")).encode()).hexdigest()
     path = shared_market_data.database_path()
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -182,7 +188,8 @@ def ingest(raw, *, mode="receipt", confirm_reviewed=False, archive_lag_minutes=N
         with db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM global_market_receipts WHERE receipt_sha256=?",(receipt,)).fetchone():
-                return {"state":"already_imported","receipt_sha256":receipt,"inserted":0,"rows":len(rows)}
+                return {"state":"already_imported","receipt_sha256":receipt,"inserted":0,"rows":len(rows),
+                        "identity":rows[0][0],"resolution":rows[0][1]}
             db.execute("INSERT INTO global_market_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                        (receipt,raw_sha,rows[0][0],rows[0][1],mode,archive_lag_minutes,_iso(now),
                         len(rows),rows[0][2],rows[-1][2],gzip.compress(original,compresslevel=3)))
@@ -275,18 +282,21 @@ def inventory():
     result = {"state":"not_recorded","series":[],"note":"Observed counts/endpoints only; not certified exchange-session completeness."}
     if not path.is_file():
         return result
+    from . import alpaca_overnight as boats
+    series=[(symbol,name,identity(symbol),resolution)
+            for symbol,(name,*_) in INSTRUMENTS.items() for resolution in ("1m","5m")]
+    series.extend((symbol,name,boats.identity(symbol),"5m") for symbol,name in boats.SYMBOLS.items())
     with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True,timeout=2)) as db:
         if not _table_exists(db):
             return result
-        for symbol,(name,*_) in INSTRUMENTS.items():
-            for resolution in ("1m","5m"):
-                key=(identity(symbol),resolution)
-                # The primary key supports these range scans. No payloads read.
-                n,first,last,arch = db.execute("""SELECT COUNT(*),MIN(bar_start_utc),MAX(bar_start_utc),
-                    COUNT(archive_known_utc) FROM global_market_bars WHERE identity=? AND resolution=?""",key).fetchone()
-                if n:
-                    result["series"].append({"instrument":symbol,"label":name,"identity":key[0],
-                        "resolution":resolution,"rows":n,"first_utc":first,"last_utc":last,"archive_rows":arch})
+        for symbol,name,ident,resolution in series:
+            key=(ident,resolution)
+            # The primary key supports these range scans. No payloads read.
+            n,first,last,arch = db.execute("""SELECT COUNT(*),MIN(bar_start_utc),MAX(bar_start_utc),
+                COUNT(archive_known_utc) FROM global_market_bars WHERE identity=? AND resolution=?""",key).fetchone()
+            if n:
+                result["series"].append({"instrument":symbol,"label":name,"identity":ident,
+                    "resolution":resolution,"rows":n,"first_utc":first,"last_utc":last,"archive_rows":arch})
         result["state"]="stored" if result["series"] else "empty"
     return result
 

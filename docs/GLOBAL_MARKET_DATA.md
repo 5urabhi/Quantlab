@@ -130,3 +130,47 @@ windows are not proof of cash-market sessions: foreign holiday/special
 session calendars, genuine prior cash close/open, official cash-index
 series, GIFT NIFTY and paired BANKNIFTY model validation remain separate
 tasks. No training or trading performance claim is made.
+
+
+## Recommended intraday route: existing Alpaca BOATS feed
+
+Alpaca documents free-plan access to 15-minute-delayed historical BOATS
+bars (https://docs.alpaca.markets/us/docs/245-trading-for-trading-api).
+A local Nov 24, 2026 three-hour probe returned SPY, QQQ, EWY, FXI, EWJ,
+and EWT, with no candles for EWS, EWH, EWA or KBE in that sample.
+This proves access to that range, not earlier dates or complete history.
+No new platform or subscription is needed for that verified access.
+
+After reviewing applicable data rights:
+
+    .venv/bin/python -m scripts.global_market_data backfill-boats --days 30 --confirm-reviewed
+    .venv/bin/python -m scripts.global_market_data enable-boats --confirm-reviewed
+    .venv/bin/python -m scripts.global_market_data inventory
+
+Dates are Indian calendar dates; the default excludes today. For
+repeatable longer experiments, pin --to-date (exclusive). A bounded
+invocation attempts up to eight newest seven-day windows. Repeat with
+the same dates to resume verified observed windows, or use --repair
+for an explicit recheck. An observed window does NOT certify complete
+history; an empty response is not interpreted as a valid holiday or
+as successful historical coverage. Original provider JSON bytes are
+retained in the same canonical receipts table (legacy gzip column
+name original_csv_gzip). No unlicensed scraping or Dhan calls.
+
+The existing context worker requests the delayed trailing hour every
+five minutes during the NY 20:00-04:00 reference session plus delay.
+New York daylight saving is respected. Keep QuantLab open for actual
+receipt evidence. Use disable-boats to stop. Historical archive
+availability assumes 20 minutes after the bar ends, more conservative
+than the advertised 15-minute delay; receipt mode uses actual import
+time. Old data downloaded today cannot become a historical live
+receipt. Sparse ETFs must remain missing where anchors are absent.
+
+    .venv/bin/python -m scripts.global_market_data features --date 2026-11-24 --cutoff 09:10
+
+Features include observed-slot coverage, age, delayed session return,
+and exact 30-minute-anchor return, not predictive performance. The NY
+overnight session may start after Japan's cash open, particularly
+during US standard time. These US-listed ETFs are not the local cash
+markets and cannot establish actual Asian cash-opening returns.
+No GIFT NIFTY data or five-year BOATS coverage is claimed.

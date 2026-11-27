@@ -29,6 +29,15 @@ def main():
     direct.add_argument("--confirm-reviewed",action="store_true")
     existing=sub.add_parser("enable-existing",help="Enable already-configured FRED and Alpaca daily feeds")
     existing.add_argument("--confirm-reviewed",action="store_true")
+    boats=sub.add_parser("backfill-boats",help="Download existing Alpaca delayed overnight ETF bars")
+    boats.add_argument("--days",type=int,default=30)
+    boats.add_argument("--to-date",type=date.fromisoformat)
+    boats.add_argument("--max-windows",type=int,default=8)
+    boats.add_argument("--repair",action="store_true")
+    boats.add_argument("--confirm-reviewed",action="store_true")
+    enable_boats=sub.add_parser("enable-boats")
+    enable_boats.add_argument("--confirm-reviewed",action="store_true")
+    sub.add_parser("disable-boats")
     sub.add_parser("inventory")
     enable=sub.add_parser("enable-live")
     enable.add_argument("--inbox",type=Path,required=True)
@@ -82,10 +91,23 @@ def main():
         config["enabled"]=True
         result=context_feeds.configure(config,True)
         result["note"]="Existing authorized daily sources enabled. The running QuantLab context worker reads this configuration; no external brokerage installation. Asian ETF proxies are previous US-market observations, not local opening prices."
+    elif args.action=="backfill-boats":
+        from workstation_api import alpaca_overnight
+        stop=args.to_date or g._now().astimezone(g.IST).date()
+        if not 1<=args.days<=1827 or not args.confirm_reviewed:
+            p.error("Choose 1-1827 days and review Alpaca archive permissions")
+        import sys
+        result=alpaca_overnight.backfill(stop-timedelta(days=args.days),stop,
+            confirmed=True,max_windows=args.max_windows,repair=args.repair,
+            progress=lambda entry:print(json.dumps(entry),file=sys.stderr,flush=True))
+    elif args.action in ("enable-boats","disable-boats"):
+        from workstation_api import alpaca_overnight
+        result=alpaca_overnight.configure(args.action=="enable-boats",
+            confirmed=getattr(args,"confirm_reviewed",False))
     elif args.action=="inventory":
-        from workstation_api import cpr_context_archive, context_feeds
+        from workstation_api import cpr_context_archive, context_feeds, alpaca_overnight
         result={"global_intraday_proxies":g.inventory(),"existing_context":cpr_context_archive.inventory(),
-                "configured_sources":context_feeds.status()}
+                "configured_sources":context_feeds.status(),"boats_enabled":alpaca_overnight.enabled()}
     elif args.action=="enable-live":
         result=g.configure_live_inbox(args.inbox,confirm_reviewed=args.confirm_reviewed)
     elif args.action=="disable-live":
@@ -96,9 +118,13 @@ def main():
             p.error("No canonical database")
         cutoff=datetime.combine(args.date,time.fromisoformat(args.cutoff),g.IST)
         with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True,timeout=2)) as db:
-            result=g.reference_features(db,args.date,cutoff,mode=args.mode,resolution=args.resolution)
+            from workstation_api import alpaca_overnight
+            result={"cash_reference_cfd":g.reference_features(db,args.date,cutoff,mode=args.mode,resolution=args.resolution),
+                    "overnight_etf":alpaca_overnight.features(db,args.date,cutoff,mode=args.mode)}
     print(json.dumps(result,indent=2))
     if args.action=="import" and any(r["state"]=="rejected_or_paused" or r["state"]=="rejected" for r in result["files"]):
+        return 2
+    if args.action=="backfill-boats" and result["state"]!="range_attempted":
         return 2
     return 0
 

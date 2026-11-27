@@ -41,7 +41,7 @@ SOURCES = {
     "sector_history": ("Dated sector classifications", "classifications", "Effective date", "Canonical SQLite", "Effective-dated source classifications"),
     "active_option_history": ("Contract-specific option history", "returned timestamp rows", "Observation time (UTC)", "Original Dhan intraday receipts", "Exact NSE_FNO security IDs captured while listed; strike, expiry and lot require archived instrument evidence; receipt ranges may overlap"),
     "expired_options": ("Expired option history", "returned timestamp rows", "Observation time (UTC)", "Original rolling-option receipts", "Rolling strike-offset responses; may overlap and include unusable prices"),
-    "global_market_bars": ("Global market CFD proxy bars", "candles", "Bar start UTC", "Canonical SQLite", "Authorized JForex exports; CFD BID OHLCV, not official cash indices"),
+    "global_market_bars": ("Global market proxy bars", "candles", "Bar start UTC", "Canonical SQLite", "Authorized CFD BID exports and Alpaca BOATS overnight ETF trade bars; not official cash indices"),
     "market_context": ("Cross-market factor observations", "observations", "Source availability time (UTC)", "Canonical SQLite", "Reviewed imports and automatic provider receipts; revisions may coexist"),
     "market_event_receipts": ("Macro calendar & news receipts", "source snapshots", "Receipt time (UTC)", "Canonical SQLite", "Official feed snapshots, not individual independent news events"),
     "market_news": ("Official announcement observations", "headlines", "First receipt time (UTC)", "Canonical SQLite", "First observed official announcement identities, not a complete news universe"),
