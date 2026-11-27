@@ -15,6 +15,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from index_research import dhan_history_budget as history_budget
 from zoneinfo import ZoneInfo
 import json
 import math
@@ -249,6 +250,20 @@ def _original_response(body: dict, *, opener=None, wire_state=None) -> dict:
 
 
 def _original_response_once(body: dict, *, opener=None) -> dict:
+    if opener is not None:
+        return _rolling_response_once(body,opener=opener)
+    try:
+        with history_budget.BUDGET.slot():
+            try:
+                return _rolling_response_once(body,opener=urlopen)
+            except RollingRateLimitError as exc:
+                history_budget.BUDGET.throttle(exc.retry_after_seconds)
+                raise
+    except history_budget.HistoricalThrottle as exc:
+        raise RollingRateLimitError(exc.retry_after_seconds) from None
+
+
+def _rolling_response_once(body: dict, *, opener=None) -> dict:
     token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
     if not token or len(token) > 4096:
         raise ValueError("Connect your Dhan Data API token under Trading Copilot > Connections")
@@ -515,6 +530,20 @@ def _active_body(security_id: str, start: date, stop: date) -> dict:
 
 
 def _active_response(body: dict, *, opener=None) -> dict:
+    if opener is not None:
+        return _active_response_once(body,opener=opener)
+    try:
+        with history_budget.BUDGET.slot():
+            try:
+                return _active_response_once(body,opener=urlopen)
+            except RollingRateLimitError as exc:
+                history_budget.BUDGET.throttle(exc.retry_after_seconds)
+                raise
+    except history_budget.HistoricalThrottle as exc:
+        raise RollingRateLimitError(exc.retry_after_seconds) from None
+
+
+def _active_response_once(body: dict, *, opener=None) -> dict:
     token = os.getenv("DHAN_ACCESS_TOKEN", "").strip()
     if not token or len(token) > 4096:
         raise ValueError("Connect your Dhan Data API token under Trading Copilot > Connections")
@@ -529,7 +558,13 @@ def _active_response(body: dict, *, opener=None) -> dict:
         if exc.code in (401, 403):
             raise ValueError("Dhan current option-history access denied. Verify the Data API subscription and token") from None
         if exc.code == 429:
-            raise ValueError("Dhan rate-limited active option candles; reuse existing cached source receipts or retry later") from None
+            raise RollingRateLimitError(_retry_after_seconds(exc.headers)) from None
+        try:
+            failure=json.loads(exc.read(4096))
+        except (ValueError,TypeError,OSError,AttributeError):
+            failure={}
+        if isinstance(failure,dict) and str(failure.get("errorCode","")).strip() in ("DH-904","805"):
+            raise RollingRateLimitError(_retry_after_seconds(exc.headers)) from None
         raise ValueError(f"Dhan active NSE_FNO options minute history failed (HTTP {exc.code})") from None
     except (URLError, TimeoutError):
         raise ValueError("Dhan active options history is unreachable") from None
@@ -539,6 +574,8 @@ def _active_response(body: dict, *, opener=None) -> dict:
         data = json.loads(raw)
     except (ValueError, UnicodeError):
         raise ValueError("Dhan active options history response is not JSON") from None
+    if isinstance(data,dict) and str(data.get("errorCode","")).strip() in ("DH-904","805"):
+        raise RollingRateLimitError()
     if not isinstance(data, dict) or not isinstance(data.get("timestamp"), list):
         raise ValueError("Dhan active options history has no timestamped candles")
     return data
