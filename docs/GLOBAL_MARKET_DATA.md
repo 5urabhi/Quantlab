@@ -198,3 +198,33 @@ The report lists missing dates and observed membership coverage.
 Accuracy, Brier score and log loss are exploratory, not a demonstrated
 edge. Index return minus 5 bps is an illustrative cost scenario, not
 executable option P&L; no gap P&L is reported. No orders, no live model.
+
+
+## Next small study: post-opening selective direction
+
+The pre-open 90-day exploratory report (27 scored holdout dates) did
+not establish a global-data lift. Do not buy more data or tune on that
+holdout. Use the existing domestic one-minute receipts:
+
+    .venv/bin/python -m unittest discover -s tests -p 'test_intraday_selective.py' -v
+    nice -n 15 ionice -c 3 .venv/bin/python -m scripts.benchmark_intraday_selective
+
+Default range June 1-November 27, 2026, end exclusive. Fixed 09:20,
+09:30, 10:00, 11:00 and 13:00 IST decisions, separate 15/30-minute
+horizons, with 09:30/15m designated primary. Features use only
+completed candles; entry proxy is the open of the minute one full
+minute after decision, exit proxy the open 15/30 minutes later.
+No current or future constituent bars enter features. Matched
+constituent cohort is bounded by dated membership, with same-date
+index comparator and prior-only relative volume where supported.
+Full index-only cohort remains available outside membership dates.
+Forty initial observed dates then expanding 10-date blocks. Fixed
+L2 logistic C=.1, 0.60 directional confidence threshold; compare
+prior direction, momentum, always-trade and abstaining models.
+Report trade count, coverage, directional accuracy, Brier/log loss,
+win rate and hypothetical 0/5/10 bps index costs. Abstentions have
+zero return, not zero-cost executed trades. Separate clock/horizon
+cells can overlap and must not be summed into portfolio P&L. Prior
+pre-open sample overlaps this exploratory analysis; reserve future
+dates for genuinely prospective confirmation. No parameter search,
+new providers, OI or option P&L, or live promotion.
