@@ -319,9 +319,10 @@ def shuffled_sessions(rows,day_index,rng):
     return np.concatenate([groups[i] for i in rng.permutation(len(unique))])
 
 
-def streaming_snapshot(get,tr,va,te,y,days,day_index,fit,*,seed=42):
+def streaming_snapshot(get,tr,va,te,y,days,day_index,fit,*,seed=42,stable=False):
     """Fixed regularized logistic SGD baseline, bounded memory, every row."""
-    model=SGDClassifier(loss="log_loss",alpha=.0001,average=True,random_state=seed)
+    model=SGDClassifier(loss="log_loss",alpha=.0001,average=True,random_state=seed,
+                        **({"learning_rate":"constant","eta0":.0001} if stable else {}))
     rng=np.random.default_rng(seed)
     weights=np.zeros(len(days),np.float32);weights[tr]=m.day_weights(days[tr])
     with threadpool_limits(limits=2):

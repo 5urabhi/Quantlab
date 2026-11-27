@@ -252,7 +252,8 @@ def labels_for_session(a,*,all_minutes=False):
 
 
 def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,splits,*,index_only=False,progress=None,
-          all_history=False,scratch=None,option_archive=None,global_archive=None):
+          all_history=False,scratch=None,option_archive=None,global_archive=None,
+          include_options=True,pretraining=False):
     dates=sorted(index);training=set(splits[0])
     bank_ids=[] if index_only else sorted({v for day,mp in membership.items() if day in training for v in mp.values()})
     if all_history and not index_only:
@@ -265,10 +266,13 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
     if not all_history and size>900_000_000:raise ValueError("Feature grid exceeds 900MB research bound")
     if all_history and scratch is None:raise ValueError("Full-history mode requires bounded disk-backed scratch")
     grid=histdata.allocate((len(dates),MINUTES,len(identities),channels),scratch,"assets")
-    option_names=option_archive.names if option_archive is not None else m.f.OPTION_NAMES
+    option_names=(option_archive.names if option_archive is not None else m.f.OPTION_NAMES) if include_options else ()
     if global_archive is not None:dn,on=global_archive.names,global_archive.overnight_names
     aux_names=() if index_only else tuple(BANK_AUX)+tuple(option_names)+tuple(dn)+tuple(on)
     aux=histdata.allocate((len(dates),MINUTES,len(aux_names)),scratch,"auxiliary")
+    pretrain_targets=(histdata.allocate((len(dates),MINUTES//5,len(identities),2,3),scratch,"pretrain_targets")
+                       if pretraining else None)
+    pretrain_counts=np.zeros((len(identities),2),dtype=np.int64)
     avail=np.zeros((len(dates),MINUTES,len(AVAILABILITY)),bool)
     histories=[[] for _ in identities];last_complete=[None for _ in identities];audit={}
     availability_names=(*AVAILABILITY[:3],"global_context",AVAILABILITY[4]) if all_history else AVAILABILITY
@@ -278,6 +282,7 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
         if progress and (i%25==0 or i+1==len(dates)):progress(f"Building unified minute grid {i+1}/{len(dates)} {day}")
         active=set(membership.get(day,{}).values());prev=direction.prior_weekday(day)
         grid[i]=np.nan;aux[i]=np.nan
+        if pretrain_targets is not None:pretrain_targets[i]=np.nan
         for j,(identity,source) in enumerate(zip(identities,sources)):
             bank=1<=j<=len(bank_ids)
             n=sessions.cash_bank_minutes(day,identity) if bank else MINUTES
@@ -290,6 +295,15 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
                 if bank and day in membership:
                     observed=grid[i,:,j,0]>0
                     grid[i,observed,j,ASSET_FIELDS.index("dated_bank_member")]=float(identity in active)
+            if pretrain_targets is not None and day in training and a is not None:
+                # Source-native labels, before feature normalization. Enforce
+                # the reviewed cash-session boundary independently of index hours.
+                raw=a.copy();raw[n:]=np.nan
+                pm,py,_,pok,_=labels_for_session(raw,all_minutes=True)
+                for k,horizon in enumerate((5,30)):
+                    col=HORIZONS.index(horizon);take=((pm+1)%5==0)&pok[:,col]
+                    pretrain_targets[i,pm[take]//5,j,k]=py[take,col]
+                    pretrain_counts[j,k]+=int(take.sum())
             histories[j].append(daily_close(a,n))
             if prefix(a,n)==n:
                 last_complete[j]=(day,(float(a[0,0]),float(a[:n,1].max()),float(a[:n,2].min()),float(a[n-1,3])))
@@ -317,7 +331,9 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
             pm=grid[i,:,1+nbank:,retcol]
             avail[i,:,1]=np.isfinite(pm).mean(axis=1)>=.8
             off=len(BANK_AUX);end=off+len(option_names)
-            if option_archive is not None:
+            if not include_options:
+                pass
+            elif option_archive is not None:
                 aux[i,:,off:end],avail[i,:,2]=option_archive.features(day,a[:,3])
             else:
                 for j in range(5,prefix(a)):
@@ -344,8 +360,10 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
     di=np.asarray(di,dtype=int)
     if isinstance(grid,np.memmap):grid.flush()
     if isinstance(aux,np.memmap):aux.flush()
+    if isinstance(pretrain_targets,np.memmap):pretrain_targets.flush()
     return {"grid":grid,"aux":aux,"aux_names":aux_names,"identities":identities,"days":np.asarray(dates)[di],
             "all_history":all_history,"equity_identities":bank_ids,"availability_names":availability_names,
+            "pretrain_targets":pretrain_targets,"pretrain_counts":pretrain_counts.tolist(),"dates":dates,
             "day_index":di,"minutes":np.asarray(minutes,dtype=int),"y":np.concatenate(targets),
             "classes":np.concatenate(classes),"mask":np.concatenate(masks),"scheduled":np.concatenate(scheduled),
             "available":avail,"audit":audit}
@@ -483,7 +501,7 @@ def calibrated_metrics(raw,cal,labels,days):
     return metrics
 
 
-def score_all(data,tr,va,te,models,joint,progress):
+def score_all(data,tr,va,te,models,joint,progress,*,v3=False):
     # One fixed latest-snapshot logistic comparator on the same data scope;
     # no architecture/horizon/threshold search on the evaluated dates.
     full=data.get("all_history",False)
@@ -506,7 +524,7 @@ def score_all(data,tr,va,te,models,joint,progress):
         def clock(rows):return np.stack([bucket.get(int(j)//30,prior) for j in data["minutes"][rows]])
         if full:
             vl,el=histdata.streaming_snapshot(getter,tr[mt],va,te,data["classes"][:,k],data["days"],
-                                               data["day_index"],stream_fit,seed=SEED)
+                                               data["day_index"],stream_fit,seed=SEED,stable=v3)
         else:
             keep=np.isfinite(tx[mt]).mean(axis=0)>=.05
             with threadpool_limits(limits=2):
@@ -530,7 +548,7 @@ def score_all(data,tr,va,te,models,joint,progress):
                 "unresolved_evaluation_rows":int((data["scheduled"][te,k]&~me).sum()),
                 "training_class_prior":prior.tolist(),"methods":{},
                 "adaptive_mae_bps":m._avg(np.abs(reference-target),de).tolist()}
-        losses={};sign_losses={};nonflat=ye!=1;regressions={}
+        losses={};sign_losses={};nonflat=ye!=1;regressions={};movement_losses={};raw_losses={};raw_sign_losses={}
         for name,(vp,ep) in methods.items():
             cal,t=calibration(vp[mv],ep,yv,dv);predictions[name][:,k]=cal
             prob=cal[me];metric=calibrated_metrics(ep[me],prob,ye,de);metric["temperature"]=t
@@ -538,9 +556,14 @@ def score_all(data,tr,va,te,models,joint,progress):
             metric["actions"]=direction._action_metrics(all_calls[me],ye-1,target[:,0],de)[0]
             metric["unresolved_scheduled_calls"]=int(((all_calls!=0)&data["scheduled"][te,k]&~me).sum())
             losses[name]=np.sum((prob-truth)**2,axis=1)
+            raw_losses[name]=np.sum((ep[me]-truth)**2,axis=1)
+            movement_losses[name]=(1-prob[:,1]-nonflat)**2
+            metric["movement_brier"]=float(m._avg(movement_losses[name],de))
             if nonflat.any():
                 pp=prob[nonflat,2]/np.maximum(prob[nonflat,0]+prob[nonflat,2],1e-12)
                 sign_losses[name]=(pp-(ye[nonflat]==2))**2
+                raw=ep[me][nonflat];rp=raw[:,2]/np.maximum(raw[:,0]+raw[:,2],1e-12)
+                raw_sign_losses[name]=(rp-(ye[nonflat]==2))**2
             if name in models:
                 reg=models[name]["evaluation"][1][me,k];regressions[name]=np.abs(reg-target)
                 metric["return_up_down_mae_bps"]=m._avg(regressions[name],de).tolist()
@@ -553,6 +576,10 @@ def score_all(data,tr,va,te,models,joint,progress):
         record["paired_brier"]={key:m.paired_day_interval(losses[main]-losses[key],de) for key in refs}
         record["paired_conditional_sign_brier"]={key:m.paired_day_interval(sign_losses[main]-sign_losses[key],de[nonflat])
              for key in refs} if nonflat.any() else {}
+        if v3:
+            record["paired_movement_brier"]={key:m.paired_day_interval(movement_losses[main]-movement_losses[key],de) for key in refs}
+            record["paired_brier_vs_raw_references"]={key:m.paired_day_interval(losses[main]-raw_losses[key],de) for key in refs}
+            record["paired_sign_vs_raw_references"]={key:m.paired_day_interval(sign_losses[main]-raw_sign_losses[key],de[nonflat]) for key in refs} if nonflat.any() else {}
         if joint:
             record["paired_return_mae_joint_minus_core"]=m.paired_day_interval(
                 regressions["joint"][:,0]-regressions["index_only"][:,0],de)
@@ -593,20 +620,27 @@ def journal_rows(data,te,models,probs):
             yield row
 
 
-def run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="cpu",progress=print,all_history=False):
+def run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="cpu",progress=print,all_history=False,
+        v3=False,include_options=False,pretrain_epochs=2,accumulate=4,width=128):
+    if v3 and not all_history:raise ValueError("V3 requires --all-history")
+    if include_options and not v3:raise ValueError("--include-options is the optional V3 ablation; V2 already includes options")
     if all_history:
         root=Path(root).resolve();folder=root/"results";folder.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="market_dynamics_scratch_",dir=folder) as scratch:
             return _run(root,stop,days,index_only=index_only,epochs=epochs,batch=batch,
-                        device_name=device_name,progress=progress,all_history=True,scratch=Path(scratch))
+                        device_name=device_name,progress=progress,all_history=True,scratch=Path(scratch),v3=v3,
+                        include_options=include_options,pretrain_epochs=pretrain_epochs,accumulate=accumulate,width=width)
     return _run(root,stop,days,index_only=index_only,epochs=epochs,batch=batch,device_name=device_name,progress=progress)
 
 
-def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="cpu",progress=print,all_history=False,scratch=None):
+def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="cpu",progress=print,all_history=False,scratch=None,
+         v3=False,include_options=False,pretrain_epochs=2,accumulate=4,width=128):
     maximum=m.MAX_CORE_DAYS if index_only else m.MAX_CONTEXT_DAYS
     if type(days) is not int or (not all_history and not 120<=days<=maximum) or stop>datetime.now(h.IST).date():
         raise ValueError("Use completed dates and bounded source history")
     if not 1<=epochs<=30 or not 16<=batch<=256:raise ValueError("Bound epochs to 1-30 and batch to 16-256")
+    if v3 and (width not in (64,128,256) or not 1<=pretrain_epochs<=4 or not 1<=accumulate<=16):
+        raise ValueError("Invalid V3 width, pretraining epochs or accumulation")
     torch,_=seq._torch()
     torch.set_num_threads(min(4,os.cpu_count() or 1))
     if device_name=="cuda" and not torch.cuda.is_available():raise ValueError("CUDA unavailable")
@@ -619,8 +653,10 @@ def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="c
     table={};daily={};overnight={};dn=();on=();option_archive=None;global_archive=None
     if all_history and not index_only:
         stocks,meta["all_equities"]=histdata.load_equities(start,stop,dates,stocks,progress)
-        option_archive=histdata.load_options(index,splits[0],progress)
-        meta["all_rolling_options"]=option_archive.evidence
+        if not v3 or include_options:
+            option_archive=histdata.load_options(index,splits[0],progress)
+            meta["all_rolling_options"]=option_archive.evidence
+        else:meta["all_rolling_options"]={"state":"excluded_from_underlying_model"}
         global_archive=histdata.load_global(start,stop,dates,progress)
         meta["all_global"]=global_archive.evidence
     elif not index_only:
@@ -638,7 +674,8 @@ def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="c
             dn=tuple(passage.global_open.DAILY);on=tuple("BOATS_"+s for s in passage.global_open.OVERNIGHT)
     data=build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,splits,
                index_only=index_only,progress=progress,all_history=all_history,scratch=scratch,
-               option_archive=option_archive,global_archive=global_archive)
+               option_archive=option_archive,global_archive=global_archive,
+               include_options=(not v3 or include_options),pretraining=v3)
     if global_archive is not None:meta["all_global"]["factor_receipt_hashes"]=sorted(global_archive.receipts)
     if all_history:
         meta["all_equities_excluded_from_embedding"]=sorted(set(stocks)-set(data["equity_identities"]))
@@ -648,9 +685,13 @@ def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="c
     models={}
     for name,joint in (("index_only",False),) if index_only else (("index_only",False),("joint",True)):
         progress("Fitting fixed custom market dynamics "+name)
-        models[name]=fit_neural(data,tr,va,te,fit,joint=joint,epochs=epochs,batch=batch,device=device,progress=progress)
-    metrics,probs=score_all(data,tr,va,te,models,not index_only,progress)
-    version=FULL_VERSION if all_history else VERSION
+        if v3:
+            from scripts import market_dynamics_v3 as advanced
+            models[name]=advanced.fit(data,tr,va,te,fit,joint=joint,epochs=epochs,batch=batch,device=device,
+                                      progress=progress,pretrain_epochs=pretrain_epochs,accumulate=accumulate,width=width)
+        else:models[name]=fit_neural(data,tr,va,te,fit,joint=joint,epochs=epochs,batch=batch,device=device,progress=progress)
+    metrics,probs=score_all(data,tr,va,te,models,not index_only,progress,v3=v3)
+    version=("market_dynamics_v3_with_options" if include_options else "market_dynamics_v3_underlying") if v3 else (FULL_VERSION if all_history else VERSION)
     report={"version":version,"from_inclusive":start.isoformat(),"to_exclusive":stop.isoformat(),
             "full_history":all_history,"observed_date_span":[dates[0],dates[-1]],
             "split_policy":"all_earlier_train_plus_latest_365d_60_20_20" if all_history else "60_20_20",
@@ -696,6 +737,17 @@ def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="c
             "unknown expiry, future data or invented membership. Scratch feature grids removed after fitting. "
             "Validation-only epoch/calibration, all horizons, overlapping index proxy not account P&L; no live qualification, "
             "RL or orders. Previously examined dates exploratory; future prospective evidence required.")
+    if v3:
+        report["architecture"]={"width":width,"heads":8,"cross_layers":2,"gru_layers":2,"transformer_layers":2,
+                                "local_minutes":30,"intraday_block_minutes":15,"prior_sessions":60,
+                                "pretrain_horizons":[5,30],"pretrain_stride":5,"pretrain_epochs":pretrain_epochs,
+                                "gradient_accumulation":accumulate,"batch_size":batch,"options_included":include_options}
+        report["snapshot_policy"]="streaming_logistic_sgd_constant_lr_3passes"
+        report["pretraining_labels_per_asset"]={asset:counts for asset,counts in zip(data["identities"],data["pretrain_counts"])}
+        for name,result in models.items():
+            report["models"][name].update(pretraining=result["pretraining"],precision=result["precision"],
+                                          memory_dimensions=result["memory_dimensions"])
+        report["warning"]+=" V3 uses a 30-minute raw local window, completed 15-minute session blocks and 60 prior observed-session tokens; long memory tokens contain index features and cross-sectional mean/dispersion/coverage, not all instruments raw at all times. Pretraining uses 5/30m instrument-specific observed labels on earlier five-minute anchors; fine-tuning uses every eligible resolved minute. Movement and conditional direction have separate supervised losses; validation rank averages their Brier scores. Optional options lane is a separate fixed ablation, not a trading decision. Previously inspected evaluation dates remain exploratory. Raw and calibrated probability comparisons are both reported."
     checkpoint={"version":version,"full_history":all_history,"research_only":True,"trade_qualified":False,"assets":data["identities"],
                 "asset_fields":list(ASSET_FIELDS),"auxiliary_fields":list(data["aux_names"]),
                 "aux_fit":{k:v.tolist() for k,v in fit.items()},"horizons":list(HORIZONS),
@@ -705,7 +757,8 @@ def _run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="c
                           for name,result in models.items()},"training_dates":splits[0],"validation_dates":splits[1]}
     # The journal needs only labels, clocks, availability and predictions.
     # Release scratch mappings before the outer TemporaryDirectory exits.
-    if all_history:del data["grid"],data["aux"]
+    if v3:checkpoint["architecture"]=report["architecture"]
+    if all_history:del data["grid"],data["aux"],data["pretrain_targets"]
     return report,journal_rows(data,te,models,probs),checkpoint
 
 
@@ -716,6 +769,11 @@ def main():
     ap.add_argument("--to-date",default="2026-11-27")
     ap.add_argument("--index-only",action="store_true")
     ap.add_argument("--all-history",action="store_true",help="Use earliest target receipt, all saved verified context, every observed training minute")
+    ap.add_argument("--v3",action="store_true",help="Larger multiscale underlying model with all-instrument pretraining")
+    ap.add_argument("--include-options",action="store_true",help="Separate V3 rolling-option context ablation")
+    ap.add_argument("--pretrain-epochs",type=int,default=2)
+    ap.add_argument("--accumulate",type=int,default=4)
+    ap.add_argument("--width",type=int,choices=(64,128,256),default=128)
     ap.add_argument("--epochs",type=int,default=8)
     ap.add_argument("--batch",type=int,default=128)
     ap.add_argument("--device",choices=("cpu","cuda"),default=None)
@@ -724,7 +782,8 @@ def main():
         root=args.shared_root.resolve()
         report,rows,checkpoint=run(root,date.fromisoformat(args.to_date),args.days,index_only=args.index_only,
              epochs=args.epochs,batch=args.batch,device_name=args.device or ("cuda" if args.all_history else "cpu"),
-             progress=lambda s:print(s,flush=True),all_history=args.all_history)
+             progress=lambda s:print(s,flush=True),all_history=args.all_history,v3=args.v3,
+             include_options=args.include_options,pretrain_epochs=args.pretrain_epochs,accumulate=args.accumulate,width=args.width)
         folder=root/"results";folder.mkdir(exist_ok=True)
         stem="banknifty_market_dynamics_"+uuid.uuid4().hex
         path=folder/(stem+".json");csv_path=folder/(stem+"_predictions.csv");weights=folder/(stem+"_research_only.pt")
@@ -742,11 +801,17 @@ def main():
         print("ASSETS",json.dumps(report["assets"]))
         print("PARTITIONS",json.dumps(report["partition_rows"]))
         print("AVAILABILITY",json.dumps(report["availability"]))
+        if args.v3:
+            print("ARCHITECTURE",json.dumps(report["architecture"]))
+            print("PRETRAIN_LABELS",json.dumps(report["pretraining_labels_per_asset"]))
+            print("MODELS",json.dumps(report["models"]))
         for horizon,s in report["evaluation"].items():
             summary={key:s[key] for key in ("evaluation_rows","unresolved_evaluation_rows","adaptive_mae_bps",
                      "paired_brier","paired_conditional_sign_brier","exploratory_checks")}
             summary["methods"]={name:{key:v.get(key) for key in ("brier","raw_brier","balanced_accuracy",
-                "conditional_nonflat_sign_brier","return_up_down_mae_bps","actions")} for name,v in s["methods"].items()}
+                "conditional_nonflat_sign_brier","movement_brier","return_up_down_mae_bps","actions")} for name,v in s["methods"].items()}
+            if args.v3:
+                summary.update({key:s[key] for key in ("paired_movement_brier","paired_brier_vs_raw_references","paired_sign_vs_raw_references")})
             print("DYNAMICS",horizon,json.dumps(summary))
         print("REPORT",path);print("PREDICTIONS",csv_path);print("RESEARCH_CHECKPOINT",weights)
         print(report["warning"])
