@@ -11,11 +11,12 @@ from . import cpr_hybrid_research as r, historical_alpha as h
 from . import predictive_option_research as p, expired_options_backtest as exp
 from . import cpr_execution_evidence as evidence
 
-VERSION="banknifty_sector_momentum_v1"
+VERSION="banknifty_sector_momentum_v2_flat_cost"
 PEERS=("INDEX:FINNIFTY","INDEX:NIFTYPRIVATEBANK","INDEX:NIFTYPSUBANK")
 RULES=("momentum","mean_reversion","confirmed_momentum","confirmed_reversion")
 HOLDS=(5,10,15,30,60)
-COSTS=(35,75)
+ORDER_COST_INR=30.
+COSTS=(ORDER_COST_INR,)
 Z_MIN=1.
 FRICTION_MAX=.025
 LOT_LIMIT=1
@@ -59,11 +60,11 @@ def choose(table,day,m,spot,lot,budget):
         premium=q["close"]
         if premium<5:continue
         counts["observed"]+=1
-        funding=r._fund(premium,lot,COSTS[-1])
+        funding=r._fund(premium,lot,0,fixed_order_cost=ORDER_COST_INR)
         if funding>budget:continue
         counts["affordable"]+=1
-        loss,_=r._net(premium,premium,lot,COSTS[-1])
-        friction=-loss/(premium*lot*(1+COSTS[-1]/10000))
+        loss,_=r._net(premium,premium,lot,0,fixed_order_cost=ORDER_COST_INR)
+        friction=-loss/(premium*lot)
         if friction>FRICTION_MAX:continue
         counts["low_friction"]+=1
         rank=(abs(strike-spot),friction,float(strike),float(premium))
@@ -115,29 +116,29 @@ def _lane(index,table,rows,days,rule,hold,cost,capital,budget,lot,cache):
         bars=index[day]
         first,last=bars.get(m+2),bars.get(m+hold+2)
         if first and last and first[0]>0 and last[0]>0:
-            move=(1 if side=="CALL" else -1)*10000*log(last[0]/first[0])
+            move=(1 if side=="CALL" else -1)*100*(last[0]/first[0]-1)
             moves.append(move)
         if side not in row["candidates"]:
             stats["no_eligible_side_contract"]+=1;continue
         distance,friction,strike,premium=row["candidates"][side]
         key=(day,m,side,hold,cost)
         if key not in cache:
-            funding=r._fund(premium,lot,cost)
+            funding=r._fund(premium,lot,0,fixed_order_cost=cost)
             signal={"session":day,"minute":m,"side":side,"spot":row["spot"],"features":[row["z"]],
                     "decision_utc":r._stamp(day,m+1),"entry_utc":r._stamp(day,m+2)}
             cache[key]=r._episode(signal,table,index[day],hold=hold,lot_size=lot,max_lots=LOT_LIMIT,
-                    risk_budget=budget,bps=cost,candidate=(distance,1,strike,lot,funding,premium))
+                    risk_budget=budget,bps=0,candidate=(distance,1,strike,lot,funding,premium),fixed_order_cost=cost)
         episodes.append({**cache[key],"entry_type":rule})
     metrics,journal=r._evaluate(episodes,method="fixed_stop",capital=capital,risk_budget=budget,
                                 dates=days,strict_execution=True)
     metrics["rule_coverage"]=dict(stats)
-    metrics["spot_forecast"]={"scored":len(moves),"mean_signed_bps":float(np.mean(moves)) if moves else None,
+    metrics["spot_forecast"]={"scored":len(moves),"mean_signed_pct":float(np.mean(moves)) if moves else None,
                               "direction_accuracy":float(np.mean(np.asarray(moves)>0)) if moves else None}
     return metrics,journal
 
 
 def qualified(lanes,*,minimum_trades,minimum_days):
-    return all(m["scored_trades"]>=minimum_trades
+    return bool(lanes) and all(m["scored_trades"]>=minimum_trades
                and m["daily_coverage"]["days_with_scored_trade"]>=minimum_days
                and (m["conditional_net_inr"] or 0)>0
                and m["stress_utility_inr"]>0 for m in lanes.values())
@@ -154,8 +155,8 @@ def _phase(index,table,rows,dates,policies,*,capital,budget,lot,minimum_trades,m
             lanes={};journals={}
             for cost in COSTS:
                 metrics,journal=_lane(index,table,rows,dates,rule,hold,cost,capital,budget,lot,cache)
-                lanes[str(cost)]=metrics
-                if keep_journal:journals[str(cost)]=journal
+                lanes["flat_30_inr_per_order"]=metrics
+                if keep_journal:journals["flat_30_inr_per_order"]=journal
             item={"rule":rule,"hold":hold,"lanes":lanes,"qualified":qualified(lanes,minimum_trades=minimum_trades,minimum_days=minimum_days)}
             if keep_journal:item["journals"]=journals
             results.append(item)
@@ -185,13 +186,14 @@ def run(*,sessions=90,to_date=None,capital=17000.,budget=12000.,lot_size=30,wing
     table,meta=p._load_options([{"session":d} for d in dates],wings,needed_stamps=clocks,evidence=cov,evidence_days=dates)
     if not table:raise ValueError("No usable saved BANKNIFTY rolling option candles")
     report={"version":VERSION,"capital_inr":capital,"funding_and_daily_realized_loss_budget_inr":budget,
+            "execution_cost_model":"flat_all_in_per_order","execution_cost_inr_per_order":ORDER_COST_INR,"roundtrip_cost_inr":2*ORDER_COST_INR,
             "assumed_lot_size":lot_size,"lots":LOT_LIMIT,"wings":wings,"target_net_on_paid_premium":r.TARGET,
             "stop_net_on_paid_premium":r.STOP,"max_roundtrip_friction_fraction":FRICTION_MAX,"z_min":Z_MIN,
             "training_dates":train,"validation_dates":val,"evaluation_dates":test,
             "index_sources":hashes,"index_failures":failures,"peer_sources":peer_sources,"peer_failures":peer_failures,
             "option_sources":meta,"option_window_states":dict(Counter(evidence.window_status(cov,d,s,today)["state"] for d in dates for s in ("CALL","PUT"))),
             "coverage":{},"training":[],"validation":None,"evaluation":None,"selected":None,
-            "warning":"Exploratory only; no ML/RL or order routing. Same-clock sector context is not independent evidence. Other indices are inputs only. One assumed historical lot; near-month rolling strike/side, nominal expiry-day exclusion, no verified exact contract, bid/ask or fills. Fixed target/stop on modeled net paid-premium marks, then delayed observed opens; losses may exceed stop. 35/75 bps adverse premium adjustment per side and current illustrative Zerodha fees; immediate unchanged-price friction capped at 2.5% at signal, not a live spread guarantee. Independent daily accounts and cumulative realized-loss/funding cap, not compounded account P&L. Previously examined validation/evaluation dates are not untouched confirmation."}
+            "warning":"Exploratory only; no ML/RL or order routing. Same-clock sector context is not independent evidence. Other indices are inputs only. One assumed historical lot; near-month rolling strike/side, nominal expiry-day exclusion, no verified exact contract, bid/ask or fills. Fixed target/stop on modeled net paid-premium marks, then delayed observed opens; losses may exceed stop. User-specified all-in INR 30 per executed order, INR 60 per completed round trip, no additional fees or proportional price penalty; fixed cost as a fraction of premium capped at 2.5% at signal. Not a verified broker tariff or live spread guarantee. Independent daily accounts and cumulative realized-loss/funding cap, not compounded account P&L. Previously examined validation/evaluation dates are not untouched confirmation."}
     rows,coverage=opportunities(index,peers,table,train,lot_size,budget)
     report["coverage"]["training"]=coverage
     if coverage.get("matched_anchors",0)<.8*coverage.get("reserved_anchors",1):
