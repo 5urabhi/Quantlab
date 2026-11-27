@@ -68,6 +68,46 @@ def require_offhours():
     if not offhours():raise Pause("Heavy history acquisition paused during 08:30–16:00 IST weekday priority window; rerun outside it")
 
 
+def live_priority_request():
+    """Use only the already-authorized, recorder-aware maintenance worker.
+
+    Do not submit generic history jobs or silently enable recurring collection.
+    Its bounded scope is separate from the requested five-year bulk acquisition.
+    """
+    health=api("/api/health")
+    if not health.get("ok") or health.get("mode")!="local" or health.get("read_only_market_data") is not True or health.get("broker_orders_enabled") is not False:
+        raise Pause("Expected local read-only QuantLab API; no writes submitted")
+    path="/api/data-manager/maintenance"
+    status=api(path)
+    cfg=status.get("config") or {}
+    result={"authorized_scope":{k:cfg.get(k) for k in ("enabled","index","constituents","options","bank_panel","index_days","constituent_days","option_days","wings")},
+            "live_pressure":status.get("live_pressure"),"next_due_utc":status.get("next_due_utc"),
+            "next_due_reason":status.get("next_due_reason"),"job":status.get("job"),
+            "heavy_backfill_deferred":True}
+    if status.get("error"):
+        return {**result,"state":"maintenance_configuration_unavailable"}
+    if cfg.get("enabled") is not True:
+        return {**result,"state":"maintenance_not_enabled",
+                "note":"Enable and authorize automatic maintenance in Data Center, or rerun bulk preparation outside market hours."}
+    if not status.get("worker_running"):
+        return {**result,"state":"maintenance_worker_unavailable"}
+    if status.get("live_pressure"):
+        return {**result,"state":"recorder_pressure_yielded"}
+    if (status.get("job") or {}).get("status") in ("queued","running"):
+        return {**result,"state":"maintenance_already_active"}
+    if status.get("next_due_reason")=="provider_rate_limit" and status.get("next_due_utc"):
+        try:
+            due=datetime.fromisoformat(status["next_due_utc"].replace("Z","+00:00"))
+            if due>datetime.now(timezone.utc):
+                return {**result,"state":"provider_cooldown_preserved"}
+        except (TypeError,ValueError):
+            return {**result,"state":"provider_schedule_unverified"}
+    updated=api(path+"/check",post=True)
+    return {**result,"state":"maintenance_check_requested","next_due_utc":updated.get("next_due_utc"),
+            "next_due_reason":updated.get("next_due_reason"),"job":updated.get("job"),
+            "note":"Existing worker schedules the bounded pass; this is a request, not verified download completion."}
+
+
 def save_json(path,value):
     path.parent.mkdir(parents=True,exist_ok=True)
     tmp=path.with_name("."+path.name+"."+uuid.uuid4().hex+".tmp")
@@ -325,6 +365,13 @@ def main():
         flush()
         say("INDEX COVERAGE",{k:{x:v[x] for x in ("complete_sessions","first_complete_session","last_complete_session","verified_receipts")} for k,v in report["index"].items()})
     try:
+        if not args.audit_only and not offhours():
+            live=live_priority_request()
+            report["live_priority"]=live
+            report["state"]="live_priority_only_bulk_deferred"
+            say("LIVE PRIORITY",live)
+            print("Five-year bulk downloads and external historical archives remain deferred until outside 08:30–16:00 IST. Run the same command again then.",flush=True)
+            return 0 if live["state"] in ("maintenance_check_requested","maintenance_already_active") else 2
         if not args.audit_only:
             require_offhours()
             health=api("/api/health")
