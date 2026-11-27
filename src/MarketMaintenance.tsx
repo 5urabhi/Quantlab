@@ -3,7 +3,7 @@ import {marketApi,marketPost,readableError} from './tradingCockpitApi'
 
 type Config={enabled:boolean;index:boolean;constituents:boolean;options:boolean;bank_panel:boolean;index_days:number;constituent_days:number;option_days:number;wings:number}
 type IndexStatus={state:string;complete_observed_sessions:number;partial_observed_sessions:number;uncovered_request_windows:number;missing_other_index_observed_sessions:number;rejected_receipts:number}
-type BankMember={expected_observed_index_sessions:number;complete_sessions:number|null;missing_or_partial_sessions:number|null;example_dates?:string[];incomplete_session_minute_counts?:Record<string,number>;example_gap_minutes?:Record<string,number>;observed_minute_slots?:number;expected_minute_slots?:number;retryable_sessions?:number;cooldown_sessions?:number;next_repair_utc?:string|null;common_missing_intervals?:{from:string;through:string;sessions:number}[]}
+type BankMember={session_policy?:string;scheduled_session_minute_counts?:Record<string,number>;expected_observed_index_sessions:number;complete_sessions:number|null;missing_or_partial_sessions:number|null;example_dates?:string[];incomplete_session_minute_counts?:Record<string,number>;example_gap_minutes?:Record<string,number>;observed_minute_slots?:number;expected_minute_slots?:number;retryable_sessions?:number;cooldown_sessions?:number;next_repair_utc?:string|null;common_missing_intervals?:{from:string;through:string;sessions:number}[]}
 type EquityStatus={state:string;reason?:string;batch_id?:string;documented_through?:string;actual_end_exclusive?:string;requested_end_exclusive?:string;unresolved?:{symbol:string;reason:string}[];observed_member_session_gaps?:number;unavailable_sources?:number;repair_dates_attempted?:number;retryable_member_session_gaps?:number;members?:Record<string,BankMember>}
 type OptionCounters={coverage_as_of?:string;progress_stale?:boolean;scope_start?:string;scope_end?:string;scope_wings?:number;known_observed_minute_slots?:number;known_expected_minute_slots?:number;known_market_dates?:number;eligible_offset_date_pairs?:number;checked_offset_date_pairs?:number;missing_offset_date_pairs?:number;remaining_planned_requests?:number;batch_limit?:number;batch_attempted?:number;batch_completed?:number;active_receipts_per_minute?:number|null;new_receipts?:number;rejected_windows?:number;planned_missing_requests?:number;existing_verified_receipts?:number}
 type OptionStatus=OptionCounters&{state:string;reason?:string;existing_verified_receipts?:number;new_receipts?:number;planned_missing_requests?:number;unattempted_requests?:number;rejected_windows?:number;empty_processed_receipts?:number;empty_verified_receipts?:number;observed_rolling_minute_slots?:number;observed_session_dates?:number;excluded_active_calendar_days?:number}
@@ -23,37 +23,29 @@ function CoverageBar({label,done,total,note}:{label:string;done:number|null|unde
   <small>{known?`${fmt(done)} / ${fmt(total)}`:'Awaiting verified scope'}{note?' · '+note:''}</small>
  </div>
 }
-const SESSION_MINUTES=375
+const BANK_SESSION_POLICY='nse_bank_cash_cas_2026_v1'
+function bankExpected(v:BankMember):number|null{
+ const n=v.expected_minute_slots, sessions=v.expected_observed_index_sessions
+ return v.session_policy===BANK_SESSION_POLICY&&typeof n==='number'&&Number.isSafeInteger(n)&&Number.isSafeInteger(sessions)&&sessions>=0&&n>=sessions*360&&n<=sessions*375?n:null
+}
 function bankMinutes(v:BankMember):number|null{
- const expected=v.expected_observed_index_sessions*SESSION_MINUTES
- if(v.complete_sessions===null||!Number.isSafeInteger(expected)||expected<0)return null
- if(v.observed_minute_slots!==undefined&&v.expected_minute_slots===expected){
-  return Number.isSafeInteger(v.observed_minute_slots)&&v.observed_minute_slots>=0&&v.observed_minute_slots<=expected?v.observed_minute_slots:null
- }
- // Backward compatible with previously verified audits; no assumed bars.
- const complete=v.complete_sessions
- if(!Number.isSafeInteger(complete)||complete<0||complete>v.expected_observed_index_sessions)return null
- let observed=complete*SESSION_MINUTES,partial=0
- for(const [minuteText,count] of Object.entries(v.incomplete_session_minute_counts||{})){
-  const minutes=Number(minuteText)
-  if(!Number.isSafeInteger(minutes)||minutes<0||minutes>=SESSION_MINUTES||!Number.isSafeInteger(count)||count<0)return null
-  partial+=count;observed+=minutes*count
- }
- return complete+partial===v.expected_observed_index_sessions&&observed<=expected?observed:null
+ const expected=bankExpected(v),n=v.observed_minute_slots
+ return expected!==null&&v.complete_sessions!==null&&typeof n==='number'&&Number.isSafeInteger(n)&&n>=0&&n<=expected?n:null
 }
 function BankCoverage({source,label}:{source:EquityStatus;label:string}){
  const rows=Object.entries(source.members||{}),total=rows.reduce((s,[,v])=>s+v.expected_observed_index_sessions,0)
+ const legacy=rows.some(([,v])=>bankExpected(v)===null)
  const known=rows.reduce((s,[,v])=>s+(v.complete_sessions??0),0)
  const minutes=rows.map(([,v])=>bankMinutes(v))
  const observed=minutes.reduce<number>((s,n)=>s+(n??0),0)
  const unknown=minutes.filter(v=>v===null).length
- const expected=total*SESSION_MINUTES
- const waiting=source.retryable_member_session_gaps===0&&(source.observed_member_session_gaps??0)>0
+ const expected=rows.reduce((s,[,v])=>s+(bankExpected(v)??0),0)
+ const waiting=!legacy&&source.retryable_member_session_gaps===0&&(source.observed_member_session_gaps??0)>0
  const repairDates=rows.flatMap(([,v])=>v.next_repair_utc?[v.next_repair_utc]:[]).sort()
- return <><CoverageBar label={label+' · observed minutes'} done={rows.length&&unknown<rows.length?observed:null} total={rows.length?expected:null} note={unknown?unknown+' unverified banks; verified lower bound':fmt(expected-observed)+' missing minute slots · known regular sessions'}/>
- <CoverageBar label={label+' · complete sessions'} done={rows.length?known:null} total={rows.length?total:null} note="Strict 375/375 minutes per bank-session"/>
+ return <><CoverageBar label={label+' · observed minutes'} done={!legacy&&rows.length&&unknown<rows.length?observed:null} total={!legacy&&rows.length?expected:null} note={legacy?'Awaiting dated NSE session re-audit':unknown?unknown+' unverified banks; verified lower bound':fmt(expected-observed)+' missing continuous-trading minute slots'}/>
+ <CoverageBar label={label+' · complete sessions'} done={!legacy&&rows.length?known:null} total={rows.length?total:null} note="All scheduled minutes; NSE CAS bank sessions are 360 minutes from Aug 3 through Dec 6, 2026, otherwise 375"/>
  {waiting&&<small className="mi-caption">No eligible session repairs now. Previously attempted gaps are on repair cooldown{repairDates.length?' · next eligible '+local(repairDates[0]):''}. Missing minutes are not filled synthetically.</small>}
- {rows.length>0&&<details><summary>Individual bank progress</summary><div className="mi-maintenance-bank-grid">{rows.map(([name,v])=><div key={name}><CoverageBar label={name+' · observed minutes'} done={bankMinutes(v)} total={v.expected_observed_index_sessions*SESSION_MINUTES}/><CoverageBar label={name+' · complete sessions'} done={v.complete_sessions} total={v.expected_observed_index_sessions} note={v.incomplete_session_minute_counts?Object.entries(v.incomplete_session_minute_counts).sort((a,b)=>b[1]-a[1]).map(([minutes,days])=>days+' sessions × '+minutes+'/375 minutes').join(' · '):undefined}/>{v.common_missing_intervals?.length?<small className="mi-caption">Common missing intervals (IST): {v.common_missing_intervals.map(x=>x.from+'–'+x.through+' · '+x.sessions+' sessions').join('; ')}</small>:null}</div>)}</div></details>}</>
+ {rows.length>0&&<details><summary>Individual bank progress</summary><div className="mi-maintenance-bank-grid">{rows.map(([name,v])=><div key={name}><CoverageBar label={name+' · observed minutes'} done={bankMinutes(v)} total={bankExpected(v)}/><CoverageBar label={name+' · complete sessions'} done={bankExpected(v)===null?null:v.complete_sessions} total={v.expected_observed_index_sessions} note={v.session_policy===BANK_SESSION_POLICY&&v.incomplete_session_minute_counts?Object.entries(v.incomplete_session_minute_counts).sort((a,b)=>b[1]-a[1]).map(([minutes,days])=>days+' partial sessions × '+minutes+' observed minutes').join(' · '):undefined}/>{v.scheduled_session_minute_counts?<small className="mi-caption">Schedule: {Object.entries(v.scheduled_session_minute_counts).map(([minutes,days])=>days+' sessions × '+minutes+' min').join(' · ')}</small>:null}{v.session_policy===BANK_SESSION_POLICY&&v.common_missing_intervals?.length?<small className="mi-caption">Common missing intervals (IST): {v.common_missing_intervals.map(x=>x.from+'–'+x.through+' · '+x.sessions+' sessions').join('; ')}</small>:null}</div>)}</div></details>}</>
 }
 export default function MarketMaintenance({onDone}:{onDone:()=>void}){
  const [status,setStatus]=useState<Status|null>(null),[config,setConfig]=useState<Config|null>(null),[approved,setApproved]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('')
@@ -99,7 +91,7 @@ export default function MarketMaintenance({onDone}:{onDone:()=>void}){
  <details><summary>Detailed source audits and remaining gaps</summary>
  {status?.historical_request_budget&&<p className="mi-caption">Historical request scheduler · {status.historical_request_budget.historical_active_requests}/{status.historical_request_budget.historical_max_in_flight} active · {fmt(status.historical_request_budget.historical_starts_last_24h)} / {fmt(status.historical_request_budget.historical_local_24h_limit)} local rolling 24h starts · at least {status.historical_request_budget.historical_start_spacing_seconds}s between starts. Counters cover this backend process, not other Dhan clients or live quote endpoints.</p>}
  {sources?.index&&<div className="mi-repair-grid">{Object.entries(sources.index).map(([id,v])=><div key={id}><strong>{id.replace('INDEX:','')} · {v.state}</strong><span>{fmt(v.complete_observed_sessions)} complete observed sessions</span><small>{v.partial_observed_sessions} partial · {v.uncovered_request_windows} unchecked windows · {v.missing_other_index_observed_sessions} missing on other observed index dates</small></div>)}</div>}
- {eq&&<div className="mi-source-info"><strong>Banking constituent minute history · {eq.state}</strong><p>{eq.reason||`Missing/partial member-session pairs: ${fmt(eq.observed_member_session_gaps)} · unavailable sources: ${fmt(eq.unavailable_sources)} · dated membership through ${eq.documented_through||'unverified'}`}</p>{eq.unresolved?.length?<p>Unresolved identities: {eq.unresolved.map(v=>v.symbol).join(', ')}</p>:null}{eq.batch_id&&<a className="ws-button" href="#/intelligencealpha">Open saved batch in Alpha Research →</a>}{eq.members&&<details><summary>Individual bank coverage</summary><div className="mi-table-scroll"><table><thead><tr><th>Bank</th><th>Observed index sessions</th><th>Complete</th><th>Missing / partial</th><th>Example dates</th></tr></thead><tbody>{Object.entries(eq.members).map(([k,v])=><tr key={k}><td>{k}</td><td>{fmt(v.expected_observed_index_sessions)}</td><td>{fmt(v.complete_sessions)}</td><td>{fmt(v.missing_or_partial_sessions)}</td><td>{v.example_dates?.join(', ')||'—'}</td></tr>)}</tbody></table></div></details>}</div>}
+ {eq&&<div className="mi-source-info"><strong>Banking constituent minute history · {eq.state}</strong><p>{eq.reason||`Missing/partial member-session pairs: ${fmt(eq.observed_member_session_gaps)} · unavailable sources: ${fmt(eq.unavailable_sources)} · dated membership through ${eq.documented_through||'unverified'}`}</p>{eq.unresolved?.length?<p>Unresolved identities: {eq.unresolved.map(v=>v.symbol).join(', ')}</p>:null}{eq.batch_id&&<a className="ws-button" href="#/intelligencealpha">Open saved batch in Alpha Research →</a>}{eq.members&&<details><summary>Individual bank coverage</summary><div className="mi-table-scroll"><table><thead><tr><th>Bank</th><th>Observed index sessions</th><th>Complete</th><th>Missing / partial</th><th>Example dates</th></tr></thead><tbody>{Object.entries(eq.members).map(([k,v])=><tr key={k}><td>{k}</td><td>{fmt(v.expected_observed_index_sessions)}</td><td>{fmt(bankExpected(v)===null?null:v.complete_sessions)}</td><td>{fmt(bankExpected(v)===null?null:v.missing_or_partial_sessions)}</td><td>{bankExpected(v)===null?'Re-audit required':v.example_dates?.join(', ')||'—'}</td></tr>)}</tbody></table></div></details>}</div>}
  {panel&&<div className="mi-source-info"><strong>Fixed major-bank panel · {panel.state}</strong><p>{panel.reason||`Missing/partial bank-session pairs: ${fmt(panel.observed_member_session_gaps)} · unavailable sources: ${fmt(panel.unavailable_sources)} · checked through ${panel.actual_end_exclusive||"unverified"} (end exclusive)`}</p><small>HDFC Bank, ICICI Bank, SBI, Axis Bank and Kotak Mahindra Bank. Research watchlist only, not dated index membership.</small></div>}
  {opt&&<div className="mi-source-info"><strong>Expired option request windows · {opt.state}</strong><p>{opt.reason||`${fmt(opt.existing_verified_receipts)} reused receipts · ${fmt(opt.new_receipts)} new · ${fmt(opt.unattempted_requests)} not attempted this pass · ${fmt(opt.rejected_windows)} rejected · ${fmt(opt.empty_processed_receipts)} newly processed empty receipts · ${fmt(opt.empty_verified_receipts)} previously verified empty receipts · ${fmt(opt.observed_session_dates)} observed dates · ${fmt(opt.observed_rolling_minute_slots)} distinct rolling side/offset/minute slots. Checked windows do not certify continuous option prices.`}</p></div>}
  </details>
