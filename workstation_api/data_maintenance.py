@@ -19,7 +19,7 @@ from . import (service, market_patterns as mp, cockpit_sources, dhan_workspace a
 IST=ZoneInfo("Asia/Kolkata")
 DEFAULT={"enabled":False,"index":True,"constituents":True,"options":True,"bank_panel":False,
          "index_days":365,"constituent_days":240,"option_days":365,"wings":3}
-VERSION="automatic_market_library_v5"
+VERSION="automatic_market_library_v6"
 INDEX_IDENTITIES=("INDEX:BANKNIFTY","INDEX:NIFTY50")
 MAX_INDEX_WINDOWS=5
 MAX_OPTION_REQUESTS=440
@@ -33,6 +33,7 @@ REPAIR_COOLDOWN=timedelta(days=7)
 RETRY=timedelta(hours=4)
 PRODUCTIVE_RETRY=timedelta(seconds=30)
 PRESSURE_RETRY=timedelta(minutes=2)
+CONNECTION_RETRY_MINUTES=(2,4,8,16,30)
 CHECKED_RETRY=timedelta(hours=24)
 LOCK=RLock()
 STOP=Event()
@@ -117,6 +118,7 @@ def configure(cfg,confirm):
             state["target"]=None
             state.pop("coverage_sources",None)
             state.pop("coverage_config",None)
+            state.pop("connection_failure_count",None)
             _write("state",state)
     # Transfer the old index-only policy to this one master control.
     if cfg["enabled"]:
@@ -191,9 +193,21 @@ def _due(cfg,state,now):
             delay,_=_next_schedule(last)
             if delay==PRODUCTIVE_RETRY:
                 due=min(datetime.fromisoformat(due),datetime.fromisoformat(last["finished_utc"])+delay).isoformat()
+        # Migrate the exact old untyped connectivity failure only, not
+        # authentication, validation, or HTTP 429 backoff.
+        old_option=last.get("sources",{}).get("options",{})
+        if (due and state.get("next_due_reason")=="source_blocked_or_paused"
+                and "transient_connection_failure" not in last
+                and old_option.get("reason")=="Dhan expired-options data connection unavailable; check local network"
+                and last.get("finished_utc")):
+            due=min(datetime.fromisoformat(due),datetime.fromisoformat(last["finished_utc"])+timedelta(minutes=2)).isoformat()
         return not due or datetime.fromisoformat(due)<=now
     except (ValueError,TypeError):
         return True
+
+def _connection_delay(failures):
+    return timedelta(minutes=CONNECTION_RETRY_MINUTES[min(len(CONNECTION_RETRY_MINUTES)-1,max(0,failures-1))])
+
 
 def _next_schedule(report):
     """Only accelerate bounded batches that made progress and have more work.
@@ -205,12 +219,19 @@ def _next_schedule(report):
         return CHECKED_RETRY,"all_authorized_scopes_checked"
     if state=="paused" and report.get("pause_reason","").startswith(("live_","recent_live_","market_priority_transition")):
         return PRESSURE_RETRY,"live_recording_priority"
+    if state=="blocked" and report.get("transient_connection_failure"):
+        return _connection_delay(report.get("connection_failure_count",1)),"connection_retry"
     if state!="partial":
         return RETRY,"normal_backoff"
     sources=report.get("sources",{})
     index=list(sources.get("index",{}).values())
     equity=[sources[k] for k in ("constituents","bank_panel") if k in sources]
     option=sources.get("options",{})
+    if report.get("transient_connection_failure") and not (
+        any(v.get("state") in ("blocked","paused") or v.get("failed_windows",0) or v.get("rejected_receipts",0) or v.get("omitted_receipts",0) for v in index)
+        or any(v.get("state") in ("blocked","paused") or v.get("batch_errors") or v.get("unavailable_sources",0) or v.get("unresolved") or v.get("batch_status") not in (None,"completed") for v in equity)
+        or option.get("rejected_windows",0) or option.get("unreadable_receipts_encountered",0)):
+        return _connection_delay(report.get("connection_failure_count",1)),"connection_retry"
     if any(v.get("state") in ("blocked","paused") for v in [*index,*equity,option]):
         return RETRY,"source_blocked_or_paused"
     if (any(v.get("failed_windows",0) or v.get("rejected_receipts",0) or v.get("omitted_receipts",0) for v in index)
@@ -242,7 +263,8 @@ def status():
     # Retain last verified source audit while another pass is in progress.
     sources={**coverage,**last.get("sources",{})} if same_scope or not state.get("coverage_config") else {}
     return {"version":VERSION,"coverage_sources":sources,"option_progress":active_counts if cfg["enabled"] and last.get("state")=="running" else None,"config":cfg,"last_run":state.get("last_run"),"target":_target(now),
-            "next_due_utc":state.get("next_due_utc"),"next_due_reason":state.get("next_due_reason"),"batch_id":state.get("batch_id"),
+            "next_due_utc":state.get("next_due_utc"),"next_due_reason":state.get("next_due_reason"),
+            "connection_failure_count":state.get("connection_failure_count",0),"batch_id":state.get("batch_id"),
             "safe_window":safe_window(now),"backfill_mode":"standard" if safe_window(now) else "live_priority",
             "live_pressure":live_pressure(now) if cfg["enabled"] else None,
             "worker_running":bool(THREAD and THREAD.is_alive()),
@@ -546,8 +568,12 @@ def run(*,progress=None,now=None):
         if should_stop():
             report.update(state="paused",reason=report["pause_reason"])
             return report
-        if not dhan_auth.check_profile().get("ok"):
-            report.update(state="blocked",reason="Dhan token or historical data permission requires attention")
+        profile=dhan_auth.check_profile()
+        if not profile.get("ok"):
+            if profile.get("code")=="profile_unreachable":
+                report.update(state="blocked",reason="Dhan profile connection unavailable; check local network",transient_connection_failure=True)
+            else:
+                report.update(state="blocked",reason="Dhan token or historical data permission requires attention")
             return report
         if cfg["index"]:
             # Legacy spot sync uses the same guard and yields while the
@@ -599,11 +625,21 @@ def run(*,progress=None,now=None):
                     "missing_offset_date_pairs","remaining_planned_requests","batch_limit","batch_attempted","batch_completed",
                     "scope_start","scope_end","scope_wings","known_observed_minute_slots","known_expected_minute_slots","known_market_dates",
                     "active_receipts_per_minute") if k in opt})
+                report["sources"]["options"]["coverage_as_of"]=_now().isoformat()
                 report["sources"]["options"]["rejected_windows"]=len(opt["rejected_requests"])
                 report["sources"]["options"]["state"]="partial" if opt["state"]=="partial_requests" or opt["unreadable_receipts_encountered"] else "checked"
             except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
                 if progress:progress(99,"Option history remains partially unavailable")
-                report["sources"]["options"]={**(OPTION_PROGRESS or {}),"state":"blocked","reason":job_safety.scrub(exc)[:200]}
+                if isinstance(exc,options.exp.RollingConnectionError):
+                    report["transient_connection_failure"]=True
+                prior=state.get("coverage_sources",{}).get("options",{})
+                if OPTION_PROGRESS is not None:
+                    evidence={**OPTION_PROGRESS,"coverage_as_of":_now().isoformat()}
+                elif prior.get("scope_start")==option_start.isoformat() and prior.get("scope_end")==option_end.isoformat() and prior.get("scope_wings")==cfg["wings"]:
+                    evidence={**prior,"progress_stale":True,"active_receipts_per_minute":None}
+                else:
+                    evidence={}
+                report["sources"]["options"]={**evidence,"state":"blocked","reason":job_safety.scrub(exc)[:200]}
         states=[v["state"] for k,v in report["sources"].items() if k!="index"]
         states.extend(v["state"] for v in report["sources"].get("index",{}).values())
         report["state"]="paused" if should_stop() else "partial" if not states or any(x!="checked" for x in states) else "checked"
@@ -615,6 +651,18 @@ def run(*,progress=None,now=None):
         if report["state"]=="running":report["state"]="interrupted"
         finished=_now()
         report["finished_utc"]=finished.isoformat()
+        if report.get("transient_connection_failure"):
+            # A successful receipt followed by a disconnect is new progress,
+            # not another consecutive zero-progress failure.
+            prior_count=state.get("connection_failure_count",0)
+            progress_made=report.get("sources",{}).get("options",{}).get("new_receipts",0)
+            if report.get("sources",{}).get("options",{}).get("progress_stale"):
+                progress_made=0
+            count=1 if progress_made else min(len(CONNECTION_RETRY_MINUTES),prior_count+1)
+            report["connection_failure_count"]=count
+            state["connection_failure_count"]=count
+        elif report.get("sources",{}).get("options",{}).get("state") in ("checked","partial") or report["state"]=="checked":
+            state["connection_failure_count"]=0
         delay,reason=_next_schedule(report)
         state["next_due_utc"]=(finished+delay).isoformat()
         state["next_due_reason"]=reason
@@ -625,6 +673,7 @@ def run(*,progress=None,now=None):
             if config()!=cfg:
                 state["target"]=None;state["next_due_utc"]=None;state["next_due_reason"]="configuration_changed"
                 state.pop("coverage_sources",None);state.pop("coverage_config",None)
+                state.pop("connection_failure_count",None)
             else:
                 state["coverage_sources"]={**state.get("coverage_sources",{}),**report["sources"]}
                 state["coverage_config"]=cfg
