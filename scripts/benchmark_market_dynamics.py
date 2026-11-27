@@ -1,0 +1,583 @@
+"""Unified causal multi-asset market dynamics research (not a trading engine).
+
+Uses existing receipt-backed data and one fixed cross-asset/temporal neural
+architecture. Fit on earlier sessions; assess all eligible completed minutes.
+"""
+import argparse
+from collections import Counter
+from datetime import date,datetime,timedelta
+import csv
+import json
+import os
+from pathlib import Path
+import sqlite3
+import uuid
+
+import numpy as np
+from threadpoolctl import threadpool_limits
+
+from scripts import benchmark_direction_gate as direction
+from scripts import benchmark_ema_first_passage as passage
+from scripts import benchmark_ema_levels as levels
+from scripts.run_banknifty_candle_forecast import write_atomic
+from workstation_api import banknifty_candle_forecast as m, historical_alpha as h
+from workstation_api import banknifty_sequence_forecast as seq
+from workstation_api import cpr_hybrid_research as r, predictive_option_research as opt
+from workstation_api import nse_session_policy as sessions, service
+
+VERSION="market_dynamics_v1"
+HORIZONS=(1,5,10,15,30,60)
+LOOKBACK=30
+MIN_HISTORY=15
+DELAY=1
+DEADBAND_BPS=5.
+CONFIDENCE=.60
+SEED=42
+MINUTES=375
+EMA=(9,21,50,200)
+LAGS=(1,5,15,30,60)
+VOL=(5,15,30)
+DAILY=(5,20,60)
+ASSET_FIELDS=("observed","open_pct","high_pct","low_pct","close_pct","log_volume",
+              "relative_log_volume_20m","prior_complete","clock_fraction"
+              )+tuple(f"return_{n}m_pct" for n in LAGS)+tuple(f"vol_{n}m_pct" for n in VOL)+tuple(
+              f"ema{n}_distance_pct" for n in EMA)+("ema9_minus_21_pct","ema_cross",
+              "opening_gap_pct","cpr_width_pct")+tuple(name+"_distance_pct" for name in levels.LEVEL_NAMES)+tuple(
+              f"prior_{n}d_{kind}" for n in DAILY for kind in ("return_scaled","rms_pct"))
+BANK_AUX=("dated_membership","scheduled_count","observed_fraction","mean_5m_pct",
+          "dispersion_5m_pct","up_fraction","verified_weighted_5m_pct")
+AVAILABILITY=("banks","peers","options","global_daily","overnight")
+
+
+def prefix(a,n=MINUTES):
+    if a is None:return 0
+    if a.shape!=(MINUTES,5):raise ValueError("Expected regular 375-minute source grid")
+    ok=np.isfinite(a[:n,:4]).all(axis=1)&(a[:n,:4]>0).all(axis=1)
+    bad=np.flatnonzero(~ok)
+    return int(bad[0]) if len(bad) else n
+
+
+def daily_close(a,n):
+    return float(a[n-1,3]) if prefix(a,n)==n else np.nan
+
+
+def rolling(x,n,kind):
+    out=np.full(len(x),np.nan)
+    if len(x)>=n:
+        win=np.lib.stride_tricks.sliding_window_view(x,n)
+        out[n-1:]=np.mean(win,axis=1) if kind=="mean" else np.sqrt(np.mean(win**2,axis=1))
+    return out
+
+
+def asset_features(a,previous,history,*,n=MINUTES,q=MINUTES):
+    """All channels describe completed bars and earlier observed sessions.
+
+    Use prior weekday only when its scheduled prefix is complete. If
+    unavailable, explicitly mark prior levels missing and seed EMA locally.
+    Missing current bars terminate the supported prefix (no gap filling).
+    """
+    out=np.full((MINUTES,len(ASSET_FIELDS)),np.nan,dtype=np.float32)
+    count=prefix(a,n)
+    if not count:return out
+    a=a[:count];o,hi,lo,c,v=a.T
+    prior=previous[:q] if prefix(previous,q)==q else None
+    anchor=np.r_[prior[-1,3] if prior is not None else o[0],c[:-1]]
+    values={"observed":np.ones(count),"prior_complete":np.full(count,float(prior is not None)),
+            "clock_fraction":(np.arange(count)+1)/MINUTES}
+    for name,x in zip(("open","high","low","close"),(o,hi,lo,c)):
+        values[name+"_pct"]=100*(x/anchor-1)
+    logv=np.log1p(np.where(np.isfinite(v)&(v>=0),v,np.nan))
+    values["log_volume"]=logv/10
+    values["relative_log_volume_20m"]=logv-np.r_[np.nan,rolling(logv,20,"mean")[:-1]]
+    for lag in LAGS:
+        value=np.full(count,np.nan)
+        if count>lag:value[lag:]=100*(c[lag:]/c[:-lag]-1)
+        values[f"return_{lag}m_pct"]=value
+    ret=np.r_[np.nan,100*np.diff(np.log(c))]
+    for k in VOL:values[f"vol_{k}m_pct"]=rolling(ret,k,"rms")
+    seeds=np.array([h._ema(prior[:,3],k) if prior is not None else c[0] for k in EMA])
+    ema=seeds.copy();alpha=2/(np.asarray(EMA)+1)
+    em=np.empty((count,len(EMA)));cross=np.zeros(count);sign=int(np.sign(ema[0]-ema[1]))
+    for j,price in enumerate(c):
+        ema+=(price-ema)*alpha;em[j]=ema
+        current=int(np.sign(ema[0]-ema[1]))
+        if current and sign and current!=sign:cross[j]=current
+        if current:sign=current
+    for k,j in zip(EMA,range(len(EMA))):values[f"ema{k}_distance_pct"]=100*(c-em[:,j])/c
+    values["ema9_minus_21_pct"]=100*(em[:,0]-em[:,1])/c
+    values["ema_cross"]=cross
+    frozen={}
+    if prior is not None:
+        po,ph,pl,pc=prior[0,0],prior[:,1].max(),prior[:,2].min(),prior[-1,3]
+        pivot=(ph+pl+pc)/3;bc=(ph+pl)/2;bottom,top=sorted((bc,2*pivot-bc))
+        frozen.update(previous_open=po,previous_high=ph,previous_low=pl,previous_close=pc,
+                      cpr_bottom=bottom,cpr_pivot=pivot,cpr_top=top,r1=2*pivot-pl,
+                      r2=pivot+ph-pl,s1=2*pivot-ph,s2=pivot-ph+pl)
+        values["opening_gap_pct"]=np.full(count,100*(o[0]/pc-1))
+        values["cpr_width_pct"]=100*(top-bottom)/c
+    else:
+        values["opening_gap_pct"]=np.full(count,np.nan);values["cpr_width_pct"]=np.full(count,np.nan)
+    th=np.maximum.accumulate(hi);tl=np.minimum.accumulate(lo)
+    dp=(th+tl+c)/3;mid=(th+tl)/2
+    frozen.update(today_open=o[0],today_running_high=th,today_running_low=tl,
+                  today_developing_cpr_bottom=np.minimum(mid,2*dp-mid),
+                  today_developing_pivot=dp,today_developing_cpr_top=np.maximum(mid,2*dp-mid))
+    if count>=15:
+        for name,value in (("opening_15m_high",hi[:15].max()),("opening_15m_low",lo[:15].min()),("opening_15m_close",c[14])):
+            z=np.full(count,np.nan);z[14:]=value;frozen[name]=z
+    for name in levels.LEVEL_NAMES:values[name+"_distance_pct"]=100*(c-frozen.get(name,np.nan))/c
+    for k in DAILY:
+        past=np.asarray(history[-(k+1):],float)
+        supported=len(past)==k+1 and np.isfinite(past).all() and np.all(past>0)
+        values[f"prior_{k}d_return_scaled"]=np.full(count,10*(past[-1]/past[0]-1) if supported else np.nan)
+        values[f"prior_{k}d_rms_pct"]=np.full(count,100*np.sqrt(np.mean(np.diff(np.log(past))**2)) if supported else np.nan)
+    out[:count]=np.column_stack([values[name] for name in ASSET_FIELDS]).astype(np.float32)
+    return out
+
+
+def labels_for_session(a):
+    """Delayed open-to-open target and observed high/low excursions.
+
+    A label requires all bars through the exit reference; excursions use
+    entry..exit-1 highs/lows plus the exit OPEN, never its future high/low.
+    Scheduled but missing outcomes remain separate from signal eligibility.
+    """
+    n=prefix(a)
+    minutes=np.arange(MIN_HISTORY-1,min(n,MINUTES-DELAY-2),dtype=int)
+    entry=minutes+1+DELAY
+    y=np.zeros((len(minutes),len(HORIZONS),3),np.float32)
+    mask=np.zeros(y.shape[:2],bool);scheduled=np.zeros_like(mask)
+    for k,duration in enumerate(HORIZONS):
+        end=entry+duration;scheduled[:,k]=end<MINUTES
+        valid=end<n;mask[:,k]=valid
+        if not valid.any():continue
+        left=entry[valid];right=end[valid]
+        ref=a[left,0];exit_=a[right,0]
+        high=np.lib.stride_tricks.sliding_window_view(a[:n,1],duration)[left].max(axis=1)
+        low=np.lib.stride_tricks.sliding_window_view(a[:n,2],duration)[left].min(axis=1)
+        y[valid,k]=np.column_stack((10000*(exit_/ref-1),
+                   10000*np.maximum(np.maximum(high,exit_)/ref-1,0),
+                   10000*np.maximum(1-np.minimum(low,exit_)/ref,0)))
+    classes=np.where(y[:,:,0]>DEADBAND_BPS,2,np.where(y[:,:,0]<-DEADBAND_BPS,0,1)).astype(np.int64)
+    return minutes,y,classes,mask,scheduled
+
+
+def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,splits,*,index_only=False,progress=None):
+    dates=sorted(index);training=set(splits[0])
+    bank_ids=[] if index_only else sorted({v for day,mp in membership.items() if day in training for v in mp.values()})
+    identities=["INDEX:BANKNIFTY",*bank_ids,*(() if index_only else m.f.PEERS)]
+    sources=[index,*[stocks.get(x,{}) for x in bank_ids],*[peers.get(x,{}) for x in identities[1+len(bank_ids):]]]
+    channels=len(ASSET_FIELDS)
+    size=len(dates)*MINUTES*len(identities)*channels*4
+    if size>900_000_000:raise ValueError("Feature grid exceeds 900MB research bound")
+    grid=np.full((len(dates),MINUTES,len(identities),channels),np.nan,np.float32)
+    aux_names=() if index_only else tuple(BANK_AUX)+tuple(m.f.OPTION_NAMES)+tuple(dn)+tuple(on)
+    aux=np.full((len(dates),MINUTES,len(aux_names)),np.nan,np.float32)
+    avail=np.zeros((len(dates),MINUTES,len(AVAILABILITY)),bool)
+    histories=[[] for _ in identities];audit={}
+    di=[];minutes=[];targets=[];classes=[];masks=[];scheduled=[]
+    retcol=ASSET_FIELDS.index("return_5m_pct")
+    for i,day in enumerate(dates):
+        if progress and (i%25==0 or i+1==len(dates)):progress(f"Building unified minute grid {i+1}/{len(dates)} {day}")
+        active=set(membership.get(day,{}).values());prev=direction.prior_weekday(day)
+        for j,(identity,source) in enumerate(zip(identities,sources)):
+            bank=1<=j<=len(bank_ids)
+            n=sessions.cash_bank_minutes(day,identity) if bank else MINUTES
+            q=sessions.cash_bank_minutes(prev,identity) if bank else MINUTES
+            a=source.get(day)
+            if not bank or identity in active:
+                grid[i,:,j]=asset_features(a,source.get(prev),histories[j],n=n,q=q)
+            histories[j].append(daily_close(a,n))
+        a=index[day]
+        if not index_only:
+            nbank=len(bank_ids);mat=grid[i,:,1:1+nbank,retcol]
+            nobs=np.isfinite(mat).sum(axis=1)
+            scheduled_bank=m.f.scheduled_bank_counts(day,np.arange(MINUTES),active)
+            frac=np.divide(nobs,scheduled_bank,out=np.zeros(MINUTES),where=scheduled_bank>0)
+            mean=np.divide(np.nansum(mat,axis=1),nobs,out=np.full(MINUTES,np.nan),where=nobs>=3)
+            dispersion=np.sqrt(np.divide(np.nansum((mat-mean[:,None])**2,axis=1),nobs,
+                                        out=np.full(MINUTES,np.nan),where=nobs>=3))
+            up=np.divide((mat>0).sum(axis=1),nobs,out=np.full(MINUTES,np.nan),where=nobs>=3)
+            weighted=np.full(MINUTES,np.nan)
+            dated=weights.get(day)
+            if active and dated and set(dated)==active and active<=set(bank_ids):
+                columns=[bank_ids.index(x) for x in sorted(active)]
+                w=np.array([dated[x] for x in sorted(active)],float)
+                if np.isfinite(w).all() and (w>=0).all() and w.sum()>0:
+                    weighted=mat[:,columns]@(w/w.sum())
+            aux[i,:,:len(BANK_AUX)]=np.column_stack((np.full(MINUTES,float(day in membership)),
+                                     scheduled_bank,frac,mean,dispersion,up,weighted))
+            avail[i,:,0]=(frac>=.8)&(nobs>=3)
+            pm=grid[i,:,1+nbank:,retcol]
+            avail[i,:,1]=np.isfinite(pm).mean(axis=1)>=.8
+            off=len(BANK_AUX);end=off+len(m.f.OPTION_NAMES)
+            for j in range(5,prefix(a)):
+                aux[i,j,off:end]=m.f.option_at(table,day,j,float(a[j,3]))
+            avail[i,:,2]=np.isfinite(aux[i,:,off+1])
+            dv=daily.get(day,np.full(len(dn),np.nan));nv=overnight.get(day,np.full(len(on),np.nan))
+            aux[i,:,end:end+len(dn)]=dv;aux[i,:,end+len(dn):]=nv
+            avail[i,:,3]=np.isfinite(dv).sum()>=4;avail[i,:,4]=np.isfinite(nv).any()
+        ms,y,c,ok,sc=labels_for_session(a)
+        di.extend([i]*len(ms));minutes.extend(ms.tolist())
+        targets.append(y);classes.append(c);masks.append(ok);scheduled.append(sc)
+        audit[day]={"eligible_minutes":len(ms),"observed_index_prefix":prefix(a),
+                    "dated_membership":day in membership,"active_members":len(active),
+                    "training_known_members":len(active&set(bank_ids)),"verified_weights":day in weights,
+                    "available_minutes":{name:int(avail[i,ms,k].sum()) for k,name in enumerate(AVAILABILITY)}}
+    if not minutes:raise ValueError("No supported completed decision minutes")
+    di=np.asarray(di,dtype=int)
+    return {"grid":grid,"aux":aux,"aux_names":aux_names,"identities":identities,"days":np.asarray(dates)[di],
+            "day_index":di,"minutes":np.asarray(minutes,dtype=int),"y":np.concatenate(targets),
+            "classes":np.concatenate(classes),"mask":np.concatenate(masks),"scheduled":np.concatenate(scheduled),
+            "available":avail,"audit":audit}
+
+
+def fit_aux(data,train):
+    x=data["aux"][data["day_index"][train],data["minutes"][train]].astype(float)
+    valid=np.isfinite(x);n=valid.sum(axis=0);clean=np.where(valid,x,0.)
+    mean=np.divide(clean.sum(axis=0),n,out=np.zeros(x.shape[1]),where=n>0)
+    sd=np.sqrt(np.divide((np.where(valid,clean-mean,0.)**2).sum(axis=0),n,
+                         out=np.ones(x.shape[1]),where=n>0))
+    return {"keep":n>=max(1,int(.05*len(train))),"mean":mean.astype(np.float32),
+            "std":np.maximum(sd,1e-6).astype(np.float32)}
+
+
+def windows(data,rows,joint,fit):
+    """Only completed candles, padded earlier session slots and explicit masks."""
+    rows=np.asarray(rows,dtype=int);days=data["day_index"][rows];minute=data["minutes"][rows]
+    clocks=minute[:,None]-np.arange(LOOKBACK-1,-1,-1)[None,:]
+    present=clocks>=0;clocks=np.maximum(clocks,0)
+    grid=data["grid"] if joint else data["grid"][:,:,:1]
+    x=grid[days[:,None],clocks]
+    valid=np.isfinite(x)&present[:,:,None,None]
+    values=np.where(valid,np.clip(x,-10,10),0.)
+    raw=np.concatenate((values,valid.astype(np.float32)),axis=-1).astype(np.float32)
+    if joint and fit["keep"].any():
+        z=data["aux"][days[:,None],clocks][:,:,fit["keep"]]
+        ok=np.isfinite(z)&present[:,:,None]
+        scaled=np.where(ok,np.clip((z-fit["mean"][fit["keep"]])/fit["std"][fit["keep"]],-10,10),0.)
+        aux=np.concatenate((scaled,ok.astype(np.float32)),axis=-1).astype(np.float32)
+    else:aux=np.zeros((len(rows),LOOKBACK,1),np.float32)
+    return raw,aux
+
+
+def partitions(data,splits):
+    days=data["days"]
+    tr=np.flatnonzero(np.isin(days,splits[0])&((data["minutes"]+1)%5==0)&data["mask"].any(axis=1))
+    va=np.flatnonzero(np.isin(days,splits[1]));te=np.flatnonzero(np.isin(days,splits[2]))
+    for k in range(len(HORIZONS)):
+        for rows,minimum in ((tr,40),(va,15),(te,15)):
+            scored=rows[data["mask"][rows,k]]
+            if len(set(days[scored]))<minimum:raise ValueError("Insufficient horizon/session support")
+        if len(np.unique(data["classes"][tr[data["mask"][tr,k]],k]))!=3:
+            raise ValueError("All three classes required for every training horizon")
+    return tr,va,te
+
+
+def predict(torch,model,data,rows,joint,fit,batch,device):
+    probs=[];reg=[];model.eval()
+    with torch.no_grad():
+        for i in range(0,len(rows),batch):
+            x,z=windows(data,rows[i:i+batch],joint,fit)
+            logits,y=model(torch.from_numpy(x).to(device),torch.from_numpy(z).to(device))
+            probs.append(torch.softmax(logits,dim=-1).cpu().numpy());reg.append(y.cpu().numpy()*10)
+    return np.concatenate(probs),np.concatenate(reg)
+
+
+def val_rank(data,rows,p):
+    scores=[]
+    for k in range(len(HORIZONS)):
+        ok=data["mask"][rows,k];ix=rows[ok]
+        err=np.sum((p[ok,k]-np.eye(3)[data["classes"][ix,k]])**2,axis=1)
+        scores.append(float(m._avg(err,data["days"][ix])))
+    return float(np.mean(scores))
+
+
+def fit_neural(data,tr,va,te,fit,*,joint,epochs,batch,device,progress):
+    torch,net=seq._torch();torch.manual_seed(SEED)
+    if device.type=="cuda":torch.cuda.manual_seed_all(SEED)
+    rng=np.random.default_rng(SEED)
+    x,z=windows(data,tr[:1],joint,fit)
+    model=net.MarketDynamics(x.shape[2],x.shape[3],z.shape[2],len(HORIZONS)).to(device)
+    optimizer=torch.optim.AdamW(model.parameters(),lr=.001,weight_decay=.01)
+    weights=np.zeros(len(data["days"]),np.float32);weights[tr]=m.day_weights(data["days"][tr])
+    best=None;history=[];stale=0
+    mode="joint" if joint else "index_only"
+    for epoch in range(1,epochs+1):
+        model.train();order=rng.permutation(tr);total=0.;seen=0
+        for i in range(0,len(order),batch):
+            rows=order[i:i+batch];x,z=windows(data,rows,joint,fit)
+            out=model(torch.from_numpy(x).to(device),torch.from_numpy(z).to(device))
+            loss=net.dynamics_objective(out,torch.from_numpy(data["classes"][rows]).to(device),
+                    torch.from_numpy(data["y"][rows]/10).to(device),
+                    torch.from_numpy(data["mask"][rows].astype(np.float32)).to(device),
+                    torch.from_numpy(weights[rows]).to(device))
+            if not bool(torch.isfinite(loss)):raise ValueError("Nonfinite dynamics training loss")
+            optimizer.zero_grad(set_to_none=True);loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(),1.);optimizer.step()
+            seen+=len(rows);total+=float(loss.detach().cpu())*len(rows)
+            if progress and i and i%(batch*100)==0:progress(f"TRAIN {mode} epoch {epoch}/{epochs} {seen}/{len(order)}")
+        p,_=predict(torch,model,data,va,joint,fit,batch,device)
+        rank=val_rank(data,va,p)
+        history.append({"epoch":epoch,"training_loss":total/seen,"validation_mean_brier":rank})
+        if progress:progress("DYNAMICS_VALIDATION "+mode+" "+json.dumps(history[-1]))
+        if best is None or rank<best["rank"]-1e-6:
+            best={"rank":rank,"epoch":epoch,"state":{k:v.detach().cpu().clone() for k,v in model.state_dict().items()}}
+            stale=0
+        else:
+            stale+=1
+            if stale>=3:break
+    model.load_state_dict(best["state"])
+    vp,vr=predict(torch,model,data,va,joint,fit,batch,device)
+    ep,er=predict(torch,model,data,te,joint,fit,batch,device)
+    return {"validation":(vp,vr),"evaluation":(ep,er),"state":best["state"],
+            "selected_epoch":best["epoch"],"history":history,
+            "parameters":sum(p.numel() for p in model.parameters()),
+            "input_dimensions":[x.shape[2],x.shape[3],z.shape[2]]}
+
+
+def snapshot(data,rows,joint):
+    grid=data["grid"] if joint else data["grid"][:,:,:1]
+    x=grid[data["day_index"][rows],data["minutes"][rows]].reshape(len(rows),-1)
+    if joint:x=np.column_stack((x,data["aux"][data["day_index"][rows],data["minutes"][rows]]))
+    return x
+
+
+def calibration(vp,ep,labels,days):
+    t=direction._calibrate(vp,labels-1,days)
+    return direction.a._temperature(ep,t),t
+
+
+def calibrated_metrics(raw,cal,labels,days):
+    metrics,_=direction._prob_metrics(cal,labels-1,days)
+    raw_metrics,_=direction._prob_metrics(raw,labels-1,days)
+    metrics["raw_brier"]=raw_metrics["brier"]
+    nonflat=labels!=1
+    if nonflat.any():
+        signed=cal[nonflat,2]/np.maximum(cal[nonflat,0]+cal[nonflat,2],1e-12)
+        metrics["conditional_nonflat_sign_brier"]=float(m._avg((signed-(labels[nonflat]==2))**2,days[nonflat]))
+    else:metrics["conditional_nonflat_sign_brier"]=None
+    return metrics
+
+
+def score_all(data,tr,va,te,models,joint,progress):
+    # One fixed latest-snapshot logistic comparator on the same data scope;
+    # no architecture/horizon/threshold search on the evaluated dates.
+    tx=snapshot(data,tr,joint);vx=snapshot(data,va,joint);ex=snapshot(data,te,joint)
+    reports={};predictions={name:np.zeros((len(te),len(HORIZONS),3),float)
+                           for name in ("constant_prior","clock_prior","snapshot",*models)}
+    for k,horizon in enumerate(HORIZONS):
+        if progress:progress(f"Scoring matched {horizon}m direction and excursion outcomes")
+        mt=data["mask"][tr,k];mv=data["mask"][va,k];me=data["mask"][te,k]
+        yt=data["classes"][tr[mt],k];yv=data["classes"][va[mv],k];ye=data["classes"][te[me],k]
+        dt=data["days"][tr[mt]];dv=data["days"][va[mv]];de=data["days"][te[me]]
+        prior=m._avg(np.eye(3)[yt],dt)
+        bucket={}
+        for clock in range(13):
+            choose=data["minutes"][tr[mt]]//30==clock
+            if choose.sum()>=30 and len(set(dt[choose]))>=10:bucket[clock]=m._avg(np.eye(3)[yt[choose]],dt[choose])
+        def clock(rows):return np.stack([bucket.get(int(j)//30,prior) for j in data["minutes"][rows]])
+        keep=np.isfinite(tx[mt]).mean(axis=0)>=.05
+        with threadpool_limits(limits=2):
+            linear=m.direction_model("ridge",tx[mt][:,keep],yt,m.day_weights(dt))
+            vl=linear.predict_proba(vx[:,keep]);el=linear.predict_proba(ex[:,keep])
+        methods={"constant_prior":(np.tile(prior,(len(va),1)),np.tile(prior,(len(te),1))),
+                 "clock_prior":(clock(va),clock(te)),"snapshot":(vl,el)}
+        for name,model in models.items():methods[name]=(model["validation"][0][:,k],model["evaluation"][0][:,k])
+        target=data["y"][te[me],k];truth=np.eye(3)[ye]
+        # Training-only adaptive excursion reference, scaled by recent
+        # one-minute RMS volatility and the requested horizon.
+        col=ASSET_FIELDS.index("vol_15m_pct")
+        def scale(rows):
+            z=data["grid"][data["day_index"][rows],data["minutes"][rows],0,col].astype(float)*100
+            return np.maximum(np.where(np.isfinite(z),z,.5),.5)*np.sqrt(horizon)
+        ratio=data["y"][tr[mt],k,1:]/scale(tr[mt])[:,None]
+        typical=np.median(ratio,axis=0)
+        reference=np.column_stack((np.zeros(len(ye)),scale(te[me])[:,None]*typical))
+        record={"train_rows":len(yt),"validation_rows":len(yv),"evaluation_rows":len(ye),
+                "scheduled_evaluation_rows":int(data["scheduled"][te,k].sum()),
+                "unresolved_evaluation_rows":int((data["scheduled"][te,k]&~me).sum()),
+                "training_class_prior":prior.tolist(),"methods":{},
+                "adaptive_mae_bps":m._avg(np.abs(reference-target),de).tolist()}
+        losses={};sign_losses={};nonflat=ye!=1;regressions={}
+        for name,(vp,ep) in methods.items():
+            cal,t=calibration(vp[mv],ep,yv,dv);predictions[name][:,k]=cal
+            prob=cal[me];metric=calibrated_metrics(ep[me],prob,ye,de);metric["temperature"]=t
+            all_calls=np.where((cal.max(axis=1)>=CONFIDENCE)&(cal.argmax(axis=1)!=1),cal.argmax(axis=1)-1,0)
+            metric["actions"]=direction._action_metrics(all_calls[me],ye-1,target[:,0],de)[0]
+            metric["unresolved_scheduled_calls"]=int(((all_calls!=0)&data["scheduled"][te,k]&~me).sum())
+            losses[name]=np.sum((prob-truth)**2,axis=1)
+            if nonflat.any():
+                pp=prob[nonflat,2]/np.maximum(prob[nonflat,0]+prob[nonflat,2],1e-12)
+                sign_losses[name]=(pp-(ye[nonflat]==2))**2
+            if name in models:
+                reg=models[name]["evaluation"][1][me,k];regressions[name]=np.abs(reg-target)
+                metric["return_up_down_mae_bps"]=m._avg(regressions[name],de).tolist()
+                metric["return_mae_minus_zero"]=m.paired_day_interval(regressions[name][:,0]-np.abs(target[:,0]),de)
+                metric["excursion_mae_minus_adaptive"]=m.paired_day_interval(
+                    regressions[name][:,1:].mean(axis=1)-np.abs(reference[:,1:]-target[:,1:]).mean(axis=1),de)
+            record["methods"][name]=metric
+        main="joint" if joint else "index_only"
+        refs=("constant_prior","clock_prior","snapshot")+(("index_only",) if joint else ())
+        record["paired_brier"]={key:m.paired_day_interval(losses[main]-losses[key],de) for key in refs}
+        record["paired_conditional_sign_brier"]={key:m.paired_day_interval(sign_losses[main]-sign_losses[key],de[nonflat])
+             for key in refs} if nonflat.any() else {}
+        if joint:
+            record["paired_return_mae_joint_minus_core"]=m.paired_day_interval(
+                regressions["joint"][:,0]-regressions["index_only"][:,0],de)
+        act=record["methods"][main]["actions"]
+        proxy=act["net_proxy_per_eligible_opportunity"]["interval_95"]
+        def favorable(v):return v["interval_95"] is not None and v["interval_95"][1]<0
+        record["exploratory_checks"]={
+            "brier_beats_all_references":all(favorable(v) for v in record["paired_brier"].values()),
+            "nonflat_sign_beats_all_references":bool(record["paired_conditional_sign_brier"]) and
+                all(favorable(v) for v in record["paired_conditional_sign_brier"].values()),
+            "minimum_call_support":act["calls"]>=100 and act["call_sessions"]>=30,
+            "both_directions":act["up_calls"]>0 and act["down_calls"]>0,
+            "positive_index_proxy_lower_interval":proxy is not None and proxy[0]>0}
+        record["trade_qualified"]=False
+        reports[str(horizon)]=record
+    return reports,predictions
+
+
+def journal_rows(data,te,models,probs):
+    for i,j in enumerate(te):
+        day=str(data["days"][j]);minute=int(data["minutes"][j]);entry=minute+1+DELAY
+        for k,horizon in enumerate(HORIZONS):
+            if not data["scheduled"][j,k]:continue
+            observed=bool(data["mask"][j,k])
+            row={"session":day,"decision_utc":r._stamp(day,minute+1),
+                 "entry_reference_utc":r._stamp(day,entry),"exit_reference_utc":r._stamp(day,entry+horizon),
+                 "horizon_minutes":horizon,"outcome_observed":observed,
+                 "actual_class":int(data["classes"][j,k]-1) if observed else None,
+                 **{key:float(data["y"][j,k,n]) if observed else None
+                    for n,key in enumerate(("actual_return_bps","actual_up_excursion_bps","actual_down_excursion_bps"))}}
+            for name,p in probs.items():
+                for n,key in enumerate(("down","flat","up")):row[name+"_"+key+"_probability"]=float(p[i,k,n])
+            for name,model in models.items():
+                for n,key in enumerate(("return","up_excursion","down_excursion")):
+                    row[name+"_predicted_"+key+"_bps"]=float(model["evaluation"][1][i,k,n])
+            for n,name in enumerate(AVAILABILITY):
+                row[name+"_available"]=bool(data["available"][data["day_index"][j],minute,n])
+            yield row
+
+
+def run(root,stop,days=365,*,index_only=False,epochs=8,batch=128,device_name="cpu",progress=print):
+    maximum=m.MAX_CORE_DAYS if index_only else m.MAX_CONTEXT_DAYS
+    if type(days) is not int or not 120<=days<=maximum or stop>datetime.now(h.IST).date():
+        raise ValueError("Use completed dates and bounded source history")
+    if not 1<=epochs<=30 or not 16<=batch<=256:raise ValueError("Bound epochs to 1-30 and batch to 16-256")
+    torch,_=seq._torch()
+    torch.set_num_threads(min(4,os.cpu_count() or 1))
+    if device_name=="cuda" and not torch.cuda.is_available():raise ValueError("CUDA unavailable")
+    device=torch.device(device_name)
+    service.DATA=root/"data"
+    if not service.DATA.is_dir():raise ValueError("Shared data directory missing")
+    start=stop-timedelta(days=days)
+    index,stocks,membership,weights,peers,_,meta=m.load_sources(start,stop,wings=None,index_only=index_only,progress=progress)
+    dates=sorted(index);splits=m.split_days(dates)
+    table={};daily={};overnight={};dn=();on=()
+    if not index_only:
+        try:
+            progress("Verifying rolling option context on the minute clock")
+            stamps={r._stamp(day,j) for day in dates for j in range(MINUTES)}
+            table,om=opt._load_options([{"session":day} for day in dates],3,needed_stamps=stamps)
+            meta["options"]={**om,"state":"loaded" if table else "unavailable","wings":3}
+        except (ValueError,OSError,RuntimeError,TypeError,KeyError) as exc:
+            meta["options"]={"state":"unavailable","reason":str(exc)[:180]}
+        try:
+            daily,overnight,gm,dn,on=passage.global_features(start,stop,dates);meta["global"]=gm
+        except (ValueError,OSError,sqlite3.Error) as exc:
+            meta["global"]={"state":"unavailable","reason":str(exc)[:180]}
+            dn=tuple(passage.global_open.DAILY);on=tuple("BOATS_"+s for s in passage.global_open.OVERNIGHT)
+    data=build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,splits,
+               index_only=index_only,progress=progress)
+    del index,stocks,peers,table
+    tr,va,te=partitions(data,splits);fit=fit_aux(data,tr)
+    progress(f"GRID {data['grid'].shape} bytes={data['grid'].nbytes} TRAIN {len(tr)} VALIDATION {len(va)} EVALUATION {len(te)}")
+    models={}
+    for name,joint in (("index_only",False),) if index_only else (("index_only",False),("joint",True)):
+        progress("Fitting fixed custom market dynamics "+name)
+        models[name]=fit_neural(data,tr,va,te,fit,joint=joint,epochs=epochs,batch=batch,device=device,progress=progress)
+    metrics,probs=score_all(data,tr,va,te,models,not index_only,progress)
+    report={"version":VERSION,"from_inclusive":start.isoformat(),"to_exclusive":stop.isoformat(),
+            "training_dates":splits[0],"validation_dates":splits[1],"evaluation_dates":splits[2],
+            "observed_index_sessions":len(dates),"assets":data["identities"],"asset_fields":list(ASSET_FIELDS),
+            "auxiliary_fields":list(data["aux_names"]),"retained_auxiliary_fields":[n for n,k in zip(data["aux_names"],fit["keep"]) if k],
+            "grid_bytes":int(data["grid"].nbytes),"aux_bytes":int(data["aux"].nbytes),"session_audit":data["audit"],
+            "partition_rows":{"training":len(tr),"validation":len(va),"evaluation":len(te)},
+            "availability":{name:{key:int(data["available"][data["day_index"][rows],data["minutes"][rows],k].sum())
+                           for key,rows in (("training",tr),("validation",va),("evaluation",te))}
+                           for k,name in enumerate(AVAILABILITY)},
+            "horizons":list(HORIZONS),"delay_minutes":DELAY,"lookback_minutes":LOOKBACK,"minimum_history":MIN_HISTORY,
+            "training_stride":5,"deadband_bps":DEADBAND_BPS,"confidence":CONFIDENCE,"seed":SEED,
+            "models":{name:{key:result[key] for key in ("selected_epoch","history","parameters","input_dimensions")}
+                      for name,result in models.items()},"evaluation":metrics,"sources":meta,
+            "device":device_name,"torch_version":str(torch.__version__),"trade_qualified":False,
+            "warning":("Exploratory custom supervised market dynamics, not a validated trading system. All eligible completed "
+                       "minutes, 30-minute context padded before 30 bars (minimum 15), prior-weekday EMA/levels when complete, "
+                       "and 5/20/60 earlier observed-session daily summaries (not certified exchange calendar or full overnight sequence). "
+                       "Current gaps terminate supported prefix; missing context remains masked. Joint model uses training-known dated bank IDs, "
+                       "actual membership and weights only, observed equity/VIX histories, rolling monthly options and archive-as-of 09:10 "
+                       "global ETF/daily proxies. Historical timestamps do not prove live receipt availability. "
+                       "Targets are delayed index opens and observed excursions, not option fills. Fit stride five overlaps longer targets within "
+                       "training sessions; whole-session partitions separate outcomes. Validation-only epoch choice and temperature calibration; "
+                       "all horizons reported, no post-hoc selection. Conditional scored metrics exclude unresolved outcomes, whose scheduled "
+                       "predictions remain in the journal. Proxy 5bps is illustrative, overlapping opportunities not account P&L. "
+                       "No RL, exact-contract selection, live inference/promotion, orders or new data downloads. Previously inspected dates are "
+                       "exploratory; prospective shadow confirmation and separate option execution tests remain mandatory.")}
+    checkpoint={"version":VERSION,"research_only":True,"trade_qualified":False,"assets":data["identities"],
+                "asset_fields":list(ASSET_FIELDS),"auxiliary_fields":list(data["aux_names"]),
+                "aux_fit":{k:v.tolist() for k,v in fit.items()},"horizons":list(HORIZONS),
+                "models":{name:{"state_dict":result["state"],"input_dimensions":result["input_dimensions"],
+                                "selected_epoch":result["selected_epoch"],
+                                "temperatures":[metrics[str(h)]["methods"][name]["temperature"] for h in HORIZONS]}
+                          for name,result in models.items()},"training_dates":splits[0],"validation_dates":splits[1]}
+    return report,journal_rows(data,te,models,probs),checkpoint
+
+
+def main():
+    ap=argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--shared-root",type=Path,default=service.ROOT)
+    ap.add_argument("--days",type=int,default=365)
+    ap.add_argument("--to-date",default="2026-11-27")
+    ap.add_argument("--index-only",action="store_true")
+    ap.add_argument("--epochs",type=int,default=8)
+    ap.add_argument("--batch",type=int,default=128)
+    ap.add_argument("--device",choices=("cpu","cuda"),default="cpu")
+    args=ap.parse_args()
+    try:
+        root=args.shared_root.resolve()
+        report,rows,checkpoint=run(root,date.fromisoformat(args.to_date),args.days,index_only=args.index_only,
+             epochs=args.epochs,batch=args.batch,device_name=args.device,progress=lambda s:print(s,flush=True))
+        folder=root/"results";folder.mkdir(exist_ok=True)
+        stem="banknifty_market_dynamics_"+uuid.uuid4().hex
+        path=folder/(stem+".json");csv_path=folder/(stem+"_predictions.csv");weights=folder/(stem+"_research_only.pt")
+        torch,_=seq._torch()
+        tmp=weights.with_suffix(".tmp")
+        try:torch.save(checkpoint,tmp);os.replace(tmp,weights)
+        finally:tmp.unlink(missing_ok=True)
+        def writer(out):
+            first=next(rows);w=csv.DictWriter(out,fieldnames=list(first));w.writeheader();w.writerow(first);w.writerows(rows)
+        write_atomic(csv_path,writer)
+        report.update(prediction_csv=csv_path.name,research_checkpoint=weights.name)
+        write_atomic(path,lambda out:json.dump(report,out,sort_keys=True,indent=2,allow_nan=False))
+        print("ASSETS",json.dumps(report["assets"]))
+        print("PARTITIONS",json.dumps(report["partition_rows"]))
+        print("AVAILABILITY",json.dumps(report["availability"]))
+        for horizon,s in report["evaluation"].items():
+            summary={key:s[key] for key in ("evaluation_rows","unresolved_evaluation_rows","adaptive_mae_bps",
+                     "paired_brier","paired_conditional_sign_brier","exploratory_checks")}
+            summary["methods"]={name:{key:v.get(key) for key in ("brier","raw_brier","balanced_accuracy",
+                "conditional_nonflat_sign_brier","return_up_down_mae_bps","actions")} for name,v in s["methods"].items()}
+            print("DYNAMICS",horizon,json.dumps(summary))
+        print("REPORT",path);print("PREDICTIONS",csv_path);print("RESEARCH_CHECKPOINT",weights)
+        print(report["warning"])
+        return 0
+    except (ValueError,OSError,RuntimeError) as exc:
+        print("Market dynamics unavailable:",str(exc)[:300])
+        return 2
+
+
+if __name__=="__main__":
+    raise SystemExit(main())
