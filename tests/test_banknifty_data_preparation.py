@@ -45,3 +45,27 @@ class PreparationTests(TestCase):
                 self.assertEqual(len(m.cs._candidates("INDEX:BANKNIFTY")),1)
                 data["instrument"]["security_id"]="13";manifest.write_text(json.dumps(data))
                 self.assertEqual(m.cs._candidates("INDEX:BANKNIFTY"),[])
+
+    def test_live_priority_requests_existing_worker_only(self):
+        health={"ok":True,"mode":"local","read_only_market_data":True,"broker_orders_enabled":False}
+        status={"config":{"enabled":True,"index":True,"index_days":365},"worker_running":True}
+        with patch.object(m,"api",side_effect=[health,status,{"next_due_reason":"manual_check_requested"}]) as api:
+            result=m.live_priority_request()
+            self.assertEqual(result["state"],"maintenance_check_requested")
+            self.assertTrue(result["heavy_backfill_deferred"])
+            self.assertEqual(api.call_args_list[-1].args,("/api/data-manager/maintenance/check",))
+            self.assertEqual(api.call_count,3)
+
+    def test_live_priority_does_not_override_disabled_active_or_pressure(self):
+        health={"ok":True,"mode":"local","read_only_market_data":True,"broker_orders_enabled":False}
+        base={"config":{"enabled":True},"worker_running":True}
+        for extra,state in [
+            ({"config":{"enabled":False}},"maintenance_not_enabled"),
+            ({"worker_running":False},"maintenance_worker_unavailable"),
+            ({"live_pressure":"recent_live_quote_storage_gap"},"recorder_pressure_yielded"),
+            ({"job":{"status":"running"}},"maintenance_already_active"),
+            ({"next_due_reason":"provider_rate_limit","next_due_utc":"2099-01-01T00:00:00+00:00"},"provider_cooldown_preserved"),
+        ]:
+            with patch.object(m,"api",side_effect=[health,{**base,**extra}]) as api:
+                self.assertEqual(m.live_priority_request()["state"],state)
+                self.assertEqual(api.call_count,2)
