@@ -203,17 +203,27 @@ def _observed(table, day, minute, side, strike):
     return row
 
 
-def _fund(price,units,bps):
-    # Conservative reserve: entry premium plus estimated round-trip charges
-    # at unchanged premium. This does not certify any broker fill.
+def _fixed_roundtrip(bps,fixed_order_cost):
+    if bps!=0 or type(fixed_order_cost) not in (int,float) or not isfinite(fixed_order_cost) or fixed_order_cost<0:
+        raise ValueError("Fixed INR order cost cannot be combined with an adverse premium penalty")
+    return fees._money(2*fixed_order_cost)
+
+
+def _fund(price,units,bps,*,fixed_order_cost=None):
+    # Reserve both sides of the modeled cost; no broker fill is certified.
+    if fixed_order_cost is not None:
+        return fees._money(price*units+_fixed_roundtrip(bps,fixed_order_cost))
     return p._funding([price],units,bps,"zerodha")
 
 
-def _net(entry,exit_,units,bps):
+def _net(entry,exit_,units,bps,*,fixed_order_cost=None):
+    if fixed_order_cost is not None:
+        charge=_fixed_roundtrip(bps,fixed_order_cost)
+        return fees._money((exit_-entry)*units-charge),charge
     return p._net([entry],[exit_],units,bps,"zerodha")
 
 
-def _candidate_pool(signal,table,*,lot_size,max_lots,bps):
+def _candidate_pool(signal,table,*,lot_size,max_lots,bps,fixed_order_cost=None):
     day,m,side,spot=(signal[k] for k in ("session","minute","side","spot"))
     quotes=table.get(_stamp(day,m),{})
     candidates=[]
@@ -226,19 +236,19 @@ def _candidate_pool(signal,table,*,lot_size,max_lots,bps):
             continue
         for lots in range(1,max_lots+1):
             units=lots*lot_size
-            funding=_fund(row["close"],units,bps)
+            funding=_fund(row["close"],units,bps,**({} if fixed_order_cost is None else {"fixed_order_cost":fixed_order_cost}))
             candidates.append((abs(k-spot),lots,k,units,funding,row["close"]))
     return sorted(candidates),{"observed_side_quotes":observed,
         "qualified_contracts":len({x[2] for x in candidates}),
         "minimum_funding_inr":min((x[4] for x in candidates),default=None)}
 
 
-def _next_open_exit(table,day,side,strike,earliest,entry,units,bps):
+def _next_open_exit(table,day,side,strike,earliest,entry,units,bps,*,fixed_order_cost=None):
     """First eligible observed same-contract open, never best future price."""
     for minute in range(earliest,LAST_SESSION_MINUTE+1):
         row=_observed(table,day,minute,side,strike)
         if row is not None:
-            net,charges=_net(entry,row["open"],units,bps)
+            net,charges=_net(entry,row["open"],units,bps,**({} if fixed_order_cost is None else {"fixed_order_cost":fixed_order_cost}))
             return {"exit_net":net,"exit_fees":charges,"exit_utc":_stamp(day,minute),
                     "exit_delay_minutes":minute-earliest}
     return None
@@ -278,10 +288,12 @@ def _derivative_vector(signal,table,strike):
 
 
 def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
-             candidate=None,learning=False):
+             candidate=None,learning=False,fixed_order_cost=None):
+    cost_kw={} if fixed_order_cost is None else {"fixed_order_cost":fixed_order_cost}
+    if cost_kw:_fixed_roundtrip(bps,fixed_order_cost)
     day,m,side,spot=(signal[k] for k in ("session","minute","side","spot"))
     if candidate is None:
-        pool,diagnostics=_candidate_pool(signal,table,lot_size=lot_size,max_lots=max_lots,bps=bps)
+        pool,diagnostics=_candidate_pool(signal,table,lot_size=lot_size,max_lots=max_lots,bps=bps,**cost_kw)
         allowed=[v for v in pool if v[4]<=risk_budget]
         if not allowed:
             state=("missing_signal_quotes" if not diagnostics["observed_side_quotes"]
@@ -309,7 +321,7 @@ def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
     entry=_observed(table,day,first,side,strike)
     if entry is None:
         return ep
-    funding=_fund(entry["open"],units,bps)
+    funding=_fund(entry["open"],units,bps,**cost_kw)
     if not learning and funding>risk_budget:
         return {**ep,"state":"entry_limit_exceeded","observed_funding":funding}
     debit=entry["open"]*units*(1+bps/10000)
@@ -326,16 +338,16 @@ def _episode(signal,table,index,*,hold,lot_size,max_lots,risk_budget,bps,
         if bar is None or spot_bar is None:
             ep["path_gap_minute"]=j
             ep["gap_exit_request_utc"]=_stamp(day,j+2)
-            ep["gap_recovery"]=_next_open_exit(table,day,side,strike,j+2,ep["entry"],units,bps)
+            ep["gap_recovery"]=_next_open_exit(table,day,side,strike,j+2,ep["entry"],units,bps,**cost_kw)
             break
-        mark,_=_net(ep["entry"],bar["close"],units,bps)
+        mark,_=_net(ep["entry"],bar["close"],units,bps,**cost_kw)
         # The availability of a counterfactual exit does not decide whether
         # HOLD is possible. Censor only if a chosen exit lacks evidence.
-        net,charges=_net(ep["entry"],future["open"],units,bps) if future is not None else (None,None)
+        net,charges=_net(ep["entry"],future["open"],units,bps,**cost_kw) if future is not None else (None,None)
         r=mark/debit
         peak=r if peak is None else max(peak,r)
         trend=(1 if side=="CALL" else -1)*(spot_bar[3]/spot-1)
-        recovery=_next_open_exit(table,day,side,strike,j+3,ep["entry"],units,bps) if future is None else None
+        recovery=_next_open_exit(table,day,side,strike,j+3,ep["entry"],units,bps,**cost_kw) if future is None else None
         if recovery is not None:
             recovery["exit_delay_minutes"]+=1
         dynamic=None

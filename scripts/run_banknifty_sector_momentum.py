@@ -39,6 +39,7 @@ def main():
             with tmp.open("x",encoding="utf-8") as f:json.dump(report,f,indent=2,sort_keys=True,allow_nan=False)
             os.replace(tmp,dest)
         finally:tmp.unlink(missing_ok=True)
+        print("EXECUTION COST INR PER ORDER",report["execution_cost_inr_per_order"],"ROUND TRIP INR",report["roundtrip_cost_inr"])
         print("RECEIPT COVERAGE",json.dumps(report["option_window_states"]))
         print("MATCHED OPPORTUNITIES",json.dumps(report["coverage"]))
         print("SELECTED",json.dumps(report["selected"]))

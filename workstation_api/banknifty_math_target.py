@@ -11,11 +11,12 @@ import numpy as np
 from scipy.special import ndtr
 from . import cpr_hybrid_research as r, historical_alpha as h
 from . import predictive_option_research as p, expired_options_backtest as exp
-from . import liquidity_spreads as fee, cpr_execution_evidence as evidence
+from . import cpr_execution_evidence as evidence
 
-VERSION="banknifty_math_target_v1"
+VERSION="banknifty_math_target_v2_flat_cost"
 HOLDS=(5,10,15,30,60)
-COSTS=(35.,75.)
+ORDER_COST_INR=30.
+COSTS=(ORDER_COST_INR,)
 MIN_PATHS=12
 MIN_TRAIN_SESSIONS=20
 MIN_VALID_TRADES=10
@@ -91,28 +92,26 @@ def paths(index,train_dates,day,m,hold):
             "expected_terminal_move_points":float(np.mean([x[2][hold+1]-spot for x in chosen]))}
 
 
-def _net_array(entry,exit_,units,bps):
-    """Unrounded screen only; exact existing fee schedule used in replay."""
-    buy=entry*units*(1+bps/10000)
-    sell=exit_*units*(1-bps/10000)
-    brokerage=2*fee.BROKER_PROFILES["zerodha"]["brokerage"]
-    charges=(brokerage+(buy+sell)*(fee.NSE_OPTION_EXCHANGE_RATE+fee.SEBI_RATE))*(1+fee.GST_RATE)+sell*fee.STT_SELL_RATE+buy*fee.STAMP_BUY_RATE
-    return (sell-buy-charges)/np.maximum(buy,1e-9)
+def _net_array(entry,exit_,units,order_cost_inr):
+    """Flat INR cost per executed order; no proportional penalty or additional charges."""
+    buy=entry*units
+    sell=exit_*units
+    return (sell-buy-2*order_cost_inr)/np.maximum(buy,1e-9)
 
 
-def _forecast_returns(op,cl,hold,units,bps):
+def _forecast_returns(op,cl,hold,units,order_cost_inr):
     # Scenario entry at m+2 open; completed-bar target/stop requests execute
     # at m+j+2 open, matching the historical engine. No intrabar high/low fill.
     entry=op[:,1]
     if np.any(entry<.05):return None
-    marks=_net_array(entry[:,None],cl[:,1:hold],units,bps)
+    marks=_net_array(entry[:,None],cl[:,1:hold],units,order_cost_inr)
     hit=(marks>=TARGET)|(marks<=STOP)
     found=hit.any(axis=1)
     first=hit.argmax(axis=1)
     ix=np.arange(len(entry))
     # j=m+2+first, requested exit j+2. Timeout at m+2+hold.
     exits=np.where(found,first+3,hold+1)
-    ret=_net_array(entry,op[ix,exits],units,bps)
+    ret=_net_array(entry,op[ix,exits],units,order_cost_inr)
     return {"expected_net_return":float(ret.mean()),
             "target_probability":float(np.mean(found & (marks[ix,first]>=TARGET))),
             "stop_probability":float(np.mean(found & (marks[ix,first]<=STOP))),
@@ -120,13 +119,13 @@ def _forecast_returns(op,cl,hold,units,bps):
             "negative_probability":float(np.mean(ret<0))}
 
 
-def required_move(spot,strike,tau,iv,side,premium,units,bps,elapsed=5):
+def required_move(spot,strike,tau,iv,side,premium,units,order_cost_inr,elapsed=5):
     """Approximate favorable spot move for +10% net at fixed IV and time."""
     t=max(1e-12,tau-elapsed/(365*1440))
     direction=1 if side=="CALL" else -1
     lo,hi=0.,spot*.2
     def mark(move):
-        return float(_net_array(premium,price(spot+direction*move,strike,t,iv,side),units,bps))
+        return float(_net_array(premium,price(spot+direction*move,strike,t,iv,side),units,order_cost_inr))
     if mark(hi)<TARGET:return None
     for _ in range(35):
         mid=(lo+hi)/2
@@ -154,7 +153,7 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget):
         if abs(strike/spot-1)>.015 or row["close"]<5:continue
         observed+=1
         premium=row["close"]
-        affordable_lots=[n for n in range(1,max_lots+1) if r._fund(premium,n*lot_size,COSTS[1])<=budget]
+        affordable_lots=[n for n in range(1,max_lots+1) if r._fund(premium,n*lot_size,0,fixed_order_cost=ORDER_COST_INR)<=budget]
         if not affordable_lots:continue
         affordable+=1
         iv=implied_vol(spot,strike,tau,premium,side)
@@ -168,7 +167,7 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget):
             if any(f is None for f in forecasts):continue
             if any(f["expected_net_return"]<=0 or f["realized_target_probability"]<PROB_FLOOR for f in forecasts):continue
             worst=min(f["expected_net_return"] for f in forecasts)
-            planned=r._fund(premium,units,COSTS[0])
+            planned=r._fund(premium,units,0,fixed_order_cost=ORDER_COST_INR)
             candidates.append((worst,forecasts[0]["realized_target_probability"],-abs(strike-spot),-lots,
                 {"side":side,"strike":float(strike),"lots":lots,"units":units,"premium":premium,
                  "iv_proxy":iv,"nominal_expiry":expiry.isoformat(),"tau":tau,"forecasts":forecasts,
@@ -185,8 +184,8 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget):
 
 
 def replay(index,train,table,dates,hold,*,capital,budget,lot_size,max_lots,progress=None):
-    """Rank once at each decision; reuse the same choices in both cost lanes.
-    Each lane obeys its own position/risk constraint, without future reselection.
+    """Rank once at each decision using flat INR order cost.
+    Replay obeys position/risk constraints without future reselection.
     """
     episodes={cost:[] for cost in COSTS}
     counts=Counter();journal=[]
@@ -202,18 +201,19 @@ def replay(index,train,table,dates,hold,*,capital,budget,lot_size,max_lots,progr
                     "ranked_target_probability":candidate["forecasts"][0]["realized_target_probability"]}
             journal.append({"session":day,"minute":m,**candidate})
             for cost in COSTS:
-                planned=r._fund(candidate["premium"],candidate["units"],cost)
+                planned=r._fund(candidate["premium"],candidate["units"],0,fixed_order_cost=cost)
                 pick=(abs(candidate["strike"]-candidate["spot"]),candidate["lots"],candidate["strike"],candidate["units"],planned,candidate["premium"])
-                ep=r._episode(signal,table,index[day],hold=hold,lot_size=lot_size,max_lots=max_lots,risk_budget=budget,bps=cost,candidate=pick)
+                ep=r._episode(signal,table,index[day],hold=hold,lot_size=lot_size,max_lots=max_lots,risk_budget=budget,bps=0,candidate=pick,fixed_order_cost=cost)
                 episodes[cost].append(ep)
     lanes={}
     for cost in COSTS:
         metrics,trades=r._evaluate(episodes[cost],method="fixed_stop",capital=capital,risk_budget=budget,dates=dates,strict_execution=True)
-        lanes[str(int(cost))]={"metrics":metrics,"journal":trades}
+        lanes["flat_30_inr_per_order"]={"metrics":metrics,"journal":trades}
     return {"hold_minutes":hold,"candidate_states":dict(counts),"candidate_journal":journal,"lanes":lanes}
 
 
 def _qualified(row):
+    if not row["lanes"]:return False
     for lane in row["lanes"].values():
         m=lane["metrics"]
         if (m["scored_trades"]<MIN_VALID_TRADES or m["daily_coverage"]["days_with_scored_trade"]<MIN_VALID_DAYS
@@ -239,12 +239,13 @@ def run(*,sessions=90,to_date=None,capital=17000.,budget=12000.,lot_size=30,max_
                                needed_stamps=clocks,evidence=coverage,evidence_days=val+test)
     if not table:raise ValueError("No usable saved BANKNIFTY rolling option candles")
     report={"version":VERSION,"capital_inr":capital,"premium_and_daily_loss_budget_inr":budget,
+            "execution_cost_model":"flat_all_in_per_order","execution_cost_inr_per_order":ORDER_COST_INR,"roundtrip_cost_inr":2*ORDER_COST_INR,
             "assumed_lot_size":lot_size,"max_lots":max_lots,"target_net_on_paid_premium":TARGET,"stop_net_on_paid_premium":STOP,
             "training_dates":train,"validation_dates":val,"evaluation_dates":test,
             "index_sources":hashes,"index_failures":failures,"option_sources":meta,
             "option_window_states":dict(Counter(evidence.window_status(coverage,d,side,today)["state"] for d in val+test for side in ("CALL","PUT"))),
             "validation":{},"evaluation":None,"selected_hold":None,
-            "warning":"Exploratory only. Fixed earlier training paths are rescaled by decision-time volatility; European zero-carry constant-IV proxy uses nominal monthly expiry, not a verified exact contract. Forecasts use approximate unrounded charges; replay uses current illustrative Zerodha charges and 35/75 bps adverse premium adjustment per side. No actual historical bid/ask, lot-size or fills. Stops/targets trigger on completed closes, then delayed observed opens; target not guaranteed and losses can exceed 5%. Missing/late evidence penalized in separate stress utility. Daily accounts reset, not compounded. Previously reviewed dates are not fresh confirmation. No ML/RL, orders, or provider requests."}
+            "warning":"Exploratory only. Fixed earlier training paths are rescaled by decision-time volatility; European zero-carry constant-IV proxy uses nominal monthly expiry, not a verified exact contract. Forecasts and replay use the user-specified all-in INR 30 per executed order (INR 60 per completed round trip), no additional fees or proportional price penalty. This is an assumption, not verified brokerage or spread. No actual historical bid/ask, lot-size or fills. Stops/targets trigger on completed closes, then delayed observed opens; target not guaranteed and losses can exceed 5%. Missing/late evidence penalized in separate stress utility. Daily accounts reset, not compounded. Previously reviewed dates are not fresh confirmation. No ML/RL, orders, or provider requests."}
     for hold in HOLDS:
         if progress:progress(50,"Validation "+str(hold)+"-minute holding policy")
         result=replay(index,train,table,val,hold,capital=capital,budget=budget,lot_size=lot_size,max_lots=max_lots,

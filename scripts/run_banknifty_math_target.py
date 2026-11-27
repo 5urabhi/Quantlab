@@ -32,6 +32,7 @@ def main():
             with tmp.open("x",encoding="utf-8") as f:json.dump(report,f,indent=2,sort_keys=True,allow_nan=False)
             os.replace(tmp,dest)
         finally:tmp.unlink(missing_ok=True)
+        print("Execution cost per order INR:",report["execution_cost_inr_per_order"],"Round trip INR:",report["roundtrip_cost_inr"])
         print("Option receipt coverage:",json.dumps(report["option_window_states"]))
         for hold,item in report["validation"].items():
             print("VALIDATION",hold,"minutes","qualified",item["qualified"],"candidate states",json.dumps(item["candidate_states"]))
@@ -50,7 +51,7 @@ def main():
 
 def summary(cost,lane):
     m=lane["metrics"]
-    print("Cost bps/side",cost,json.dumps({k:m[k] for k in (
+    print("Execution cost model",cost,json.dumps({k:m[k] for k in (
         "scored_trades","profitable_trades","realized_target_hits","conditional_net_inr",
         "conditional_fees_inr","stress_utility_inr","unresolved_trades","recovered_delayed_exits",
         "exit_reasons","max_within_day_closed_drawdown_inr")}))
