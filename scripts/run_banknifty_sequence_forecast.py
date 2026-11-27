@@ -19,6 +19,7 @@ def main():
     ap.add_argument("--batch",type=int,default=96)
     ap.add_argument("--device",choices=("cpu","cuda"),default="cpu")
     ap.add_argument("--full-grid",action="store_true",help="All 12 architecture/lookback pairs rather than the six prespecified comparisons")
+    ap.add_argument("--convergence",action="store_true",help="Only previously validation-selected 15m Transformer; reduce LR on validation plateau, patience six")
     ap.add_argument("--shared-root",type=Path)
     args=ap.parse_args()
     try:
@@ -28,7 +29,7 @@ def main():
         torch,_=m._torch()
         report,predictions,checkpoint=m.run(days=args.days,to_date=args.to_date,
               wings=None if args.no_options else args.wings,epochs=args.epochs,batch=args.batch,
-              device_name=args.device,full_grid=args.full_grid,progress=lambda s:print(s,flush=True))
+              device_name=args.device,full_grid=args.full_grid,convergence=args.convergence,progress=lambda s:print(s,flush=True))
         dest=root/"results";dest.mkdir(exist_ok=True)
         stem="banknifty_sequence_forecast_"+uuid.uuid4().hex
         path=dest/(stem+".json");journal=dest/(stem+"_predictions.csv");weights=dest/(stem+"_research_only.pt")
@@ -51,6 +52,9 @@ def main():
             "verified_weight_days":sum(report["session_bank_coverage"][day]["verified_weights"] for day in report[part+"_dates"])}
             for part in ("training","validation","evaluation")}))
         print("SELECTED",json.dumps(report["selected"]))
+        if args.convergence:
+            print("CONVERGENCE HISTORY",json.dumps(report["validation_models"][0]["history"]))
+            print("STOP REASON",report["validation_models"][0]["stop_reason"])
         print("VALIDATION MODELS",json.dumps([{k:v for k,v in row.items() if k!="history"} for row in report["validation_models"]]))
         print("EVALUATION ADAPTIVE",json.dumps(report["adaptive_baselines"]["evaluation"]))
         print("EVALUATION V1 MATCHED",json.dumps(report["matched_v1_tabular"]["evaluation"]))
