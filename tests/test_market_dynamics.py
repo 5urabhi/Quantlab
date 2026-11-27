@@ -105,23 +105,38 @@ class DynamicsModelTests(TestCase):
     def setUpClass(cls):torch.set_num_threads(1)
 
     def test_attention_padding_and_coherent_multitask_backward(self):
-        b,t,a,c=3,30,4,8
-        x=torch.zeros(b,t,a,c);x[:,15:,0,0]=1
-        aux=torch.zeros(b,t,2)
-        model=net.MarketDynamics(a,c,2,len(d.HORIZONS))
-        logits,reg=model(x,aux)
-        self.assertEqual(tuple(logits.shape),(b,6,3))
-        self.assertTrue(bool(torch.isfinite(logits).all()))
-        self.assertTrue(bool((reg[:,:,1]>=reg[:,:,0].clamp_min(0)).all()))
-        self.assertTrue(bool((reg[:,:,2]>=(-reg[:,:,0]).clamp_min(0)).all()))
-        mask=torch.ones(b,6);mask[:,5]=0
-        target=torch.zeros(b,6,3);labels=torch.ones(b,6,dtype=torch.long)
-        loss=net.dynamics_objective((logits,reg),labels,target,mask,torch.ones(b))
-        target[:,5]=1e6;labels[:,5]=0
-        other=net.dynamics_objective((logits,reg),labels,target,mask,torch.ones(b))
-        self.assertAlmostEqual(float(loss),float(other),places=6)
-        loss.backward()
-        self.assertTrue(any(p.grad is not None and bool(torch.isfinite(p.grad).all()) for p in model.parameters()))
+        devices=["cpu"]+(["cuda"] if torch.cuda.is_available() else [])
+        for device in devices:
+            with self.subTest(device=device):
+                b,t,a,c=3,30,4,8
+                x=torch.zeros(b,t,a,c,device=device);x[:,15:,0,0]=1
+                aux=torch.zeros(b,t,2,device=device)
+                model=net.MarketDynamics(a,c,2,len(d.HORIZONS)).to(device)
+                logits,reg=model(x,aux)
+                self.assertEqual(tuple(logits.shape),(b,6,3))
+                self.assertTrue(bool(torch.isfinite(logits).all()))
+                self.assertTrue(bool((reg[:,:,1]>=reg[:,:,0].clamp_min(0)).all()))
+                self.assertTrue(bool((reg[:,:,2]>=(-reg[:,:,0]).clamp_min(0)).all()))
+                mask=torch.ones(b,6,device=device);mask[:,5]=0
+                target=torch.zeros(b,6,3,device=device)
+                labels=torch.ones(b,6,dtype=torch.long,device=device)
+                weights=torch.ones(b,device=device)
+                loss=net.dynamics_objective((logits,reg),labels,target,mask,weights)
+                # Autograd saves the original target and class labels for
+                # backward. Perturb separate tensors, never saved inputs.
+                changed_target=target.clone();changed_labels=labels.clone()
+                changed_target[:,5]=1e6;changed_labels[:,5]=0
+                other=net.dynamics_objective((logits,reg),changed_labels,changed_target,mask,weights)
+                self.assertAlmostEqual(loss.detach().item(),other.detach().item(),places=6)
+                original_grad=torch.autograd.grad(loss,(logits,reg),retain_graph=True)
+                changed_grad=torch.autograd.grad(other,(logits,reg),retain_graph=True)
+                for original,changed in zip(original_grad,changed_grad):
+                    torch.testing.assert_close(original,changed)
+                    self.assertTrue(bool((original[:,5]==0).all()))
+                loss.backward()
+                grads=[p.grad for p in model.parameters() if p.grad is not None]
+                self.assertTrue(grads)
+                self.assertTrue(all(bool(torch.isfinite(g).all()) for g in grads))
 
     def test_small_training_and_unresolved_journal(self):
         days=[(date(2025,1,1)+timedelta(days=i)).isoformat() for i in range(6)]
@@ -136,7 +151,8 @@ class DynamicsModelTests(TestCase):
         tr=np.arange(12);va=np.arange(12,15);te=np.arange(15,18)
         data["all_history"]=True
         fit=d.fit_aux(data,tr)
-        result=d.fit_neural(data,tr,va,te,fit,joint=True,epochs=1,batch=3,device=torch.device("cpu"),progress=None)
+        device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        result=d.fit_neural(data,tr,va,te,fit,joint=True,epochs=1,batch=3,device=device,progress=None)
         self.assertEqual(result["selected_epoch"],1)
         self.assertEqual(result["evaluation"][0].shape,(3,6,3))
         rows=list(d.journal_rows(data,te,{"joint":result},{"joint":result["evaluation"][0]}))
