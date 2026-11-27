@@ -93,8 +93,9 @@ Read this at the beginning of every task. Update this same checklist on each evi
 - [x] Pass updated multi-horizon regression tests (14/14) and attempt the 15-minute comparison on d85dc92. Result: no_confirmed_ohlc_improvement; volatility-adaptive and constant-prior comparators outperform the selected ML model.
 - [x] Attempt remaining fixed core horizon comparisons (5m adaptive, 10m, 30m, 60m, 1m) on bac7f53. All six horizons rejected: selected ML loses to adaptive range and constant-prior probability comparators; report below. Actual peak RAM not measured.
 - [ ] Extend early-session coverage, explicit UP/DOWN/FLAT and movement/volatility/first-passage probability distribution (current horizon extension retains 60-minute input and binary up-vs-not-up label).
-- [x] Implement the fixed five-year material-direction benchmark using the existing three-class protocol, 16 completed input bars, one-minute delay, 5m outcome, +/-5 bps deadband, validation-only temperature calibration and 60% confidence abstention. Tests and actual run pending.
-- [ ] Pass directional benchmark tests and run the fixed protocol; report all calls, coverage, class scores, paired block losses, proxy economics and failures. No threshold tuning on the inspected historical partition.
+- [x] Implement the fixed five-year material-direction benchmark using the existing three-class protocol, 16 completed input bars, one-minute delay, 5m outcome, +/-5 bps deadband, validation-only temperature calibration and 60% confidence abstention. All 3 scoped tests passed and the five-year run completed on 8a3b138; qualification failed.
+- [x] Pass directional benchmark tests (3/3) and run fixed five-year protocol. 87,191 evaluation anchors, 38 calibrated calls across 17 days; day-weighted material hit 40.29%, mean net proxy -2.981 bps/called opportunity. State direction_not_qualified; see ledger.
+- [ ] Audit continuous multi-session features and session-gap evidence; test a genuinely distinct prior-session/regime context hypothesis with matched intraday-only comparator before changing model complexity. Current material-direction inputs reset each session and do not encode previous-day or multi-day history.
 - [ ] Establish retrospective directional qualification against simple matched comparators; if no signal qualifies, remain in Phase 1 rather than claim success.
 - [ ] Freeze a qualifying candidate and confirm it on new receipt-time shadow sessions (proposed minimum 60 new sessions and 100 calls, subject to predeclared power/support review); check calibration, coverage, both directions, stable performance and latency. No live use before qualification.
 - [ ] Validate out-of-sample directional and price skill, probability calibration and prospective stability before claiming a core model is usable.
@@ -139,7 +140,7 @@ Read this at the beginning of every task. Update this same checklist on each evi
 - [ ] Confirm calibration, drift, net risk-controlled paper performance and operational integrity. A no-edge conclusion is valid; do not promote automatically.
 - [ ] Only after baseline evidence, evaluate controlled offline retraining, contextual bandits or RL versus simpler policies; keep live order routing disabled.
 
-**Current next command (direction qualification; after pulling latest branch changes):**
+**Completed direction qualification command (reproducibility only; do not repeat or tune the failed test):**
 
     .venv/bin/python -m unittest discover -s tests -p 'test_direction_gate.py' -v
     nice -n 15 ionice -c 3 .venv/bin/python -m scripts.benchmark_direction_gate --days 1825 --to-date 2026-11-27
@@ -486,9 +487,21 @@ Local files: results/banknifty_matched_context_622f6bfc383c4b34bd5c9a521571a57a.
 
 Deferred protocol and command above; scripts/benchmark_option_response.py reuses verified index and rolling option loaders and existing numerical models, not a new live engine. Conditional premium movement outcomes, option-only vs option-plus-index, no-change and training-only historical bucket baselines, complete evaluation candidate state accounting. Existing Greeks/scenario and historical option research are retained. No assumption that underlying forecasts are reliable, no exact contract, actual IV response target, order execution or strategy profitability claim. New tests and empirical run remain pending; direction qualification takes precedence.
 
-### Direction qualification benchmark (implementation, run pending)
+### Direction qualification benchmark (completed; not qualified)
 
-The project owner clarified that the goal includes actual manual trading, so directional qualification is a blocking prerequisite. scripts/benchmark_direction_gate.py implements the fixed five-year material-direction screen documented above. No new source acquisition or production inference. Historical dates already examined remain exploratory; tests and empirical run pending. A failure is a valid result and does not authorize use for real money. Even a retrospective pass requires frozen prospective shadow validation and separate actual option contract/cost/risk acceptance.
+The project owner clarified that the goal includes actual manual trading, so directional qualification is a blocking prerequisite. Operator console at 8a3b138: all 3 tests passed (0.046s). Five-year span 2021-11-29 through 2026-11-26, 1,231 observed weekday sessions; chronological 738/246/247 session reservations, 50,650 nonoverlapping fit, 86,523 validation and 87,191 rolling evaluation rows. Observed date continuity is not a certified complete exchange-session calendar: incomplete/gap windows excluded, weekends excluded, no proof every expected trading day is present. No random date split; fixed fitted model rather than daily walk-forward retraining. The current model's features use only the immediately preceding 16 same-session completed bars, not overnight or previous-session state. Five-year training supplies examples across days, not a continuous multiday input sequence. Earlier OHLC features included prior-session and up to five earlier-day summaries, but that is not this compact direction-gate feature set.
+
+| Evaluation method | Multiclass Brier | Balanced accuracy | Calls / call sessions | Day-weighted material hit | Mean net proxy bps per called opportunity |
+| --- | ---: | ---: | --- | ---: | ---: |
+| Raw model | 0.55540836 | 34.1062% | 13 / 5 | 51.1111% | -2.95768 |
+| Calibrated model | 0.55650204 | 34.1062% | 38 / 17 | 40.2941% | -2.98103 |
+| Calibrated training prior | 0.57668872 | 33.3333% | 0 / 0 | n/a | n/a |
+| Calibrated clock prior | 0.57455988 | 33.3333% | 0 / 0 | n/a | n/a |
+| 5m momentum | n/a | n/a | 37330 / 247 | 21.4699% | -5.01410 |
+
+Calibrated model accuracy 58.0243% vs prior 57.8259%; largely flat-class classification, not 58% directional trade accuracy. Paired Brier differences against training prior -0.02018667 (95% descriptive block interval [-0.02630307,-0.01427880]) and clock prior -0.01805784 ([-0.02418730,-0.01236766]); this is multiclass probability improvement, not evidence of profitable direction. 16 UP and 22 DOWN calls; 38 total (0.0436% day-weighted coverage), opposite material hit 40.2941%, flat 19.4118%. Net index proxy per eligible opportunity -0.00263180 bps, interval [-0.00783141,+0.00114883]. Gate: Brier PASS, both directions PASS, support FAIL, positive proxy lower interval FAIL. State direction_not_qualified. Retain the failed protocol unchanged. Next distinct hypothesis to assess is whether causal prior-session and multi-day regime state adds direction value, with a matched short-history comparator, explicit exchange-session gaps and no overnight target leakage. This is a proposed next experiment, not implemented or empirically verified. Do not claim a continuous multiday sequence or daily retraining exists. Do not tune thresholds on this already inspected test.
+
+Local report results/banknifty_direction_gate_e4a7349a5b1d4c9c9f199ee400c35480.json and corresponding _predictions.csv. Console only; original report hashes not independently verified. No new source acquisition or production inference. Historical dates already examined remain exploratory. Even a retrospective pass requires frozen prospective shadow validation and separate actual option contract/cost/risk acceptance.
 
 ### Global and fixed-time experiments (November 27, exploratory)
 
