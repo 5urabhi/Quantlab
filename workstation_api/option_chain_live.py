@@ -21,7 +21,7 @@ import re
 import sqlite3
 import time
 
-from . import dhan_option_chain, dhan_workspace, shared_market_data
+from . import dhan_option_chain, dhan_workspace, shared_market_data, nse_session_policy as sessions
 
 IST = ZoneInfo("Asia/Kolkata")
 LOCK = RLock()
@@ -285,7 +285,9 @@ def expiries(*, sleep=time.sleep) -> dict:
     with LOCK:
         prior = _EXPIRY_CACHE.get(key)
         if prior and now - prior[0] < EXPIRY_TTL_SECONDS:
-            return {**prior[1], "cache_hit": True}
+            eligible=[e for e in prior[1]["expiries"] if _valid_expiry(e,_clock())]
+            if eligible:
+                return {**prior[1], "expiries":eligible,"nearest_expiry":eligible[0],"cache_hit":True}
         body = {"UnderlyingScrip": 25, "UnderlyingSeg": "IDX_I"}
         delay = MIN_CHAIN_INTERVAL_SECONDS - (time.monotonic() - _LAST_VENDOR_CALL)
         if _LAST_VENDOR_CALL and delay > 0:
@@ -297,7 +299,7 @@ def expiries(*, sleep=time.sleep) -> dict:
         candidates = raw.get("data")
         if not isinstance(candidates, list):
             raise ValueError("Dhan expirylist response is not a date list")
-        current = _clock().astimezone(IST).date()
+        current = _clock()
         expirations = sorted({
             val for val in candidates
             if isinstance(val, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", val)
@@ -314,10 +316,13 @@ def expiries(*, sleep=time.sleep) -> dict:
         return result
 
 
-def _valid_expiry(text: str, current: date) -> bool:
+def _valid_expiry(text: str, current: date | datetime) -> bool:
     try:
-        return date.fromisoformat(text) >= current
-    except ValueError:
+        expiry=date.fromisoformat(text)
+        if isinstance(current,datetime):
+            return current<datetime.combine(expiry,sessions.index_expiry_close(expiry),IST)
+        return expiry>=current
+    except (ValueError,TypeError):
         return False
 
 
@@ -330,11 +335,11 @@ def chain(expiry: str, *, force_refresh: bool = False, sleep=time.sleep) -> dict
     now = time.monotonic()
     key = ("BANKNIFTY", expiry, auth)
     with LOCK:
+        if not _valid_expiry(expiry,_clock()):
+            raise ValueError("Selected Dhan BANKNIFTY option has reached its scheduled trading cutoff")
         cached = _CHAIN_CACHE.get(key)
         if cached and not force_refresh and now - cached[0] < CHAIN_TTL_SECONDS:
             return {**cached[1], "cache_hit": True}
-        if not _valid_expiry(expiry, _clock().astimezone(IST).date()):
-            raise ValueError("Selected Dhan BANKNIFTY option has already expired")
         # Check against authoritative Dhan expirylist (cached) rather than
         # generating monthly/weekly dates from a calendar assumption.
         observed = expiries(sleep=sleep)
