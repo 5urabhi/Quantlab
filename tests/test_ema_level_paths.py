@@ -27,6 +27,9 @@ class EMALevelTests(TestCase):
         a[17]=[109,113,108,112,1]
         row=l.level_row("2026-11-26",a,cross(10,1,100),cross(14,-1,107),375,"previous_high",110.)
         self.assertEqual(row["first_touch_state"],"rejected_close")
+        self.assertEqual(row["initial_rejection_failure_minute"],11)
+        self.assertEqual(row["initial_rejection_reclaim_minute"],12)
+        self.assertEqual(row["initial_rejection_minutes_to_reclaim"],1)
         self.assertEqual(row["breakout_minute"],12)
         self.assertEqual(row["state"],"failed_breakout_in_leg")
         self.assertEqual(row["minutes_breakout_to_failure"],2)

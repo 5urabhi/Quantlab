@@ -31,6 +31,11 @@ LEVEL_NAMES=(
     "opening_15m_high","opening_15m_low","opening_15m_close",
 )
 FOLLOWUP_MINUTES=(1,5,10,15,30,60)
+INITIAL_REJECTION_FIELDS=("failure_minute","failure_close","failure_followup_state",
+    "reclaim_minute","followup_end_minute","minutes_to_reclaim","observed_followup_minutes",
+    "minutes_to_adverse_extreme","adverse_extreme_price","adverse_points_from_failure_close",
+    "adverse_points_from_level","adverse_bps_from_failure_close","reclaim_after_opposite_cross"
+    )+tuple(f"signed_close_change_{n}m_points" for n in FOLLOWUP_MINUTES)
 
 
 def frozen_levels(bars,cross):
@@ -123,7 +128,8 @@ def level_row(day,bars,cross,next_cross,prefix,name,level):
          "adverse_extreme_price":None,"adverse_points_from_failure_close":None,
          "adverse_points_from_level":None,"adverse_bps_from_failure_close":None,
          "reclaim_after_opposite_cross":None,
-         **{f"signed_close_change_{n}m_points":None for n in FOLLOWUP_MINUTES}}
+         **{f"signed_close_change_{n}m_points":None for n in FOLLOWUP_MINUTES},
+         **{"initial_rejection_"+key:None for key in INITIAL_REJECTION_FIELDS}}
     if level is None:return row
     distance=direction*(level-price)
     row.update(distance_points=distance,distance_bps=10000*distance/price)
@@ -142,6 +148,13 @@ def level_row(day,bars,cross,next_cross,prefix,name,level):
                first_touch_state="closed_beyond" if direction*(touch_close-level)>0 else
                        "rejected_close" if direction*(touch_close-level)<0 else "closed_at_level")
     breakout=first_index(direction*(bars[touch:end+1,3]-level)>0,touch)
+    # First strict near-side close after touch and before any confirmed
+    # breakout. Preserve its reversal even if a later breakout succeeds.
+    initial_end=breakout if breakout is not None else end+1
+    initial=first_index(direction*(bars[touch:initial_end,3]-level)<0,touch)
+    if initial is not None:
+        follow=failure_followup(bars,level,direction,initial,prefix,end)
+        row.update({"initial_rejection_"+key:value for key,value in follow.items()})
     if breakout is None:
         row["state"]="touched_no_breakout" if near else "unresolved_touched_no_breakout"
         # A strict near-side close following a touch is a known rejection
@@ -212,6 +225,8 @@ def summarize(rows):
                 "censored_followup":{k:p.distribution(censored,k) for k in metrics},
                 "close_change_before_or_at_reclaim":{str(n):p.distribution(selected,f"signed_close_change_{n}m_points")
                                                      for n in FOLLOWUP_MINUTES}}
+    initial_rejections=[{key:x["initial_rejection_"+key] for key in INITIAL_REJECTION_FIELDS}
+                        for x in ahead if x["initial_rejection_failure_minute"] is not None]
     return {"paths":len(rows),"sessions":len({x["session"] for x in rows}),
             "states":dict(Counter(x["state"] for x in rows)),
             "ahead":len(ahead),"completed_ahead":len(completed),
@@ -230,6 +245,7 @@ def summarize(rows):
             "minutes_to_breakout_completed":p.distribution(completed_broken,"minutes_to_breakout"),
             "breakout_extension_completed":p.distribution(completed_broken,"breakout_favorable_extension_points"),
             "minutes_breakout_to_failure_completed":p.distribution(confirmed_failed,"minutes_breakout_to_failure"),
+            "initial_rejection_followup":failure_stats(initial_rejections),
             "failure_followup":{kind:failure_stats([x for x in failures if x["failure_kind"]==kind])
                                 for kind in ("touch_rejection_without_leg_breakout","closed_back_after_breakout")}}
 
@@ -274,8 +290,9 @@ def run(root,stop,days=1825,progress=print):
                        "Only levels strictly ahead qualify; counts per level include at most one encounter per leg. "
                        "Touch uses high/low; breakout requires strict close beyond; failure requires subsequent strict "
                        "close back across within the leg. The first touch outcome is separate from eventual breakout. "
-                       "A touched level without any breakout in the observed leg may be followed by a rejection; "
-                       "its first strict near-side close is tracked separately. No-break and no-failure states "
+                       "A strict near-side close after touch but before any confirmed breakout has its own "
+                       "follow-up, even if a later breakout succeeds. Rejections without a leg breakout are "
+                       "a separate descriptive subset of those initial rejections. No-break and no-failure states "
                        "on incomplete legs are unresolved. Main rates condition on completed legs, not all signals; "
                        "all observed and censored counts are retained. Failures are followed through the first strict "
                        "reclaim close or session/gap censor, even after opposite EMA cross. No intrabar timing "
@@ -291,7 +308,7 @@ def _median(value):return value.get("p50")
 
 def brief(name,s):
     failures=s["failure_followup"]["closed_back_after_breakout"]
-    reject=s["failure_followup"]["touch_rejection_without_leg_breakout"]
+    reject=s["initial_rejection_followup"]
     return {"level":name,"ahead":s["ahead"],"completed_ahead":s["completed_ahead"],
             "touch":s["completed_touch"],"breakout":s["completed_breakout"],"failed":s["completed_failed_breakouts"],
             "breakout_per_ahead":s["completed_breakout_fraction_of_ahead"],
