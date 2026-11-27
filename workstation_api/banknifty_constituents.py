@@ -27,7 +27,7 @@ import struct
 import time
 import uuid
 
-from . import dhan_workspace, live_market, market_inventory, pit_index, recorder_storage, service, shared_market_data
+from . import dhan_workspace, live_market, market_inventory, pit_index, recorder_storage, service, shared_market_data, nse_session_policy as sessions
 
 STREAM = "banknifty_constituent_quotes"
 MAX_MEMBERS = 50
@@ -283,9 +283,6 @@ def _setup(db):
     CREATE INDEX IF NOT EXISTS bank_constituent_receipt
       ON banknifty_constituent_quotes(received_utc);
     """)
-
-
-from . import nse_session_policy as sessions
 
 
 class Capture:
