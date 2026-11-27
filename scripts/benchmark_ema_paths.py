@@ -29,7 +29,7 @@ PROXY_COST_BPS=5.
 MINUTES=375
 
 
-def session_crosses(bars,previous):
+def session_crosses(bars,previous,*,previous_minutes=MINUTES,session_minutes=MINUTES):
     """One-minute close EMA, seeded with verified complete prior weekday.
 
     Ignore equality touches: a new cross requires opposite nonzero signs.
@@ -38,18 +38,25 @@ def session_crosses(bars,previous):
     """
     if bars.shape!=(MINUTES,5):
         raise ValueError("Expected regular 375-minute index research array")
-    prev=m.f.daily_ohlc(previous)
-    if prev is None or np.any(previous[:,:4]<=0):
+    if not (type(previous_minutes) is int and type(session_minutes) is int and
+            1<=previous_minutes<=MINUTES and 1<=session_minutes<=MINUTES):
+        raise ValueError("Invalid scheduled comparison window")
+    if previous is None or previous.shape!=(MINUTES,5):
         return [],0,"prior_complete_weekday_unavailable"
-    valid=np.isfinite(bars[:,:4]).all(axis=1)&(bars[:,:4]>0).all(axis=1)
+    prior=previous[:previous_minutes,:4]
+    if not np.isfinite(prior).all() or np.any(prior<=0):
+        return [],0,"prior_complete_weekday_unavailable"
+    prev=(prior[0,0],prior[:,1].max(),prior[:,2].min(),prior[-1,3])
+    current=bars[:session_minutes,:4]
+    valid=np.isfinite(current).all(axis=1)&(current>0).all(axis=1)
     missing=np.flatnonzero(~valid)
-    prefix=int(missing[0]) if len(missing) else MINUTES
+    prefix=int(missing[0]) if len(missing) else session_minutes
     if not prefix:return [],0,"current_prefix_unavailable"
     op,high,low,close=map(float,prev)
     pivot=(high+low+close)/3
     bc=(high+low)/2
     bottom,top=sorted((bc,2*pivot-bc))
-    fast=h._ema(previous[:,3],FAST);slow=h._ema(previous[:,3],SLOW)
+    fast=h._ema(prior[:,3],FAST);slow=h._ema(prior[:,3],SLOW)
     state=int(np.sign(fast-slow))
     crosses=[];today_high=-np.inf;today_low=np.inf
     for minute in range(prefix):
@@ -67,7 +74,7 @@ def session_crosses(bars,previous):
                             "today_open":float(bars[0,0]),"today_running_high":today_high,
                             "today_running_low":today_low})
         if direction:state=direction
-    return crosses,prefix,"complete_regular_prefix" if prefix==MINUTES else "current_gap"
+    return crosses,prefix,"complete_regular_prefix" if prefix==session_minutes else "current_gap"
 
 
 def path_row(day,bars,cross,next_cross,prefix):

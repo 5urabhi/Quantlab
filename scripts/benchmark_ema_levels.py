@@ -66,7 +66,7 @@ def first_index(mask,start):
     return int(positions[0]+start) if len(positions) else None
 
 
-def failure_followup(bars,level,direction,minute,prefix,leg_end):
+def failure_followup(bars,level,direction,minute,prefix,leg_end,*,session_minutes=p.MINUTES):
     """After a known near-side close, observe adverse movement to reclaim.
 
     A reclaim is a strict completed close beyond the same frozen level.
@@ -86,7 +86,7 @@ def failure_followup(bars,level,direction,minute,prefix,leg_end):
     extreme=float(extremes[extreme_offset])
     result={"failure_minute":minute,"failure_close":failure_close,
             "failure_followup_state":"reclaimed" if reclaim is not None else
-                ("censored_session_end" if prefix==p.MINUTES else "censored_gap"),
+                ("censored_session_end" if prefix==session_minutes else "censored_gap"),
             "reclaim_minute":reclaim,"followup_end_minute":end,
             "minutes_to_reclaim":reclaim-minute if reclaim is not None else None,
             "observed_followup_minutes":end-minute,
@@ -104,7 +104,7 @@ def failure_followup(bars,level,direction,minute,prefix,leg_end):
     return result
 
 
-def level_row(day,bars,cross,next_cross,prefix,name,level):
+def level_row(day,bars,cross,next_cross,prefix,name,level,*,session_minutes=p.MINUTES):
     start=int(cross["minute"]);direction=int(cross["direction"])
     end=int(next_cross["minute"]) if next_cross is not None else prefix-1
     if not 0<=start<=end<prefix or direction not in (-1,1):
@@ -115,7 +115,7 @@ def level_row(day,bars,cross,next_cross,prefix,name,level):
          "direction":direction,"signal_close":price,"level_name":name,"level_price":level,
          "cpr_zone":cross["cpr_zone"],"leg_end_minute":end,
          "leg_state":"opposite_cross" if next_cross is not None else
-                 ("censored_session_end" if prefix==p.MINUTES else "censored_gap"),
+                 ("censored_session_end" if prefix==session_minutes else "censored_gap"),
          "distance_points":None,"distance_bps":None,"state":"unavailable_level",
          "touch_minute":None,"minutes_to_touch":None,"first_touch_close":None,
          "first_touch_state":None,"breakout_minute":None,"minutes_to_breakout":None,
@@ -153,7 +153,7 @@ def level_row(day,bars,cross,next_cross,prefix,name,level):
     initial_end=breakout if breakout is not None else end+1
     initial=first_index(direction*(bars[touch:initial_end,3]-level)<0,touch)
     if initial is not None:
-        follow=failure_followup(bars,level,direction,initial,prefix,end)
+        follow=failure_followup(bars,level,direction,initial,prefix,end,session_minutes=session_minutes)
         row.update({"initial_rejection_"+key:value for key,value in follow.items()})
     if breakout is None:
         row["state"]="touched_no_breakout" if near else "unresolved_touched_no_breakout"
@@ -162,7 +162,7 @@ def level_row(day,bars,cross,next_cross,prefix,name,level):
         failure=first_index(direction*(bars[touch:end+1,3]-level)<0,touch)
         if failure is not None:
             row["failure_kind"]="touch_rejection_without_leg_breakout"
-            row.update(failure_followup(bars,level,direction,failure,prefix,end))
+            row.update(failure_followup(bars,level,direction,failure,prefix,end,session_minutes=session_minutes))
         return row
     row.update(breakout_minute=breakout,minutes_to_breakout=breakout-start,
                breakout_close=float(bars[breakout,3]),minutes_touch_to_breakout=breakout-touch)
@@ -179,7 +179,7 @@ def level_row(day,bars,cross,next_cross,prefix,name,level):
     else:
         row.update(state="failed_breakout_in_leg",failure_kind="closed_back_after_breakout",
                    minutes_breakout_to_failure=failure-breakout)
-        row.update(failure_followup(bars,level,direction,failure,prefix,end))
+        row.update(failure_followup(bars,level,direction,failure,prefix,end,session_minutes=session_minutes))
     return row
 
 
