@@ -112,3 +112,32 @@ class GlobalMarketArchiveTests(TestCase):
             self.assertTrue((day/"japan.csv").exists())
             g.disable_live_inbox()
             self.assertIsNone(g.scan_live_inbox(now=self.now))
+
+
+    def test_direct_gmt_csv_preserves_original_and_deduplicates(self):
+        raw=b"Gmt time,Open,High,Low,Close,Volume\n03.03.2025 00:00:00.000,100,102,99,101,1\n"
+        kw=dict(symbol="JPN.IDX/JPY",minutes=5,mode="archive",archive_lag_minutes=5,
+                confirm_reviewed=True)
+        first=g.import_direct_csv(raw,now=self.now,**kw)
+        self.assertEqual(first["inserted"],1)
+        self.assertEqual(g.import_direct_csv(raw,now=self.now+timedelta(minutes=1),**kw)["state"],"already_imported")
+        import gzip
+        from hashlib import sha256
+        with closing(sqlite3.connect(self.path)) as db:
+            digest,original=db.execute("SELECT raw_sha256,original_csv_gzip FROM global_market_receipts").fetchone()
+            self.assertEqual(digest,sha256(raw).hexdigest())
+            self.assertEqual(gzip.decompress(original),raw)
+        self.assertAlmostEqual(self.features(self.start+timedelta(minutes=10))["first_5m_bps"],100)
+
+    def test_direct_epoch_csv_and_invalid_clock(self):
+        raw=("timestamp,open,high,low,close,volume\n"+str(int(self.start.timestamp()*1000))
+             +",100,102,99,101,1\n").encode()
+        self.assertEqual(g.import_direct_csv(raw,symbol="JPN.IDX/JPY",minutes=5,
+                         confirm_reviewed=True,now=self.now)["inserted"],1)
+        for invalid in (b"Local time,Open,High,Low,Close,Volume\n2025-03-03 09:00,100,102,99,101,1\n",
+                        b"Gmt time,Open,High,Low,Close,Volume\n03.03.2025 00:01:00.000,100,102,99,101,1\n"):
+            with self.assertRaises(ValueError):
+                g.import_direct_csv(invalid,symbol="JPN.IDX/JPY",minutes=5,
+                                    confirm_reviewed=True,now=self.now)
+        with self.assertRaises(ValueError):
+            g.import_direct_csv(raw,symbol="JPN.IDX/JPY",minutes=5,now=self.now)

@@ -1,4 +1,4 @@
-# Free/authorized global-market pilot
+# Free/authorized global-market pilot (no JForex required)
 
 QuantLab uses its existing data/dhan/shared_market.sqlite3. The new
 global_market_bars table stores unique exact broker BID OHLCV bars;
@@ -23,7 +23,48 @@ References:
 - https://www.dukascopy.com/swiss/english/cfd/range-of-markets/cfd-indices/
 - https://wiki.dukascopy.com/en/manuals/jforex4-desktop/strategies/
 
-## First run
+## Recommended first run: existing sources, no new account
+
+From the existing QuantLab root, after reviewing the existing FRED and
+Alpaca data entitlements:
+
+    .venv/bin/python -m scripts.global_market_data enable-existing --confirm-reviewed
+    .venv/bin/python -m scripts.global_market_data inventory
+
+This enables the existing context worker's authorized FRED and Alpaca
+daily sources without changing existing provider mappings or selected
+Alpaca feed. It does not backfill five years, start a second API worker,
+or download Asian opening prices. The earlier audited daily ETF and FRED
+observations remain in the same database. Keep QuantLab running for
+automatic source receipts.
+
+## Optional direct CSV export: no JForex or extra account
+
+Dukascopy's public Historical Data Export web tool is separate from the
+trading platform. Its general website terms restrict database use and
+automated collection. Use the following import ONLY if the relevant
+data-specific terms or written authorization allow local database storage
+and research. Free access alone does not establish that right. No scraper,
+browser challenge workaround or automated third-party downloader is provided.
+
+Select the actual named instrument, BID side, GMT/UTC, and 5-minute bars
+in an authorized export. Start with a short interval. Save the original CSV.
+Supported direct formats are GMT time,Open,High,Low,Close,Volume or
+timestamp,open,high,low,close,volume (UTC epoch milliseconds). Explicitly
+verify identity, interval, BID side and bar-start timestamp semantics;
+they are not inferred from filenames. For example:
+
+    .venv/bin/python -m scripts.global_market_data import-export \
+      --file "/absolute/path/japan.csv" --instrument JPN.IDX/JPY \
+      --minutes 5 --mode archive --archive-lag-minutes 5 --confirm-reviewed
+
+The archive lag is an illustrative research assumption, not verified
+historical publication evidence. Use receipt mode without a reviewed lag.
+Original bytes and SHA-256 are retained; repeat imports are idempotent.
+For larger datasets export smaller monthly files (maximum 50,000 bars
+per file). No permission to scrape or database data is implied.
+
+## Optional JForex route (not necessary for the initial study)
 1. Obtain authorized JForex access and review local data-storage rights.
    Install official JForex Desktop and open a demo session. Do not share
    login details in chat or commit them. No funding or order is needed.

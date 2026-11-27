@@ -148,7 +148,8 @@ def _table_exists(db):
     return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='global_market_bars'").fetchone() is not None
 
 
-def ingest(raw, *, mode="receipt", confirm_reviewed=False, archive_lag_minutes=None, now=None):
+def ingest(raw, *, mode="receipt", confirm_reviewed=False, archive_lag_minutes=None, now=None,
+           _original_export=None):
     if confirm_reviewed is not True or mode not in ("receipt","archive"):
         raise ValueError("Confirm authorized local data storage and chosen availability mode")
     if mode == "archive":
@@ -160,8 +161,16 @@ def ingest(raw, *, mode="receipt", confirm_reviewed=False, archive_lag_minutes=N
     if now.tzinfo is None:
         raise ValueError("Use timezone-aware receipt time")
     rows = parse(raw,now)
-    raw_sha = sha256(raw).hexdigest()
-    receipt = sha256(json.dumps([raw_sha,mode,archive_lag_minutes],separators=(",",":")).encode()).hexdigest()
+    original = raw if _original_export is None else _original_export
+    if not isinstance(original,bytes) or not 0<len(original)<=MAX_BYTES:
+        raise ValueError("Invalid original export")
+    raw_sha = sha256(original).hexdigest()
+    key = [raw_sha,mode,archive_lag_minutes]
+    if _original_export is not None:
+        # Bind external CSV with explicit reviewed identity/resolution and
+        # keep idempotence even when the import timestamp changes.
+        key.extend(["reviewed_direct_bid_csv_v1",rows[0][0],rows[0][1]])
+    receipt = sha256(json.dumps(key,separators=(",",":")).encode()).hexdigest()
     path = shared_market_data.database_path()
     path.parent.mkdir(parents=True,exist_ok=True)
     # Bounded transaction per export, never replace a live database or change
@@ -176,7 +185,7 @@ def ingest(raw, *, mode="receipt", confirm_reviewed=False, archive_lag_minutes=N
                 return {"state":"already_imported","receipt_sha256":receipt,"inserted":0,"rows":len(rows)}
             db.execute("INSERT INTO global_market_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                        (receipt,raw_sha,rows[0][0],rows[0][1],mode,archive_lag_minutes,_iso(now),
-                        len(rows),rows[0][2],rows[-1][2],gzip.compress(raw,compresslevel=3)))
+                        len(rows),rows[0][2],rows[-1][2],gzip.compress(original,compresslevel=3)))
             inserted = upgraded = 0
             for r in rows:
                 archive = None
@@ -203,6 +212,62 @@ def ingest(raw, *, mode="receipt", confirm_reviewed=False, archive_lag_minutes=N
     return {"state":"imported","receipt_sha256":receipt,"inserted":inserted,
             "archive_upgraded":upgraded,"rows":len(rows),"mode":mode,
             "identity":rows[0][0],"resolution":rows[0][1]}
+
+
+
+def import_direct_csv(raw, *, symbol, minutes, mode="receipt", confirm_reviewed=False,
+                      archive_lag_minutes=None, now=None):
+    """Import an authorized original BID export without JForex or a downloader.
+
+    The user must explicitly review symbol, BID side, UTC bar-start timestamps,
+    resolution and data rights; generic CSV filenames are not identity proof.
+    The original bytes are retained, not merely the normalized representation.
+    """
+    if confirm_reviewed is not True:
+        raise ValueError("Review direct export identity, timezone, price side and permitted storage")
+    identity(symbol)
+    if type(minutes) is not int or minutes not in (1,5):
+        raise ValueError("Choose 1 or 5 minutes")
+    now=now or _now()
+    if now.tzinfo is None:
+        raise ValueError("Use timezone-aware receipt time")
+    if not isinstance(raw,bytes) or not 0<len(raw)<=MAX_BYTES:
+        raise ValueError("Missing or oversized original export")
+    try:
+        reader=csv.DictReader(io.StringIO(raw.decode("utf-8-sig"),newline=""))
+    except UnicodeError as exc:
+        raise ValueError("Expected UTF-8 CSV") from exc
+    names=reader.fieldnames or []
+    header=tuple(x.strip().lower() for x in names)
+    if header not in (("gmt time","open","high","low","close","volume"),
+                      ("timestamp","open","high","low","close","volume")):
+        raise ValueError("Use a reviewed GMT-time or UTC epoch-millisecond OHLCV export")
+    out=io.StringIO()
+    writer=csv.writer(out,lineterminator="\n")
+    writer.writerow(HEADER)
+    exported=str(int(now.timestamp()*1000))
+    for idx,row in enumerate(reader):
+        if idx>=MAX_ROWS or None in row or any(v is None for v in row.values()):
+            raise ValueError("Malformed export or row limit; split original exports into smaller date ranges")
+        stamp=row[names[0]].strip()
+        if header[0]=="timestamp":
+            _ms(stamp)
+        else:
+            parsed=None
+            for fmt in ("%d.%m.%Y %H:%M:%S.%f","%d.%m.%Y %H:%M:%S",
+                        "%d.%m.%Y %H:%M","%Y.%m.%d %H:%M:%S","%Y.%m.%d %H:%M"):
+                try:
+                    parsed=datetime.strptime(stamp,fmt).replace(tzinfo=UTC)
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                raise ValueError("Unsupported GMT time; never guess local timezone")
+            stamp=str(int(parsed.timestamp()*1000))
+        writer.writerow((symbol,minutes,"BID",stamp,
+                         *(row[name] for name in names[1:]),exported))
+    return ingest(out.getvalue().encode(),mode=mode,confirm_reviewed=True,
+                  archive_lag_minutes=archive_lag_minutes,now=now,_original_export=raw)
 
 
 def inventory():
