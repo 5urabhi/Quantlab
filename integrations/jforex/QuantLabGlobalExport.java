@@ -4,7 +4,9 @@ import com.dukascopy.api.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.time.*;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.Instant;
 import java.util.*;
 
 public class QuantLabGlobalExport implements IStrategy {
@@ -96,7 +98,7 @@ public class QuantLabGlobalExport implements IStrategy {
     private int write(File target,String symbol,List<IBar> bars,long start,long stop) throws IOException {
         if (bars==null || bars.isEmpty()) return 0; // no false completed file
         long exported=System.currentTimeMillis(), step=minutes*60000L;
-        Path temp=Files.createTempFile(folder.toPath(),"quantlab_",".tmp");
+        Path temp=Files.createTempFile(target.getParentFile().toPath(),"quantlab_",".tmp");
         int count=0;
         try {
             try (BufferedWriter out=Files.newBufferedWriter(temp,StandardCharsets.UTF_8)) {
@@ -115,11 +117,15 @@ public class QuantLabGlobalExport implements IStrategy {
     }
 
     public void onBar(Instrument i,Period p,IBar ask,IBar bid) throws JFException {
-        if (!live || p!=period || !instruments.containsKey(i) || bid==null) return;
+        if (!live || folder==null || !period.equals(p) || !instruments.containsKey(i) || bid==null) return;
         long t=bid.getTime();
-        File target=new File(folder,fileKey(instruments.get(i))+"_"+minutes+"m_"+t+".csv");
+        File day=new File(folder,Instant.ofEpochMilli(t).atZone(ZoneOffset.UTC).toLocalDate().toString());
+        File target=new File(day,fileKey(instruments.get(i))+"_"+minutes+"m_"+t+".csv");
         if (target.isFile()) return;
-        try { write(target,instruments.get(i),Collections.singletonList(bid),t,t+minutes*60000L); }
+        try {
+            Files.createDirectories(day.toPath());
+            write(target,instruments.get(i),Collections.singletonList(bid),t,t+minutes*60000L);
+        }
         catch (IOException | RuntimeException e) {
             context.getConsole().getErr().println("Live export failed: "+e.getClass().getSimpleName());
         }

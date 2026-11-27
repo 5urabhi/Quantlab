@@ -89,3 +89,25 @@ class GlobalMarketArchiveTests(TestCase):
         g.ingest(self.raw(),confirm_reviewed=True,now=self.now)
         result=self.features(self.start+timedelta(minutes=65),mode="receipt")
         self.assertEqual(result["state"],"missing")
+
+
+    def test_live_import_opt_in_and_restart_safe(self):
+        raw=self.raw()
+        folder=Path(self.tmp.name)/"quantlab_global_live"
+        day=folder/str(self.now.date())
+        day.mkdir(parents=True)
+        (day/"japan.csv").write_bytes(raw)
+        # Keep source file unchanged, and avoid touching real configuration.
+        with mock.patch.object(g.service,"DATA",Path(self.tmp.name)), \
+             mock.patch.object(g.recorder_storage,"allow",return_value=True), \
+             mock.patch.object(g.recorder_storage,"saved"):
+            self.assertIsNone(g.scan_live_inbox(now=self.now))
+            with self.assertRaises(ValueError):
+                g.configure_live_inbox(folder)
+            g.configure_live_inbox(folder,confirm_reviewed=True)
+            self.assertEqual(g.scan_live_inbox(now=self.now)["inserted"],12)
+            self.assertEqual(g.scan_live_inbox(now=self.now)["inserted"],0)
+            self.assertEqual(g.inventory()["series"][0]["archive_rows"],0)
+            self.assertTrue((day/"japan.csv").exists())
+            g.disable_live_inbox()
+            self.assertIsNone(g.scan_live_inbox(now=self.now))

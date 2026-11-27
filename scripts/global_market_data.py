@@ -20,6 +20,10 @@ def main():
     imp.add_argument("--max-new-files",type=int,default=20)
     imp.add_argument("--confirm-reviewed",action="store_true")
     sub.add_parser("inventory")
+    enable=sub.add_parser("enable-live")
+    enable.add_argument("--inbox",type=Path,required=True)
+    enable.add_argument("--confirm-reviewed",action="store_true")
+    sub.add_parser("disable-live")
     feat=sub.add_parser("features")
     feat.add_argument("--date",type=date.fromisoformat,required=True)
     feat.add_argument("--cutoff",choices=("09:00","09:10","09:15"),default="09:10")
@@ -36,6 +40,10 @@ def main():
             max_new_files=args.max_new_files)
     elif args.action=="inventory":
         result=g.inventory()
+    elif args.action=="enable-live":
+        result=g.configure_live_inbox(args.inbox,confirm_reviewed=args.confirm_reviewed)
+    elif args.action=="disable-live":
+        result=g.disable_live_inbox()
     else:
         path=shared_market_data.database_path()
         if not path.is_file():

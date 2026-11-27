@@ -60,10 +60,17 @@ References:
 6. For new bars, run the JForex strategy locally with Live only enabled.
    It writes one atomically finalized bar file when the provider delivers
    a completed BID candle. Import from its quantlab_global_live folder
-   using receipt mode. Receipt known time is actual QuantLab import time,
-   never the bar time. Keep the external session running and refresh the
-   importer for new files. Fully unattended acquisition and gap repair
-   are not certified; the demo may expire. The Java source must be
+   by enabling the existing context worker once (with applicable permission):
+
+       .venv/bin/python -m scripts.global_market_data enable-live \
+         --inbox "/absolute/path/quantlab_global_live" --confirm-reviewed
+
+   Then keep the authorized JForex session and QuantLab running. The
+   worker checks the current and two preceding UTC date folders; older
+   missed days must be reviewed/re-imported explicitly. Receipt known
+   time is actual QuantLab import time, never bar time. To stop automatic
+   intake, run the same module with disable-live. Fully unattended broker
+   acquisition and historical gap repair are not certified; the demo may expire. The Java source must be
    compiled and tested in the actual JForex installation.
 
 ## Identities and model boundaries

@@ -15,9 +15,12 @@ import gzip
 import io
 import json
 import math
+import os
 import sqlite3
+import time as monotonic_time
+import uuid
 
-from . import service, shared_market_data
+from . import service, shared_market_data, recorder_storage
 
 UTC = timezone.utc
 IST = ZoneInfo("Asia/Kolkata")
@@ -276,7 +279,7 @@ def reference_features(db, day, cutoff, *, resolution="5m", mode="archive"):
 
 
 def import_directory(directory, *, mode="receipt", confirm_reviewed=False, archive_lag_minutes=None,
-                     max_new_files=20):
+                     max_new_files=20, _known=None, _deadline=None):
     """Import finalized exports without deleting them; skip exact receipts."""
     directory=Path(directory).expanduser().resolve()
     if not directory.is_dir() or not 1<=max_new_files<=200:
@@ -288,11 +291,24 @@ def import_directory(directory, *, mode="receipt", confirm_reviewed=False, archi
         raise ValueError("Too many export files; split into bounded directories")
     results=[]; skipped=0
     for path in entries:
+        if _deadline is not None and monotonic_time.monotonic()>_deadline:
+            break
+        if len(results)>=max_new_files:
+            break
         if path.is_symlink() or not path.is_file() or path.stat().st_size>MAX_BYTES:
             results.append({"file":path.name,"state":"rejected","reason":"unsafe or oversized input"})
             continue
         # Avoid re-parsing saved raw bytes or creating duplicate receipts.
-        raw=path.read_bytes()
+        try:
+            st=path.stat()
+            sig=(st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns)
+            if _known is not None and _known.get(str(path))==sig:
+                skipped+=1
+                continue
+            raw=path.read_bytes()
+        except OSError:
+            results.append({"file":path.name,"state":"rejected_or_paused","reason":"Export unavailable"})
+            continue
         digest=sha256(json.dumps([sha256(raw).hexdigest(),mode,archive_lag_minutes],
                                   separators=(",",":")).encode()).hexdigest()
         target=shared_market_data.database_path()
@@ -300,13 +316,106 @@ def import_directory(directory, *, mode="receipt", confirm_reviewed=False, archi
             with closing(sqlite3.connect(target.resolve().as_uri()+"?mode=ro",uri=True,timeout=2)) as db:
                 if _table_exists(db) and db.execute("SELECT 1 FROM global_market_receipts WHERE receipt_sha256=?",(digest,)).fetchone():
                     skipped+=1
+                    if _known is not None:
+                        _known[str(path)]=sig
                     continue
         try:
+            if not recorder_storage.allow("global_market_bars"):
+                results.append({"file":path.name,"state":"rejected_or_paused","reason":"Shared disk reserve"})
+                break
             outcome=ingest(raw,mode=mode,confirm_reviewed=True,archive_lag_minutes=archive_lag_minutes)
             results.append({"file":path.name,**outcome})
+            if _known is not None:
+                _known[str(path)]=sig
+            if outcome["inserted"]:
+                recorder_storage.saved("global_market_bars",_iso(_now()),count=outcome["inserted"])
         except (ValueError,OSError,sqlite3.Error) as exc:
             results.append({"file":path.name,"state":"rejected_or_paused","reason":str(exc)[:200]})
         if len(results)>=max_new_files:
             break
     return {"files":results,"skipped_receipts":skipped,"scanned_candidates":len(entries),
             "note":"Retry remaining/rejected exports after review; no gaps were manufactured."}
+
+
+# Explicit opt-in for the existing local context worker. No network access,
+# no Dhan session dependency, no automatic retrospective archive assumptions.
+_LIVE_KNOWN={}
+_LIVE_DB_ID=None
+
+
+def _live_config_path():
+    return service.DATA/"research_workspace"/"global_market_live_inbox.json"
+
+
+def configure_live_inbox(directory, *, confirm_reviewed=False):
+    if confirm_reviewed is not True:
+        raise ValueError("Confirm authorized live source and local storage")
+    folder=Path(directory).expanduser().resolve()
+    if not folder.is_dir() or folder.name!="quantlab_global_live":
+        raise ValueError("Choose the JForex quantlab_global_live export directory")
+    path=_live_config_path()
+    path.parent.mkdir(parents=True,exist_ok=True)
+    if path.is_symlink():
+        raise ValueError("Unsafe live inbox config")
+    tmp=path.with_name("."+path.name+"."+uuid.uuid4().hex)
+    try:
+        tmp.write_text(json.dumps({"version":1,"directory":str(folder)},sort_keys=True),encoding="utf-8")
+        os.replace(tmp,path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"state":"configured","directory":str(folder),
+            "note":"Context worker will import authorized finalized live receipts while QuantLab is running."}
+
+
+def disable_live_inbox():
+    path=_live_config_path()
+    if path.is_symlink():
+        raise ValueError("Unsafe live inbox config")
+    path.unlink(missing_ok=True)
+    return {"state":"disabled"}
+
+
+def scan_live_inbox(*, now=None):
+    global _LIVE_DB_ID
+    path=_live_config_path()
+    if not path.exists():
+        return None
+    if path.is_symlink() or path.stat().st_size>8192:
+        raise ValueError("Unsafe live inbox config")
+    config=json.loads(path.read_text(encoding="utf-8"))
+    if set(config)!={"version","directory"} or config["version"]!=1 or not isinstance(config["directory"],str):
+        raise ValueError("Invalid live inbox config")
+    folder=Path(config["directory"])
+    if not folder.is_absolute() or folder.name!="quantlab_global_live" or not folder.is_dir() or folder.is_symlink():
+        raise ValueError("Configured live source unavailable")
+    target=shared_market_data.database_path()
+    st=target.stat() if target.exists() else None
+    dbid=(str(target),st.st_dev,st.st_ino) if st else (str(target),None,None)
+    if dbid!=_LIVE_DB_ID or len(_LIVE_KNOWN)>20000:
+        _LIVE_KNOWN.clear()
+        _LIVE_DB_ID=dbid
+    now=now or _now()
+    today=now.astimezone(UTC).date()
+    deadline=monotonic_time.monotonic()+3
+    files=[];skipped=0
+    active=[]
+    # Current and two prior UTC dates; historical repairs remain explicit.
+    for delta in range(3):
+        sub=folder/str(today-timedelta(days=delta))
+        if sub.is_dir() and not sub.is_symlink():
+            active.append(sub)
+    # Prevent unbounded memory and do not delete original source files.
+    for key in list(_LIVE_KNOWN):
+        if not any(Path(key).parent==sub for sub in active):
+            del _LIVE_KNOWN[key]
+    for sub in active:
+        if monotonic_time.monotonic()>deadline or len(files)>=20:
+            break
+        result=import_directory(sub,mode="receipt",confirm_reviewed=True,
+                 max_new_files=20-len(files),_known=_LIVE_KNOWN,_deadline=deadline)
+        files.extend(result["files"]);skipped+=result["skipped_receipts"]
+    return {"state":"observed" if files or skipped else "waiting_for_exports",
+            "inserted":sum(x.get("inserted",0) for x in files),
+            "new_files":len(files),"known_files":skipped,
+            "rejected_or_paused":sum(x["state"].startswith("rejected") for x in files),
+            "note":"Local receipt import only; not a certificate of continuous broker coverage."}
