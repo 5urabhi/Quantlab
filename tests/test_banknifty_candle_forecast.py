@@ -145,3 +145,62 @@ class ForecastTests(TestCase):
             self.assertTrue(loader.call_args.kwargs["index_only"])
             with self.assertRaises(ValueError):
                 m.run(days=1828,to_date="2025-11-27",index_only=True)
+
+
+    def test_horizon_targets_same_session_and_gap_rules(self):
+        a=bars()
+        for horizon in f.HORIZONS:
+            minutes,y,real=f.anchors(a,horizon)
+            self.assertEqual(minutes[0],59)
+            self.assertEqual(minutes[-1],374-horizon)
+            future=a[60:60+horizon]
+            np.testing.assert_allclose(real[0],[future[0,0],future[:,1].max(),future[:,2].min(),future[-1,3]])
+            np.testing.assert_allclose(m.decode(a[minutes,3],y),real,rtol=1e-12)
+            broken=a.copy();broken[60]=np.nan
+            self.assertNotIn(59,f.anchors(broken,horizon)[0])
+        with self.assertRaises(ValueError):f.anchors(a,3)
+        with self.assertRaises(ValueError):m.run(days=365,to_date="2025-11-27",horizon=15)
+
+    def test_adaptive_range_is_past_volatility_scaled_and_fit_only_on_training(self):
+        minutes=np.array([59,89,119])
+        ref=np.full(3,100.)
+        vol=np.array([.02,.02,.02])
+        truth=np.column_stack((ref,ref+.4,ref-.2,ref))
+        fit=m.adaptive_fit(truth,ref,minutes,vol,15)
+        pred=m.decode(ref,m.adaptive_predict(minutes,2*vol,15,fit))
+        np.testing.assert_allclose(pred[:,1],ref+.8)
+        np.testing.assert_allclose(pred[:,2],ref-.4)
+        np.testing.assert_allclose(pred[:,3],ref)
+        with self.assertRaises(ValueError):m.adaptive_scale(np.array([np.nan]),15)
+
+    def test_day_blocks_weight_sessions_not_overlapping_rows(self):
+        days=np.array(["a"]*100+["b"])
+        delta=np.array([1.]*100+[-1.])
+        result=m.paired_day_interval(delta,days)
+        self.assertEqual(result["mean_difference"],0.)
+        self.assertIsNone(result["interval_95"])
+        days=np.repeat([str(k).zfill(2) for k in range(20)],5)
+        result=m.paired_day_interval(np.full(100,-.25),days)
+        self.assertEqual(result["interval_95"],[-.25,-.25])
+        self.assertEqual(result["days"],20)
+
+    def test_nondefault_assessment_uses_horizon_stride_and_clock(self):
+        from datetime import datetime
+        dates=[(date(2025,1,1)+timedelta(days=i)).isoformat() for i in range(80)]
+        days=np.repeat(dates,4);minutes=np.tile([59,60,74,75],80)
+        z=np.sin(np.arange(len(days))/4)
+        x=np.column_stack((z,np.full(len(z),.02))).astype(np.float32)
+        y=np.column_stack((np.zeros(len(z)),.06*z,np.full(len(z),.02),np.full(len(z),.02)))
+        ref=np.full(len(z),63000.)
+        data={"days":days,"minutes":minutes,"ref":ref,"y":y,"actual":m.decode(ref,y),
+              "names":{"index":("signal","vol_30m_pct")},
+              "blocks":{"index":x,**{k:np.full((len(z),1),np.nan,dtype=np.float32) for k in ("banks","peers","options")}},
+              "available":{k:np.zeros(len(z),dtype=bool) for k in ("banks","peers","options")}}
+        result,pred=m.assess(data,m.split_days(dates),algorithms=("ridge",),horizon=15)
+        self.assertEqual(result["training_rows"],48*2)
+        self.assertEqual(len(pred),16*4)
+        self.assertIn("last_close_adaptive_range",result["baselines"]["evaluation"])
+        self.assertIn("brier_difference_day_blocks",result["direction_probability"]["evaluation"])
+        self.assertEqual(result["adaptive_comparison"]["evaluation"]["ohlc_mae_pct_difference"]["days"],16)
+        for row in pred:
+            self.assertEqual((datetime.fromisoformat(row["target_end_utc"])-datetime.fromisoformat(row["decision_utc"])).total_seconds(),900)

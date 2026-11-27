@@ -17,7 +17,7 @@ from . import historical_alpha as h, banknifty_forecast_features as f
 from . import cpr_hybrid_research as r, predictive_option_research as p
 from . import expired_options_backtest as exp
 
-VERSION="banknifty_ohlc_forecast_v2"
+VERSION="banknifty_ohlc_forecast_v3"
 MAX_CORE_DAYS=1827
 MAX_CONTEXT_DAYS=400
 TRAIN_STRIDE=5
@@ -80,7 +80,9 @@ def load_sources(start,stop,*,wings,index_only=False,progress=None):
                "banks":banks,"peers":peer_meta,"options":option_meta}
 
 
-def assemble(index,stocks,membership,weights,peers,table,*,index_only=False,progress=None):
+def assemble(index,stocks,membership,weights,peers,table,*,index_only=False,horizon=f.HORIZON,progress=None):
+    if type(horizon) is not int or horizon not in f.HORIZONS:raise ValueError("Unsupported forecast horizon")
+    if horizon!=f.HORIZON and not index_only:raise ValueError("Nondefault horizons require explicit index-only mode")
     dates=sorted(index);ids=sorted({v for x in membership.values() for v in x.values()})
     buffers={key:[] for key in ("index","banks","peers","options")}
     names={};availability={key:[] for key in ("banks","peers","options")}
@@ -90,11 +92,11 @@ def assemble(index,stocks,membership,weights,peers,table,*,index_only=False,prog
     # accumulating hundreds of per-day matrices and then duplicating them
     # with vstack. No bank/peer/option matrix is allocated in this lane.
     index_matrix=None;index_count=0
-    max_rows=len(dates)*(f.MINUTES-f.HORIZON-f.LOOKBACK+1)
+    max_rows=len(dates)*(f.MINUTES-horizon-f.LOOKBACK+1)
     for i,day in enumerate(dates):
         if progress and (i==0 or (i+1)%20==0 or i+1==len(dates)):
             progress(f"Building causal feature windows {i+1}/{len(dates)} {day}")
-        a=index[day];minutes,y,real=f.anchors(a)
+        a=index[day];minutes,y,real=f.anchors(a,horizon)
         coverage[day]={"eligible_index_windows":len(minutes),"complete_regular_index":f.daily_ohlc(a) is not None}
         prior=prior_daily[-1] if prior_daily else None
         if len(minutes):
@@ -144,7 +146,7 @@ def assemble(index,stocks,membership,weights,peers,table,*,index_only=False,prog
             all_days.extend([day]*len(minutes));all_minutes.extend(minutes.tolist())
             all_ref.extend(a[minutes,3].tolist());all_y.append(y);all_real.append(real)
         prior_daily.append(f.daily_ohlc(a))
-    if not all_days:raise ValueError("No complete 60-minute input and next-five-minute target windows")
+    if not all_days:raise ValueError("No complete 60-minute input and requested-horizon target windows")
     matrix=({"index":index_matrix[:index_count],
              **{k:np.empty((index_count,0),dtype=np.float32) for k in ("banks","peers","options")}}
             if index_only else {k:np.vstack(v) for k,v in buffers.items()})
@@ -273,12 +275,88 @@ def _coverage(data,masks):
     return out
 
 
-def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
+def adaptive_scale(vol,horizon):
+    """Past 30-minute RMS log-return volatility in percentage units.
+    Fixed 0.5 bp one-minute floor, scaled to the requested horizon.
+    """
+    vol=np.asarray(vol,float)
+    if not np.isfinite(vol).all() or np.any(vol<0):
+        raise ValueError("Adaptive baseline requires finite nonnegative past volatility")
+    return np.maximum(vol,.005)*np.sqrt(horizon)
+
+
+def adaptive_fit(actual,ref,minutes,vol,horizon):
+    # Targets are training-only excursions from the decision close, not the
+    # encoded wick labels beyond future O/C. Negative excursions clip to 0
+    # because this comparator deliberately predicts O=C=last close.
+    scale=adaptive_scale(vol,horizon)
+    excursions=np.maximum(0.,100*np.column_stack((actual[:,1]-ref,ref-actual[:,2]))/ref[:,None])
+    ratios=excursions/scale[:,None]
+    default=np.median(ratios,axis=0)
+    buckets={int(k):np.median(ratios[minutes//30==k],axis=0) for k in np.unique(minutes//30)}
+    return default,buckets
+
+
+def adaptive_predict(minutes,vol,horizon,fit):
+    default,buckets=fit
+    ratios=np.stack([buckets.get(int(k//30),default) for k in minutes])
+    return np.column_stack((np.zeros((len(minutes),2)),ratios*adaptive_scale(vol,horizon)[:,None]))
+
+
+def paired_day_interval(delta,days,*,block=5,draws=1000):
+    """Exploratory circular moving-block bootstrap of daily mean differences.
+    Negative loss difference favors the candidate; overlapping minute rows
+    within a session are never treated as independent bootstrap draws.
+    """
+    unique,inverse=np.unique(days,return_inverse=True)
+    n=len(unique)
+    values=np.bincount(inverse,weights=delta)/np.bincount(inverse)
+    if n<2*block:
+        return {"days":n,"mean_difference":float(values.mean()),"interval_95":None}
+    rng=np.random.default_rng(42)
+    starts=rng.integers(0,n,size=(draws,(n+block-1)//block))
+    idx=((starts[:,:,None]+np.arange(block))%n).reshape(draws,-1)[:,:n]
+    samples=values[idx].mean(axis=1)
+    return {"days":n,"mean_difference":float(values.mean()),
+            "interval_95":[float(v) for v in np.quantile(samples,[.025,.975])],
+            "block_observed_sessions":block,"draws":draws}
+
+
+def probability_metrics(prob,y,days,prior):
+    p=np.asarray(prob,float);y=np.asarray(y,float)
+    weights=day_weights(days)
+    base=np.full(len(p),prior)
+    def loss(q):
+        q=np.clip(q,1e-8,1-1e-8)
+        return -(y*np.log(q)+(1-y)*np.log1p(-q))
+    bins=[]
+    bucket=np.minimum((p*10).astype(int),9)
+    for k in range(10):
+        chosen=bucket==k
+        if chosen.any():
+            w=weights[chosen]
+            bins.append({"bin":k,"rows":int(chosen.sum()),
+                         "sessions":len(set(days[chosen].tolist())),
+                         "weight_fraction":float(w.sum()/weights.sum()),
+                         "mean_probability":float(np.average(p[chosen],weights=w)),
+                         "observed_up_rate":float(np.average(y[chosen],weights=w))})
+    return {"brier":float(_avg((p-y)**2,days)),
+            "training_base_rate_brier":float(_avg((base-y)**2,days)),
+            "log_loss":float(_avg(loss(p),days)),
+            "training_base_rate_log_loss":float(_avg(loss(base),days)),
+            "training_up_rate":prior,"mean_predicted_up_probability":float(_avg(p,days)),
+            "classifier_direction_accuracy":float(_avg((p>=.5)==y,days)),
+            "reliability_bins":bins,
+            "brier_difference_day_blocks":paired_day_interval((p-y)**2-(base-y)**2,days)}
+
+
+def assess(data,splits,*,algorithms=ALGORITHMS,horizon=f.HORIZON,progress=None):
+    if type(horizon) is not int or horizon not in f.HORIZONS:raise ValueError("Unsupported forecast horizon")
     tr,va,te=splits;days=data["days"];minutes=data["minutes"];y=data["y"];ref=data["ref"]
     masks={"train":np.isin(days,tr),"validation":np.isin(days,va),"evaluation":np.isin(days,te)}
-    # Nonoverlapping five-minute target windows for fitting. Every minute is
-    # scored out of sample; day weighting handles unequal eligible day counts.
-    train=masks["train"]&((minutes+1)%TRAIN_STRIDE==0)
+    # Nonoverlapping horizon-sized target windows for fitting. Every minute
+    # is scored out of sample; day weighting handles unequal session counts.
+    train=masks["train"]&((minutes+1)%horizon==0)
     val=masks["validation"];test=masks["evaluation"]
     for label,mask,minimum in (("train",train,MIN_TRAIN_DAYS),("validation",val,MIN_ASSESS_DAYS),("evaluation",test,MIN_ASSESS_DAYS)):
         if len(set(days[mask].tolist()))<minimum:raise ValueError("Insufficient eligible index days in "+label)
@@ -288,6 +366,16 @@ def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
     flat={label:decode(ref[mask],np.zeros((int(mask.sum()),4))) for label,mask in (("validation",val),("evaluation",test))}
     baseline={label:{"last_close":_metrics(data,mask,flat[label]),"last_close_typical_range":_metrics(data,mask,naive[label])}
               for label,mask in (("validation",val),("evaluation",test))}
+    adaptive={}
+    # Older synthetic unit-test matrices may not carry the feature schema.
+    # Every original-source assembly has this completed-history feature.
+    names=data.get("names",{}).get("index",())
+    if "vol_30m_pct" in names:
+        vol=data["blocks"]["index"][:,names.index("vol_30m_pct")]
+        fit=adaptive_fit(data["actual"][train],ref[train],minutes[train],vol[train],horizon)
+        for label,mask in (("validation",val),("evaluation",test)):
+            adaptive[label]=decode(ref[mask],adaptive_predict(minutes[mask],vol[mask],horizon,fit))
+            baseline[label]["last_close_adaptive_range"]=_metrics(data,mask,adaptive[label])
     coverage=_coverage(data,{"train_fit":train,"validation":val,"evaluation":test})
     result={"training_rows":int(train.sum()),"training_days":len(set(days[train].tolist())),
             "feature_coverage":coverage,"baselines":baseline,"validation":{},"selected":None}
@@ -354,9 +442,7 @@ def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
     val_prob=cls.predict_proba(x[val])[:,1] if cls is not None else np.full(int(val.sum()),prior)
     probability={}
     for label,mask,pr in (("validation",val,val_prob),("evaluation",test,prob)):
-        probability[label]={"brier":float(_avg((pr-actual_up[mask])**2,days[mask])),
-                           "training_base_rate_brier":float(_avg((prior-actual_up[mask])**2,days[mask])),
-                           "training_up_rate":prior,"mean_predicted_up_probability":float(_avg(pr,days[mask]))}
+        probability[label]=probability_metrics(pr,actual_up[mask],days[mask],prior)
     def skill(score,base):
         b=base["last_close_typical_range"]
         return {"ohlc_mae_skill":1-score["mean_ohlc_mae_pct"]/max(b["mean_ohlc_mae_pct"],1e-12),
@@ -366,11 +452,26 @@ def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
                   selected_validation=val_score,evaluation=test_score,validation_skill=vskill,evaluation_skill=tskill,
                   close_interval=interval,direction_probability=probability,
                   state="exploratory_forecast_improved" if all(v>0 for v in (*vskill.values(),*tskill.values())) else "no_confirmed_ohlc_improvement")
+    if adaptive:
+        result["adaptive_comparison"]={}
+        for label,mask,pred in (("validation",val,vpred),("evaluation",test,tpred)):
+            actual=data["actual"][mask]
+            base=adaptive[label]
+            # Full OHLC relative error and high/low mean absolute point error
+            # against the matched stronger comparator. Negative favors model.
+            rel=100*(np.abs(actual-pred)-np.abs(actual-base))/ref[mask,None]
+            extremes=(np.abs(actual[:,1:3]-pred[:,1:3])-np.abs(actual[:,1:3]-base[:,1:3])).mean(axis=1)
+            result["adaptive_comparison"][label]={
+                "ohlc_mae_pct_difference":paired_day_interval(rel.mean(axis=1),days[mask]),
+                "high_low_mae_points_difference":paired_day_interval(extremes,days[mask]),
+                "close_mae_points_difference":paired_day_interval(np.abs(actual[:,3]-pred[:,3])-np.abs(actual[:,3]-base[:,3]),days[mask])}
+    else:
+        result["adaptive_comparison"]={"state":"unavailable_feature_schema"}
     # Only selected model evaluated; every eligible test anchor is preserved.
     predictions=[]
     for i,j in enumerate(np.flatnonzero(test)):
         day=str(days[j]);m=int(minutes[j]);actual=data["actual"][j]
-        predictions.append({"session":day,"decision_utc":r._stamp(day,m+1),"target_end_utc":r._stamp(day,m+1+f.HORIZON),
+        predictions.append({"session":day,"decision_utc":r._stamp(day,m+1),"target_end_utc":r._stamp(day,m+1+horizon),
                             "decision_close":float(ref[j]),**{"actual_"+k:float(actual[n]) for n,k in enumerate(FIELDS)},
                             **{"predicted_"+k:float(tpred[i,n]) for n,k in enumerate(FIELDS)},
                             "up_probability":float(prob[i]),"close_interval_low":float(lower[i]),"close_interval_high":float(upper[i]),
@@ -378,7 +479,9 @@ def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
     return result,predictions
 
 
-def run(*,days=365,to_date=None,wings=3,index_only=False,algorithms=ALGORITHMS,progress=None):
+def run(*,days=365,to_date=None,wings=3,index_only=False,horizon=f.HORIZON,algorithms=ALGORITHMS,progress=None):
+    if type(horizon) is not int or horizon not in f.HORIZONS:raise ValueError("Unsupported forecast horizon")
+    if horizon!=f.HORIZON and not index_only:raise ValueError("Nondefault horizons require explicit index-only mode")
     today=datetime.now(h.IST).date();stop=date.fromisoformat(to_date) if to_date else today
     maximum=MAX_CORE_DAYS if index_only else MAX_CONTEXT_DAYS
     if type(days) is not int or not 120<=days<=maximum or stop>today or (wings is not None and not 0<=wings<=10):
@@ -387,14 +490,14 @@ def run(*,days=365,to_date=None,wings=3,index_only=False,algorithms=ALGORITHMS,p
     start=stop-timedelta(days=days)
     index,stocks,membership,weights,peers,table,meta=load_sources(start,stop,wings=wings,index_only=index_only,progress=progress)
     dates=sorted(index);splits=split_days(dates)
-    data=assemble(index,stocks,membership,weights,peers,table,index_only=index_only,progress=progress)
+    data=assemble(index,stocks,membership,weights,peers,table,index_only=index_only,horizon=horizon,progress=progress)
     del index,stocks,membership,weights,peers,table
-    result,predictions=assess(data,splits,algorithms=algorithms,progress=progress)
+    result,predictions=assess(data,splits,algorithms=algorithms,horizon=horizon,progress=progress)
     report={"version":VERSION,"from_inclusive":start.isoformat(),"to_exclusive":stop.isoformat(),
             "requested_calendar_days":days,"mode":"index_only" if index_only else "context_comparison",
             "observed_date_span":[dates[0],dates[-1]],"core_feature_matrix_bytes":int(data["blocks"]["index"].nbytes),
-            "lookback_minutes":f.LOOKBACK,"horizon_minutes":f.HORIZON,"training_stride_minutes":TRAIN_STRIDE,
+            "lookback_minutes":f.LOOKBACK,"horizon_minutes":horizon,"training_stride_minutes":horizon,
             "training_dates":splits[0],"validation_dates":splits[1],"evaluation_dates":splits[2],
             "sources":meta,"feature_schema":{k:list(v) for k,v in data["names"].items()},"session_coverage":data["coverage"],
-            **result,"warning":"Retrospective index forecasts only; no trades or option P&L. Dates previously used in research are not fresh confirmation. Whole-day chronological split; train on nonoverlapping five-minute targets, evaluate rolling forecasts every minute, day-weighted summaries do not imply independent observations. Missing source features remain missing, training-only imputation and feature retention. Dated historical memberships and recorded prior weights only, no present-day backfill. Rolling monthly option features are not exact contract-ID or historical bid/ask evidence; nominal expiry proxy. External global feeds are not included in v1. The validation-selected residual interval is descriptive, not a guarantee. No provider requests, data mutation, recorder restart or live deployment."}
+            **result,"warning":"Retrospective index forecasts only; no trades or option P&L. Dates previously used in research are not fresh confirmation. Whole-day chronological split; train on nonoverlapping horizon-sized targets, evaluate rolling forecasts every minute, day-weighted summaries do not imply independent observations. Missing source features remain missing, training-only imputation and feature retention. Dated historical memberships and recorded prior weights only, no present-day backfill. Rolling monthly option features are not exact contract-ID or historical bid/ask evidence; nominal expiry proxy. External global feeds are not included. Binary direction is future close above decision close versus not above; separate flat/first-passage labels and first-hour forecasting remain future work. The adaptive range baseline and observed-session block intervals are exploratory diagnostics, not selection on evaluation or proof of predictive edge. The validation-selected residual interval is descriptive, not a guarantee. No provider requests, data mutation, recorder restart or live deployment."}
     return report,predictions

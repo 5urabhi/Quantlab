@@ -83,11 +83,13 @@ Read this at the beginning of every task. Update this same checklist on each evi
 - [x] Attempt prior shorter-history model/sequence study (245 sessions reported); original metrics still need reconciliation.
 - [x] Implement explicit bounded index-only long-history mode for the existing OHLC runner, up to 1,827 calendar days. Avoid bank/peer/options loads, reuse core features, preallocate core matrix, record actual date span and matrix size. Context and sequence runners retain 400-day bounds.
 - [x] Pass new and existing OHLC unit tests on 3cabad7: 10/10 passed locally (0.274s). Five-year core matrix built (510,912,220 bytes; not total process peak RAM).
-- [ ] Full release acceptance and actual peak memory/IO audit. CI on 3cabad7: browser acceptance passed, Python regression 1 failure / 1,279 tests (4 skipped) due to old documentation routes. Canonical README API/UI fix committed; rerun acceptance.
+- [ ] Full release acceptance and actual peak memory/IO audit. CI on 3cabad7: browser acceptance passed, Python regression 1 failure / 1,279 tests (4 skipped) due to old documentation routes. Canonical README API/UI fix on 7f1944f passed all 12 local Model Laboratory tests, including the guide route. Full CI for current revision and peak resource checks remain pending.
 - [x] Attempt the frozen five-year core ridge/logistic baseline on saved data; completed on 3cabad7 with 1,231 observed sessions, 44,433 train windows, 76,817 evaluated predictions. Result: no_confirmed_ohlc_improvement. Record in experiment ledger.
 - [ ] Independently reconcile original forecast JSON/CSV, receipt hashes, eligible dates, prediction counts and peak resource usage against current local audit (console output alone does not establish full provenance).
-- [ ] Run and compare the default ridge vs histogram-gradient baseline; record untouched-vs-previously-examined split status, probability metrics and day-block uncertainty.
-- [ ] Extend explicit labels and evaluation to 1/10/15/30/60-minute horizons, early-session coverage, UP/DOWN/FLAT and movement/volatility/first-passage distribution.
+- [x] Attempt five-year ridge vs histogram-gradient comparison on 7f1944f; same 1,231 observed sessions and 76,817 evaluation rows. Validation selected histogram gradient; evaluation state no_confirmed_ohlc_improvement. Record prior examined dates, OHLC and probability scores below.
+- [x] Implement explicit index-only 1/5/10/15/30/60-minute horizon labels with horizon-sized training stride; implement training-only volatility-adaptive comparator, descriptive reliability bins and paired 5-session block uncertainty. Scoped tests and empirical runs pending.
+- [ ] Pass updated multi-horizon regression tests; evaluate 15-minute comparison first, then 1/10/30/60 and repeat 5m only for stronger comparator, reporting matched rows and day-block diagnostics. No tuning on already inspected dates.
+- [ ] Extend early-session coverage, explicit UP/DOWN/FLAT and movement/volatility/first-passage probability distribution (current horizon extension retains 60-minute input and binary up-vs-not-up label).
 - [ ] Validate out-of-sample directional and price skill, probability calibration and prospective stability before claiming a core model is usable.
 
 **Phase 2 — Incremental context**
@@ -128,10 +130,10 @@ Read this at the beginning of every task. Update this same checklist on each evi
 
 **Current next command (after pulling latest branch changes):**
 
-    .venv/bin/python -m unittest discover -s tests -p 'test_model_laboratory.py' -v
-    bash run.sh banknifty-ohlc --index-only --days 1825 --to-date 2026-11-27
+    .venv/bin/python -m unittest discover -s tests -p 'test_banknifty_candle_forecast.py' -v
+    bash run.sh banknifty-ohlc --index-only --days 1825 --to-date 2026-11-27 --horizon 15
 
-Run at a safe off-hours boundary using existing saved local sources. This is the planned ridge vs histogram-gradient comparison with the same frozen dates, features, stride and validation selection; the runner evaluates the validation-selected candidate on the later retrospective partition. Do not tune against that previously examined partition or claim prospective confirmation. Limit thread/CPU contention using the existing launcher. The ridge-only run is complete; the nonlinear comparison, independent source reconciliation, probability calibration and further horizons remain pending. No new downloads or orders.
+Run at a safe off-hours boundary, using existing saved sources. Both five-minute core baselines have now run; neither confirmed close/direction skill. The next predeclared horizon is 15 minutes, then 1/10/30/60 (and 5m for the adaptive comparator), one bounded run at a time. The feature schema, whole-session chronological reservations and validation selection stay fixed; stride equals horizon so training targets do not overlap. Different horizons have different eligible anchors; do not pool counts, rank final-test horizons as independent discoveries or claim prospective confirmation. The new stronger baseline sets O=C=last close and scales training-only median nonnegative high/low excursions by the preceding 30-minute RMS log-return volatility, a fixed 0.5bp one-minute floor, and sqrt(horizon), with training-only clock buckets. Report paired daily mean model-minus-baseline loss with descriptive 95% circular five-observed-session block intervals (1,000 draws, seed 42), reliability bins, classifier accuracy, Brier and log loss. These diagnose uncertainty, not calibrate probabilities or authorize trading. First 60 minutes still unavailable; long 1-minute fitting may require more RAM and remains untested. No new downloads or orders.
 
 ### End-to-end option decision research roadmap
 
@@ -376,7 +378,30 @@ Operator console at commit 3cabad7b68c1d4eeb79ffc6d95147442dfaae4ec: 10 tests pa
 
 Validation OHLC skill +2.9781%, close skill -1.0692%; evaluation OHLC skill +3.9272%, close skill -0.8428% (relative MAE, not accuracy). Logistic Brier worse than training-rate comparator in both partitions. Nominal 80% validation-residual interval covers 75.7710% of evaluation outcomes, mean width 87.5926 points. Direction accuracy 50.9679% refers to OHLC point forecast sign, not classifier accuracy. Report state: no_confirmed_ohlc_improvement. Interpretation: improved conditional range estimates but no demonstrated close/direction probability advantage or option P&L. Do not deploy.
 
-Local files: results/banknifty_ohlc_forecast_2d69dcd19ca14b0dbf21c960c1c943d5.json and results/banknifty_ohlc_forecast_2d69dcd19ca14b0dbf21c960c1c943d5_predictions.csv. Console establishes completion and printed results; full original reports, source digests, skipped-session details and peak resource usage not independently inspected. Next run the already specified default ridge vs histogram-gradient study with the same dates, not a new tuned grid. Save result regardless of outcome.
+Local files: results/banknifty_ohlc_forecast_2d69dcd19ca14b0dbf21c960c1c943d5.json and results/banknifty_ohlc_forecast_2d69dcd19ca14b0dbf21c960c1c943d5_predictions.csv. Console establishes completion and printed results; full original reports, source digests, skipped-session details and peak resource usage not independently inspected. The planned default comparison completed on 7f1944f; see the next entry. No new tuned grid.
+
+### Five-year rolling nonlinear comparison (November 27, 2026)
+
+Operator console at 7f1944fbbb77cea7d5a4515b4c9e38edf4595e96: 12/12 Model Laboratory tests passed, including the canonical documentation route (0.743s). The same five-year index-only study ran both ridge and histogram gradient (44,433 fit windows, 343 retained features, 76,195 validation rows, 76,817 evaluation rows over 247 sessions). Validation selected histogram gradient by OHLC mean relative MAE (0.02960558% vs ridge 0.02967848%). Evaluation is retrospective, not an untouched independent test following the earlier ridge-only run.
+
+| Day-weighted evaluation metric | Last-close / typical-range or training class prior | Gradient OHLC / classifier |
+| --- | ---: | ---: |
+| Open MAE (points) | 2.1033 | 2.0639 |
+| High MAE (points) | 22.3027 | 20.8120 |
+| Low MAE (points) | 22.0657 | 20.6669 |
+| Close MAE (points) | 31.1306 | 31.1784 |
+| Mean OHLC relative MAE (%) | 0.0341674 | 0.0328769 |
+| Range MAE (points) | 35.8814 | 28.6771 |
+| Balanced OHLC close-direction accuracy | 50.0000% | 50.9463% |
+| Classifier Brier | 0.2500454 | 0.2506312 |
+
+Validation OHLC skill +3.2164%, close skill +0.0159%; evaluation OHLC skill +3.7768%, close skill -0.1549%. Nominal 80% interval covers 75.6799% (mean width 86.6637 points). Point-forecast direction accuracy 51.0434% is not classifier accuracy. Both five-minute models improve high/low estimates against the fixed typical-range comparator; neither beats the naive close forecast or constant prior probability on evaluation. No evidence of a tradable signal; need stronger volatility-adaptive comparator and horizon-specific tests. Do not infer option P&L. State no_confirmed_ohlc_improvement.
+
+Local reports: results/banknifty_ohlc_forecast_914a2ab5309e419195d0165b4a141f52.json and results/banknifty_ohlc_forecast_914a2ab5309e419195d0165b4a141f52_predictions.csv. Console results are recorded; exact file hashes and peak process memory have not been independently inspected.
+
+### Multi-horizon core forecast extension (implementation, acceptance pending)
+
+The same core runner supports --horizon 1, 5, 10, 15, 30 or 60 for explicit index-only mode. Five-minute default and contextual/sequence clocks remain unchanged. Forecast targets are next complete horizon wholly inside one session, never future bars in features; 60 completed input minutes, horizon-sized nonoverlapping training stride and every eligible minute evaluated. Added training-only volatility-adaptive range baseline, paired observed-session loss intervals, classifier accuracy and probability reliability/log-loss diagnostics. Prior fixed-baseline skill state remains descriptive; adaptive comparisons and Brier differences must also be assessed before accepting a predictor. No probability calibration, first-passage or flat class yet. New code and regression tests committed, not empirically verified until actual local results.
 
 ### Global and fixed-time experiments (November 27, exploratory)
 

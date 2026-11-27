@@ -19,6 +19,7 @@ from . import nse_session_policy as sessions
 MINUTES=375
 LOOKBACK=60
 HORIZON=5
+HORIZONS=(1,5,10,15,30,60)
 PEERS=("INDEX:NIFTY50",*sorted(index_spot.RESEARCH_INDEXES))
 LAGS=(1,3,5,10,15,30,60)
 EMA_SPANS=(5,9,13,20,50,100,200)
@@ -184,13 +185,16 @@ def price_features(a,*,index=False,prior=None,earlier_days=()):
     return _pack(result)
 
 
-def anchors(a):
-    """Each row is the immediately NEXT five minutes, not a partial candle.
+def anchors(a,horizon=HORIZON):
+    """Immediately next complete horizon, wholly within the same session.
     Encode O/C relative to known close and nonnegative upper/lower excursions.
+    The default five-minute label is unchanged for the sequence engine.
     """
+    if type(horizon) is not int or horizon not in HORIZONS:
+        raise ValueError("Unsupported forecast horizon")
     idx=[];targets=[];real=[]
-    for m in range(LOOKBACK-1,MINUTES-HORIZON):
-        past=a[m-LOOKBACK+1:m+1,:4];future=a[m+1:m+1+HORIZON,:4]
+    for m in range(LOOKBACK-1,MINUTES-horizon):
+        past=a[m-LOOKBACK+1:m+1,:4];future=a[m+1:m+1+horizon,:4]
         if not np.isfinite(past).all() or not np.isfinite(future).all():continue
         ref=a[m,3];op,cl=future[0,0],future[-1,3]
         high,low=future[:,1].max(),future[:,2].min()
