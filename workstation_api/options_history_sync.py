@@ -144,7 +144,7 @@ def _saved_windows(start,stop,wings,*,observed=None,statistics=None):
             "MONTH",0,offset,side)) for side in ("CALL","PUT") for offset in exp._offsets(wings)}
     paths=[]
     for p in root.iterdir():
-        if re.fullmatch(r"[0-9a-f]{64}\\.json",p.name):
+        if re.fullmatch(r"[0-9a-f]{64}[.]json",p.name):
             paths.append(p)
             if len(paths)>MAX_RECEIPTS:
                 raise ValueError("Expired-option receipt scan limit exceeded; use source inspection")
