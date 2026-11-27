@@ -90,8 +90,21 @@ def priority_blocker(parallel_live,*,dhan=True):
 
 
 def require_priority(parallel_live,*,dhan=True):
-    reason=priority_blocker(parallel_live,dhan=dhan)
-    if reason:raise Pause(reason)
+    # Only transient recorder pressure gets a bounded automatic wait. Do
+    # not clear provider cooldowns, change recurring settings or retry errors.
+    deadline=time.monotonic()+900
+    last=None
+    while True:
+        reason=priority_blocker(parallel_live,dhan=dhan)
+        if not reason:
+            if last:print("RESUME: recorder pressure cleared",flush=True)
+            return
+        if not parallel_live or not reason.startswith("Recorder pressure:") or time.monotonic()>=deadline:
+            raise Pause(reason)
+        if reason!=last:
+            print("YIELD: "+reason+"; waiting for recorder recovery",flush=True)
+            last=reason
+        time.sleep(5)
 
 
 def live_priority_request():
@@ -185,7 +198,7 @@ def job(path,body,record,flush,*,cancel_path=None,parallel_live=False):
         record["batch_id"]=created["batch"]["id"]
     flush()
     print("LOCAL JOB",jid,path,flush=True)
-    last=None;cancelled=False;yield_reason=None
+    last=None;last_batch=None;cancelled=False;yield_reason=None
     deadline=time.monotonic()+48*3600
     while time.monotonic()<deadline:
         status=api("/api/jobs/"+jid)
@@ -193,12 +206,33 @@ def job(path,body,record,flush,*,cancel_path=None,parallel_live=False):
         if stage!=last:
             say("JOB PROGRESS",{"id":jid,"status":stage[0],"percent":stage[1],"stage":stage[2]})
             last=stage
+        # The generic job percentage stays at zero during bulk downloads,
+        # and the public job result may be an empty summary. Read the batch
+        # itself to distinguish completed acquisition from a paused checkpoint.
+        batch_id=record.get("batch_id")
+        batch=None
+        if batch_id and path.startswith("/api/dhan/batches"):
+            batch=api("/api/dhan/batches/"+batch_id)
+            summary={k:batch.get(k) for k in ("id","status","updated_utc","total","processed","current_symbol","current_window","counts","failure_examples","membership_covered_through")}
+            if summary!=last_batch:
+                say("STOCK BATCH PROGRESS",summary)
+                record["batch_progress"]=summary;flush()
+                last_batch=summary
         if status["status"]=="complete":
             result=status.get("result") or {}
             record.update(state="job_complete",result=result);flush()
-            if result.get("status") in ("paused","cancelled","interrupted"):
-                raise Pause("Acquisition stopped at a saved checkpoint "+str(record.get("batch_id",jid))+"; "+(yield_reason or "inspect provider status before rerun"))
-            if yield_reason:raise Pause(yield_reason+"; submitted job completed, saved receipts retained")
+            terminal=batch if batch is not None else result
+            if terminal.get("status") in ("paused","cancelled","interrupted") or (batch is not None and terminal.get("status")!="completed"):
+                record["state"]="batch_incomplete" if batch is not None else "checkpoint_incomplete";flush()
+                raise Pause("Acquisition stopped at a saved checkpoint "+str(batch_id or jid)+"; "+(yield_reason or "inspect provider status before rerun"))
+            if yield_reason:
+                if parallel_live and yield_reason.startswith("Recorder pressure:"):
+                    # A completed job must not be replayed just because a
+                    # recent recorder gap was observed before its completion.
+                    record["pressure_yield"]=yield_reason;flush()
+                    require_priority(True)
+                else:
+                    raise Pause(yield_reason+"; submitted job completed, saved receipts retained")
             return result
         if status["status"] not in ("queued","running"):
             record.update(state=status["status"]);flush()
@@ -380,6 +414,7 @@ def main():
     p.add_argument("--max-index-windows",type=int,default=240)
     p.add_argument("--alpaca-feed",choices=("iex","sip"),default="iex")
     p.add_argument("--audit-only",action="store_true")
+    p.add_argument("--skip-index-downloads",action="store_true",help="Audit existing index receipts but defer further index repair requests; use after a completed index pass")
     p.add_argument("--parallel-live",action="store_true",help="Allow full history preparation alongside live recording, guarded by backend recorder pressure and shared Dhan budget")
     p.add_argument("--confirm-reviewed",action="store_true",help="Authorize existing provider read-only downloads and reviewed archive assumptions")
     args=p.parse_args()
@@ -392,7 +427,7 @@ def main():
     load_dotenv(root/".env",override=False)
     stop=local_now().date();start=stop-timedelta(days=365*args.years)
     option_start=stop-timedelta(days=args.option_days)
-    report={"version":"banknifty_data_preparation_v2","parallel_live":args.parallel_live,"from_inclusive":str(start),"to_exclusive":str(stop),
+    report={"version":"banknifty_data_preparation_v3","parallel_live":args.parallel_live,"skip_index_downloads":args.skip_index_downloads,"from_inclusive":str(start),"to_exclusive":str(stop),
             "index":{},"index_jobs":[],"equity_jobs":[],"options":[],"context":[],
             "blocked_sources":{"historical_weights":"Exact dated official/reviewed weight files required; no fabricated weights",
              "expired_futures":"Exact contract identity, expiry and authorized historical futures source required; no reconstructed futures",
@@ -433,7 +468,7 @@ def main():
             require_priority(args.parallel_live)
             auth=api("/api/dhan/credentials/check")
             report["dhan_profile"]={"ok":bool(auth.get("ok")),"code":auth.get("code")};flush()
-            if auth.get("ok"):
+            if auth.get("ok") and not args.skip_index_downloads:
                 # Use the serialized generic original IDX_I endpoint for all
                 # indices; this branch reads those raw receipts in place.
                 total=0
@@ -454,8 +489,12 @@ def main():
                             break
                 audit_all()
                 known=set(report["index"]["INDEX:BANKNIFTY"]["complete_dates"])
-            else:report["blocked_sources"]["dhan"]="Profile unavailable; renew credentials locally in QuantLab"
-        else:known=set(report["index"]["INDEX:BANKNIFTY"]["complete_dates"])
+            elif not auth.get("ok"):
+                report["blocked_sources"]["dhan"]="Profile unavailable; renew credentials locally in QuantLab"
+            else:
+                print("INDEX: saved receipts audited; further index repair requests explicitly deferred",flush=True)
+                report["index_downloads_deferred"]=True
+        known=set(report["index"]["INDEX:BANKNIFTY"]["complete_dates"])
         info=pit_index.status()
         report["membership"]=info
         if info.get("available"):
