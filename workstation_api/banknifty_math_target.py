@@ -22,6 +22,7 @@ MIN_TRAIN_SESSIONS=20
 MIN_VALID_TRADES=10
 MIN_VALID_DAYS=5
 PROB_FLOOR=.35
+IV_STRESS_POINT=.01
 TARGET=.10
 STOP=-.05
 
@@ -120,6 +121,17 @@ def _forecast_returns(op,cl,hold,units,order_cost_inr):
             "negative_probability":float(np.mean(ret<0))}
 
 
+def iv_stress_paths(scenario,strike,open_times,close_times,iv,side,hold):
+    """Prespecified +/- one volatility-point ramp AFTER hypothetical entry.
+    Sensitivity only; not a learned IV forecast. Entry IV is unchanged.
+    """
+    open_ramp=np.maximum(np.arange(hold+2)-1,0)/hold
+    close_ramp=np.arange(hold+2)/hold
+    return [(price(scenario["opens"],strike,open_times,np.maximum(.0001,iv+shock*open_ramp),side),
+             price(scenario["closes"],strike,close_times,np.maximum(.0001,iv+shock*close_ramp),side))
+            for shock in (-IV_STRESS_POINT,IV_STRESS_POINT)]
+
+
 def required_move(spot,strike,tau,iv,side,premium,units,order_cost_inr,elapsed=5):
     """Approximate favorable spot move for +10% net at fixed IV and time."""
     t=max(1e-12,tau-elapsed/(365*1440))
@@ -165,6 +177,11 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget,comparison=Fa
         median_volume=float(np.median([q["volume"] for q in recent if q is not None])) if recent_count else 0.
         op=price(scenario["opens"],strike,open_times,iv,side)
         cl=price(scenario["closes"],strike,close_times,iv,side)
+        stress_paths=iv_stress_paths(scenario,strike,open_times,close_times,iv,side,hold) if comparison and recent_count==10 else []
+        vendor_iv=row.get("iv")
+        old_iv=recent[4].get("iv") if recent_count==10 else None
+        has_iv=all(type(v) in (int,float) and isfinite(v) and v>0 for v in (vendor_iv,old_iv))
+        iv_change=float(np.clip(vendor_iv/old_iv-1,-.5,.5)) if has_iv else 0.
         for lots in affordable_lots:
             units=lots*lot_size
             forecasts=[_forecast_returns(op,cl,hold,units,cost) for cost in COSTS]
@@ -172,10 +189,15 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget,comparison=Fa
             if any(f["expected_net_return"]<=0 or f["realized_target_probability"]<PROB_FLOOR for f in forecasts):continue
             worst=min(f["expected_net_return"] for f in forecasts)
             planned=r._fund(premium,units,0,fixed_order_cost=ORDER_COST_INR)
+            stressed=[_forecast_returns(a,b,hold,units,ORDER_COST_INR) for a,b in stress_paths]
+            robust=[forecasts[0],*stressed] if stressed and all(v is not None for v in stressed) else []
             candidates.append((worst,forecasts[0]["realized_target_probability"],-abs(strike-spot),-lots,
                 {"side":side,"strike":float(strike),"lots":lots,"units":units,"premium":premium,
                  "iv_proxy":iv,"nominal_expiry":expiry.isoformat(),"tau":tau,"forecasts":forecasts,
-                 "planned_funding":planned,**({"recent_observations":recent_count,"median_recent_volume":median_volume} if comparison else {})}))
+                 "planned_funding":planned,**({"recent_observations":recent_count,"median_recent_volume":median_volume,
+                 "vendor_iv_5m_relative_change":iv_change,"vendor_iv_change_missing":not has_iv,
+                 "worst_iv_capped_return":min((v["expected_target_capped_return"] for v in robust),default=None),
+                 "worst_iv_target_probability":min((v["realized_target_probability"] for v in robust),default=None)} if comparison else {})}))
     if not candidates:
         return None,("no_observed_contract" if not observed else "no_affordable_contract" if not affordable else "no_priceable_contract" if not priced else "no_positive_math_candidate")
     def finish(chosen):
@@ -194,6 +216,11 @@ def select(index,train,table,day,m,hold,*,lot_size,max_lots,budget,comparison=Fa
     liquid=[x for x in candidates if x[-1]["recent_observations"]==10 and x[-1]["median_recent_volume"]>=x[-1]["units"]]
     out={"raw":finish(baseline),"capped":finish(capped)}
     if liquid:out["liquid"]=finish(max(liquid,key=capped_rank)[-1])
+    iv_eligible=[x for x in liquid if x[-1]["worst_iv_capped_return"] is not None
+                 and x[-1]["worst_iv_capped_return"]>0
+                 and x[-1]["worst_iv_target_probability"]>=PROB_FLOOR]
+    if iv_eligible:
+        out["iv_robust"]=finish(max(iv_eligible,key=lambda x:(x[-1]["worst_iv_capped_return"],x[-1]["worst_iv_target_probability"],*x[2:4]))[-1])
     return out,"selected"
 
 
