@@ -108,5 +108,48 @@ class OptionsHistorySyncTests(unittest.TestCase):
         self.assertIsNone(exp._get_cached(calls[1]))
 
 
+    def test_scope_progress_counts_distinct_pairs_and_not_rejected_attempts(self):
+        args=dict(start_date="2026-10-01",end_date="2026-10-05",wings=0,today=self.today)
+        snapshots=[]
+        def fetch(body):
+            if body["drvOptionType"]=="CALL":
+                raise exp.RollingInputError("DH-905")
+            return {"data":{}}
+        result=sync.run(**args,fetcher=fetch,on_counts=snapshots.append,request_limit=3)
+        self.assertEqual(result["eligible_offset_date_pairs"],10)
+        self.assertEqual(snapshots[0]["checked_offset_date_pairs"],0)
+        self.assertEqual(result["batch_attempted"],3)
+        self.assertEqual(result["remaining_planned_requests"],result["planned_missing_requests"]-result["batch_completed"])
+        self.assertLess(result["checked_offset_date_pairs"],10)
+        self.assertTrue(all(a["checked_offset_date_pairs"]<=b["checked_offset_date_pairs"] for a,b in zip(snapshots,snapshots[1:])))
+        self.assertEqual(result["missing_offset_date_pairs"]+result["checked_offset_date_pairs"],10)
+        final=sync.run(**args,fetcher=lambda _:{"data":{}})
+        self.assertEqual(final["checked_offset_date_pairs"],10)
+        self.assertEqual(final["remaining_planned_requests"],0)
+        self.assertFalse(final["continuous_coverage_certified"])
+
+    def test_unchanged_receipts_skip_reparse_but_changed_and_deleted_revalidate(self):
+        args=dict(start_date="2026-10-01",end_date="2026-10-02",wings=0,today=self.today)
+        sync.run(**args,fetcher=lambda _:{"data":{}})
+        with patch.object(sync,"_verified_summary",wraps=sync._verified_summary) as parse:
+            sync.run(**args,fetcher=lambda _:self.fail("unexpected request"))
+            self.assertEqual(parse.call_count,2)
+            parse.reset_mock()
+            result=sync.run(**args,fetcher=lambda _:self.fail("unexpected request"))
+            self.assertEqual(parse.call_count,0)
+            self.assertEqual(result["checked_offset_date_pairs"],4)
+            body=exp._request_body(date(2026,10,1),date(2026,10,2),"MONTH",0,"ATM","CALL")
+            path=exp._cache_path(body)
+            path.write_text("corrupt",encoding="utf-8")
+            cover,reused,rejected=sync._saved_windows(date(2026,10,1),date(2026,10,3),0)
+            self.assertEqual((reused,rejected),(1,1))
+            self.assertEqual(parse.call_count,1)
+            self.assertNotIn(("CALL","ATM"),cover)
+            path.unlink()
+            result=sync.run(**args,fetcher=lambda _:{"data":{}})
+            self.assertEqual(result["new_receipts"],1)
+            self.assertEqual(result["checked_offset_date_pairs"],4)
+
+
 if __name__=="__main__":
     unittest.main()
