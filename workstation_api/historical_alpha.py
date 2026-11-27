@@ -122,12 +122,12 @@ def _read_file(path,digest,start,stop,budget,expected_rows=None):
     return data
 
 
-def shared_index_sources(start,stop,budget):
+def shared_index_sources(start,stop,budget,*,identity="INDEX:BANKNIFTY"):
     """Union original verified spot receipts; newest verified minute wins.
     No extra market download or reconstructed index is required by a batch.
     """
     candidates=[]
-    for path,_,meta in cockpit_sources._candidates("INDEX:BANKNIFTY"):
+    for path,_,meta in cockpit_sources._candidates(identity):
         try:
             if date.fromisoformat(meta["to_exclusive"])<=start or date.fromisoformat(meta["from_inclusive"])>=stop:
                 continue
@@ -151,12 +151,12 @@ def shared_index_sources(start,stop,budget):
                     if session+timedelta(minutes=minute)<latest and minute not in index[day]:
                         index[day][minute]=bar;used=True
             if used:
-                digests["INDEX:BANKNIFTY:"+path.parent.name]=meta["sha256"]
+                digests[identity+":"+path.parent.name]=meta["sha256"]
         except (ValueError,OSError,KeyError,TypeError,OverflowError,csv.Error) as exc:
-            failures["INDEX:BANKNIFTY:"+path.parent.name]=str(exc)[:160]
+            failures[identity+":"+path.parent.name]=str(exc)[:160]
     index={day:bars for day,bars in index.items() if bars}
     if not index:
-        raise ValueError("No usable original BANKNIFTY minute receipts in selected date range")
+        raise ValueError("No usable original "+identity.removeprefix("INDEX:")+" minute receipts in selected date range")
     return index,digests,failures
 
 
