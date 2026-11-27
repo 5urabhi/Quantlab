@@ -629,8 +629,9 @@ def run(*,progress=None,now=None):
             report["profile_code"]=profile.get("code") or "profile_unverified"
             if profile.get("code")=="profile_unreachable":
                 report.update(state="blocked",reason="Dhan profile connection unavailable; check local network",transient_connection_failure=True)
-            elif profile.get("code")=="profile_http_error" and _rate_limit_message(profile.get("message")):
-                report.update(state="blocked",reason="Dhan profile rate limit (429)",provider_rate_limited=True)
+            elif profile.get("code")=="profile_rate_limited" or (profile.get("code")=="profile_http_error" and _rate_limit_message(profile.get("message"))):
+                report.update(state="blocked",reason="Dhan profile rate limit",provider_rate_limited=True,
+                              provider_retry_after_seconds=profile.get("provider_retry_after_seconds",0))
             else:
                 report.update(state="blocked",reason=job_safety.scrub(
                     profile.get("message") or "Dhan token or historical data permission requires attention",limit=200))
