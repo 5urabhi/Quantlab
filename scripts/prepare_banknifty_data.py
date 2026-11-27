@@ -402,6 +402,11 @@ def archive_windows(start,stop,root,report,flush,feed,*,parallel_live=False):
                 ledger[key]=[v["receipt_sha256"] for v in factors.values()]
                 save_json(path,ledger)
             say("ARCHIVE RESULT",{"scope":key,"states":{k:v.get("state") for k,v in factors.items()},"state":result.get("state")})
+            if name=="fred" and result.get("state")=="provider_rate_limited":
+                report["context"].append({"provider":name,"state":"remaining_windows_deferred_provider_rate_limit","older_than":str(a)})
+                flush()
+                print("FRED provider rate limit: remaining older windows deferred; no repeated rate-limited requests",flush=True)
+                break
 
 
 def main():
@@ -414,12 +419,14 @@ def main():
     p.add_argument("--max-index-windows",type=int,default=240)
     p.add_argument("--alpaca-feed",choices=("iex","sip"),default="iex")
     p.add_argument("--audit-only",action="store_true")
+    p.add_argument("--resume-daily-batch",help="Resume only this previously authorized dated BANKNIFTY daily batch via the running, updated backend; no other downloads")
     p.add_argument("--skip-index-downloads",action="store_true",help="Audit existing index receipts but defer further index repair requests; use after a completed index pass")
     p.add_argument("--parallel-live",action="store_true",help="Allow full history preparation alongside live recording, guarded by backend recorder pressure and shared Dhan budget")
     p.add_argument("--confirm-reviewed",action="store_true",help="Authorize existing provider read-only downloads and reviewed archive assumptions")
     args=p.parse_args()
     if not 1<=args.option_days<=366 or not 1<=args.context_days<=1825 or not 0<=args.wings<=10 or not 1<=args.max_index_windows<=250:
         p.error("Invalid bounded scope")
+    if args.audit_only and args.resume_daily_batch:p.error("--audit-only and --resume-daily-batch are mutually exclusive")
     if not args.audit_only and not args.confirm_reviewed:p.error("Use --confirm-reviewed after reviewing data provider terms and archive assumptions")
     root=args.shared_root.resolve()
     if not (root/"data").is_dir():p.error("Original QuantLab shared data directory missing")
@@ -445,6 +452,28 @@ def main():
         flush()
         say("INDEX COVERAGE",{k:{x:v[x] for x in ("complete_sessions","first_complete_session","last_complete_session","verified_receipts")} for k,v in report["index"].items()})
     try:
+        if args.resume_daily_batch:
+            health=api("/api/health")
+            if not health.get("ok") or health.get("mode")!="local" or health.get("read_only_market_data") is not True or health.get("broker_orders_enabled") is not False:
+                raise Pause("Expected local read-only QuantLab API")
+            bid=args.resume_daily_batch
+            if not dw.BATCH_ID.fullmatch(bid):raise ValueError("Invalid batch identity")
+            previous=api("/api/dhan/batches/"+bid)
+            if previous.get("selection")!="banknifty_pit" or previous.get("interval") is not None or previous.get("status") in ("queued","running"):
+                raise Pause("Expected a stopped dated BANKNIFTY daily batch")
+            record={"batch_id":bid,"interval":None,"from":previous["from_date"],"to_exclusive":previous["to_date"]}
+            report["equity_jobs"].append(record)
+            counts=previous["counts"]
+            if previous["status"]=="completed" and counts.get("complete",0)+counts.get("cached",0)==previous["total"]:
+                record.update(state="existing_completed_batch",batch_progress=previous);flush()
+            else:
+                job("/api/dhan/batches/"+bid+"/resume",{},record,flush,parallel_live=args.parallel_live)
+            final=api("/api/dhan/batches/"+bid)
+            record["batch_progress"]={k:final.get(k) for k in ("id","status","counts","total","processed","failure_examples")}
+            counts=final["counts"]
+            report["state"]="daily_batch_complete_review_coverage" if final["status"]=="completed" and counts.get("complete",0)+counts.get("cached",0)==final["total"] else "daily_batch_incomplete"
+            say("DAILY BATCH",record["batch_progress"])
+            return 0 if report["state"]=="daily_batch_complete_review_coverage" else 2
         if not args.audit_only and not args.parallel_live and not offhours():
             live=live_priority_request()
             report["live_priority"]=live
