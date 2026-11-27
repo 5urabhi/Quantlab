@@ -122,3 +122,37 @@ class PreparationTests(TestCase):
             def pressure():raise m.Pause("Recorder pressure")
             with self.assertRaises(m.Pause):m.fred.backfill(a,b,confirmed=True,live_guard=pressure)
             with self.assertRaises(m.Pause):m.alpaca.backfill(a,b,confirmed=True,live_guard=pressure)
+
+    def test_transient_recorder_pressure_waits_then_clears(self):
+        with patch.object(m,"priority_blocker",side_effect=["Recorder pressure: auto_depth",None]) as guard,patch.object(m.time,"sleep") as sleep:
+            m.require_priority(True)
+            self.assertEqual(guard.call_count,2)
+            sleep.assert_called_once_with(5)
+        with patch.object(m,"priority_blocker",return_value="Provider cooldown until tomorrow"),patch.object(m.time,"sleep") as sleep:
+            with self.assertRaises(m.Pause):m.require_priority(True)
+            sleep.assert_not_called()
+
+    def test_completed_batch_does_not_replay_after_recorder_pressure(self):
+        record={}
+        replies=[{"job_id":"job1","batch":{"id":"batch_fixture"}},
+                 {"status":"running"},{"status":"running","processed":15,"total":16},
+                 {},{"status":"complete","result":{}},{"status":"completed","processed":16,"total":16}]
+        with patch.object(m,"wait_idle"),patch.object(m.time,"sleep"), \
+             patch.object(m,"priority_blocker",return_value="Recorder pressure: auto_depth"), \
+             patch.object(m,"require_priority") as recover,patch.object(m,"api",side_effect=replies) as api:
+            m.job("/api/dhan/batches",{},record,lambda:None,parallel_live=True)
+            recover.assert_called_once_with(True)
+            self.assertEqual(api.call_count,6)
+            self.assertEqual(api.call_args_list[3].args,("/api/dhan/batches/batch_fixture/cancel",))
+        self.assertEqual(record["state"],"job_complete")
+        self.assertEqual(record["batch_progress"]["processed"],16)
+        self.assertIn("auto_depth",record["pressure_yield"])
+
+    def test_generic_complete_does_not_mask_paused_stock_batch(self):
+        record={}
+        replies=[{"job_id":"job1","batch":{"id":"batch_fixture"}},
+                 {"status":"complete","result":{}},{"status":"paused","processed":5,"total":16}]
+        with patch.object(m,"wait_idle"),patch.object(m,"api",side_effect=replies):
+            with self.assertRaises(m.Pause):m.job("/api/dhan/batches",{},record,lambda:None,parallel_live=True)
+        self.assertEqual(record["state"],"batch_incomplete")
+        self.assertEqual(record["batch_progress"]["status"],"paused")
