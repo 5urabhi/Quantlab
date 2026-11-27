@@ -16,7 +16,7 @@ import json
 import re
 import time
 
-from . import expired_options_backtest as exp, market_patterns, service, dhan_auth
+from . import expired_options_backtest as exp, market_patterns, service, dhan_auth, nse_session_policy as sessions
 
 MAX_DAYS=366
 MAX_RECEIPTS=20000
@@ -27,6 +27,8 @@ REQUEST_START_SPACING=.45
 MAX_REJECTIONS=132
 LOCK=Lock()
 SOURCE="Dhan v2 /charts/rollingoption"
+COMPARISON_MASK=(1<<sessions.COMPARISON_MINUTES)-1
+EXTENDED_AUDIT_POLICY="nse_rolling_session_v1"
 # Process-local planning summaries only; research continues to verify raw receipts.
 _SCAN_ROOT=None
 _SCAN_CACHE={}
@@ -89,11 +91,11 @@ def _record_observed(audit,rows,start,stop,*,count_days=None):
             continue
         stamp=datetime.fromisoformat(row["timestamp_utc"]).astimezone(exp.IST)
         minute=stamp.hour*60+stamp.minute-555
-        if 0<=minute<375:
+        if 0<=minute<sessions.derivatives_segment_minutes(day) and not stamp.second and not stamp.microsecond:
             key=(row["side"],row["origin_offset"],day)
             before=audit.get(key,0)
             audit[key]=before|(1<<minute)
-            if count_days is not None and day in count_days and before!=audit[key]:
+            if count_days is not None and day in count_days and minute<sessions.COMPARISON_MINUTES and before!=audit[key]:
                 added+=1
     return added
 
@@ -120,7 +122,7 @@ def _verified_summary(path,signature):
     raw=json.dumps(payload,sort_keys=True,separators=(",",":")).encode()
     if sha256(raw).hexdigest()!=envelope["sha256"] or not isinstance(payload.get("data"),dict):
         raise ValueError("Receipt integrity mismatch")
-    rows=exp._normalize(payload,body)
+    rows=exp._normalize(payload,body,full_session=True)
     masks={}
     _record_observed(masks,rows,a,b)
     if _signature(path)!=signature or path.is_symlink():
@@ -323,7 +325,10 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
         total_pairs=len(dates)*2*len(exp._offsets(wings))
         known_days={d.isoformat() for d in dates}&set(priority_sessions)
         known_expected=len(known_days)*2*len(exp._offsets(wings))*375
-        known_minutes=sum(mask.bit_count() for key,mask in observed.items() if key[2] in known_days)
+        known_minutes=sum((mask&COMPARISON_MASK).bit_count() for key,mask in observed.items() if key[2] in known_days)
+        extended_days={d for d in known_days if sessions.CAS_START.isoformat()<=d<sessions.CAS_REVISION.isoformat()}
+        revision_days={d for d in known_days if d>=sessions.CAS_REVISION.isoformat()}
+        extended_expected=len(extended_days)*2*len(exp._offsets(wings))*10
         requests=[]
         for side in ("CALL","PUT"):
             for offset in exp._offsets(wings):
@@ -356,6 +361,11 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
             return {**scan_counts,"scope_start":start_date,"scope_end":end_date,"scope_wings":wings,
                     "known_observed_minute_slots":known_minutes,"known_expected_minute_slots":known_expected,
                     "known_market_dates":len(known_days),"checked_offset_date_pairs":len(checked),
+                    "extended_audit_policy":EXTENDED_AUDIT_POLICY,
+                    "extended_market_dates":len(extended_days),"extended_expected_minute_slots":extended_expected,
+                    "extended_observed_minute_slots":sum((mask>>sessions.COMPARISON_MINUTES).bit_count() for key,mask in observed.items() if key[2] in extended_days),
+                    "revision_market_dates":len(revision_days),
+                    "revision_tail_observed_slots":sum((mask>>sessions.COMPARISON_MINUTES).bit_count() for key,mask in observed.items() if key[2] in revision_days),
                     "missing_offset_date_pairs":total_pairs-len(checked),
                     "planned_missing_requests":len(requests),"remaining_planned_requests":len(requests)-completed,
                     "batch_limit":min(len(requests),request_limit or len(requests)),
@@ -411,7 +421,7 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
                 # The next window is never dispatched after a known error.
                 if i+1<len(batch) and not (should_stop is not None and should_stop()):
                     prefetch(batch[i+1])
-                rows=exp._normalize(payload,body)
+                rows=exp._normalize(payload,body,full_session=True)
                 if cached:
                     exact_reused+=1
                 else:
@@ -432,7 +442,7 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
         return {**preview(start_date,end_date,wings,today),**counts(),
                 "existing_verified_receipts":reused,"unreadable_receipts_encountered":rejected,
                 "empty_verified_receipts":statistics["empty_verified_receipts"],
-                "observed_rolling_minute_slots":sum(v.bit_count() for v in observed.values()),
+                "observed_rolling_minute_slots":sum((v&COMPARISON_MASK).bit_count() for v in observed.values()),
                 "observed_offset_session_pairs":len(observed),
                 "observed_session_dates":len({k[2] for k in observed}),
                 "planned_missing_requests":len(requests),"new_receipts":downloaded,
