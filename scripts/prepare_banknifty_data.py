@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 from urllib.error import HTTPError, URLError
 import argparse
+import csv
 import json
 import os
 import time
@@ -49,7 +50,8 @@ def api(path,body=None,*,post=False):
             return json.loads(payload)
     except HTTPError as exc:
         # Do not print arbitrary response bodies, tokens, or request URLs.
-        raise Failed("Local workstation HTTP "+str(exc.code)+" at "+path.split("?")[0]) from None
+        error=Pause if exc.code in (401,403,409,429) else Failed
+        raise error("Local workstation HTTP "+str(exc.code)+" at "+path.split("?")[0]) from None
     except (URLError,TimeoutError,OSError) as exc:
         raise Pause("Local workstation connection unavailable; inspect the running Jobs page before retrying a submitted write") from None
 
@@ -160,7 +162,7 @@ def audit_index(identity,start,stop):
                     for minute in minutes:
                         if 0<=minute<MINUTES:mask|=1<<minute
                     masks[day]=mask
-        except (ValueError,OSError,KeyError,TypeError,OverflowError) as exc:
+        except (ValueError,OSError,KeyError,TypeError,OverflowError,csv.Error) as exc:
             rejected[path.parent.name]=type(exc).__name__
     complete=sorted(d for d,m in masks.items() if m.bit_count()==MINUTES)
     return {"verified_receipts":len(hashes),"source_hashes":hashes,"rejected_receipts":rejected,
@@ -325,7 +327,9 @@ def main():
     try:
         if not args.audit_only:
             require_offhours()
-            api("/api/health")
+            health=api("/api/health")
+            if not health.get("ok") or health.get("mode")!="local" or health.get("read_only_market_data") is not True or health.get("broker_orders_enabled") is not False:
+                raise Pause("Expected local read-only QuantLab API; no writes submitted")
             for label,path in (("master","/api/dhan/instruments/refresh"),("membership","/api/indices/sync")):
                 record={};report[label+"_refresh"]=record
                 try:job(path,{},record,flush)
