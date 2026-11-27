@@ -190,6 +190,12 @@ class DhanAuthTests(TestCase):
         self.assertFalse(result["ok"])
         self.assertNotIn("PRIVATE", str(result))
 
+    def test_verified_loopback_profile_wakes_authorized_maintenance(self):
+        with patch.object(dhan_auth,"check_profile",return_value={"ok":True,"code":"ready"}),patch("workstation_api.app.data_maintenance.credentials_verified") as wake:
+            response=self.client.get("/api/dhan/credentials/check")
+            self.assertEqual(response.status_code,200)
+            wake.assert_called_once_with()
+
     def test_loopback_endpoint_missing_credentials(self):
         with patch.dict("os.environ", {}, clear=True):
             response = self.client.get("/api/dhan/credentials/check")
