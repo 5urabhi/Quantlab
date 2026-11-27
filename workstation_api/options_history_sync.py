@@ -264,10 +264,6 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
         requests=_prioritize(requests,rank,priority_sessions)
         if len(requests)>MAX_REQUESTS:
             raise ValueError("Missing request scope exceeds bounded limit; shorten the date range")
-        if requests and fetcher is None:
-            profile=dhan_auth.check_profile()
-            if not profile.get("ok"):
-                raise ValueError("Verify Dhan historical-data access in Connections before downloading")
         if request_limit is not None and (type(request_limit) is not int or not 1<=request_limit<=MAX_REQUESTS):
             raise ValueError("Invalid bounded automatic request limit")
         downloaded=0
@@ -299,6 +295,13 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
             if on_counts is not None:
                 on_counts(counts())
         emit()
+        if requests and fetcher is None and not (should_stop is not None and should_stop()):
+            profile=dhan_auth.check_profile()
+            if not profile.get("ok"):
+                if profile.get("code")=="profile_unreachable":
+                    raise exp.RollingConnectionError("Dhan profile connection unavailable; check local network")
+                raise ValueError("Verify Dhan historical-data access in Connections before downloading")
+        begun=time.monotonic()
         for body in requests:
             if (request_limit is not None and attempted>=request_limit) or (should_stop is not None and should_stop()):
                 stopped_early=True
@@ -320,6 +323,9 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
                         payload=exp._original_response_once(body)
                     else:
                         payload=fetcher(body)
+                except exp.RollingConnectionError:
+                    emit()
+                    raise
                 except exp.RollingInputError:
                     consecutive+=1
                     rejected_requests.append({"from":body["fromDate"],"through":body["toDate"],
