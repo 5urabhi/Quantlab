@@ -3591,11 +3591,19 @@ def workstation_learning_run(body: LearningStudyRequest):
 def dhan_credentials_check():
     """Explicit user-requested, read-only live Dhan profile check.
 
-    Does not expose account information or access-token values.
+    Does not expose account information or access-token values. A successful
+    check may wake previously authorized, authentication-blocked maintenance.
     """
     LOG.info("Dhan credentials verification requested from local UI")
     result = dhan_auth.check_profile()
     LOG.info("Dhan credentials verification finished: code=%s ok=%s", result.get("code"), result.get("ok"))
+    if result.get("ok"):
+        # Resume only previously authorized maintenance; a verification is
+        # not authorization for additional market-data scopes.
+        try:
+            data_maintenance.credentials_verified()
+        except (OSError,ValueError,TypeError):
+            LOG.warning("Dhan profile verified but maintenance wake failed; check local state")
     return result
 
 
@@ -3819,6 +3827,12 @@ def market_data_connect_dhan(body: DhanLocalConnect):
         verified = market_data_workflow.store_verified_dhan_access_token(
             body.access_token.get_secret_value(), confirm_local_storage=body.confirm_local_storage,
             client_id=body.client_id.get_secret_value() if body.client_id else "")
+        # A verified, persisted token immediately releases an authentication
+        # blocker in the already-authorized maintenance worker.
+        try:
+            data_maintenance.credentials_verified()
+        except (OSError,ValueError,TypeError):
+            LOG.warning("Dhan connected but maintenance wake failed; check local state")
         # Connecting through the UI should start the read-only CE/PE recorders
         # immediately (or queue them for NSE hours); no Arm click is required.
         auto_option_depth.resume_if_armed()
