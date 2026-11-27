@@ -30,8 +30,8 @@ FIELDS=("open","high","low","close")
 
 
 def split_days(dates):
-    if len(dates)<MIN_TRAIN_DAYS+2*MIN_ASSESS_DAYS:
-        raise ValueError("Need at least 70 completed observed index sessions")
+    if len(dates)<75:
+        raise ValueError("Need at least 75 observed index sessions for chronological support")
     n=len(dates);a=int(.6*n);b=int(.8*n)
     if a<MIN_TRAIN_DAYS or b-a<MIN_ASSESS_DAYS or n-b<MIN_ASSESS_DAYS:
         raise ValueError("Chronological split has insufficient session support")
@@ -245,7 +245,7 @@ def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
     coverage=_coverage(data,{"train_fit":train,"validation":val,"evaluation":test})
     result={"training_rows":int(train.sum()),"training_days":len(set(days[train].tolist())),
             "feature_coverage":coverage,"baselines":baseline,"validation":{},"selected":None}
-    best=None
+    best=None;index_validation={}
     for scope,groups in SCOPES.items():
         # Scope eligibility is determined exclusively on the training part.
         available_groups=tuple(g for g in groups if g=="index" or coverage[g]["train_fit"]["days"]>=MIN_CONTEXT_TRAIN_DAYS)
@@ -272,6 +272,8 @@ def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
             match_inside=matched[val]
             score["matched_context"]=_metrics(data,matched,forecast[match_inside])
             score["matched_naive"]=_metrics(data,matched,naive["validation"][match_inside])
+            if scope=="index":index_validation[algorithm]=forecast.copy()
+            else:score["matched_index_only"]=_metrics(data,matched,index_validation[algorithm][match_inside])
             scope_record["models"][algorithm]=score
             if progress:progress(f"VALIDATION {scope} {algorithm} "+json.dumps({k:score[k] for k in ("rows","days","mean_ohlc_mae_pct","day_weighted_mae_points","balanced_direction_accuracy")}))
             rank=(score["mean_ohlc_mae_pct"],score["day_weighted_mae_pct"]["close"],list(SCOPES).index(scope),ALGORITHMS.index(algorithm))
@@ -333,7 +335,7 @@ def run(*,days=365,to_date=None,wings=3,algorithms=ALGORITHMS,progress=None):
     today=datetime.now(h.IST).date();stop=date.fromisoformat(to_date) if to_date else today
     if type(days) is not int or not 120<=days<=400 or stop>today or (wings is not None and not 0<=wings<=10):
         raise ValueError("Use 120-400 calendar days, completed dates, and 0-10 option wings")
-    if not algorithms or any(x not in ALGORITHMS for x in algorithms):raise ValueError("Invalid algorithms")
+    if not algorithms or len(set(algorithms))!=len(algorithms) or any(x not in ALGORITHMS for x in algorithms):raise ValueError("Invalid algorithms")
     start=stop-timedelta(days=days)
     index,stocks,membership,weights,peers,table,meta=load_sources(start,stop,wings=wings,progress=progress)
     dates=sorted(index);splits=split_days(dates)
