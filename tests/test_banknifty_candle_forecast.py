@@ -1,6 +1,7 @@
 """Regression tests for the next-five-minute candle research clock."""
 from datetime import date,timedelta
 from unittest import TestCase
+from unittest.mock import patch
 import numpy as np
 from workstation_api import banknifty_forecast_features as f, banknifty_candle_forecast as m
 
@@ -96,3 +97,51 @@ class ForecastTests(TestCase):
         self.assertTrue(all(p["predicted_high"]>=max(p["predicted_open"],p["predicted_close"]) for p in pred))
         self.assertTrue(all(p["predicted_low"]<=min(p["predicted_open"],p["predicted_close"]) for p in pred))
         self.assertEqual(result["validation"]["index_banks"]["state"],"insufficient_training_context")
+
+
+    def test_index_only_loader_does_not_read_optional_sources(self):
+        dates=[]
+        d=date(2025,1,1)
+        while len(dates)<80:
+            if d.weekday()<5:dates.append(d.isoformat())
+            d+=timedelta(days=1)
+        original={day:{i:tuple(row) for i,row in enumerate(bars())} for day in dates}
+        # f.dense accepts exact verified minute rows; external context readers
+        # must not be invoked even when --wings retains its default.
+        with patch.object(m.h,"shared_index_sources",return_value=(original,{"index":"hash"},{})) as src, \
+             patch.object(f,"load_membership",side_effect=AssertionError("bank loader called")), \
+             patch.object(m.p,"_load_options",side_effect=AssertionError("option loader called")):
+            index,stocks,members,weights,peers,table,meta=m.load_sources(date(2025,1,1),d,wings=3,index_only=True)
+        self.assertEqual(src.call_count,1)
+        self.assertEqual(len(index),80)
+        self.assertEqual((stocks,members,weights,peers,table),({},{},{},{},{}))
+        self.assertEqual(meta["options"]["state"],"disabled_index_only")
+        self.assertEqual(meta["index"]["observed_minutes"],80*375)
+
+    def test_core_assembly_reuses_features_and_avoids_context_matrices(self):
+        a=bars()
+        index={"2025-01-02":a,"2025-01-03":a.copy()}
+        full=m.assemble(index,{},{},{},{},{})
+        with patch.object(f,"banks_at",side_effect=AssertionError("bank features called")), \
+             patch.object(f,"peers_at",side_effect=AssertionError("peer features called")), \
+             patch.object(f,"option_at",side_effect=AssertionError("option features called")):
+            core=m.assemble(index,{},{},{},{},{},index_only=True)
+        self.assertEqual(full["names"]["index"],core["names"]["index"])
+        np.testing.assert_allclose(full["blocks"]["index"],core["blocks"]["index"],equal_nan=True)
+        for name in ("banks","peers","options"):
+            self.assertEqual(core["blocks"][name].shape,(622,0))
+            self.assertFalse(core["available"][name].any())
+        np.testing.assert_array_equal(full["minutes"],core["minutes"])
+        np.testing.assert_allclose(full["actual"],core["actual"])
+
+    def test_long_range_only_allowed_for_explicit_core(self):
+        with patch.object(m,"load_sources",side_effect=RuntimeError("loader entered")) as loader:
+            with self.assertRaises(ValueError):
+                m.run(days=1825,to_date="2025-11-27")
+            loader.assert_not_called()
+            with self.assertRaisesRegex(RuntimeError,"loader entered"):
+                m.run(days=1825,to_date="2025-11-27",index_only=True)
+            self.assertEqual(loader.call_args.args,(date(2020,11,28),date(2025,11,27)))
+            self.assertTrue(loader.call_args.kwargs["index_only"])
+            with self.assertRaises(ValueError):
+                m.run(days=1828,to_date="2025-11-27",index_only=True)

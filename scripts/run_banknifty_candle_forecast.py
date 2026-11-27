@@ -18,7 +18,8 @@ def write_atomic(path,writer):
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--days",type=int,default=365,help="Calendar lookback, 120-400 days")
+    ap.add_argument("--days",type=int,default=365,help="Calendar lookback, 120-400 days; up to 1827 with --index-only")
+    ap.add_argument("--index-only",action="store_true",help="Core index-only study; skip bank, peer and option loaders")
     ap.add_argument("--to-date",help="Exclusive end date in exchange timezone")
     ap.add_argument("--wings",type=int,default=3,help="Saved rolling monthly option offsets per side")
     ap.add_argument("--no-options",action="store_true")
@@ -30,7 +31,7 @@ def main():
         if not (root/"data").is_dir():raise ValueError("Original shared data directory is missing")
         service.DATA=root/"data"
         report,predictions=m.run(days=args.days,to_date=args.to_date,wings=None if args.no_options else args.wings,
-                         algorithms=("ridge",) if args.ridge_only else m.ALGORITHMS,progress=lambda s:print(s,flush=True))
+                         index_only=args.index_only,algorithms=("ridge",) if args.ridge_only else m.ALGORITHMS,progress=lambda s:print(s,flush=True))
         folder=root/"results";folder.mkdir(exist_ok=True)
         stem="banknifty_ohlc_forecast_"+uuid.uuid4().hex
         path=folder/(stem+".json");journal=folder/(stem+"_predictions.csv")
@@ -40,6 +41,8 @@ def main():
         write_atomic(journal,csv_writer)
         report["prediction_csv"]=journal.name
         write_atomic(path,lambda out:json.dump(report,out,indent=2,sort_keys=True,allow_nan=False))
+        print("MODE",report["mode"],"REQUESTED_DAYS",report["requested_calendar_days"],"OBSERVED_SPAN",report["observed_date_span"])
+        print("CORE_MATRIX_BYTES",report["core_feature_matrix_bytes"])
         print("SESSIONS",json.dumps({k:len(report[k+"_dates"]) for k in ("training","validation","evaluation")}))
         print("SOURCE COVERAGE",json.dumps({"index_sessions":report["sources"]["index"]["sessions"],
               "bank_membership_days":report["sources"]["banks"]["membership_days"],

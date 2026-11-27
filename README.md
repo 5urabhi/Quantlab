@@ -6,6 +6,7 @@
 
 1. [Mission and scope](#mission-and-scope)
 2. [Current evidence and priorities](#current-evidence-and-priorities)
+   - [Live research checklist](#live-research-checklist)
    - [End-to-end option decision research roadmap](#end-to-end-option-decision-research-roadmap)
    - [Implemented capability inventory](#implemented-capability-inventory)
    - [Experiment and evidence register](#experiment-and-evidence-register)
@@ -48,7 +49,7 @@ This is a dated evidence register, not a new independent acceptance run. Local o
 | Daily global | FRED and Alpaca configured; prior inventory seven US ETF proxy series with 1,441 rows each starting November 2021; Nikkei/FRED and other macro archive observations starting March 2024 | Archive assumptions differ from historical live receipt; no exact global intraday index substitution |
 | Overnight global | Existing authorized Alpaca BOATS feed: operator's 90-calendar-day run (2026-08-29 to 2026-11-27 exclusive) returned 18,178 observed five-minute bars across ten ETFs | US-listed proxy trades, not Asian cash indices or GIFT NIFTY; delayed and often sparse; automatic collection configured, continuous operation not yet verified |
 | Live recorder | Dhan quotes, OI, option chains, depth, stock context and storage guards implemented | Check actual packet age, drops, entitlements, storage and session boundaries; no historical depth reconstruction |
-| Forecast engines | Rolling next-five-minute OHLC and optional PyTorch multi-asset sequence research already implemented; source-aware, chronological evaluation | Both current run entrypoints enforce a 120-400 calendar-day study range; **five-year continuous multi-horizon model is not complete** |
+| Forecast engines | Rolling next-five-minute OHLC and optional PyTorch multi-asset sequence research already implemented; source-aware, chronological evaluation | The OHLC runner now has an explicit 120-1,827-day index-only implementation awaiting local testing; contextual and sequence runs remain capped at 400 days. **Five-year continuous multi-horizon model is not complete** |
 | Opening experiments | Pre-open global and post-open selective baseline scripts implemented and local tests passed in the global-opening-context branch | Exploratory only; not a substitute for rolling forecast, not approved strategies |
 | Software | Local workstation and prior software/browser acceptance documented; latest global-opening-context branch unit tests reported passing for its scoped experiments | Re-run full CI and local acceptance at the actual commit; local data readiness and model performance are separate |
 | Live trading | Read-only research, manual workflow, simulation/paper and modeled costs | No automated broker orders. No validated production model or independently reproduced profitable strategy |
@@ -63,6 +64,73 @@ This is a dated evidence register, not a new independent acceptance run. Local o
 - **P1 — Later execution research.** Only after predictive evidence, test CE/PE contract selection, actual quote sides, lot sizes, fees, delay and fills, with funding/risk constraints and a separate spread experiment.
 - **P2 — Deferred unless needed.** New external provider onboarding (including JForex), five-year foreign intraday data, deep/RL expansion, additional fixed-time strategy grids, speculative architecture rewrites. Keep authorized existing collectors running; focus on predictive performance. Repair material data-quality gaps and protect live capture, but do not make peripheral infrastructure a prerequisite for the core study.
 
+### Live research checklist
+
+Read this at the beginning of every task. Update this same checklist on each evidence-backed change; no separate roadmap. GitHub task boxes distinguish **implemented**, **attempted** and **accepted**. A checked attempt can have a negative result. A checked code change is not a passed local test. Pending work is unchecked, not concealed as a success. Record report paths, source scope, dates and limitations in the evidence register. Work in phase order; do not jump to speculative new experiments.
+
+**Phase 0 — Data and project direction**
+- [x] Define the BANKNIFTY options decision-support end goal and canonical documentation.
+- [x] Implement read-only shared storage, original receipt verification, market library, resumable history and live collection.
+- [x] Attempt five-year historical BANKNIFTY acquisition and report complete/partial sessions; prior local audit: 1,190 complete, 52 partial.
+- [x] Attempt authorized global data pilot (30/90-day BOATS, existing daily archive); keep provider/coverage caveats.
+- [x] Implement dated bank membership, option history, depth recording and current-session policy.
+- [ ] Verify current exact five-year local audit, verified source identities/date spans and expected-session gaps; distinguish requested and observed coverage.
+- [ ] Reconcile live recorder freshness, option and bank coverage, calendar and source gaps that actually block later phases. No unnecessary new provider.
+
+**Phase 1 — Five-year rolling forecast (CURRENT P0)**
+- [x] Audit existing OHLC/sequence code: five-minute OHLC target, 60-minute inputs, chronological session split, current contextual and sequence limits 400 calendar days; reuse original index receipt loader.
+- [x] Implement original shorter-history rolling OHLC and optional CNN/GRU/Transformer engines.
+- [x] Attempt prior shorter-history model/sequence study (245 sessions reported); original metrics still need reconciliation.
+- [x] Implement explicit bounded index-only long-history mode for the existing OHLC runner, up to 1,827 calendar days. Avoid bank/peer/options loads, reuse core features, preallocate core matrix, record actual date span and matrix size. Context and sequence runners retain 400-day bounds.
+- [ ] Pass new and existing OHLC unit tests on current commit; verify CI and actual memory/IO usage.
+- [ ] Run the frozen five-year core baseline on saved data (ridge first for a fast feasibility check; no new downloads), verify SHA/date span/eligible windows and saved predictions. A run may report negative skill.
+- [ ] Run and compare the default ridge vs histogram-gradient baseline; record untouched-vs-previously-examined split status, probability metrics and day-block uncertainty.
+- [ ] Extend explicit labels and evaluation to 1/10/15/30/60-minute horizons, early-session coverage, UP/DOWN/FLAT and movement/volatility/first-passage distribution.
+- [ ] Validate out-of-sample directional and price skill, probability calibration and prospective stability before claiming a core model is usable.
+
+**Phase 2 — Incremental context**
+- [x] Implement bank, peer-index, options, volatility and global context inputs and original provenance.
+- [x] Attempt historical constituent/peer/volatility and fixed-time global/post-open baselines; no demonstrated robust trading edge.
+- [ ] Verify original local reports and dated membership/weights; compare matched causal feature ablations without shrinking the core history.
+- [ ] Test shorter-history optional context lanes and calibrated combination/fallback on matched held-out anchors.
+
+**Phase 3 — Option response**
+- [x] Implement original rolling option history, theoretical Greeks/IV and BSM scenarios; existing predictive_option_research and forecast_depth_research.
+- [x] Attempt mathematical premium-target, sector-confirmed, capped utility and supervised correction research.
+- [ ] Audit actual local option coverage, price/IV/OI/volume and exact contract identity vs rolling family.
+- [ ] Fit and evaluate premium/IV response distributions conditional on frozen underlying predictions; compare simple baselines and calibrate uncertainty without future option information.
+
+**Phase 4 — Contract and entry decision**
+- [x] Implement option-chain inspection, liquidity/stress ranking, modeled fees, funding/whole-lot selection and separate spread scanner.
+- [x] Attempt EMA/CPR, ranked-entry, conditional profitability and spread research. Earlier results negative or inconclusive.
+- [ ] Connect validated frozen forecasts to causal exact-contract selection; compute expected net INR, downside, probability of net gain where supported, entry price cap and no-trade.
+- [ ] Compare against simple affordable contracts and cash, use dated fees/lots/margin and realistic latency/liquidity; preserve rejected and unfilled attempts.
+
+**Phase 5 — Holding and exits**
+- [x] Implement fixed, target/stop, trailing, reversal, adaptive and pinned forecast-adaptive paper exits.
+- [x] Attempt rule/ML/offline-Q exit comparisons and dynamic replay.
+- [ ] Validate integrated entry/hold/exit policy on observed later paths; enforce funding, risk, liquidity, expiration, hard cutoff and unresolved-position rules.
+- [ ] Show source-aware position recommendations and evidence in existing cockpit; no unrestricted averaging down.
+
+**Phase 6 — Execution and account-level validation**
+- [x] Implement original-depth replay, separate directional/spread research, cost/fee models, risk and execution stress, paper accounts.
+- [x] Attempt spread and timing viability screens; no demonstrated executable net edge.
+- [ ] Verify exact receipt timing, realistic bid/ask, quantity, slippage and incomplete baskets/fills; reconcile actual dated fee and margin evidence.
+- [ ] Evaluate net P&L, drawdown, loss distribution and abstentions after all costs; compare no-trade, not just conditional completed trades.
+
+**Phase 7 — Prospective paper and controlled learning**
+- [x] Implement immutable candidate registry, prospective ledger, paper engine and opt-in research retraining.
+- [ ] Verify actual ledger support; freeze validated model/policy and log shadow predictions/decisions against strictly new sessions.
+- [ ] Confirm calibration, drift, net risk-controlled paper performance and operational integrity. A no-edge conclusion is valid; do not promote automatically.
+- [ ] Only after baseline evidence, evaluate controlled offline retraining, contextual bandits or RL versus simpler policies; keep live order routing disabled.
+
+**Current next command (after pulling the checklist/core implementation commit):**
+
+    .venv/bin/python -m unittest discover -s tests -p 'test_banknifty_candle_forecast.py' -v
+    bash run.sh banknifty-ohlc --index-only --days 1825 --to-date 2026-11-27 --ridge-only
+
+Run at a safe off-hours boundary using the existing saved local source. This first run is a fast fixed ridge/logistic baseline and data/assembly feasibility assessment, not the complete model comparison; next run omit --ridge-only if resource use and evidence support it. The new code is committed but current local test/run results are pending. No live model or source coverage is certified by this change.
+
 ### End-to-end option decision research roadmap
 
 **Research objective:** compare policies that map the current causal information set and position state to action. A research objective is expected net INR P&L (after spread, market impact/slippage, commissions, exchange fees and taxes), penalized for downside/tail risk, subject to cash/margin, whole-lot and loss limits. Use no-trade as a real zero-return comparator. The exact risk penalty, funding and loss budget must be declared before the experiment, not chosen from the final test. Do not use forecast accuracy as a substitute for net utility; model-based expected profit is not a realized fill.
@@ -70,7 +138,7 @@ This is a dated evidence register, not a new independent acceptance run. Local o
 | Phase | Deliverable | Current status and next acceptance gate |
 | --- | --- | --- |
 | 0. Data | Shared source-verified clock-aligned histories, provenance and maintenance | Substantial collection exists; re-audit coverage and material gaps, particularly exact contract, dates, member IDs and available-at clock. Avoid optional provider expansion. |
-| 1. Core forecasts (P0) | Rolling next-candle OHLC/direction/uncertainty from five-year BANKNIFTY minute data, starting with 5m then 1/10/15/30/60m | Existing 5m OHLC and temporal sequence code capped at 400 days. Extend safely, reuse previous code and compare against no-change/adaptive/training-prior baselines. Freeze chronology and evaluate by session. |
+| 1. Core forecasts (P0) | Rolling next-candle OHLC/direction/uncertainty from five-year BANKNIFTY minute data, starting with 5m then 1/10/15/30/60m | Existing 5m OHLC code extended to explicit 1,827-day index-only mode, pending local test; contextual and sequence studies remain 400 days. Reuse previous code and compare against no-change/adaptive/training-prior baselines. Freeze chronology and evaluate by session. |
 | 2. Context (P1) | Incremental lift from bank returns/volume, Indian peers, global data and derivatives | Existing constituent, peer, global and option features; shorter histories must not shrink core training. Matched ablations and true calibration; retain fallback when unavailable. |
 | 3. Option response (P1) | Distribution of future premium and IV/Greek response conditional on underlying forecast, time to expiry, strike, OI, IV, volume and liquidity | BSM scenario repricing, rolling option path analogs, empirical response research and IV stress exist. Need trained/tested premium/IV forecasts and uncertainty on actual supported contracts/paths, benchmark vs pricing-only/last premium, and distinguish rolling historical families from exact contract IDs. |
 | 4. Contract and entry (P1) | For each source-qualified exact contract, expected net P&L, loss distribution, chance of net gain, cost and funding. Choose strike, expiry, CE/PE, whole lots, entry time/price or no-trade | Existing chain/depth scanners, Greeks, fees, funding, predictive option and paper selectors. Need integrate frozen calibrated forecasts rather than optimistic scenario assumptions or EMA-only rules; evaluate ranked selection against affordable simple and cash baselines on matched dates. |
@@ -115,7 +183,7 @@ Use this ledger to avoid repeating research or confusing code existence with dem
 | Candle morphology and first passage | Completed-candle patterns, empirical shrunk lookup, class prior, logistic and shallow random forest; 1/5/15/30-minute grids, future color vs direction kept separate. Prior 90-session summary reported 668 anchors, 4,658 option paths, 30 evaluation sessions, candle accuracy 38.85–44.07% and multiclass Brier 0.5669–0.6362. | Reopen original candle/sequence reports for method-specific results. Not evidence of a profitable option trade, and not the rolling five-year continuous predictor. |
 | Historical constituent/peer and regime alpha | Point-in-time breadth/dispersion/relative-volume, index-only vs matched bank/peer models, logistic/boosting, GMM/HMM forward regime work, 5/10/15/30/60m and near-close forecasts. | Existing tools and source gates; earlier dates not untouched. Prior 90-session context summary indicated volatility Brier modestly improved with banks (5m .63878 to .63175; 15m .63280 to .61733; 30m .58526 to .57943); directional lead/lag inconclusive. Reopen original report and confirm definitions. |
 | Mathematical option selection (banknifty-math, banknifty-sector, banknifty-capped) | Historical spot paths and BSM/IV scenarios, momentum vs reversal with peer confirmations, capped target utility, liquidity proxies, IV stress, optional logistic/ridge correction; flat INR 30/order in these specific v2 studies. | Implemented exploratory methods; exact run outcome not reverified here. No proof of +10% net target, true fills, exact historical lot or calibrated profit. Reuse reports, not new variants before P0. |
-| Rolling five-minute OHLC v1 | 60-minute causal features, last-close/range baseline, ridge/hist-gradient, bank/peer/options optional groups, 60/20/20 chronological sessions, stride-five fit, rolling assessment. | Implemented and previously studied shorter lookbacks. Exact selected model scores not reverified; extend 400-day cap safely, inspect saved metrics and original provenance. |
+| Rolling five-minute OHLC v1 / v2 core extension | 60-minute causal features, last-close/range baseline, ridge/hist-gradient, bank/peer/options optional groups, 60/20/20 chronological sessions, stride-five fit, rolling assessment. | Implemented and previously studied shorter lookbacks. Exact selected model scores not reverified; verify the new explicit long-history index-only mode and inspect saved metrics and original provenance. |
 | Multi-asset temporal sequence | CNN/GRU/Transformer, multiple lookbacks, OHLC/direction/tail/quantile losses and validation selection, 365-day run used 245 sessions, 29 missing evaluation membership dates. Prior validation-selected 15-minute-lookback Transformer motivated an optional convergence experiment (up to 20 epochs); 5m output target. | No claim of positive neural skill without original report. 120-minute common-support gate excludes early session; no repeated epoch tuning on known test. Core five-year forecast and early-session/multi-horizon support remain. |
 | Overnight global pilot | 30-day 6,575 bars; 90-day 18,178 bars, SPY/QQQ/EWY most liquid. | Keep existing collectors; official Asian cash/GIFT and five-year foreign intraday not mandatory for core. |
 | Pre-open global baseline, Nov 27 | 27 matched out-of-sample dates; combined worsened Brier and log loss for gap/15m/30m. Exact accuracy and result path in forecast section below. | No demonstrated incremental lift. Do not expand provider integrations merely because of this study. |
@@ -124,7 +192,7 @@ Use this ledger to avoid repeating research or confusing code existence with dem
 | Dynamic entry/exit and replay, prior Nov 26 summary | 61,352 ticks, 4,501 checkpoints, 15,653 qualified observations, 62 scored trades (6 winners/56 losers) reported; directional fixed 1m -₹1,760.19, 2m -₹1,515.13, 10m -₹1,141.62, adaptive -₹1,212.56; spread variants -₹147.43 to -₹242.47. | Prior report summary; confirm exact cohorts and cost model before reuse. No demonstrated replay edge, much less actual broker profit. Preserve rejection/censoring accounting. |
 | Original-depth forecast-to-option and adaptive paper | Predictive rolling CE/PE and debit spread research; forecast-depth original-book replay, calibrated logistic registry, forecast-adaptive exits, opt-in rolling research retraining. | Software exists, actual qualification/recorded prospective coverage and whole-account profitability not reverified. Earlier Nov 26 ledger was reported 0/60 because disabled; check current state before running a 60-session study. |
 
-**Research completion checklist:** Core rolling 5-year model [pending]; baseline skill & calibration across regimes [pending]; supported matched context lift [pending]; conditional premium/IV forecast [pending]; realistic ranked contract/entry selection [pending]; risk-controlled dynamic hold/exit [pending]; exact-book and fee/margin validation [pending]; forward shadow/paper acceptance [pending]; adaptive/RL only after simpler methods qualify [deferred]. Do not mark a row complete solely because a file, model ID, unit test or backtest report exists.
+**Research completion:** use the live task checklist below. A checked experiment means it was attempted and its result is recorded, not that it succeeded. A checked implementation is not an empirical acceptance claim.
 
 **Local evidence to recover before repeating an old experiment:** inspect results/ in the original checkout (not a clean clone): banknifty_data_preparation_b22fcb6817ba4c48ba76769b3c0bc107.json, candle_patterns_*.json, cpr_hybrid_*.json, trading_validation_*.json, previous OHLC/sequence JSON plus prediction CSV/checkpoints, global_open_baseline_2026-08-29_2026-11-27.json and intraday_selective_2026-06-01_2026-11-27.json. Retrieve the precise mathematical/sector/capped and execution screen report names from their CLI outputs rather than guess. Record hash, scope, split, selected method and metrics when an original report is actually reviewed.
 
@@ -276,13 +344,14 @@ Add --execute and a fresh output directory only when source prerequisites are ge
 
 ### Existing rolling forecast commands (reuse before adding anything)
 
+    bash run.sh banknifty-ohlc --index-only --days 1825 --to-date 2026-11-27 --ridge-only
     bash run.sh banknifty-ohlc --days 365 --wings 3
     bash run.sh banknifty-sequence --days 365 --wings 3 --epochs 6 --batch 96
     bash run.sh cross-index-research --sessions 90
     bash run.sh cross-index-research --list-sources
     bash run.sh candle-research --help
 
-Actual files: workstation_api/banknifty_candle_forecast.py, banknifty_forecast_features.py, banknifty_sequence_data.py, banknifty_sequence_models.py, banknifty_sequence_forecast.py, historical_alpha.py; CLI scripts/run_banknifty_candle_forecast.py and scripts/run_banknifty_sequence_forecast.py. Both existing OHLC and sequence run functions reject --days beyond 400; **do not instruct the user to pass 1825 until the implementation and tests support it**. This is the specific gap to address first.
+Actual files: workstation_api/banknifty_candle_forecast.py, banknifty_forecast_features.py, banknifty_sequence_data.py, banknifty_sequence_models.py, banknifty_sequence_forecast.py, historical_alpha.py; CLI scripts/run_banknifty_candle_forecast.py and scripts/run_banknifty_sequence_forecast.py. The OHLC runner now permits --days 1825 only with explicit --index-only (maximum 1,827); its normal contextual mode and the sequence runner retain the 400-day cap. The new regression tests and actual saved-data run remain to be verified. Do not increase context/sequence limits by assumption.
 
 Existing OHLC v1: every eligible minute forecasts next five complete minutes from previous 60 contiguous minutes. Encode OHLC relative to prior close with coherent nonnegative wick structure; index, bank, peer and option feature groups; optional context not fabricated. Whole-session 60/20/20 split; training stride five, assessment each eligible minute, day weighting. Last-close/range baselines, ridge, histogram gradient and direction models; training-only support/normalization, validation-only model selection, later metrics and CSV predictions. No global inputs in v1. Existing source loader bounded; inspect actual data volume before extending.
 

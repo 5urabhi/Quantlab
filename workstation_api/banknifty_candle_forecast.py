@@ -17,7 +17,9 @@ from . import historical_alpha as h, banknifty_forecast_features as f
 from . import cpr_hybrid_research as r, predictive_option_research as p
 from . import expired_options_backtest as exp
 
-VERSION="banknifty_ohlc_forecast_v1"
+VERSION="banknifty_ohlc_forecast_v2"
+MAX_CORE_DAYS=1827
+MAX_CONTEXT_DAYS=400
 TRAIN_STRIDE=5
 MIN_TRAIN_DAYS=40
 MIN_ASSESS_DAYS=15
@@ -38,12 +40,21 @@ def split_days(dates):
     return dates[:a],dates[a:b],dates[b:]
 
 
-def load_sources(start,stop,*,wings,progress=None):
+def load_sources(start,stop,*,wings,index_only=False,progress=None):
     if progress:progress("Verifying original BANKNIFTY index receipts")
     index,hashes,failures=h.shared_index_sources(start,stop,[h.MAX_TOTAL])
     index={d:f.dense(bars) for d,bars in sorted(index.items()) if start.isoformat()<=d<stop.isoformat() and date.fromisoformat(d).weekday()<5}
     dates=sorted(index)
     split_days(dates)
+    index_meta={"source_hashes":hashes,"failures":failures,"sessions":len(index),
+                "complete_regular_sessions":sum(f.daily_ohlc(a) is not None for a in index.values()),
+                "observed_minutes":sum(int(np.isfinite(a[:,3]).sum()) for a in index.values())}
+    if index_only:
+        # Preserve the same verified index loader and research clock. Do not
+        # open shorter constituent, peer or expired-option history at all.
+        return index,{},{},{},{},{},{"index":index_meta,
+            "banks":{"state":"disabled_index_only","membership_days":0,"source_hashes":{},"weighted_days":0},
+            "peers":{},"options":{"state":"disabled_index_only"}}
     stocks,membership,weights,banks=f.load_membership(dates,start,stop,progress)
     peers={};peer_meta={}
     for identity in f.PEERS:
@@ -65,18 +76,21 @@ def load_sources(start,stop,*,wings,progress=None):
             option_meta={**meta,"state":"loaded" if table else "unavailable","wings":wings}
         except (OSError,ValueError,RuntimeError,TypeError,KeyError) as exc:
             option_meta={"state":"unavailable","reason":str(exc)[:180],"wings":wings}
-    return index,stocks,membership,weights,peers,table,{"index":{"source_hashes":hashes,"failures":failures,
-               "sessions":len(index),"complete_regular_sessions":sum(f.daily_ohlc(a) is not None for a in index.values()),
-               "observed_minutes":sum(int(np.isfinite(a[:,3]).sum()) for a in index.values())},
+    return index,stocks,membership,weights,peers,table,{"index":index_meta,
                "banks":banks,"peers":peer_meta,"options":option_meta}
 
 
-def assemble(index,stocks,membership,weights,peers,table,*,progress=None):
+def assemble(index,stocks,membership,weights,peers,table,*,index_only=False,progress=None):
     dates=sorted(index);ids=sorted({v for x in membership.values() for v in x.values()})
     buffers={key:[] for key in ("index","banks","peers","options")}
     names={};availability={key:[] for key in ("banks","peers","options")}
     all_days=[];all_minutes=[];all_ref=[];all_y=[];all_real=[]
     prior_daily=[];coverage={};bank_scheduled=[];bank_closed=[]
+    # The long-history lane retains the existing core feature schema without
+    # accumulating hundreds of per-day matrices and then duplicating them
+    # with vstack. No bank/peer/option matrix is allocated in this lane.
+    index_matrix=None;index_count=0
+    max_rows=len(dates)*(f.MINUTES-f.HORIZON-f.LOOKBACK+1)
     for i,day in enumerate(dates):
         if progress and (i==0 or (i+1)%20==0 or i+1==len(dates)):
             progress(f"Building causal feature windows {i+1}/{len(dates)} {day}")
@@ -92,31 +106,51 @@ def assemble(index,stocks,membership,weights,peers,table,*,progress=None):
                                    np.full(len(minutes),(exp._nominal_selected_expiry(date.fromisoformat(day),0)-date.fromisoformat(day)).days)))
             ns+=("weekday","days_to_nominal_monthly_expiry")
             blocks={"index":(ns,np.column_stack((features[minutes],seq,extra)).astype(np.float32))}
-            members=set(membership.get(day,{}).values())
-            scheduled=f.scheduled_bank_counts(day,minutes,members)
+            if index_only:
+                scheduled=np.zeros(len(minutes),dtype=int)
+                members=set()
+                bok=pok=ook=np.zeros(len(minutes),dtype=bool)
+                # Zero-width placeholders retain reporting compatibility,
+                # not invented observations or missing context features.
+                for key in ("banks","peers","options"):
+                    blocks[key]=((),np.empty((len(minutes),0),dtype=np.float32))
+            else:
+                members=set(membership.get(day,{}).values())
+                scheduled=f.scheduled_bank_counts(day,minutes,members)
+                bn,bv,bok=f.banks_at(day,minutes,ids,stocks,members,weights.get(day),dates[:i],a[:,3])
+                pn,pv,pok=f.peers_at(day,minutes,peers,a[:,3])
+                ov=np.stack([f.option_at(table,day,int(m),a[m,3]) for m in minutes]).astype(np.float32)
+                ook=np.isfinite(ov[:,1])
+                blocks.update(banks=(bn,bv),peers=(pn,pv),options=(f.OPTION_NAMES,ov))
             bank_scheduled.extend((scheduled>0).tolist())
             bank_closed.extend(((scheduled==0)&bool(members)).tolist())
             coverage[day]["bank_scheduled_open_windows"]=int((scheduled>0).sum())
             coverage[day]["bank_scheduled_closed_windows"]=int(((scheduled==0)&bool(members)).sum())
-            bn,bv,bok=f.banks_at(day,minutes,ids,stocks,members,weights.get(day),dates[:i],a[:,3])
-            pn,pv,pok=f.peers_at(day,minutes,peers,a[:,3])
-            ov=np.stack([f.option_at(table,day,int(m),a[m,3]) for m in minutes]).astype(np.float32)
-            ook=np.isfinite(ov[:,1])
-            blocks.update(banks=(bn,bv),peers=(pn,pv),options=(f.OPTION_NAMES,ov))
             for key,(columns,values) in blocks.items():
                 if key in names and names[key]!=columns:raise ValueError("Feature schema changed across sessions")
                 names[key]=columns
                 values=np.asarray(values,dtype=np.float32);values[~np.isfinite(values)]=np.nan
-                buffers[key].append(values)
+                if index_only:
+                    if key=="index":
+                        if index_matrix is None:
+                            index_matrix=np.empty((max_rows,len(columns)),dtype=np.float32)
+                        end=index_count+len(minutes)
+                        if end>max_rows:raise ValueError("Index feature row bound exceeded")
+                        index_matrix[index_count:end]=values;index_count=end
+                else:
+                    buffers[key].append(values)
             for key,ok in (("banks",bok),("peers",pok),("options",ook)):
                 availability[key].append(ok);coverage[day][key+"_available_windows"]=int(ok.sum())
             all_days.extend([day]*len(minutes));all_minutes.extend(minutes.tolist())
             all_ref.extend(a[minutes,3].tolist());all_y.append(y);all_real.append(real)
         prior_daily.append(f.daily_ohlc(a))
     if not all_days:raise ValueError("No complete 60-minute input and next-five-minute target windows")
+    matrix=({"index":index_matrix[:index_count],
+             **{k:np.empty((index_count,0),dtype=np.float32) for k in ("banks","peers","options")}}
+            if index_only else {k:np.vstack(v) for k,v in buffers.items()})
     return {"days":np.asarray(all_days),"minutes":np.asarray(all_minutes,dtype=int),"ref":np.asarray(all_ref),
             "y":np.vstack(all_y),"actual":np.vstack(all_real),
-            "blocks":{k:np.vstack(v) for k,v in buffers.items()},"names":names,
+            "blocks":matrix,"names":names,
             "available":{k:np.concatenate(v) for k,v in availability.items()},"coverage":coverage,
             "bank_scheduled":np.asarray(bank_scheduled,dtype=bool),"bank_closed":np.asarray(bank_closed,dtype=bool)}
 
@@ -216,6 +250,7 @@ def direction_model(name,x,y,weights):
 
 
 def scope_matrix(data,groups):
+    if len(groups)==1:return data["blocks"][groups[0]]
     return np.column_stack([data["blocks"][g] for g in groups]).astype(np.float32,copy=False)
 
 
@@ -268,7 +303,7 @@ def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
             continue
         x=scope_matrix(data,available_groups);keep=select_columns(x,train)
         if not keep.any():continue
-        x=x[:,keep]
+        if not keep.all():x=x[:,keep]
         scope_record={"state":"assessed","groups":list(available_groups),"features_retained":int(keep.sum()),"models":{}}
         for algorithm in algorithms:
             if progress:progress(f"Fitting {scope} / {algorithm}, {int(train.sum())} nonoverlapping windows, {int(keep.sum())} features")
@@ -294,7 +329,8 @@ def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
         del x
     if best is None:raise ValueError("No supported supervised forecast model")
     _,scope,algorithm,groups,keep,fitted,vpred=best
-    x=scope_matrix(data,groups)[:,keep]
+    x=scope_matrix(data,groups)
+    if not keep.all():x=x[:,keep]
     tpred=decode(ref[test],predict_model(fitted,x[test]))
     val_score=_metrics(data,val,vpred);test_score=_metrics(data,test,tpred)
     matched=test.copy()
@@ -342,18 +378,21 @@ def assess(data,splits,*,algorithms=ALGORITHMS,progress=None):
     return result,predictions
 
 
-def run(*,days=365,to_date=None,wings=3,algorithms=ALGORITHMS,progress=None):
+def run(*,days=365,to_date=None,wings=3,index_only=False,algorithms=ALGORITHMS,progress=None):
     today=datetime.now(h.IST).date();stop=date.fromisoformat(to_date) if to_date else today
-    if type(days) is not int or not 120<=days<=400 or stop>today or (wings is not None and not 0<=wings<=10):
-        raise ValueError("Use 120-400 calendar days, completed dates, and 0-10 option wings")
+    maximum=MAX_CORE_DAYS if index_only else MAX_CONTEXT_DAYS
+    if type(days) is not int or not 120<=days<=maximum or stop>today or (wings is not None and not 0<=wings<=10):
+        raise ValueError(f"Use 120-{maximum} calendar days, completed dates, and 0-10 option wings; longer studies require --index-only")
     if not algorithms or len(set(algorithms))!=len(algorithms) or any(x not in ALGORITHMS for x in algorithms):raise ValueError("Invalid algorithms")
     start=stop-timedelta(days=days)
-    index,stocks,membership,weights,peers,table,meta=load_sources(start,stop,wings=wings,progress=progress)
+    index,stocks,membership,weights,peers,table,meta=load_sources(start,stop,wings=wings,index_only=index_only,progress=progress)
     dates=sorted(index);splits=split_days(dates)
-    data=assemble(index,stocks,membership,weights,peers,table,progress=progress)
+    data=assemble(index,stocks,membership,weights,peers,table,index_only=index_only,progress=progress)
     del index,stocks,membership,weights,peers,table
     result,predictions=assess(data,splits,algorithms=algorithms,progress=progress)
     report={"version":VERSION,"from_inclusive":start.isoformat(),"to_exclusive":stop.isoformat(),
+            "requested_calendar_days":days,"mode":"index_only" if index_only else "context_comparison",
+            "observed_date_span":[dates[0],dates[-1]],"core_feature_matrix_bytes":int(data["blocks"]["index"].nbytes),
             "lookback_minutes":f.LOOKBACK,"horizon_minutes":f.HORIZON,"training_stride_minutes":TRAIN_STRIDE,
             "training_dates":splits[0],"validation_dates":splits[1],"evaluation_dates":splits[2],
             "sources":meta,"feature_schema":{k:list(v) for k,v in data["names"].items()},"session_coverage":data["coverage"],
