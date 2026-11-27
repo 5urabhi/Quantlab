@@ -29,8 +29,8 @@ def main():
         start=date.fromisoformat(a.from_date) if a.from_date else stop-timedelta(days={60:100,90:150,120:200}[a.sessions])
         if not (a.first_passage or a.regimes) and (a.fixed_panel or a.context_mode!="off"):
             raise ValueError("Context ablations require --first-passage or --regimes")
-        if not 0<(stop-start).days<=MAX_STUDY_DAYS or stop>today or not alpha_retraining.safe_window(datetime.now(timezone.utc)):
-            raise ValueError("Use a completed range up to 200 days, outside Indian market priority hours")
+        if not 0<(stop-start).days<=MAX_STUDY_DAYS or stop>today:
+            raise ValueError("Use a completed range up to 200 days")
         index,hashes,failures=h.shared_index_sources(start,stop,[h.MAX_TOTAL])
         dates=[d for d in sorted(index) if start.isoformat()<=d<stop.isoformat() and date.fromisoformat(d).weekday()<5][-a.sessions:]
         if len(dates)<a.sessions:
