@@ -33,12 +33,13 @@ def _root() -> Path:
 
 
 def _candidates(identity: str) -> list[tuple[Path, Path, dict]]:
-    if identity not in INDEX_IDENTITIES:
+    if identity not in INDEX_IDENTITIES and identity not in index_spot.RESEARCH_INDEXES:
         raise ValueError("Unknown index identity")
     root = _root()
     if root.is_symlink() or not root.is_dir():
         return []
-    basename, _ = INDEX_IDENTITIES[identity]
+    basename = (INDEX_IDENTITIES[identity][0] if identity in INDEX_IDENTITIES
+                else index_spot.RESEARCH_INDEXES[identity][0])
     results: list[tuple[Path, Path, dict]] = []
     for folder in sorted(root.iterdir(), reverse=True):
         if not folder.is_dir() or folder.is_symlink() or not BATCH.fullmatch(folder.name):
