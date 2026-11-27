@@ -859,3 +859,19 @@ completion guarantee. Index and bank bars use audited known session
 counts and refresh after the respective audit. Detailed audit text is
 collapsed by default. Previously verified coverage remains visible
 during subsequent passes; no prediction model is promoted.
+
+
+### Automatic recovery from connection interruptions (v6)
+
+The automatic worker now distinguishes transient connection errors from
+authorization, invalid input, and rate-limit errors. Transient failures
+schedule bounded retries at 2, 4, 8, 16, and at most 30 minutes; successful
+receipt progress resets the consecutive zero-progress failure count.
+Existing authentication and provider rate-limit backoff stays in place.
+Legacy checkpoints with the exact known connection error become eligible
+after the initial two-minute delay. Verified request counters are
+published before option-provider preflight and retained on interruption;
+the progress card reports the actual pause reason and audit timestamp.
+Equity-session diagnostics now report how many original minutes each
+incomplete session contains, distinguishing missing days from partial
+days without fabricating candles.
