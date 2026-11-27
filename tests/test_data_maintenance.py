@@ -269,9 +269,12 @@ class MaintenanceTests(TestCase):
             result=m.run(now=self.now)
             self.assertTrue(result["transient_connection_failure"])
             self.assertEqual(m._state()["next_due_reason"],"connection_retry")
-        with patch.object(m,"_now",return_value=self.now),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value={"ok":False,"code":"auth_rejected"}):
+        with patch.object(m,"_now",return_value=self.now),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value={"ok":False,"code":"auth_rejected","message":"Dhan rejected this access token. Enter a fresh token."}):
             result=m.run(now=self.now)
             self.assertNotIn("transient_connection_failure",result)
+            self.assertEqual(result["profile_code"],"auth_rejected")
+            self.assertEqual(result["reason"],"Dhan rejected this access token. Enter a fresh token.")
+            self.assertEqual(m.status()["last_run"]["profile_code"],"auth_rejected")
             self.assertEqual(m._state()["next_due_reason"],"normal_backoff")
 
 
