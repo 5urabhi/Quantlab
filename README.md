@@ -94,19 +94,21 @@ Read this at the beginning of every task. Update this same checklist on each evi
 - [ ] Extend early-session coverage, explicit UP/DOWN/FLAT and movement/volatility/first-passage probability distribution (current horizon extension retains 60-minute input and binary up-vs-not-up label).
 - [ ] Validate out-of-sample directional and price skill, probability calibration and prospective stability before claiming a core model is usable.
 
-**Phase 2 — Incremental context (CURRENT NEXT EXPERIMENT)**
+**Phase 2 — Incremental context (domestic matched benchmark closed; no established incremental skill)**
 - [x] Implement bank, peer-index, options, volatility and global context inputs and original provenance.
 - [x] Attempt historical constituent/peer/volatility and fixed-time global/post-open baselines; no demonstrated robust trading edge.
 - [ ] Verify original local reports and dated membership/weights; compare matched causal feature ablations without shrinking the core history.
-- [x] Implement separate matched five-minute bank, peer and rolling-option context ablations using existing source loaders, fixed ridge/logistic models, per-lane supported-session chronological split, equal training/evaluation anchors, adaptive comparator and validation-only sigmoid calibration. New tests and local run pending.
-- [ ] Pass matched-context regression tests and attempt all supported lanes; record paired raw/calibrated Brier and OHLC/range losses versus identical index cohort and simple comparator. Explicitly report insufficient support.
-- [ ] Evaluate calibrated combination/fallback only if matched context demonstrates useful incremental evidence; reserve new sessions for prospective confirmation.
+- [x] Implement separate matched five-minute bank, peer and rolling-option context ablations using existing source loaders, fixed ridge/logistic models, per-lane supported-session chronological split, equal training/evaluation anchors, adaptive comparator and validation-only sigmoid calibration. All three lanes ran on 7ab3125; 16/16 tests and both CI workflows passed.
+- [x] Pass matched-context regression tests and attempt all three lanes. All failed to establish incremental forecast skill; see experiment ledger. Calibration improved raw Brier but did not establish context lift.
+- [ ] Evaluate calibrated combination/fallback only if useful incremental evidence is later demonstrated (deferred after negative matched study); reserve new sessions for prospective confirmation.
 
-**Phase 3 — Option response**
+**Phase 3 — Option response (CURRENT NEXT EXPERIMENT)**
 - [x] Implement original rolling option history, theoretical Greeks/IV and BSM scenarios; existing predictive_option_research and forecast_depth_research.
 - [x] Attempt mathematical premium-target, sector-confirmed, capped utility and supervised correction research.
 - [ ] Audit actual local option coverage, price/IV/OI/volume and exact contract identity vs rolling family.
-- [ ] Fit and evaluate premium/IV response distributions conditional on frozen underlying predictions; compare simple baselines and calibrate uncertainty without future option information.
+- [x] Implement fixed direct rolling monthly premium-response benchmark using original receipt loaders, delayed five-minute open-to-open labels, option-only and option-plus-index ridge/logistic, no-change and historical bucket baselines, validation-only sigmoid calibration and matched day-block diagnostics. Implementation committed; tests and run pending.
+- [ ] Pass premium-response tests and run on saved 365-day range, document coverage, unresolved outcomes and paired premium/probability scores. No executable net P&L claim.
+- [ ] Fit and evaluate premium/IV response distributions conditional on supported underlying predictions; compare simple baselines and calibrate uncertainty without future option information. IV forecasts, first-passage, exact contract and execution evidence remain pending.
 
 **Phase 4 — Contract and entry decision**
 - [x] Implement option-chain inspection, liquidity/stress ranking, modeled fees, funding/whole-lot selection and separate spread scanner.
@@ -134,10 +136,10 @@ Read this at the beginning of every task. Update this same checklist on each evi
 
 **Current next command (after pulling latest branch changes):**
 
-    .venv/bin/python -m unittest discover -s tests -p 'test_banknifty_candle_forecast.py' -v
-    bash run.sh banknifty-ohlc --matched-context --days 365 --to-date 2026-11-27 --wings 3
+    .venv/bin/python -m unittest discover -s tests -p 'test_option_response_benchmark.py' -v
+    nice -n 15 ionice -c 3 .venv/bin/python -m scripts.benchmark_option_response --days 365 --to-date 2026-11-27
 
-Run off-hours with existing saved data. Stop adding index-only model families: all six fixed-horizon benchmarks failed relative to stronger simple comparators. This next fixed five-minute study tests incremental domestic information using existing banks/peers/rolling-options feature loaders. Each lane uses only its own supported sessions (at least 20 rolling labeled windows and four nonoverlapping fit anchors per session; at least 75 supported dates), split chronologically 60/20/20. Matched index and index-plus-context ridge/logistic models train on identical nonoverlapping windows and evaluate on identical rolling windows; source availability is the existing feature-group gate, not all individual features present. Compare also the training-only volatility-adaptive range and constant-prior direction. Fit fixed sigmoid calibration on validation only, report evaluation raw/calibrated probability and five-session paired loss intervals. No new data download, model search, combined lane, live promotion, or options P&L. Every lane may be unsupported; do not relax the support gate after seeing results. Different lane date ranges are not comparable without matching; previously examined dates are exploratory. Keep first-hour, meaningful flat/first-passage targets, actual peak RAM, complete provenance and independent prospective acceptance unchecked. This prioritization tests whether additional information exists before expanding targets or architectures.
+The index-only and domestic context directional/OHLC benchmarks are completed with negative results. Do not keep changing underlying model families or fit a combined model after failed ablations. Proceed to Phase 3, because the final target is option decisions: this exploratory fixed benchmark directly forecasts observed future premium response, not a new strategy grid. Reuse the original rolling monthly family (ATM +/-3 receipt offsets), observed BANKNIFTY price history and same-strike positive-volume bars. Every aligned five minutes after 60 completed minutes, choose at most three closest observed strikes per CE/PE using only signal-time data, premium >=5 and within 2% of spot. Decision after completed bar, one whole minute delay, entry/exit reference opens five minutes apart; no cross-session outcomes. Score terminal premium and delayed gross change (both normalized by known signal premium), and probability of positive gross change. Fixed option-only and option-plus-index ridge/logistic on identical scored candidates, no-change and fixed training-only side/moneyness/clock historical median/prior comparators. Validation-only sigmoid, paired observed-day bootstrap, no test-based tuning. Chronologically reserve all observed index dates 60/20/20 before option availability filtering; at least 40/15/15 scored sessions. Preserve missing entry/exit counts and unresolved evaluation candidates. Conditional observed bars are not broker fills or exact contract IDs. No fees, net P&L, ranking, actual entry recommendation or IV outcome yet. Do not interpret positive gross-change probability as profit. First-hour support, explicit flat/first-passage, actual peak RAM and prospective acceptance remain open. No new downloads, paid data, orders or deployment.
 
 ### End-to-end option decision research roadmap
 
@@ -450,9 +452,27 @@ Local report stems under results/ (each has .json and _predictions.csv):
 
 Core matrix sizes 420,264,180 to 517,514,284 bytes; no peak RSS measurement. These are user-reported console results, not independently hashed local files. Next study uses existing contextual data with matched shorter cohorts rather than pretend five-year options/depth coverage.
 
-### Matched domestic context ablation (implementation, empirical run pending)
+### Matched domestic context ablation (completed, negative)
 
-One explicit --matched-context mode in the existing OHLC runner, fixed 5m and 365 requested days. Independent banks, peers and options lanes; use source-specific supported dates and minimum gates declared in the current command above. Compare identical paired fitting, validation and evaluation rows, same model family and training-derived columns, constant prior and adaptive range. Validation-only sigmoid uses raw logit and fixed regularization; raw and calibrated scores reported, no guarantee of calibration or usefulness. Existing bank membership, peer, and rolling option feature gates retained; missing values remain explicit with training-only imputation. Exact receipt/expiry and global/depth features remain separate tasks. Save complete lane-specific dates, metrics, pairs and source provenance in banknifty_matched_context_*.json and a single corresponding prediction CSV (absent if no lane supports the experiment). New code tests pending; do not claim context lift until the actual result.
+One explicit --matched-context mode in the existing OHLC runner, fixed 5m and 365 requested days. Independent banks, peers and options lanes; use source-specific supported dates and minimum gates declared in the current command above. Compare identical paired fitting, validation and evaluation rows, same model family and training-derived columns, constant prior and adaptive range. Validation-only sigmoid uses raw logit and fixed regularization; raw and calibrated scores reported, no guarantee of calibration or usefulness. Existing bank membership, peer, and rolling option feature gates retained; missing values remain explicit with training-only imputation. Exact receipt/expiry and global/depth features remain separate tasks. Save complete lane-specific dates, metrics, pairs and source provenance in banknifty_matched_context_*.json and a single corresponding prediction CSV (absent if no lane supports the experiment). All 16 local tests and both full software CI workflows passed at 7ab3125. Actual results below.
+
+### Matched domestic context results (November 27, 2026)
+
+Operator run on 7ab31254080598c0bea64ccafb4d8fd8e4ed39f6: 16/16 local tests passed (0.389 s); both GitHub CI workflows succeeded. Requested 365 days; 245 observed index sessions 2025-11-27 through 2026-11-26, 216 dated membership days, 14 original bank-stock sources, zero dated weight snapshots; all ten peer indices have 245 observed sessions. Options group available on 243 supported sessions; this is a group feature-availability gate, not 243 days of complete exact option chains or bid/ask, and supersedes the earlier 90-session *narrower-scope* audit only for this feature gate. Core feature matrix 104,539,540 bytes; peak RSS unmeasured.
+
+| Lane | Supported sessions | Fit / validation / evaluation rows | Evaluation days | Index / context / adaptive OHLC relative MAE (%) | Prior / index / context raw Brier | Index / context calibrated Brier |
+| --- | ---: | --- | ---: | --- | --- | --- |
+| Banks | 216 | 8127 / 13313 / 13244 | 44 | 0.02664844 / 0.02786604 / 0.02609019 | 0.25002313 / 0.25289228 / 0.26750450 | 0.24971911 / 0.24971891 |
+| Peers | 245 | 9261 / 15239 / 15239 | 49 | 0.03525742 / 0.03542020 / 0.03452721 | 0.24999520 / 0.25460449 / 0.25625485 | 0.25016523 / 0.25010883 |
+| Options | 243 | 9134 / 15239 / 15239 | 49 | 0.03468216 / 0.03475842 / 0.03399143 | 0.24999793 / 0.25435461 / 0.25507269 | 0.25021686 / 0.25018453 |
+
+All three context models have worse OHLC error than the adaptive comparator (positive paired block intervals). Banks improve range MAE against index ML by 1.79384 points (95% descriptive block interval -2.39852 to -1.25412), but are worse than adaptive by 1.88777 points; peers and options are worse than adaptive by 6.77543 and 6.66471 points. Calibrated context-minus-index Brier differences respectively -0.00000020, -0.00005640, -0.00003233; all paired descriptive 95% intervals include zero. Banks calibrated Brier beats the training prior by 0.00030422, but the matched index-only calibrated model achieves essentially the same value. Calibration reduces raw probability loss; this does not establish incremental signal or certify calibration on new sessions. None establishes a useful underlying-direction edge. Do not select a combined model, expand providers or repeat these tests without a new research hypothesis. Different lanes have different dates; cannot pool rows. Earlier examined dates remain exploratory.
+
+Local files: results/banknifty_matched_context_622f6bfc383c4b34bd5c9a521571a57a.json and results/banknifty_matched_context_622f6bfc383c4b34bd5c9a521571a57a_predictions.csv. Console evidence only; original file hashes and full local source reconciliation remain unchecked.
+
+### Direct option premium response (implementation, run pending)
+
+Fixed protocol and command above; scripts/benchmark_option_response.py reuses verified index and rolling option loaders and existing numerical models, not a new live engine. Conditional premium movement outcomes, option-only vs option-plus-index, no-change and training-only historical bucket baselines, complete evaluation candidate state accounting. Existing Greeks/scenario and historical option research are retained. No assumption that underlying forecasts are reliable, no exact contract, actual IV response target, order execution or strategy profitability claim. New tests and empirical run remain pending.
 
 ### Global and fixed-time experiments (November 27, exploratory)
 
