@@ -41,6 +41,7 @@ SOURCES = {
     "sector_history": ("Dated sector classifications", "classifications", "Effective date", "Canonical SQLite", "Effective-dated source classifications"),
     "active_option_history": ("Contract-specific option history", "returned timestamp rows", "Observation time (UTC)", "Original Dhan intraday receipts", "Exact NSE_FNO security IDs captured while listed; strike, expiry and lot require archived instrument evidence; receipt ranges may overlap"),
     "expired_options": ("Expired option history", "returned timestamp rows", "Observation time (UTC)", "Original rolling-option receipts", "Rolling strike-offset responses; may overlap and include unusable prices"),
+    "global_market_bars": ("Global market CFD proxy bars", "candles", "Bar start UTC", "Canonical SQLite", "Authorized JForex exports; CFD BID OHLCV, not official cash indices"),
     "market_context": ("Cross-market factor observations", "observations", "Source availability time (UTC)", "Canonical SQLite", "Reviewed imports and automatic provider receipts; revisions may coexist"),
     "market_event_receipts": ("Macro calendar & news receipts", "source snapshots", "Receipt time (UTC)", "Canonical SQLite", "Official feed snapshots, not individual independent news events"),
     "market_news": ("Official announcement observations", "headlines", "First receipt time (UTC)", "Canonical SQLite", "First observed official announcement identities, not a complete news universe"),
@@ -50,6 +51,7 @@ SOURCES = {
 # SQL is fixed and internal. Payload columns (book_json, normalized_json,
 # feature_json) are never read by inventory SQL.
 SQL = {
+    "global_market_bars": ("global_market_bars", "identity", "bar_start_utc", "", "resolution"),
     "market_context": ("market_context_observations", "factor", "available_utc", "", ""),
     "market_event_receipts": ("market_event_receipts", "source", "received_utc", "", ""),
     "market_news": ("market_news_observations", "source", "first_received_utc", "", ""),
@@ -438,6 +440,7 @@ def inventory(source="all",query="",page=1,per_page=50,refresh=False):
 # Fixed, small scalar record previews. No credentials, original JSON payloads
 # or raw file paths. Full depth and chain payloads remain in Trading / Replay.
 RECORD_COLUMNS = {
+    "global_market_bars": ("bar_start_utc","bar_end_utc","identity","resolution","open","high","low","close","volume","receipt_known_utc","archive_known_utc","receipt_sha256"),
     "market_context": ("available_utc","factor","event_utc","value","receipt_sha256"),
     "market_event_receipts": ("received_utc","source","sha256"),
     "market_news": ("first_received_utc","source","published_utc","event_id","title","topic","link"),
