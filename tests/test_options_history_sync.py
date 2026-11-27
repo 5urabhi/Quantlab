@@ -108,5 +108,93 @@ class OptionsHistorySyncTests(unittest.TestCase):
         self.assertIsNone(exp._get_cached(calls[1]))
 
 
+    def test_scope_progress_counts_distinct_pairs_and_not_rejected_attempts(self):
+        args=dict(start_date="2026-10-01",end_date="2026-10-05",wings=0,today=self.today)
+        snapshots=[]
+        def fetch(body):
+            if body["drvOptionType"]=="CALL":
+                raise exp.RollingInputError("DH-905")
+            return {"data":{}}
+        result=sync.run(**args,fetcher=fetch,on_counts=snapshots.append,request_limit=3)
+        self.assertEqual(result["eligible_offset_date_pairs"],10)
+        self.assertEqual(snapshots[0]["checked_offset_date_pairs"],0)
+        self.assertEqual(result["batch_attempted"],3)
+        self.assertEqual(result["remaining_planned_requests"],result["planned_missing_requests"]-result["batch_completed"])
+        self.assertLess(result["checked_offset_date_pairs"],10)
+        self.assertTrue(all(a["checked_offset_date_pairs"]<=b["checked_offset_date_pairs"] for a,b in zip(snapshots,snapshots[1:])))
+        self.assertEqual(result["missing_offset_date_pairs"]+result["checked_offset_date_pairs"],10)
+        final=sync.run(**args,fetcher=lambda _:{"data":{}})
+        self.assertEqual(final["checked_offset_date_pairs"],10)
+        self.assertEqual(final["remaining_planned_requests"],0)
+        self.assertFalse(final["continuous_coverage_certified"])
+
+    def test_observed_minute_coverage_is_not_request_coverage(self):
+        day="2026-10-01"
+        stamp=datetime(2026,10,1,4,0,tzinfo=timezone.utc).timestamp()
+        def fetch(body):
+            if body["drvOptionType"]=="PUT":
+                return {"data":{}}
+            return {"data":{"ce":{"timestamp":[stamp],"open":[10],"high":[11],"low":[9],
+                                   "close":[10],"strike":[60000],"volume":[0]}}}
+        args=dict(start_date=day,end_date="2026-10-02",wings=0,today=self.today,priority_sessions=[day])
+        first=sync.run(**args,fetcher=fetch)
+        second=sync.run(**args,fetcher=lambda _:self.fail("unexpected request"))
+        for report in (first,second):
+            self.assertEqual(report["checked_offset_date_pairs"],4)
+            self.assertEqual(report["known_expected_minute_slots"],750)
+            self.assertEqual(report["known_observed_minute_slots"],1)
+            self.assertEqual(report["known_market_dates"],1)
+            self.assertFalse(report["continuous_coverage_certified"])
+
+    def test_unchanged_receipts_skip_reparse_but_changed_and_deleted_revalidate(self):
+        args=dict(start_date="2026-10-01",end_date="2026-10-02",wings=0,today=self.today)
+        sync.run(**args,fetcher=lambda _:{"data":{}})
+        with patch.object(sync,"_verified_summary",wraps=sync._verified_summary) as parse:
+            sync.run(**args,fetcher=lambda _:self.fail("unexpected request"))
+            self.assertEqual(parse.call_count,2)
+            parse.reset_mock()
+            result=sync.run(**args,fetcher=lambda _:self.fail("unexpected request"))
+            self.assertEqual(parse.call_count,0)
+            self.assertEqual(result["checked_offset_date_pairs"],4)
+            body=exp._request_body(date(2026,10,1),date(2026,10,2),"MONTH",0,"ATM","CALL")
+            path=exp._cache_path(body)
+            path.write_text("corrupt",encoding="utf-8")
+            cover,reused,rejected=sync._saved_windows(date(2026,10,1),date(2026,10,3),0)
+            self.assertEqual((reused,rejected),(1,1))
+            self.assertEqual(parse.call_count,1)
+            self.assertNotIn(("CALL","ATM"),cover)
+            path.unlink()
+            result=sync.run(**args,fetcher=lambda _:{"data":{}})
+            self.assertEqual(result["new_receipts"],1)
+            self.assertEqual(result["checked_offset_date_pairs"],4)
+
+
+    def test_profile_disconnect_keeps_verified_progress_before_provider_request(self):
+        day="2026-10-01"
+        body=exp._request_body(date(2026,10,1),date(2026,10,2),"MONTH",0,"ATM","CALL")
+        exp._save_cache(body,{"data":{}})
+        seen=[]
+        with patch.object(sync.dhan_auth,"check_profile",return_value={"ok":False,"code":"profile_unreachable"}),patch.object(exp,"_original_response_once") as request:
+            with self.assertRaises(exp.RollingConnectionError):
+                sync.run(start_date=day,end_date="2026-10-02",wings=0,today=self.today,on_counts=seen.append)
+            request.assert_not_called()
+        self.assertEqual(seen[-1]["checked_offset_date_pairs"],2)
+        self.assertEqual(seen[-1]["eligible_offset_date_pairs"],4)
+        self.assertEqual(seen[-1]["remaining_planned_requests"],1)
+
+
+    def test_provider_retry_after_is_respected(self):
+        from urllib.error import HTTPError
+        from io import BytesIO
+        body=exp._request_body(date(2026,10,1),date(2026,10,2),"MONTH",0,"ATM","CALL")
+        def opener(*args,**kwargs):
+            raise HTTPError(exp.ENDPOINT,429,"rate limit",{"Retry-After":"1800"},BytesIO(b""))
+        with patch.dict(exp.os.environ,{"DHAN_ACCESS_TOKEN":"fixture-token"}):
+            with self.assertRaises(exp.RollingRateLimitError) as err:
+                exp._original_response_once(body,opener=opener)
+        self.assertEqual(err.exception.retry_after_seconds,1800)
+        self.assertEqual(exp._retry_after_seconds({"Retry-After":"invalid"}),0)
+
+
 if __name__=="__main__":
     unittest.main()

@@ -19,24 +19,28 @@ from . import (service, market_patterns as mp, cockpit_sources, dhan_workspace a
 IST=ZoneInfo("Asia/Kolkata")
 DEFAULT={"enabled":False,"index":True,"constituents":True,"options":True,"bank_panel":False,
          "index_days":365,"constituent_days":240,"option_days":365,"wings":3}
-VERSION="automatic_market_library_v4"
+VERSION="automatic_market_library_v7"
 INDEX_IDENTITIES=("INDEX:BANKNIFTY","INDEX:NIFTY50")
 MAX_INDEX_WINDOWS=5
-MAX_OPTION_REQUESTS=112
+MAX_OPTION_REQUESTS=440
 MAX_EQUITY_REPAIRS=2
 LIVE_INDEX_WINDOWS=1
-LIVE_OPTION_REQUESTS=32
+LIVE_OPTION_REQUESTS=64
 LIVE_EQUITY_REPAIRS=1
 LIVE_RECORDER_DROP_COOLDOWN=timedelta(minutes=2)
 LIVE_QUOTE_QUEUE_FRACTION=.10
 REPAIR_COOLDOWN=timedelta(days=7)
-RETRY=timedelta(hours=4)
-PRODUCTIVE_RETRY=timedelta(minutes=2)
+RETRY=timedelta(minutes=5)
+RATE_LIMIT_RETRY=timedelta(minutes=15)
+PRODUCTIVE_RETRY=timedelta(seconds=30)
+PRESSURE_RETRY=timedelta(minutes=2)
+CONNECTION_RETRY_MINUTES=(2,4,8,16,30)
 CHECKED_RETRY=timedelta(hours=24)
 LOCK=RLock()
 STOP=Event()
 WAKE=Event()
 THREAD=None
+OPTION_PROGRESS=None
 
 def _now():
     return datetime.now(timezone.utc)
@@ -110,9 +114,18 @@ def configure(cfg,confirm):
         _write("config",cfg)
         state=_state()
         if old!=cfg:
-            state["next_due_utc"]=None
-            state["next_due_reason"]="configuration_changed"
+            due,reason=_effective_schedule(state)
+            if reason=="provider_rate_limit" and due and datetime.fromisoformat(due)>_now():
+                state["next_due_utc"]=due
+                state["next_due_reason"]=reason
+                state["schedule_version"]=7
+            else:
+                state["next_due_utc"]=None
+                state["next_due_reason"]="configuration_changed"
             state["target"]=None
+            state.pop("coverage_sources",None)
+            state.pop("coverage_config",None)
+            state.pop("connection_failure_count",None)
             _write("state",state)
     # Transfer the old index-only policy to this one master control.
     if cfg["enabled"]:
@@ -173,23 +186,54 @@ def _target(now):
     stop,option_end=target_dates(now)
     return {"end_exclusive":stop.isoformat(),"option_through":option_end.isoformat()}
 
+def _rate_limit_message(value):
+    text=str(value or "").lower()
+    return ("rate-limit" in text or "rate limit" in text or "http 429" in text
+            or "(429)" in text or "dh-904" in text or "too many requests" in text
+            or text.strip() in ("429","805"))
+
+
+def _effective_schedule(state):
+    """Apply the shorter policy to old saved checkpoints on startup.
+    Do not shorten an explicit provider cooldown already recorded by v7.
+    """
+    due=state.get("next_due_utc")
+    reason=state.get("next_due_reason")
+    last=state.get("last_run") or {}
+    if not due or state.get("schedule_version")==7:
+        return due,reason
+    finished=last.get("finished_utc")
+    if not finished:
+        if reason=="pass_running" and last.get("started_utc"):
+            return min(datetime.fromisoformat(due),datetime.fromisoformat(last["started_utc"])+RETRY).isoformat(),reason
+        return due,reason
+    old_option=last.get("sources",{}).get("options",{})
+    if old_option.get("reason")=="Dhan expired-options data connection unavailable; check local network":
+        last={**last,"transient_connection_failure":True}
+    if last.get("state") not in ("partial","blocked","paused","interrupted","checked"):
+        return due,reason
+    delay,new_reason=_next_schedule(last)
+    revised=datetime.fromisoformat(finished)+delay
+    original=datetime.fromisoformat(due)
+    return (revised.isoformat(),new_reason) if revised<original else (due,reason)
+
+
 def _due(cfg,state,now):
     if not cfg["enabled"]:
         return False
-    if state.get("target")!=_target(now):
-        return True
     try:
-        due=state.get("next_due_utc")
-        # Upgrade an old productive checkpoint without requiring the user
-        # to press Check or wait for its previous four-hour schedule.
-        last=state.get("last_run") or {}
-        if due and not state.get("next_due_reason") and last.get("finished_utc") and last.get("state")=="partial":
-            delay,_=_next_schedule(last)
-            if delay==PRODUCTIVE_RETRY:
-                due=min(datetime.fromisoformat(due),datetime.fromisoformat(last["finished_utc"])+delay).isoformat()
+        due,reason=_effective_schedule(state)
+        if reason=="provider_rate_limit" and due and datetime.fromisoformat(due)>now:
+            return False
+        if state.get("target")!=_target(now):
+            return True
         return not due or datetime.fromisoformat(due)<=now
     except (ValueError,TypeError):
         return True
+
+def _connection_delay(failures):
+    return timedelta(minutes=CONNECTION_RETRY_MINUTES[min(len(CONNECTION_RETRY_MINUTES)-1,max(0,failures-1))])
+
 
 def _next_schedule(report):
     """Only accelerate bounded batches that made progress and have more work.
@@ -197,16 +241,28 @@ def _next_schedule(report):
     retain normal backoff; never bypass the market or storage guard.
     """
     state=report["state"]
+    sources=report.get("sources",{})
+    lanes=[*sources.get("index",{}).values(),*(v for k,v in sources.items() if k!="index")]
+    if report.get("provider_rate_limited") or any(v.get("provider_rate_limited") or _rate_limit_message(v.get("reason")) for v in lanes) or _rate_limit_message(report.get("reason")):
+        seconds=max(RATE_LIMIT_RETRY.total_seconds(),report.get("provider_retry_after_seconds",0) or 0)
+        return timedelta(seconds=seconds),"provider_rate_limit"
     if state=="checked":
         return CHECKED_RETRY,"all_authorized_scopes_checked"
     if state=="paused" and report.get("pause_reason","").startswith(("live_","recent_live_","market_priority_transition")):
-        return PRODUCTIVE_RETRY,"live_recording_priority"
+        return PRESSURE_RETRY,"live_recording_priority"
+    if state=="blocked" and report.get("transient_connection_failure"):
+        return _connection_delay(report.get("connection_failure_count",1)),"connection_retry"
     if state!="partial":
         return RETRY,"normal_backoff"
     sources=report.get("sources",{})
     index=list(sources.get("index",{}).values())
     equity=[sources[k] for k in ("constituents","bank_panel") if k in sources]
     option=sources.get("options",{})
+    if report.get("transient_connection_failure") and not (
+        any(v.get("state") in ("blocked","paused") or v.get("failed_windows",0) or v.get("rejected_receipts",0) or v.get("omitted_receipts",0) for v in index)
+        or any(v.get("state") in ("blocked","paused") or v.get("batch_errors") or v.get("unavailable_sources",0) or v.get("unresolved") or v.get("batch_status") not in (None,"completed") for v in equity)
+        or option.get("rejected_windows",0) or option.get("unreadable_receipts_encountered",0)):
+        return _connection_delay(report.get("connection_failure_count",1)),"connection_retry"
     if any(v.get("state") in ("blocked","paused") for v in [*index,*equity,option]):
         return RETRY,"source_blocked_or_paused"
     if (any(v.get("failed_windows",0) or v.get("rejected_receipts",0) or v.get("omitted_receipts",0) for v in index)
@@ -227,12 +283,23 @@ def status():
     try:
         with LOCK:
             cfg=config();state=_state()
+            active_counts=dict(OPTION_PROGRESS) if OPTION_PROGRESS is not None else None
         error=None
     except (OSError,ValueError,TypeError):
-        cfg=dict(DEFAULT);state={};error="Maintenance configuration or checkpoint unreadable"
+        cfg=dict(DEFAULT);state={};active_counts=None;error="Maintenance configuration or checkpoint unreadable"
     now=_now()
-    return {"version":VERSION,"config":cfg,"last_run":state.get("last_run"),"target":_target(now),
-            "next_due_utc":state.get("next_due_utc"),"next_due_reason":state.get("next_due_reason"),"batch_id":state.get("batch_id"),
+    last=state.get("last_run") or {}
+    same_scope=state.get("coverage_config")==cfg
+    coverage=state.get("coverage_sources",{}) if same_scope else {}
+    # Retain last verified source audit while another pass is in progress.
+    sources={**coverage,**last.get("sources",{})} if same_scope or not state.get("coverage_config") else {}
+    try:
+        due_at,due_reason=_effective_schedule(state)
+    except (ValueError,TypeError):
+        due_at,due_reason=state.get("next_due_utc"),state.get("next_due_reason")
+    return {"version":VERSION,"coverage_sources":sources,"option_progress":active_counts if cfg["enabled"] and last.get("state")=="running" else None,"config":cfg,"last_run":state.get("last_run"),"target":_target(now),
+            "next_due_utc":due_at,"next_due_reason":due_reason,
+            "connection_failure_count":state.get("connection_failure_count",0),"batch_id":state.get("batch_id"),
             "safe_window":safe_window(now),"backfill_mode":"standard" if safe_window(now) else "live_priority",
             "live_pressure":live_pressure(now) if cfg["enabled"] else None,
             "worker_running":bool(THREAD and THREAD.is_alive()),
@@ -240,7 +307,7 @@ def status():
             "limits":{"option_requests_per_pass":MAX_OPTION_REQUESTS,"equity_repairs_per_instrument":MAX_EQUITY_REPAIRS,
                       "live_option_requests_per_pass":LIVE_OPTION_REQUESTS,"live_equity_repairs_per_instrument":LIVE_EQUITY_REPAIRS,
                       "live_index_windows_per_instrument":LIVE_INDEX_WINDOWS,
-                      "productive_retry_seconds":int(PRODUCTIVE_RETRY.total_seconds()),"normal_retry_seconds":int(RETRY.total_seconds())},
+                      "productive_retry_seconds":int(PRODUCTIVE_RETRY.total_seconds()),"live_pressure_retry_seconds":int(PRESSURE_RETRY.total_seconds()),"normal_retry_seconds":int(RETRY.total_seconds()),"rate_limit_retry_seconds":int(RATE_LIMIT_RETRY.total_seconds())},
             "note":"Runs while the backend is open, including during Indian market hours with smaller batches and live-recorder pressure checks. In-flight requests may finish before a pause. Verified request coverage is not proof of every minute. Global feeds, approved report deliveries and live capture retain their own source permissions. Historical missed ticks/books, unknown membership, unavailable provider history and missing dated weights cannot be fabricated."}
 
 def request_check():
@@ -248,6 +315,9 @@ def request_check():
         raise ValueError("Enable and authorize automatic maintenance first")
     with LOCK:
         state=_state()
+        due,reason=_effective_schedule(state)
+        if reason=="provider_rate_limit" and due and datetime.fromisoformat(due)>_now():
+            return status()
         state["next_due_utc"]=None
         state["next_due_reason"]="manual_check_requested"
         _write("state",state)
@@ -290,20 +360,24 @@ def _index_pass(cfg,state,now,stop,progress,should_stop):
     start=today-timedelta(days=cfg["index_days"])
     sources={k:mp._history(k,today) for k in INDEX_IDENTITIES}
     result={}
+    provider_rate_limited=False
     for i,identity in enumerate(INDEX_IDENTITIES):
         source=sources[identity];other=sources[INDEX_IDENTITIES[1-i]]
         plan,missing=_index_plan(source,other,start,stop,identity,state,now,
                                  limit=MAX_INDEX_WINDOWS if safe_window(now) else LIVE_INDEX_WINDOWS)
         errors=0;downloaded=0
         for a,b,key in plan:
-            if should_stop():break
-            if key:_mark(state,key,_now())
+            if provider_rate_limited or should_stop():break
             if progress:progress(5+i*10,"Updating original "+identity+" history "+a.isoformat())
             try:
                 cockpit_sources.download_spot(identity,a.isoformat(),b.isoformat())
                 downloaded+=1
-            except (ValueError,OSError,RuntimeError):
+            except (ValueError,OSError,RuntimeError) as exc:
                 errors+=1
+                if _rate_limit_message(exc):
+                    provider_rate_limited=True
+                    break
+            if key:_mark(state,key,_now())
             with mp.LOCK:
                 mp.CACHE.pop(identity,None)
         final=mp._history(identity,today)
@@ -314,11 +388,12 @@ def _index_pass(cfg,state,now,stop,progress,should_stop):
         uncovered=mp.missing_windows(start,stop,final["coverage"])
         uncovered=[(a,b) for a,b in uncovered if any((a+timedelta(days=i)).weekday()<5 for i in range((b-a).days))]
         missing_observed=sum(not final["days"].get(d) for d in missing)
-        result[identity]={"state":"partial" if errors or uncovered or partial or missing_observed or final["rejected_receipts"] or final["omitted_receipts"] else "checked",
+        result[identity]={"state":"partial" if provider_rate_limited or errors or uncovered or partial or missing_observed or final["rejected_receipts"] or final["omitted_receipts"] else "checked",
                           "complete_observed_sessions":complete,"partial_observed_sessions":partial,
                           "uncovered_request_windows":len(uncovered),"missing_other_index_observed_sessions":missing_observed,
                           "rejected_receipts":final["rejected_receipts"],"omitted_receipts":final["omitted_receipts"],
-                          "downloaded_windows":downloaded,"failed_windows":errors}
+                          "downloaded_windows":downloaded,"failed_windows":errors,
+                          "provider_rate_limited":provider_rate_limited}
     return result
 
 def _batch_for(state,start,stop,plan):
@@ -360,8 +435,15 @@ def _equity_audit(raw,start,stop,index_days,state,now,*,choose_repairs):
             candles=ha._read_file(path,sig["source_sha256"],start,stop,budget)
             gaps=[d for d in days if len(candles.get(d,{}))<mp.MINUTES]
             eligible=[d for d in gaps if _attempt_allowed(state.get("repairs",{}),identity+"|"+d,now)]
+            # Count missing minutes on audited index dates, rather than
+            # describing a 374-bar session and an absent day identically.
+            histogram=defaultdict(int)
+            for day in gaps:
+                histogram[str(len(candles.get(day,{})))]+=1
             result[symbol]={"expected_observed_index_sessions":len(days),"complete_sessions":len(days)-len(gaps),
-                            "missing_or_partial_sessions":len(gaps),"retryable_sessions":len(eligible),"example_dates":gaps[:8]}
+                            "missing_or_partial_sessions":len(gaps),"retryable_sessions":len(eligible),"example_dates":gaps[:8],
+                            "incomplete_session_minute_counts":dict(histogram),
+                            "example_gap_minutes":{d:len(candles.get(d,{})) for d in gaps[:8]}}
             if choose_repairs:
                 if eligible:
                     repairs[identity]=eligible[:MAX_EQUITY_REPAIRS if safe_window(now) else LIVE_EQUITY_REPAIRS]
@@ -440,7 +522,8 @@ def _equity_pass(cfg,state,now,stop,progress,should_stop):
             "batch_counts":outcome["counts"],"observed_member_session_gaps":gaps,"unavailable_sources":unavailable,
             "members":observed,"repair_dates_attempted":len(attempted),
             "retryable_member_session_gaps":sum(x.get("retryable_sessions",0) for x in observed.values()),
-            "batch_errors":bool(outcome["errors"])}
+            "batch_errors":bool(outcome["errors"]),
+            "provider_rate_limited":any(_rate_limit_message(x.get("code")) or _rate_limit_message(x.get("summary")) for x in outcome.get("failure_examples",[]))}
 
 def _panel_pass(cfg,state,now,stop,progress,should_stop):
     """Optional, independently labeled five-bank watchlist.
@@ -492,21 +575,31 @@ def _panel_pass(cfg,state,now,stop,progress,should_stop):
             "members":observed,"repair_dates_attempted":len(attempted),
             "retryable_member_session_gaps":sum(x.get("retryable_sessions",0) for x in observed.values()),
             "batch_status":outcome["status"],"batch_errors":bool(outcome["errors"]),
+            "provider_rate_limited":any(_rate_limit_message(x.get("code")) or _rate_limit_message(x.get("summary")) for x in outcome.get("failure_examples",[])),
             "warning":"Fixed research watchlist, not verified BANKNIFTY membership or index attribution."}
 
 
 def run(*,progress=None,now=None):
+    global OPTION_PROGRESS
     now=now or _now();cfg=config()
     if not cfg["enabled"]:
         return {"state":"paused","reason":"Automatic maintenance disabled"}
     during_priority=not safe_window(now)
     with LOCK:
         state=_state()
+        OPTION_PROGRESS=None
+        if state.get("coverage_config")!=cfg:
+            state["coverage_sources"]={} if state.get("coverage_config") else (state.get("last_run") or {}).get("sources",{})
+            state["coverage_config"]=cfg
     stop,option_end=target_dates(now)
     report={"started_utc":now.isoformat(),"state":"running","sources":{},
             "backfill_mode":"live_priority" if during_priority else "standard"}
-    state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),next_due_reason="pass_running",last_run=report)
+    state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),next_due_reason="pass_running",last_run=report,schedule_version=7)
     _save_state(state)
+    def provider_limited():
+        sources=report["sources"]
+        lanes=[*sources.get("index",{}).values(),*(v for k,v in sources.items() if k!="index")]
+        return any(v.get("provider_rate_limited") or _rate_limit_message(v.get("reason")) for v in lanes)
     def should_stop():
         # Once paused, do not re-enter the same pass if pressure briefly
         # clears. The next scheduled pass rechecks current resources.
@@ -531,8 +624,14 @@ def run(*,progress=None,now=None):
         if should_stop():
             report.update(state="paused",reason=report["pause_reason"])
             return report
-        if not dhan_auth.check_profile().get("ok"):
-            report.update(state="blocked",reason="Dhan token or historical data permission requires attention")
+        profile=dhan_auth.check_profile()
+        if not profile.get("ok"):
+            if profile.get("code")=="profile_unreachable":
+                report.update(state="blocked",reason="Dhan profile connection unavailable; check local network",transient_connection_failure=True)
+            elif profile.get("code")=="profile_http_error" and _rate_limit_message(profile.get("message")):
+                report.update(state="blocked",reason="Dhan profile rate limit (429)",provider_rate_limited=True)
+            else:
+                report.update(state="blocked",reason="Dhan token or historical data permission requires attention")
             return report
         if cfg["index"]:
             # Legacy spot sync uses the same guard and yields while the
@@ -540,7 +639,7 @@ def run(*,progress=None,now=None):
             with mp.HISTORY_WRITE_LOCK:
                 report["sources"]["index"]=_index_pass(cfg,state,now,stop,progress,should_stop)
             _save_state(state)
-        if cfg["constituents"] and not should_stop():
+        if cfg["constituents"] and not provider_limited() and not should_stop():
             if progress:progress(30,"Checking dated banking constituents")
             try:
                 report["sources"]["constituents"]=_equity_pass(cfg,state,now,stop,progress,should_stop)
@@ -548,14 +647,14 @@ def run(*,progress=None,now=None):
                 if progress:progress(49,"Constituent history remains partially unavailable")
                 report["sources"]["constituents"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
             _save_state(state)
-        if cfg["bank_panel"] and not should_stop():
+        if cfg["bank_panel"] and not provider_limited() and not should_stop():
             if progress:progress(49,"Checking fixed major-bank research panel")
             try:
                 report["sources"]["bank_panel"]=_panel_pass(cfg,state,now,stop,progress,should_stop)
             except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
                 report["sources"]["bank_panel"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
             _save_state(state)
-        if cfg["options"] and not should_stop():
+        if cfg["options"] and not provider_limited() and not should_stop():
             if progress:progress(55,"Checking saved expired-option request windows")
             try:
                 option_start=_local(now).date()-timedelta(days=cfg["option_days"])
@@ -568,19 +667,40 @@ def run(*,progress=None,now=None):
                                     if bars and option_start.isoformat()<=d<=option_end.isoformat())
                 except (ValueError,OSError,RuntimeError,KeyError,TypeError):
                     pass
+                def on_counts(counts):
+                    global OPTION_PROGRESS
+                    with LOCK:
+                        OPTION_PROGRESS=dict(counts)
                 opt=options.run(start_date=option_start.isoformat(),
                     end_date=option_end.isoformat(),wings=cfg["wings"],request_limit=LIVE_OPTION_REQUESTS if during_priority else MAX_OPTION_REQUESTS,
-                    priority_sessions=priority,
+                    priority_sessions=priority,on_counts=on_counts,
                     should_stop=should_stop,progress=(lambda pct,msg:progress(55+.44*pct,msg)) if progress else None)
                 report["sources"]["options"]={k:opt[k] for k in ("state","existing_verified_receipts","new_receipts",
                     "planned_missing_requests","unattempted_requests","empty_processed_receipts","usable_rows_in_processed_receipts",
                     "unreadable_receipts_encountered","excluded_active_calendar_days","continuous_coverage_certified",
                     "empty_verified_receipts","observed_rolling_minute_slots","observed_offset_session_pairs","observed_session_dates")}
+                report["sources"]["options"].update({k:opt[k] for k in ("eligible_offset_date_pairs","checked_offset_date_pairs",
+                    "missing_offset_date_pairs","remaining_planned_requests","batch_limit","batch_attempted","batch_completed",
+                    "scope_start","scope_end","scope_wings","known_observed_minute_slots","known_expected_minute_slots","known_market_dates",
+                    "active_receipts_per_minute") if k in opt})
+                report["sources"]["options"]["coverage_as_of"]=_now().isoformat()
                 report["sources"]["options"]["rejected_windows"]=len(opt["rejected_requests"])
                 report["sources"]["options"]["state"]="partial" if opt["state"]=="partial_requests" or opt["unreadable_receipts_encountered"] else "checked"
             except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
                 if progress:progress(99,"Option history remains partially unavailable")
-                report["sources"]["options"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
+                if isinstance(exc,options.exp.RollingConnectionError):
+                    report["transient_connection_failure"]=True
+                if isinstance(exc,options.exp.RollingRateLimitError):
+                    report["provider_rate_limited"]=True
+                    report["provider_retry_after_seconds"]=exc.retry_after_seconds
+                prior=state.get("coverage_sources",{}).get("options",{})
+                if OPTION_PROGRESS is not None:
+                    evidence={**OPTION_PROGRESS,"coverage_as_of":_now().isoformat()}
+                elif prior.get("scope_start")==option_start.isoformat() and prior.get("scope_end")==option_end.isoformat() and prior.get("scope_wings")==cfg["wings"]:
+                    evidence={**prior,"progress_stale":True,"active_receipts_per_minute":None}
+                else:
+                    evidence={}
+                report["sources"]["options"]={**evidence,"state":"blocked","reason":job_safety.scrub(exc)[:200]}
         states=[v["state"] for k,v in report["sources"].items() if k!="index"]
         states.extend(v["state"] for v in report["sources"].get("index",{}).values())
         report["state"]="paused" if should_stop() else "partial" if not states or any(x!="checked" for x in states) else "checked"
@@ -592,14 +712,35 @@ def run(*,progress=None,now=None):
         if report["state"]=="running":report["state"]="interrupted"
         finished=_now()
         report["finished_utc"]=finished.isoformat()
+        if report.get("transient_connection_failure"):
+            # A successful receipt followed by a disconnect is new progress,
+            # not another consecutive zero-progress failure.
+            prior_count=state.get("connection_failure_count",0)
+            progress_made=report.get("sources",{}).get("options",{}).get("new_receipts",0)
+            if report.get("sources",{}).get("options",{}).get("progress_stale"):
+                progress_made=0
+            count=1 if progress_made else min(len(CONNECTION_RETRY_MINUTES),prior_count+1)
+            report["connection_failure_count"]=count
+            state["connection_failure_count"]=count
+        elif report.get("sources",{}).get("options",{}).get("state") in ("checked","partial") or report["state"]=="checked":
+            state["connection_failure_count"]=0
         delay,reason=_next_schedule(report)
         state["next_due_utc"]=(finished+delay).isoformat()
         state["next_due_reason"]=reason
+        state["schedule_version"]=7
         with LOCK:
             # Preserve a concurrently saved request to disable/reconfigure;
             # its new settings take effect at the next safe boundary.
+            OPTION_PROGRESS=None
             if config()!=cfg:
-                state["target"]=None;state["next_due_utc"]=None;state["next_due_reason"]="configuration_changed"
+                state["target"]=None
+                if reason!="provider_rate_limit":
+                    state["next_due_utc"]=None;state["next_due_reason"]="configuration_changed"
+                state.pop("coverage_sources",None);state.pop("coverage_config",None)
+                state.pop("connection_failure_count",None)
+            else:
+                state["coverage_sources"]={**state.get("coverage_sources",{}),**report["sources"]}
+                state["coverage_config"]=cfg
             state["last_run"]=report
             _save_state(state)
 

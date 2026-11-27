@@ -826,3 +826,70 @@ This supersedes the earlier automatic-maintenance-only time restriction.
 The separate heavy research commands and standalone repair launcher
 retain their off-market guards. Existing saved consent and scope
 are unchanged; no new live feed or order permission is granted.
+
+
+### Faster sequential backfill and live progress meters (v5)
+
+Automatic backfill now uses up to 440 option requests per standard
+pass and 64 during live-priority hours. The existing sequential 0.45 s
+pre-request pacing and provider error backoff remain unchanged. The
+productive continuation interval is 30 seconds; recording-pressure
+pauses retain the two-minute cooldown. Disk protection and closed/
+expired-session eligibility remain. The provider's authenticated rolling
+endpoint evidence supports only two inclusive consecutive calendar
+dates per request, so thousands of requests may still be needed.
+
+The receipt planner reuses process-local verified compact summaries of
+unchanged files (device, inode, size, modification and change timestamps).
+Changed files are revalidated, removed files disappear from the plan,
+and a restart re-verifies receipts. No raw price cache or second data
+store is introduced. Historical research still validates original
+receipts. The first scan after restart may therefore take longer.
+
+The Market Library reports an overall request-scope bar based on
+distinct eligible side/rolling-offset/calendar-date pairs, not a sum
+of overlapping receipt counts. Verified empty receipts contribute to
+request coverage but not price observations. A separate observed
+minute meter uses only known index dates, with 375 regular-session
+minutes per side/offset as its reference, not exact-contract coverage.
+Show current pass attempted/verified/rejected counts, remaining planned
+requests and the measured active receipt rate. The active-time estimate
+excludes scans, pauses, provider backoff and changing scope. It is not a
+completion guarantee. Index and bank bars use audited known session
+counts and refresh after the respective audit. Detailed audit text is
+collapsed by default. Previously verified coverage remains visible
+during subsequent passes; no prediction model is promoted.
+
+
+### Automatic recovery from connection interruptions (v6)
+
+The automatic worker now distinguishes transient connection errors from
+authorization, invalid input, and rate-limit errors. Transient failures
+schedule bounded retries at 2, 4, 8, 16, and at most 30 minutes; successful
+receipt progress resets the consecutive zero-progress failure count.
+Existing authentication and provider rate-limit backoff stays in place.
+Legacy checkpoints with the exact known connection error become eligible
+after the initial two-minute delay. Verified request counters are
+published before option-provider preflight and retained on interruption;
+the progress card reports the actual pause reason and audit timestamp.
+Equity-session diagnostics now report how many original minutes each
+incomplete session contains, distinguishing missing days from partial
+days without fabricating candles.
+
+
+### Remove the four-hour retry fallback (v7)
+
+The fixed four-hour automatic maintenance retry is replaced with five
+minutes for ordinary errors or no immediately actionable work. Existing
+saved schedules are migrated to the new policy, and status exposes the
+effective next check. Productive passes still continue after 30 seconds;
+live-recorder pressure still retries after two minutes; transient Dhan
+connection failures retry after 2, 4, 8, 16 and at most 30 minutes.
+Explicit provider rate limits use a separate 15-minute fallback or a
+longer valid Retry-After supplied by the rolling endpoint. Automatic
+checks and the manual Check button do not override an active provider
+cooldown. The existing seven-day cooldown for already attempted equity
+repair dates remains separate from the worker's retry schedule; it avoids
+repeated identical requests for persistent source gaps. Checked scopes
+retain their ordinary daily check. No credentials, synthetic candles or
+provider-limit bypass are introduced.
