@@ -392,8 +392,15 @@ def _equity_audit(raw,start,stop,index_days,state,now,*,choose_repairs):
             candles=ha._read_file(path,sig["source_sha256"],start,stop,budget)
             gaps=[d for d in days if len(candles.get(d,{}))<mp.MINUTES]
             eligible=[d for d in gaps if _attempt_allowed(state.get("repairs",{}),identity+"|"+d,now)]
+            # Count missing minutes on audited index dates, rather than
+            # describing a 374-bar session and an absent day identically.
+            histogram=defaultdict(int)
+            for day in gaps:
+                histogram[str(len(candles.get(day,{})))]+=1
             result[symbol]={"expected_observed_index_sessions":len(days),"complete_sessions":len(days)-len(gaps),
-                            "missing_or_partial_sessions":len(gaps),"retryable_sessions":len(eligible),"example_dates":gaps[:8]}
+                            "missing_or_partial_sessions":len(gaps),"retryable_sessions":len(eligible),"example_dates":gaps[:8],
+                            "incomplete_session_minute_counts":dict(histogram),
+                            "example_gap_minutes":{d:len(candles.get(d,{})) for d in gaps[:8]}}
             if choose_repairs:
                 if eligible:
                     repairs[identity]=eligible[:MAX_EQUITY_REPAIRS if safe_window(now) else LIVE_EQUITY_REPAIRS]
