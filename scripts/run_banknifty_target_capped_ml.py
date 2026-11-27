@@ -32,7 +32,8 @@ def main():
             os.replace(tmp,dest)
         finally:tmp.unlink(missing_ok=True)
         print("COST INR PER ORDER",report["order_cost_inr"])
-        print("DAILY CONTEXT",json.dumps(report["daily_context"]))
+        print("DAILY CONTEXT",json.dumps({k:v for k,v in report["daily_context"].items() if k not in ("sources","context_source_dates","rejected_sources","original_view")}))
+        print("DAILY CONTEXT REJECTIONS",json.dumps(report["daily_context"].get("rejected_sources",{})))
         print("OPTION COVERAGE",json.dumps(report["option_window_states"]))
         for hold,part in report["validation"].items():
             for policy,item in part["policies"].items():
