@@ -24,7 +24,7 @@ import time
 import uuid
 
 from index_research.dhan_data import MASTER_URL
-from . import dhan_workspace, live_market, market_depth, option_chain_live, shared_market_data, recorder_storage
+from . import dhan_workspace, live_market, market_depth, option_chain_live, shared_market_data, recorder_storage, nse_session_policy as sessions
 
 IST = ZoneInfo("Asia/Kolkata")
 LOCK = RLock()
@@ -61,7 +61,7 @@ def _now() -> datetime:
 def _market_open(now: datetime | None = None) -> bool:
     ist = (now or _now()).astimezone(IST)
     return (ist.weekday() < 5 and
-            dtime(9, 15) <= ist.time().replace(tzinfo=None) < dtime(15, 30))
+            dtime(9, 15) <= ist.time().replace(tzinfo=None) < sessions.derivatives_close(ist.date()))
 
 
 def _root() -> Path:
