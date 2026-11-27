@@ -237,9 +237,10 @@ def status():
         cfg=dict(DEFAULT);state={};active_counts=None;error="Maintenance configuration or checkpoint unreadable"
     now=_now()
     last=state.get("last_run") or {}
-    coverage=state.get("coverage_sources",{}) if state.get("coverage_config")==cfg else {}
+    same_scope=state.get("coverage_config")==cfg
+    coverage=state.get("coverage_sources",{}) if same_scope else {}
     # Retain last verified source audit while another pass is in progress.
-    sources={**coverage,**last.get("sources",{})}
+    sources={**coverage,**last.get("sources",{})} if same_scope or not state.get("coverage_config") else {}
     return {"version":VERSION,"coverage_sources":sources,"option_progress":active_counts if cfg["enabled"] and last.get("state")=="running" else None,"config":cfg,"last_run":state.get("last_run"),"target":_target(now),
             "next_due_utc":state.get("next_due_utc"),"next_due_reason":state.get("next_due_reason"),"batch_id":state.get("batch_id"),
             "safe_window":safe_window(now),"backfill_mode":"standard" if safe_window(now) else "live_priority",
@@ -596,6 +597,7 @@ def run(*,progress=None,now=None):
                     "empty_verified_receipts","observed_rolling_minute_slots","observed_offset_session_pairs","observed_session_dates")}
                 report["sources"]["options"].update({k:opt[k] for k in ("eligible_offset_date_pairs","checked_offset_date_pairs",
                     "missing_offset_date_pairs","remaining_planned_requests","batch_limit","batch_attempted","batch_completed",
+                    "scope_start","scope_end","scope_wings","known_observed_minute_slots","known_expected_minute_slots","known_market_dates",
                     "active_receipts_per_minute") if k in opt})
                 report["sources"]["options"]["rejected_windows"]=len(opt["rejected_requests"])
                 report["sources"]["options"]["state"]="partial" if opt["state"]=="partial_requests" or opt["unreadable_receipts_encountered"] else "checked"
