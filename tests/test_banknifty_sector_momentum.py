@@ -56,10 +56,10 @@ class SectorMomentumTests(TestCase):
         table[r._stamp(DAY,35)]={("CALL",63000):quote(63000,300)}
         self.assertEqual(m.choose(table,DAY,34,63000,30,12000)[0],chosen)
 
-    def test_qualification_both_cost_lanes_and_minimum_support(self):
+    def test_qualification_flat_cost_and_minimum_support(self):
         good={"scored_trades":20,"daily_coverage":{"days_with_scored_trade":10},
               "conditional_net_inr":100.,"stress_utility_inr":50.}
-        lanes={"35":dict(good),"75":dict(good)}
+        lanes={"flat_30_inr_per_order":dict(good)}
         self.assertTrue(m.qualified(lanes,minimum_trades=20,minimum_days=10))
-        lanes["75"]["stress_utility_inr"]=-1.
+        lanes["flat_30_inr_per_order"]["stress_utility_inr"]=-1.
         self.assertFalse(m.qualified(lanes,minimum_trades=20,minimum_days=10))
