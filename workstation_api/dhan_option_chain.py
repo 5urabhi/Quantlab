@@ -4,7 +4,7 @@ Only GET /profile and POST /optionchain/expirylist /optionchain. No trading
 endpoints. Uses ignored local .env credentials; never returns/logs secrets,
 client identities, raw vendor errors or proprietary quote JSON to browser.
 Dhan expiry API provides a date, NOT an exact settlement timestamp, so
-15:30 Asia/Kolkata is explicitly labeled as an assumed regular-session mark.
+The dated NSE scheduled index-contract close is an assumed regular-session mark, not a settlement timestamp.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import os
 import time
 import csv
 
-from . import option_quotes, service
+from . import option_quotes, service, nse_session_policy as sessions
 
 CHAIN_ENDPOINT="https://api.dhan.co/v2/optionchain"
 EXPIRY_ENDPOINT="https://api.dhan.co/v2/optionchain/expirylist"
@@ -94,7 +94,7 @@ def _pick_expiry(expiries: object, captured: datetime) -> str:
             parsed=date.fromisoformat(value)
         except ValueError:
             continue
-        close=datetime(parsed.year,parsed.month,parsed.day,15,30,tzinfo=india)
+        close=datetime.combine(parsed,sessions.index_expiry_close(parsed),india)
         if close>captured:
             candidates.append((close,value))
     if not candidates:
@@ -126,7 +126,8 @@ def _normalize_chain(response: dict, *, symbol: str, expiry: str,
         if math.isfinite(strike) and strike>0 and isinstance(body,dict):
             strikes.append((abs(strike-spot),strike,body))
     strikes.sort(key=lambda item:(item[0],item[1]))
-    expiry_at=expiry+"T15:30:00+05:30"
+    expiry_day=date.fromisoformat(expiry)
+    expiry_at=datetime.combine(expiry_day,sessions.index_expiry_close(expiry_day),ZoneInfo("Asia/Kolkata")).isoformat()
     fields=["captured_at","provider","underlying","underlying_spot",
             "expiry_at","strike","option_type","bid","ask"]
     out=StringIO()
@@ -189,10 +190,10 @@ def capture(dataset_id: str, underlying: str = "NIFTY50",
             "captured_at_local_utc":captured.isoformat(),
             "original_expiry_list_sha256":__import__("hashlib").sha256(expiry_raw).hexdigest(),
             "source_expiry_time_is_exact":False,
-            "expiry_close_time_assumption":"15:30 Asia/Kolkata regular NSE session",
+            "expiry_close_time_assumption":sessions.index_expiry_close(expiry).isoformat()+" Asia/Kolkata scheduled NSE index expiry cutoff",
             "provider_timestamp_is_exchange_event_timestamp":False,
-            "warning":"Dhan chain supplies expiry DATE; 15:30 IST regular close is an "
-                      "explicit timing assumption, not an exchange-sourced expiry timestamp.",
+            "warning":"Dhan chain supplies expiry DATE; the dated scheduled index trading cutoff is an "
+                      "explicit timing assumption, not an exchange-sourced settlement timestamp.",
         })
     return {"id":result["id"],"dataset_id":dataset_id,
             "underlying":underlying,"expiry":expiry,
@@ -201,4 +202,4 @@ def capture(dataset_id: str, underlying: str = "NIFTY50",
             "market_data_not_orders":True,
             "independently_source_certified":False,
             "warning":"Imported a CURRENT Dhan market snapshot. Quotes may change immediately. "
-                      "Expiry time assumed 15:30 IST regular session; rates/yield remain model assumptions."}
+                      "Expiry time uses dated scheduled NSE index trading cutoff; rates/yield remain model assumptions."}
