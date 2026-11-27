@@ -893,3 +893,18 @@ repair dates remains separate from the worker's retry schedule; it avoids
 repeated identical requests for persistent source gaps. Checked scopes
 retain their ordinary daily check. No credentials, synthetic candles or
 provider-limit bypass are introduced.
+
+
+### Independent productive backfill (v8)
+
+A complete productive option batch no longer inherits the ordinary five-minute
+retry of a different source. Other healthy source lanes may likewise continue
+when an independent source has an error. The next eligible pass is 30 seconds
+after completion, with unchanged serialized acquisition, 440/64 request caps,
+0.45-second pacing, live-recorder priority, storage checks and per-date repair
+cooldowns. A fully verified batch can continue despite separate unreadable old
+receipts, which remain reported and do not count as observed data. Rejected or
+stale batches are not accelerated. Shared provider rate limits and connection
+failures retain their safeguards. Existing v7 source-error schedules migrate
+only when the recorded productive lane qualifies; provider cooldowns are
+preserved. This does not certify continuous historical coverage.
