@@ -204,3 +204,44 @@ class ForecastTests(TestCase):
         self.assertEqual(result["adaptive_comparison"]["evaluation"]["ohlc_mae_pct_difference"]["days"],16)
         for row in pred:
             self.assertEqual((datetime.fromisoformat(row["target_end_utc"])-datetime.fromisoformat(row["decision_utc"])).total_seconds(),900)
+
+
+    def test_matched_context_reserves_shorter_supported_lane_and_preserves_pairs(self):
+        dates=[(date(2025,1,1)+timedelta(days=i)).isoformat() for i in range(100)]
+        days=np.repeat(dates,25);minutes=np.tile(np.arange(59,84),100)
+        z=np.sin(np.arange(len(days))/3)
+        x=np.column_stack((np.ones(len(z)),np.full(len(z),.02))).astype(np.float32)
+        ref=np.full(len(z),63000.)
+        y=np.column_stack((np.zeros(len(z)),.06*z,np.full(len(z),.02),np.full(len(z),.02)))
+        data={"days":days,"minutes":minutes,"ref":ref,"y":y,"actual":m.decode(ref,y),
+              "names":{"index":("constant","vol_30m_pct")},
+              "blocks":{"index":x,"banks":z[:,None].astype(np.float32),
+                        "peers":z[:,None].astype(np.float32),"options":z[:,None].astype(np.float32)},
+              "available":{"banks":np.isin(days,dates[-80:]),"peers":np.isin(days,dates[-40:]),
+                           "options":np.zeros(len(z),dtype=bool)}}
+        result,pred=m.assess_matched_context(data)
+        lane=result["lanes"]["banks"]
+        self.assertEqual(lane["supported_sessions"],80)
+        self.assertEqual(lane["training_dates"],dates[20:68])
+        self.assertEqual(lane["validation_dates"],dates[68:84])
+        self.assertEqual(lane["evaluation_dates"],dates[84:])
+        self.assertEqual(lane["rows"],{"training":240,"validation":400,"evaluation":400})
+        self.assertEqual(lane["index_only"]["evaluation"]["rows"],400)
+        self.assertEqual(lane["context"]["evaluation"]["rows"],400)
+        self.assertEqual(lane["context"]["calibration_state"],"validation_sigmoid")
+        self.assertEqual(result["lanes"]["peers"]["state"],"insufficient_context_sessions")
+        self.assertEqual(result["lanes"]["options"]["state"],"insufficient_context_sessions")
+        self.assertEqual(len(pred),400)
+        self.assertEqual(len({(row["lane"],row["decision_utc"]) for row in pred}),400)
+        self.assertTrue(all(row["session"] in dates[84:] and row["lane"]=="banks" for row in pred))
+        self.assertIn("context_minus_index_calibrated_brier",lane["paired_differences"])
+
+    def test_matched_context_refuses_sparse_support_and_nondefault_clock(self):
+        days=np.repeat(["2025-01-02","2025-01-03"],25)
+        minutes=np.tile(np.arange(59,84),2)
+        data={"days":days,"minutes":minutes,"available":{"banks":np.ones(len(days),dtype=bool)}}
+        rec,masks=m.matched_context_cohort(data,"banks")
+        self.assertIsNone(masks)
+        self.assertEqual(rec["supported_sessions"],2)
+        with self.assertRaises(ValueError):m.run(index_only=True,matched_context=True)
+        with self.assertRaises(ValueError):m.run(horizon=10,matched_context=True)

@@ -17,7 +17,7 @@ from . import historical_alpha as h, banknifty_forecast_features as f
 from . import cpr_hybrid_research as r, predictive_option_research as p
 from . import expired_options_backtest as exp
 
-VERSION="banknifty_ohlc_forecast_v3"
+VERSION="banknifty_ohlc_forecast_v4"
 MAX_CORE_DAYS=1827
 MAX_CONTEXT_DAYS=400
 TRAIN_STRIDE=5
@@ -479,7 +479,157 @@ def assess(data,splits,*,algorithms=ALGORITHMS,horizon=f.HORIZON,progress=None):
     return result,predictions
 
 
-def run(*,days=365,to_date=None,wings=3,index_only=False,horizon=f.HORIZON,algorithms=ALGORITHMS,progress=None):
+def matched_context_cohort(data,group,horizon=f.HORIZON):
+    """Availability/label-support cohort, fixed before any model fitting.
+
+    Each lane has separate chronological reservations, but both its models
+    see precisely the same rows, labels, dates and weights. Do not require
+    the shorter option archive to cover the beginning of the whole study.
+    """
+    days=data["days"];minutes=data["minutes"]
+    available=np.asarray(data["available"][group],dtype=bool)
+    stride=(minutes+1)%horizon==0
+    counts=Counter(days[available].tolist())
+    fitting=Counter(days[available&stride].tolist())
+    supported=sorted(d for d,n in counts.items() if n>=20 and fitting[d]>=4)
+    record={"available_rows":int(available.sum()),"available_sessions":len(counts),
+            "supported_sessions":len(supported),"minimum_rolling_rows_per_session":20,
+            "minimum_stride_rows_per_session":4,"minimum_total_sessions":75,
+            "supported_date_span":[supported[0],supported[-1]] if supported else None}
+    if len(supported)<75:
+        return {**record,"state":"insufficient_context_sessions"},None
+    tr,va,te=split_days(supported)
+    masks={"training":available&stride&np.isin(days,tr),
+           "validation":available&np.isin(days,va),
+           "evaluation":available&np.isin(days,te)}
+    record.update(state="ready",training_dates=tr,validation_dates=va,evaluation_dates=te,
+                  rows={key:int(mask.sum()) for key,mask in masks.items()})
+    return record,masks
+
+
+def _matched_matrix(data,groups,mask):
+    # Only materialize this partition, not another full contextual matrix.
+    return np.column_stack([data["blocks"][g][mask] for g in groups]).astype(np.float32,copy=False)
+
+
+def _calibrate_probability(validation_prob,validation_y,validation_days,evaluation_prob):
+    """Fixed sigmoid calibration; validation only. No test-label input."""
+    def logit(p):
+        p=np.clip(np.asarray(p,float),1e-6,1-1e-6)
+        return np.log(p/(1-p)).reshape(-1,1)
+    if len(np.unique(validation_y))<2:
+        return np.asarray(evaluation_prob,float),"unavailable_one_class_validation"
+    model=LogisticRegression(C=1.,max_iter=500,random_state=0)
+    model.fit(logit(validation_prob),validation_y,sample_weight=day_weights(validation_days))
+    return model.predict_proba(logit(evaluation_prob))[:,1],"validation_sigmoid"
+
+
+def _matched_fit(data,groups,masks,prior):
+    train,val,test=(masks[k] for k in ("training","validation","evaluation"))
+    days=data["days"];y=data["y"];ref=data["ref"];actual=data["actual"]
+    xtrain=_matched_matrix(data,groups,train)
+    keep=np.isfinite(xtrain).mean(axis=0)>=.05
+    if not keep.any():
+        raise ValueError("No supported training features in matched scope")
+    xtrain=xtrain[:,keep]
+    w=day_weights(days[train])
+    regression=train_model("ridge",xtrain,y[train],w)
+    labels=(y[:,1]>0).astype(int)
+    cls=direction_model("ridge",xtrain,labels[train],w)
+    del xtrain
+    xv=_matched_matrix(data,groups,val)[:,keep]
+    vpred=decode(ref[val],predict_model(regression,xv))
+    vp=cls.predict_proba(xv)[:,1] if cls is not None else np.full(int(val.sum()),prior)
+    del xv
+    xt=_matched_matrix(data,groups,test)[:,keep]
+    pred=decode(ref[test],predict_model(regression,xt))
+    prob=cls.predict_proba(xt)[:,1] if cls is not None else np.full(int(test.sum()),prior)
+    del xt
+    cal,state=_calibrate_probability(vp,labels[val],days[val],prob)
+    stats={"features_retained":int(keep.sum()),"calibration_state":state,
+           "validation":_metrics(data,val,vpred),"evaluation":_metrics(data,test,pred),
+           "validation_probability_raw":probability_metrics(vp,labels[val],days[val],prior),
+           "evaluation_probability_raw":probability_metrics(prob,labels[test],days[test],prior),
+           "evaluation_probability_calibrated":probability_metrics(cal,labels[test],days[test],prior)}
+    return stats,pred,prob,cal
+
+
+def assess_matched_context(data,*,progress=None):
+    """One fixed five-minute ridge/logistic information ablation per source.
+
+    A shorter supported cohort gets its own chronological date split. The
+    index comparator is refitted on the very same anchors as its challenger.
+    There is no best-lane selection or claim of an untouched test period.
+    """
+    days=data["days"];minutes=data["minutes"];ref=data["ref"];actual=data["actual"]
+    labels=(data["y"][:,1]>0).astype(int)
+    lanes={};predictions=[]
+    names=data.get("names",{}).get("index",())
+    if "vol_30m_pct" not in names:
+        raise ValueError("Missing causal volatility for matched comparison")
+    vol=data["blocks"]["index"][:,names.index("vol_30m_pct")]
+    for group in ("banks","peers","options"):
+        record,masks=matched_context_cohort(data,group)
+        lanes[group]=record
+        if masks is None:
+            if progress:progress("MATCHED "+group+" "+json.dumps(record))
+            continue
+        train,val,test=(masks[k] for k in ("training","validation","evaluation"))
+        if len(np.unique(labels[train]))<2:
+            record["state"]="insufficient_training_classes"
+            if progress:progress("MATCHED "+group+" "+json.dumps(record))
+            continue
+        prior=float(_avg(labels[train],days[train]))
+        if progress:progress("Fitting matched "+group+" / ridge and logistic, "+str(record["rows"]))
+        fit=adaptive_fit(actual[train],ref[train],minutes[train],vol[train],f.HORIZON)
+        adaptive=decode(ref[test],adaptive_predict(minutes[test],vol[test],f.HORIZON,fit))
+        i,ip,ir,ic=_matched_fit(data,("index",),masks,prior)
+        c,cp,cr,cc=_matched_fit(data,("index",group),masks,prior)
+        if c["features_retained"]<=i["features_retained"]:
+            record["state"]="no_supported_extra_features"
+            if progress:progress("MATCHED "+group+" "+json.dumps(record))
+            continue
+        truth=actual[test];d=days[test];y=labels[test];reference=ref[test]
+        def error(pred):return 100*np.abs(truth-pred).mean(axis=1)/reference
+        def range_error(pred):return np.abs((truth[:,1]-truth[:,2])-(pred[:,1]-pred[:,2]))
+        record.update(state="assessed",training_prior_up_rate=prior,
+                      index_only=i,context=c,adaptive_baseline=_metrics(data,test,adaptive),
+                      paired_differences={
+                          "context_minus_index_ohlc_mae_pct":paired_day_interval(error(cp)-error(ip),d),
+                          "context_minus_adaptive_ohlc_mae_pct":paired_day_interval(error(cp)-error(adaptive),d),
+                          "context_minus_index_range_mae_points":paired_day_interval(range_error(cp)-range_error(ip),d),
+                          "context_minus_adaptive_range_mae_points":paired_day_interval(range_error(cp)-range_error(adaptive),d),
+                          "context_minus_index_close_mae_points":paired_day_interval(np.abs(truth[:,3]-cp[:,3])-np.abs(truth[:,3]-ip[:,3]),d),
+                          "context_minus_index_raw_brier":paired_day_interval((cr-y)**2-(ir-y)**2,d),
+                          "context_minus_index_calibrated_brier":paired_day_interval((cc-y)**2-(ic-y)**2,d),
+                          "context_calibrated_minus_prior_brier":paired_day_interval((cc-y)**2-(prior-y)**2,d)})
+        for k,j in enumerate(np.flatnonzero(test)):
+            day=str(days[j]);minute=int(minutes[j])
+            predictions.append({"lane":group,"session":day,"decision_utc":r._stamp(day,minute+1),
+                                "target_end_utc":r._stamp(day,minute+1+f.HORIZON),
+                                "decision_close":float(ref[j]),"actual_up":int(y[k]),
+                                "training_prior_up":prior,
+                                **{"actual_"+field:float(truth[k,n]) for n,field in enumerate(FIELDS)},
+                                **{prefix+"_"+field:float(values[k,n]) for prefix,values in (("index",ip),("context",cp),("adaptive",adaptive)) for n,field in enumerate(FIELDS)},
+                                "index_raw_up":float(ir[k]),"context_raw_up":float(cr[k]),
+                                "index_calibrated_up":float(ic[k]),"context_calibrated_up":float(cc[k])})
+        if progress:
+            progress("MATCHED "+group+" "+json.dumps({"state":record["state"],"supported_sessions":record["supported_sessions"],
+                "rows":record["rows"],"index_ohlc":i["evaluation"]["mean_ohlc_mae_pct"],
+                "context_ohlc":c["evaluation"]["mean_ohlc_mae_pct"],
+                "adaptive_ohlc":record["adaptive_baseline"]["mean_ohlc_mae_pct"],
+                "prior_brier":c["evaluation_probability_raw"]["training_base_rate_brier"],
+                "index_raw_brier":i["evaluation_probability_raw"]["brier"],
+                "context_raw_brier":c["evaluation_probability_raw"]["brier"],
+                "index_calibrated_brier":i["evaluation_probability_calibrated"]["brier"],
+                "context_calibrated_brier":c["evaluation_probability_calibrated"]["brier"],
+                "paired_differences":record["paired_differences"]}))
+    return {"state":"matched_context_assessed" if predictions else "insufficient_matched_context",
+            "lanes":lanes,"total_lane_prediction_rows":len(predictions)},predictions
+
+
+def run(*,days=365,to_date=None,wings=3,index_only=False,horizon=f.HORIZON,algorithms=ALGORITHMS,matched_context=False,progress=None):
+    if matched_context and (index_only or horizon!=f.HORIZON):raise ValueError("Matched context requires five-minute contextual mode")
     if type(horizon) is not int or horizon not in f.HORIZONS:raise ValueError("Unsupported forecast horizon")
     if horizon!=f.HORIZON and not index_only:raise ValueError("Nondefault horizons require explicit index-only mode")
     today=datetime.now(h.IST).date();stop=date.fromisoformat(to_date) if to_date else today
@@ -492,12 +642,16 @@ def run(*,days=365,to_date=None,wings=3,index_only=False,horizon=f.HORIZON,algor
     dates=sorted(index);splits=split_days(dates)
     data=assemble(index,stocks,membership,weights,peers,table,index_only=index_only,horizon=horizon,progress=progress)
     del index,stocks,membership,weights,peers,table
-    result,predictions=assess(data,splits,algorithms=algorithms,horizon=horizon,progress=progress)
+    if matched_context:
+        result,predictions=assess_matched_context(data,progress=progress)
+    else:
+        result,predictions=assess(data,splits,algorithms=algorithms,horizon=horizon,progress=progress)
     report={"version":VERSION,"from_inclusive":start.isoformat(),"to_exclusive":stop.isoformat(),
-            "requested_calendar_days":days,"mode":"index_only" if index_only else "context_comparison",
+            "requested_calendar_days":days,"mode":"matched_context" if matched_context else ("index_only" if index_only else "context_comparison"),
             "observed_date_span":[dates[0],dates[-1]],"core_feature_matrix_bytes":int(data["blocks"]["index"].nbytes),
             "lookback_minutes":f.LOOKBACK,"horizon_minutes":horizon,"training_stride_minutes":horizon,
-            "training_dates":splits[0],"validation_dates":splits[1],"evaluation_dates":splits[2],
+            **({} if matched_context else {"training_dates":splits[0],"validation_dates":splits[1],"evaluation_dates":splits[2]}),
             "sources":meta,"feature_schema":{k:list(v) for k,v in data["names"].items()},"session_coverage":data["coverage"],
             **result,"warning":"Retrospective index forecasts only; no trades or option P&L. Dates previously used in research are not fresh confirmation. Whole-day chronological split; train on nonoverlapping horizon-sized targets, evaluate rolling forecasts every minute, day-weighted summaries do not imply independent observations. Missing source features remain missing, training-only imputation and feature retention. Dated historical memberships and recorded prior weights only, no present-day backfill. Rolling monthly option features are not exact contract-ID or historical bid/ask evidence; nominal expiry proxy. External global feeds are not included. Binary direction is future close above decision close versus not above; separate flat/first-passage labels and first-hour forecasting remain future work. The adaptive range baseline and observed-session block intervals are exploratory diagnostics, not selection on evaluation or proof of predictive edge. The validation-selected residual interval is descriptive, not a guarantee. No provider requests, data mutation, recorder restart or live deployment."}
+    if matched_context:report["warning"]+=" Matched lanes have separate supported-date reservations; ridge/logistic only, validation-only sigmoid calibration, no combined model or evaluation-based promotion. Context available means the existing group gate, not every feature present. Lane rows may overlap and are not independent. Compare within lane only."
     return report,predictions
