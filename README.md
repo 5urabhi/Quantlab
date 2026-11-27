@@ -83,12 +83,14 @@ Read this at the beginning of every task. Update this same checklist on each evi
 - [x] Attempt prior shorter-history model/sequence study (245 sessions reported); original metrics still need reconciliation.
 - [x] Implement explicit bounded index-only long-history mode for the existing OHLC runner, up to 1,827 calendar days. Avoid bank/peer/options loads, reuse core features, preallocate core matrix, record actual date span and matrix size. Context and sequence runners retain 400-day bounds.
 - [x] Pass new and existing OHLC unit tests on 3cabad7: 10/10 passed locally (0.274s). Five-year core matrix built (510,912,220 bytes; not total process peak RAM).
-- [ ] Full release acceptance and actual peak memory/IO audit. CI on 3cabad7: browser acceptance passed, Python regression 1 failure / 1,279 tests (4 skipped) due to old documentation routes. Canonical README API/UI fix on 7f1944f passed all 12 local Model Laboratory tests, including the guide route. Full CI for current revision and peak resource checks remain pending.
+- [x] Full software CI at d85dc92: Verify React quant research workstation and QuantLab Ubuntu browser acceptance both succeeded. Previous guide regression resolved; this is software acceptance, not model approval.
+- [ ] Measure peak memory/IO and verify local end-to-end operational acceptance; core matrix size alone is not peak RAM.
 - [x] Attempt the frozen five-year core ridge/logistic baseline on saved data; completed on 3cabad7 with 1,231 observed sessions, 44,433 train windows, 76,817 evaluated predictions. Result: no_confirmed_ohlc_improvement. Record in experiment ledger.
 - [ ] Independently reconcile original forecast JSON/CSV, receipt hashes, eligible dates, prediction counts and peak resource usage against current local audit (console output alone does not establish full provenance).
 - [x] Attempt five-year ridge vs histogram-gradient comparison on 7f1944f; same 1,231 observed sessions and 76,817 evaluation rows. Validation selected histogram gradient; evaluation state no_confirmed_ohlc_improvement. Record prior examined dates, OHLC and probability scores below.
-- [x] Implement explicit index-only 1/5/10/15/30/60-minute horizon labels with horizon-sized training stride; implement training-only volatility-adaptive comparator, descriptive reliability bins and paired 5-session block uncertainty. Scoped tests and empirical runs pending.
-- [ ] Pass updated multi-horizon regression tests; evaluate 15-minute comparison first, then 1/10/30/60 and repeat 5m only for stronger comparator, reporting matched rows and day-block diagnostics. No tuning on already inspected dates.
+- [x] Implement explicit index-only 1/5/10/15/30/60-minute horizon labels with horizon-sized training stride; implement training-only volatility-adaptive comparator, descriptive reliability bins and paired 5-session block uncertainty. All 14 scoped tests passed on d85dc92 (0.345 s); 15-minute run completed. Other horizons pending.
+- [x] Pass updated multi-horizon regression tests (14/14) and attempt the 15-minute comparison on d85dc92. Result: no_confirmed_ohlc_improvement; volatility-adaptive and constant-prior comparators outperform the selected ML model.
+- [ ] Attempt remaining fixed core horizon comparisons (5m with adaptive comparator, 10m, 30m, 60m, then 1m with resource monitoring). Report all results, matched per-horizon rows and day-block diagnostics, including failures. No tuning on already inspected dates.
 - [ ] Extend early-session coverage, explicit UP/DOWN/FLAT and movement/volatility/first-passage probability distribution (current horizon extension retains 60-minute input and binary up-vs-not-up label).
 - [ ] Validate out-of-sample directional and price skill, probability calibration and prospective stability before claiming a core model is usable.
 
@@ -131,9 +133,11 @@ Read this at the beginning of every task. Update this same checklist on each evi
 **Current next command (after pulling latest branch changes):**
 
     .venv/bin/python -m unittest discover -s tests -p 'test_banknifty_candle_forecast.py' -v
-    bash run.sh banknifty-ohlc --index-only --days 1825 --to-date 2026-11-27 --horizon 15
+    for horizon in 5 10 30 60 1; do
+      bash run.sh banknifty-ohlc --index-only --days 1825 --to-date 2026-11-27 --horizon "$horizon" || break
+    done
 
-Run at a safe off-hours boundary, using existing saved sources. Both five-minute core baselines have now run; neither confirmed close/direction skill. The next predeclared horizon is 15 minutes, then 1/10/30/60 (and 5m for the adaptive comparator), one bounded run at a time. The feature schema, whole-session chronological reservations and validation selection stay fixed; stride equals horizon so training targets do not overlap. Different horizons have different eligible anchors; do not pool counts, rank final-test horizons as independent discoveries or claim prospective confirmation. The new stronger baseline sets O=C=last close and scales training-only median nonnegative high/low excursions by the preceding 30-minute RMS log-return volatility, a fixed 0.5bp one-minute floor, and sqrt(horizon), with training-only clock buckets. Report paired daily mean model-minus-baseline loss with descriptive 95% circular five-observed-session block intervals (1,000 draws, seed 42), reliability bins, classifier accuracy, Brier and log loss. These diagnose uncertainty, not calibrate probabilities or authorize trading. First 60 minutes still unavailable; long 1-minute fitting may require more RAM and remains untested. No new downloads or orders.
+Run at a safe off-hours boundary, using existing saved sources. The five-minute core and 15-minute comparisons have run; neither confirmed close/direction skill, and the 15m adaptive range baseline beat ML. Complete the remaining predeclared horizons sequentially (5m adaptive comparison, 10/30/60, then 1m). The order is changed only to leave the largest training matrix (1m) last; no model parameters are changed. The feature schema, whole-session chronological reservations and validation selection stay fixed; stride equals horizon so training targets do not overlap. Different horizons have different eligible anchors; do not pool counts, rank final-test horizons as independent discoveries or claim prospective confirmation. The new stronger baseline sets O=C=last close and scales training-only median nonnegative high/low excursions by the preceding 30-minute RMS log-return volatility, a fixed 0.5bp one-minute floor, and sqrt(horizon), with training-only clock buckets. Report paired daily mean model-minus-baseline loss with descriptive 95% circular five-observed-session block intervals (1,000 draws, seed 42), reliability bins, classifier accuracy, Brier and log loss. These diagnose uncertainty, not calibrate probabilities or authorize trading. First 60 minutes still unavailable; long 1-minute fitting may require more RAM and remains untested. No new downloads or orders.
 
 ### End-to-end option decision research roadmap
 
@@ -399,9 +403,27 @@ Validation OHLC skill +3.2164%, close skill +0.0159%; evaluation OHLC skill +3.7
 
 Local reports: results/banknifty_ohlc_forecast_914a2ab5309e419195d0165b4a141f52.json and results/banknifty_ohlc_forecast_914a2ab5309e419195d0165b4a141f52_predictions.csv. Console results are recorded; exact file hashes and peak process memory have not been independently inspected.
 
-### Multi-horizon core forecast extension (implementation, acceptance pending)
+### Multi-horizon core forecast extension (15m attempted; other horizons pending)
 
-The same core runner supports --horizon 1, 5, 10, 15, 30 or 60 for explicit index-only mode. Five-minute default and contextual/sequence clocks remain unchanged. Forecast targets are next complete horizon wholly inside one session, never future bars in features; 60 completed input minutes, horizon-sized nonoverlapping training stride and every eligible minute evaluated. Added training-only volatility-adaptive range baseline, paired observed-session loss intervals, classifier accuracy and probability reliability/log-loss diagnostics. Prior fixed-baseline skill state remains descriptive; adaptive comparisons and Brier differences must also be assessed before accepting a predictor. No probability calibration, first-passage or flat class yet. New code and regression tests committed, not empirically verified until actual local results.
+The same core runner supports --horizon 1, 5, 10, 15, 30 or 60 for explicit index-only mode. Five-minute default and contextual/sequence clocks remain unchanged. Forecast targets are next complete horizon wholly inside one session, never future bars in features; 60 completed input minutes, horizon-sized nonoverlapping training stride and every eligible minute evaluated. Added training-only volatility-adaptive range baseline, paired observed-session loss intervals, classifier accuracy and probability reliability/log-loss diagnostics. Prior fixed-baseline skill state remains descriptive; adaptive comparisons and Brier differences must also be assessed before accepting a predictor. No probability calibration, first-passage or flat class yet. Local 14/14 regression tests passed and both full software CI workflows succeeded at d85dc92; the first 15-minute empirical run completed. This does not certify forecasting skill.
+
+### Five-year rolling 15-minute comparison (November 27, 2026)
+
+Operator console at d85dc9265ce380b01e7b26b13b77b9649cf0652c: 14/14 regression tests passed (0.345s). Same 1,231 observed sessions and 738/246/247 chronological reservations; 14,803 nonoverlapping training windows, 73,745 validation rows across 245 eligible sessions, 74,347 evaluation predictions across 247 sessions, 343 features, core matrix 494,407,060 bytes (not peak process RAM). Validation selected histogram gradient (0.04999931% OHLC relative MAE vs ridge 0.05075053%). No fresh prospective holdout.
+
+| Day-weighted evaluation metric | Fixed typical-range baseline | Volatility-adaptive baseline | Gradient boosting |
+| --- | ---: | ---: | ---: |
+| Open MAE (points) | 2.1166 | 2.1166 | 2.0785 |
+| High MAE (points) | 38.7529 | 34.8626 | 35.9938 |
+| Low MAE (points) | 38.3434 | 35.1010 | 36.0128 |
+| Close MAE (points) | 54.5711 | 54.5711 | 54.7818 |
+| Mean OHLC relative MAE (%) | 0.05894027 | 0.05574087 | 0.05672706 |
+| Range MAE (points) | 61.0771 | 36.1474 | 47.7761 |
+| Balanced point-forecast close direction | 50% | 50% | 50.3890% |
+
+Evaluation Brier 0.25127324 vs training class prior 0.25014718; paired five-session block mean difference +0.00112607, descriptive 95% interval [+0.00027311,+0.00211360]. Classifier accuracy 50.9193%; log loss 0.69575311 vs prior 0.69344155. Reliability bin [0.6,0.7): 2,874 rows, 226 sessions, weighted probability 0.622554 vs observed up rate 0.522269. Model-minus-adaptive paired OHLC relative MAE difference +0.00098619 percentage points (interval [+0.00075175,+0.00126598]); mean high/low absolute error difference +1.02146 points (interval [+0.78406,+1.29123]); close MAE difference +0.21062 points (interval [+0.11424,+0.33148]). Nominal 80% residual interval covers 75.0938%, mean width 148.4581 points. The stronger simple comparator outperforms the selected nonlinear model; probability confidence is overstated in the 0.6-0.7 group. State no_confirmed_ohlc_improvement. Do not promote ML; preserve adaptive range as a comparator, not a proven option-premium or profitability model.
+
+Local files: results/banknifty_ohlc_forecast_d4ccd040e8174731bbc95224bd875b4b.json and results/banknifty_ohlc_forecast_d4ccd040e8174731bbc95224bd875b4b_predictions.csv. Console verifies the run and printed metrics, not file hashes or complete local data provenance. Finish the remaining fixed horizon comparisons before deciding on any more complex model or matched context study. No extra providers, new model grid, deployment or orders.
 
 ### Global and fixed-time experiments (November 27, exploratory)
 
