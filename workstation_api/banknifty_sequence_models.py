@@ -86,18 +86,22 @@ class MarketSequence(nn.Module):
         return candle,events,torch.stack((low,high),dim=1)
 
 
-def objective(output,y,event,weight):
+def objective(output,y,event,weight,*,return_parts=False):
     candle,prob,interval=output
     # Targets normalized by causal recent volatility; focus on close but
     # retain the four OHLC components, direction, move tails and quantiles.
     components=F.smooth_l1_loss(candle,y,reduction="none")
     candle_loss=(components*components.new_tensor([.25,2.,1.,1.])).sum(dim=1)/4.25
-    event_loss=F.binary_cross_entropy(prob.clamp(1e-6,1-1e-6),event,reduction="none")
-    event_loss=(event_loss[:,0]+event_loss[:,1:].mean(dim=1))/2
+    event_components=F.binary_cross_entropy(prob.clamp(1e-6,1-1e-6),event,reduction="none")
+    event_loss=(event_components[:,0]+event_components[:,1:].mean(dim=1))/2
     error=y[:,1:2]-interval
     q=interval.new_tensor([.1,.9])
     quantile=torch.maximum(q*error,(q-1)*error).mean(dim=1)
     loss=candle_loss+.6*event_loss+.4*quantile
     # Weights are fixed across the training partition. Do not renormalize
     # each minibatch by its own sum (which would distort session weighting).
-    return (loss*weight).mean()
+    total=(loss*weight).mean()
+    if not return_parts:return total
+    parts={"candle":(candle_loss*weight).mean(),"direction_bce":(event_components[:,0]*weight).mean(),
+           "tail_bce":(event_components[:,1:].mean(dim=1)*weight).mean(),"quantile":(quantile*weight).mean()}
+    return total,{k:v.detach() for k,v in parts.items()}
