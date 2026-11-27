@@ -657,10 +657,15 @@ def run(*,progress=None,now=None):
         sources=report["sources"]
         lanes=[*sources.get("index",{}).values(),*(v for k,v in sources.items() if k!="index")]
         return bool(history_budget.BUDGET.remaining_cooldown()) or any(v.get("provider_rate_limited") or _rate_limit_message(v.get("reason")) for v in lanes)
+    guard_lock=RLock()
+    pause=[None]
     def should_stop():
+        with guard_lock:
+            return check_stop()
+    def check_stop():
         # Once paused, do not re-enter the same pass if pressure briefly
         # clears. The next scheduled pass rechecks current resources.
-        if report.get("pause_reason"):
+        if pause[0]:
             return True
         current=_now()
         reason=None
@@ -674,12 +679,12 @@ def run(*,progress=None,now=None):
             else:
                 reason=live_pressure(current)
         if reason:
-            report["pause_reason"]=reason
+            pause[0]=reason
         return reason is not None
     try:
         if progress:progress(1,"Checking Dhan connection and shared storage")
         if should_stop():
-            report.update(state="paused",reason=report["pause_reason"])
+            report.update(state="paused",reason=pause[0],pause_reason=pause[0])
             return report
         profile=dhan_auth.check_profile()
         if not profile.get("ok"):
@@ -703,25 +708,11 @@ def run(*,progress=None,now=None):
             with mp.HISTORY_WRITE_LOCK:
                 report["sources"]["index"]=_index_pass(cfg,state,now,stop,progress,should_stop)
             _save_state(state)
-        if cfg["constituents"] and not provider_limited() and not should_stop():
-            if progress:progress(30,"Checking dated banking constituents")
-            try:
-                report["sources"]["constituents"]=_equity_pass(cfg,state,now,stop,progress,should_stop)
-            except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
-                if progress:progress(49,"Constituent history remains partially unavailable")
-                report["sources"]["constituents"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
-            _save_state(state)
-        if cfg["bank_panel"] and not provider_limited() and not should_stop():
-            if progress:progress(49,"Checking fixed major-bank research panel")
-            try:
-                report["sources"]["bank_panel"]=_panel_pass(cfg,state,now,stop,progress,should_stop)
-            except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
-                report["sources"]["bank_panel"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
-            _save_state(state)
-        if cfg["options"] and not provider_limited() and not should_stop():
+        def option_pass(progress,prior_option,option_stop):
+            result={}
+            option_start=_local(now).date()-timedelta(days=cfg["option_days"])
             if progress:progress(55,"Checking saved expired-option request windows")
             try:
-                option_start=_local(now).date()-timedelta(days=cfg["option_days"])
                 # Original observed dates establish download priority, not
                 # a complete holiday calendar. Unknown dates remain in scope.
                 priority=[]
@@ -738,33 +729,91 @@ def run(*,progress=None,now=None):
                 opt=options.run(start_date=option_start.isoformat(),
                     end_date=option_end.isoformat(),wings=cfg["wings"],request_limit=LIVE_OPTION_REQUESTS if during_priority else MAX_OPTION_REQUESTS,
                     priority_sessions=priority,on_counts=on_counts,pipeline=not during_priority,
-                    should_stop=should_stop,progress=(lambda pct,msg:progress(55+.44*pct,msg)) if progress else None)
-                report["sources"]["options"]={k:opt[k] for k in ("state","existing_verified_receipts","new_receipts",
+                    should_stop=option_stop,progress=(lambda pct,msg:progress(55+.44*pct,msg)) if progress else None)
+                result["source"]={k:opt[k] for k in ("state","existing_verified_receipts","new_receipts",
                     "planned_missing_requests","unattempted_requests","empty_processed_receipts","usable_rows_in_processed_receipts",
                     "unreadable_receipts_encountered","excluded_active_calendar_days","continuous_coverage_certified",
                     "empty_verified_receipts","observed_rolling_minute_slots","observed_offset_session_pairs","observed_session_dates")}
-                report["sources"]["options"].update({k:opt[k] for k in ("eligible_offset_date_pairs","checked_offset_date_pairs",
+                result["source"].update({k:opt[k] for k in ("eligible_offset_date_pairs","checked_offset_date_pairs",
                     "missing_offset_date_pairs","remaining_planned_requests","batch_limit","batch_attempted","batch_completed",
                     "scope_start","scope_end","scope_wings","known_observed_minute_slots","known_expected_minute_slots","known_market_dates",
                     "active_receipts_per_minute") if k in opt})
-                report["sources"]["options"]["coverage_as_of"]=_now().isoformat()
-                report["sources"]["options"]["rejected_windows"]=len(opt["rejected_requests"])
-                report["sources"]["options"]["state"]="partial" if opt["state"]=="partial_requests" or opt["unreadable_receipts_encountered"] else "checked"
+                result["source"]["coverage_as_of"]=_now().isoformat()
+                result["source"]["rejected_windows"]=len(opt["rejected_requests"])
+                result["source"]["state"]="partial" if opt["state"]=="partial_requests" or opt["unreadable_receipts_encountered"] else "checked"
             except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
                 if progress:progress(99,"Option history remains partially unavailable")
                 if isinstance(exc,options.exp.RollingConnectionError):
-                    report["transient_connection_failure"]=True
+                    result["transient_connection_failure"]=True
                 if isinstance(exc,options.exp.RollingRateLimitError):
-                    report["provider_rate_limited"]=True
-                    report["provider_retry_after_seconds"]=exc.retry_after_seconds
-                prior=state.get("coverage_sources",{}).get("options",{})
+                    result["provider_rate_limited"]=True
+                    result["provider_retry_after_seconds"]=exc.retry_after_seconds
+                prior=prior_option
                 if OPTION_PROGRESS is not None:
                     evidence={**OPTION_PROGRESS,"coverage_as_of":_now().isoformat()}
                 elif prior.get("scope_start")==option_start.isoformat() and prior.get("scope_end")==option_end.isoformat() and prior.get("scope_wings")==cfg["wings"]:
                     evidence={**prior,"progress_stale":True,"active_receipts_per_minute":None}
                 else:
                     evidence={}
-                report["sources"]["options"]={**evidence,"state":"blocked","reason":job_safety.scrub(exc)[:200]}
+                result["source"]={**evidence,"state":"blocked","reason":job_safety.scrub(exc)[:200]}
+            return result
+
+        def accept_option(result):
+            if result.get("source") is not None:
+                report["sources"]["options"]=result["source"]
+            for key in ("transient_connection_failure","provider_rate_limited","provider_retry_after_seconds"):
+                if key in result:
+                    report[key]=result[key]
+
+        def bank_pass(progress):
+            if cfg["constituents"] and not provider_limited() and not should_stop():
+                if progress:progress(30,"Checking dated banking constituents")
+                try:
+                    report["sources"]["constituents"]=_equity_pass(cfg,state,now,stop,progress,should_stop)
+                except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
+                    if progress:progress(49,"Constituent history remains partially unavailable")
+                    report["sources"]["constituents"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
+                _save_state(state)
+            if cfg["bank_panel"] and not provider_limited() and not should_stop():
+                if progress:progress(49,"Checking fixed major-bank research panel")
+                try:
+                    report["sources"]["bank_panel"]=_panel_pass(cfg,state,now,stop,progress,should_stop)
+                except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
+                    report["sources"]["bank_panel"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
+                _save_state(state)
+
+        prior_option=dict(state.get("coverage_sources",{}).get("options",{}))
+        def option_stop():
+            return option_cancel.is_set() or bool(history_budget.BUDGET.remaining_cooldown()) or should_stop()
+
+        option_cancel=Event()
+        if cfg["options"] and (cfg["constituents"] or cfg["bank_panel"]) and not during_priority and not provider_limited() and not should_stop():
+            # Index history is audited first: bank gaps and option observed-day
+            # coverage depend on it. Bank files and expired-option receipts have
+            # distinct canonical writers, so these two lanes may overlap.
+            report["backfill_mode"]="parallel_history"
+            progress_lock=RLock()
+            lane_pct={"banks":25.0,"options":0.0}
+            lane_stage={"banks":"bank history queued","options":"option history queued"}
+            def lane_progress(lane,pct,msg):
+                if progress:
+                    with progress_lock:
+                        lane_pct[lane]=max(lane_pct[lane],pct if lane=="banks" else max(0,pct-55))
+                        lane_stage[lane]=msg
+                        progress(min(99,sum(lane_pct.values())),
+                                 "Banks: "+lane_stage["banks"][:72]+" | Options: "+lane_stage["options"][:112])
+            with ThreadPoolExecutor(max_workers=1,thread_name_prefix="history-options") as pool:
+                future=pool.submit(option_pass,lambda pct,msg:lane_progress("options",pct,msg),prior_option,option_stop)
+                try:
+                    bank_pass(lambda pct,msg:lane_progress("banks",pct,msg))
+                    lane_progress("banks",55,"bank history audited")
+                    accept_option(future.result())
+                finally:
+                    option_cancel.set()
+        else:
+            bank_pass(progress)
+            if cfg["options"] and not provider_limited() and not should_stop():
+                accept_option(option_pass(progress,prior_option,option_stop))
         shared_cooldown=history_budget.BUDGET.remaining_cooldown()
         if shared_cooldown:
             report["provider_rate_limited"]=True
@@ -773,7 +822,8 @@ def run(*,progress=None,now=None):
         states.extend(v["state"] for v in report["sources"].get("index",{}).values())
         report["state"]="paused" if should_stop() else "partial" if not states or any(x!="checked" for x in states) else "checked"
         if report["state"]=="paused":
-            report["reason"]=report.get("pause_reason","maintenance_paused")
+            report["pause_reason"]=pause[0] or "maintenance_paused"
+            report["reason"]=report["pause_reason"]
         if progress:progress(100,"Automatic maintenance pass saved")
         return report
     finally:
