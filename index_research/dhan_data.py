@@ -23,6 +23,8 @@ import time
 from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from contextlib import nullcontext
+from . import dhan_history_budget as history_budget
 
 import numpy as np
 import pandas as pd
@@ -106,13 +108,18 @@ def _post_json(path: str, payload: dict, token: str, *, attempts: int=4,
     LOG.info("Dhan candle request started: endpoint=%s interval=%s from=%s to=%s instrument=%s segment=%s security_id=%s",
              path, payload.get("interval", "daily"), payload.get("fromDate"), payload.get("toDate"),
              payload.get("instrument"), payload.get("exchangeSegment"), payload.get("securityId"))
+    real_transport = opener is urlopen
     for attempt in range(attempts):
         try:
-            with opener(request, timeout=30) as response:
-                body = response.read()
+            with (history_budget.BUDGET.slot() if real_transport else nullcontext()):
+                with opener(request, timeout=30) as response:
+                    body = response.read()
             result = json.loads(body)
             if not isinstance(result, dict):
                 raise ValueError("Unexpected Dhan API response")
+            if real_transport and str(result.get("errorCode","")).strip() in ("DH-904","805"):
+                history_budget.BUDGET.throttle()
+                raise history_budget.HistoricalThrottle(history_budget.BUDGET.remaining_cooldown())
             if result.get("status") == "failure" or result.get("errorCode"):
                 # Vendor messages might contain account context; do not print body.
                 raise RuntimeError("Dhan returned an error: verify token, instrument, subscription and dates")
@@ -121,6 +128,17 @@ def _post_json(path: str, payload: dict, token: str, *, attempts: int=4,
         except HTTPError as exc:
             LOG.warning("Dhan candle HTTP error: endpoint=%s status=%s attempt=%s/%s security_id=%s",
                         path, exc.code, attempt + 1, attempts, payload.get("securityId"))
+            if real_transport:
+                vendor_code=""
+                try:
+                    failure=json.loads(exc.read(4096))
+                    if isinstance(failure,dict):
+                        vendor_code=str(failure.get("errorCode","")).strip()
+                except (ValueError,TypeError,OSError,AttributeError):
+                    pass
+                if exc.code==429 or vendor_code in ("DH-904","805"):
+                    history_budget.BUDGET.throttle(history_budget.retry_after(exc.headers))
+                    raise history_budget.HistoricalThrottle(history_budget.BUDGET.remaining_cooldown()) from None
             if exc.code in (429,500,502,503,504) and attempt < attempts-1:
                 sleeper(min(30,2**attempt+random.random()))
                 continue
