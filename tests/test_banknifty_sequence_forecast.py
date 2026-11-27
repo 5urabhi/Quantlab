@@ -142,3 +142,21 @@ class TorchSequenceTests(TestCase):
         self.assertEqual(result["epoch"],1)
         self.assertTrue(np.isfinite(result["rank"]))
         self.assertTrue(result["state"])
+
+    def test_convergence_logs_loss_parts_and_reduces_lr_on_plateau(self):
+        data=tiny();rows=np.array([0,1]);fit=d.context_fit(data,rows)
+        benchmark=m.score(data,rows,*m.adaptive_predict(data,rows,m.adaptive_fit(data,rows)))
+        from unittest.mock import patch
+        # Force a flat validation objective; retain the first best checkpoint.
+        with patch.object(m,"_rank",return_value=1.):
+            result=m.fit_one(data,rows,rows,fit,"transformer",15,benchmark,
+                             epochs=10,batch=2,device=torch.device("cpu"),convergence=True)
+        self.assertEqual(result["epoch"],1)
+        self.assertEqual(result["stop_reason"],"validation_early_stop")
+        self.assertEqual(len(result["history"]),7)
+        self.assertLess(result["history"][-1]["learning_rate"],.001)
+        for row in result["history"]:
+            p=row["training_loss_components"]
+            reconstructed=p["candle"]+.3*(p["direction_bce"]+p["tail_bce"])+.4*p["quantile"]
+            self.assertAlmostEqual(row["training_loss"],reconstructed,places=5)
+        self.assertEqual(m.CONVERGENCE_CONFIGS,(("transformer",15),))
