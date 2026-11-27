@@ -23,7 +23,7 @@ from .cpr_direct_utility import _timely
 
 VERSION="banknifty_target_capped_ml_v1"
 HOLDS=(30,60)
-POLICIES=("raw","capped","capped_liquid","ml","ml_daily")
+POLICIES=("raw","capped","capped_liquid","iv_robust","ml","ml_daily")
 COST=math_target.ORDER_COST_INR
 TARGET=math_target.TARGET
 WARMUP=20
@@ -34,7 +34,7 @@ MAX_DAILY_BYTES=256*1024*1024
 FEATURES=("scenario_target_probability","scenario_capped_return","scenario_stop_probability",
           "scenario_expected_return","scenario_count","iv_proxy","signed_moneyness",
           "premium","units","days_to_nominal_expiry","decision_minute","median_volume",
-          "one_minute_rms","signed_spot_momentum","signed_spot_forecast_points")
+          "one_minute_rms","signed_spot_momentum","signed_spot_forecast_points","vendor_iv_5m_relative_change","vendor_iv_change_missing")
 DAILY_FEATURES=("prior_market_median_return","prior_up_fraction","prior_cross_section_mad",
                 "prior_20_session_volatility","prior_volatility_historical_percentile")
 
@@ -110,7 +110,8 @@ def candidate_features(c,index_day,m):
        forecast["stop_probability"],forecast["expected_net_return"],len(c["scenario_days"]),
        c["iv_proxy"],direction*log(c["spot"]/c["strike"]),c["premium"],c["units"],
        365*c["tau"],m,log1p(c.get("median_recent_volume",0.)),sigma,
-       direction*log(index_day[m][3]/index_day[m-15][3]),direction*c["expected_terminal_move_points"]]
+       direction*log(index_day[m][3]/index_day[m-15][3]),direction*c["expected_terminal_move_points"],
+       c.get("vendor_iv_5m_relative_change",0.),float(c.get("vendor_iv_change_missing",True))]
     return [float(v) for v in x] if all(isfinite(v) for v in x) else None
 
 
@@ -228,13 +229,34 @@ def capped_account(metrics,journal,episodes):
             "capped_stress_by_day_inr":{d:round(v,2) for d,v in sorted(daily.items())}}
 
 
-def evaluate(rows,dates,policy,models,context,*,capital,budget):
+def limit_touch(ep,result,table):
+    """Conservative OHLC reachability diagnostic for a standing target.
+    Stop-touch wins ambiguous same-bar events; no fill, queue or P&L inferred.
+    """
+    if result["state"]!="complete" or ep["state"]!="entered":return "not_observed_entry_and_exit"
+    entry=ep["entry"];units=ep["units"];day=ep["session"]
+    target=entry*(1+TARGET)+2*COST/units
+    stop=entry*(1+math_target.STOP)+2*COST/units
+    request=result.get("exit_request_utc")
+    if not request:return "missing_exit_request"
+    for j in range(ep["minute"]+2,r.SQUAREOFF_MINUTE):
+        if r._stamp(day,j+2)>request:break
+        q=r._observed(table,day,j,ep["side"],ep["strike"])
+        if q is None:return "monitoring_gap"
+        hi,lo=q.get("high"),q.get("low")
+        if not all(type(v) in (int,float) and isfinite(v) and v>0 for v in (hi,lo)):return "missing_range"
+        if lo<=stop:return "ambiguous_both_touched" if hi>target else "stop_touched_first"
+        if hi>target:return "target_traded_through_first"
+    return "neither_observed_before_request"
+
+
+def evaluate(rows,dates,policy,models,context,*,capital,budget,table=None):
     episodes=[];counts=Counter();scores=[]
     if policy.startswith("ml") and models.get(policy) is None:
         return {"state":"unavailable_ml_support","qualified":False}
     for row in rows:
         day=row["day"]
-        kind="raw" if policy=="raw" else "capped" if policy=="capped" else "liquid"
+        kind="raw" if policy=="raw" else "capped" if policy=="capped" else "iv_robust" if policy=="iv_robust" else "liquid"
         item=row["candidates"].get(kind)
         if item is None:
             counts["no_candidate"]+=1;continue
@@ -255,6 +277,12 @@ def evaluate(rows,dates,policy,models,context,*,capital,budget):
     metrics,journal=r._evaluate(episodes,method="fixed_stop",capital=capital,risk_budget=budget,
                                 dates=dates,strict_execution=True)
     metrics.update(capped_account(metrics,journal,episodes))
+    touches=Counter()
+    if table is not None:
+        by_key={(e["session"],e["decision_utc"]):e for e in episodes}
+        for t in journal:
+            if t["state"]=="complete":
+                touches[limit_touch(by_key[(t["session"],t["decision_utc"])],t,table)]+=1
     calibration={}
     if scores:
         per_day=defaultdict(list)
@@ -273,7 +301,7 @@ def evaluate(rows,dates,policy,models,context,*,capital,budget):
             and metrics["target_capped_stress_inr"]>0
             and metrics["capped_stress_without_best_day_inr"]>0)
     return {"state":"assessed","qualified":bool(passed),"counts":dict(counts),"metrics":metrics,
-            "candidate_calibration":calibration,"journal":journal}
+            "candidate_calibration":calibration,"standing_target_touch_diagnostic":dict(touches),"journal":journal}
 
 
 def run(*,sessions=90,to_date=None,capital=17000.,budget=12000.,lot_size=30,max_lots=3,wings=10,progress=None):
@@ -299,12 +327,13 @@ def run(*,sessions=90,to_date=None,capital=17000.,budget=12000.,lot_size=30,max_
     if not table:raise ValueError("No usable saved BANKNIFTY option candles")
     out={"version":VERSION,"capital_inr":capital,"budget_inr":budget,"lot_size_assumed":lot_size,
          "max_lots":max_lots,"wings":wings,"order_cost_inr":COST,"target":TARGET,"stop":math_target.STOP,
+         "iv_sensitivity_volatility_points":math_target.IV_STRESS_POINT*100,
          "training_dates":train,"validation_dates":val,"evaluation_dates":test,
          "index_sources":hashes,"index_failures":failures,"option_sources":meta,
          "option_window_states":dict(Counter(evidence.window_status(coverage,d,s,today)["state"] for d in needed for s in ("CALL","PUT"))),
          "daily_context":context_meta,"ml_features":list(FEATURES),"development":{},"validation":{},
          "selected":None,"evaluation":None,
-         "warning":"Exploratory only; previously inspected dates are not fresh confirmation. Target-capped accounting is a sensitivity analysis, not verified limit fills. Same original rolling strike/side OHLC and nominal expiry proxy, constant IV scenarios, assumed lot, no historical bid/ask, INR 30 all-in/order; actual fills and charges unverified. Ten prior observed option bars and median traded volume >= units are liquidity proxies, not executable depth. Labels use earlier actual premium outcomes and full planned funding stress on missing/late exits, not stock-return labels. Candidate examples can overlap; day weighting does not make them independent. Daily closes are unadjusted available-observation broad equity context, not five years of certified option labels or historical membership. No orders, no ML auto-promotion, no compounding."}
+         "warning":"Exploratory only; previously inspected dates are not fresh confirmation. Target-capped accounting and standing target trade-through diagnostics are sensitivity analyses, not verified limit fills. Same original rolling strike/side OHLC and nominal expiry proxy, constant IV baseline plus prespecified +/- one volatility-point ramp sensitivity, assumed lot, no historical bid/ask, INR 30 all-in/order; actual fills and charges unverified. Ten prior observed option bars and median traded volume >= units are liquidity proxies, not executable depth. Labels use earlier actual premium outcomes and full planned funding stress on missing/late exits, not stock-return labels. Candidate examples can overlap; day weighting does not make them independent. Daily closes are unadjusted available-observation broad equity context, not five years of certified option labels or historical membership. No orders, no ML auto-promotion, no compounding."}
     model_by_hold={}
     opts=dict(lot_size=lot_size,max_lots=max_lots,budget=budget,progress=progress)
     for hold in HOLDS:
@@ -327,7 +356,7 @@ def run(*,sessions=90,to_date=None,capital=17000.,budget=12000.,lot_size=30,max_
             # If daily lane exists, restrict the base ML lane to the same
             # context-available anchors. The mathematical lanes remain full.
             lane_rows=[row for row in rows if row["day"] in context] if policy=="ml" and daily_model is not None else rows
-            result=evaluate(lane_rows,val,policy,models,context,capital=capital,budget=budget)
+            result=evaluate(lane_rows,val,policy,models,context,capital=capital,budget=budget,table=table)
             results[policy]=result
             if progress:
                 m=result.get("metrics",{})
@@ -344,6 +373,6 @@ def run(*,sessions=90,to_date=None,capital=17000.,budget=12000.,lot_size=30,max_
     out["selected"]={"hold":hold,"policy":policy}
     rows,counts=collect(index,table,test,train,hold,**opts)
     if policy=="ml" and model_by_hold[hold]["ml_daily"] is not None:rows=[row for row in rows if row["day"] in context]
-    out["evaluation"]={"counts":counts,"result":evaluate(rows,test,policy,model_by_hold[hold],context,capital=capital,budget=budget)}
+    out["evaluation"]={"counts":counts,"result":evaluate(rows,test,policy,model_by_hold[hold],context,capital=capital,budget=budget,table=table)}
     out["state"]="exploratory_evaluation_complete"
     return out
