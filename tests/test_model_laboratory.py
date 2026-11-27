@@ -195,10 +195,12 @@ class ModelLaboratoryTests(unittest.TestCase):
         self.assertEqual(invalid.status_code,400)
 
     def test_documentation_routes_have_only_allowlisted_text(self):
-        for topic in ("user-guide","model-catalog","reproducibility"):
+        expected=(Path(__file__).resolve().parents[1]/"README.md").read_text(encoding="utf-8")
+        for topic in ("user-guide","model-catalog","reproducibility","workspace","metrics"):
             response=self.client.get("/api/guide/"+topic)
             self.assertEqual(response.status_code,200,(topic,response.text[:500]))
-            self.assertIn("QuantLab",response.text)
+            self.assertEqual(response.text,expected)
+            self.assertIn("Live research checklist",response.text)
             self.assertNotIn("DHAN_ACCESS_TOKEN=",response.text)
         unknown=self.client.get("/api/guide/../../.env")
         self.assertNotEqual(unknown.status_code,200)

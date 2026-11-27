@@ -1,6 +1,6 @@
 import {useState} from 'react'
 import {Activity, ArrowRight, BookOpen, CheckCircle2, CircleAlert,
-  Database, FlaskConical, GitBranch, HelpCircle, Layers, Search, ShieldCheck} from 'lucide-react'
+  Database, FlaskConical, HelpCircle, Search, ShieldCheck} from 'lucide-react'
 import './model-lab.css'
 import './guide.css'
 
@@ -100,12 +100,7 @@ export default function ResearchGuide({onNavigate}:Props){
       <h2>From market data to reproducible evidence.</h2>
       <p>QuantLab is a private, local-first quantitative research workbench. This guide explains what to click, what each screen means, and how to avoid overstating backtests or simulations.</p>
       <div className="qg-doc-buttons">
-        <a href="/api/guide/user-guide" target="_blank" rel="noreferrer"><BookOpen size={15}/> Full user guide <ArrowRight size={13}/></a>
-        <a href="/api/guide/model-catalog" target="_blank" rel="noreferrer"><Layers size={15}/> Model mathematics catalog <ArrowRight size={13}/></a>
-        <a href="/api/guide/workspace" target="_blank" rel="noreferrer"><BookOpen size={15}/> Research Workspace manual <ArrowRight size={13}/></a>
-        <a href="/api/guide/metrics" target="_blank" rel="noreferrer">
-          <BookOpen size={15}/> Complete metric formula reference <ArrowRight size={13}/></a>
-        <a href="/api/guide/reproducibility" target="_blank" rel="noreferrer"><GitBranch size={15}/> Research & reproducibility <ArrowRight size={13}/></a>
+        <a href="/api/guide/user-guide" target="_blank" rel="noreferrer"><BookOpen size={15}/> Canonical project guide &amp; research checklist <ArrowRight size={13}/></a>
         <a href="/api/docs" target="_blank" rel="noreferrer"><Database size={15}/> Interactive API docs <ArrowRight size={13}/></a>
       </div></div><div className="qg-hero-icon"><FlaskConical size={42}/></div></section>
     <section className="qg-panel">
