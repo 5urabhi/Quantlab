@@ -66,7 +66,7 @@ class MaintenanceTests(TestCase):
             self.assertEqual(result["state"],"paused")
             self.assertEqual(result["pause_reason"],"live_quote_queue_backlog")
             self.assertEqual(m._state()["next_due_reason"],"live_recording_priority")
-            self.assertEqual(m._state()["next_due_utc"],(live+m.PRODUCTIVE_RETRY).isoformat())
+            self.assertEqual(m._state()["next_due_utc"],(live+m.PRESSURE_RETRY).isoformat())
             provider.assert_not_called()
 
     def test_missing_credentials_report_blocker(self):
@@ -198,3 +198,31 @@ class MaintenanceTests(TestCase):
         self.assertEqual(attempted,{"NSE_EQ:1333|2026-11-23"})
         self.assertFalse(m._attempt_allowed(state["repairs"],"NSE_EQ:1333|2026-11-23",self.now))
         self.assertTrue(m._attempt_allowed(state["repairs"],"NSE_EQ:1333|2026-11-24",self.now))
+
+
+    def test_option_progress_available_before_pass_finishes(self):
+        cfg={**m.DEFAULT,"enabled":True,"index":False,"constituents":False}
+        m.configure(cfg,True)
+        counts={"eligible_offset_date_pairs":100,"checked_offset_date_pairs":60,
+                "remaining_planned_requests":20,"batch_attempted":2,"batch_limit":20}
+        old={"state":"partial","members":{}}
+        state=m._state()
+        state.update(coverage_config=cfg,coverage_sources={"bank_panel":old})
+        m._save_state(state)
+        lane={"state":"partial_requests","existing_verified_receipts":30,"new_receipts":2,
+              "planned_missing_requests":22,"unattempted_requests":20,"empty_processed_receipts":0,
+              "usable_rows_in_processed_receipts":2,"unreadable_receipts_encountered":0,
+              "excluded_active_calendar_days":1,"continuous_coverage_certified":False,
+              "empty_verified_receipts":0,"observed_rolling_minute_slots":2,
+              "observed_offset_session_pairs":1,"observed_session_dates":1,"rejected_requests":[],**counts}
+        def provider(**kwargs):
+            kwargs["on_counts"](counts)
+            live=m.status()
+            self.assertEqual(live["option_progress"],counts)
+            self.assertEqual(live["coverage_sources"]["bank_panel"],old)
+            return lane
+        with patch.object(m,"_now",return_value=self.now),patch.object(m.recorder_storage,"allow",return_value=True),patch.object(m.dhan_auth,"check_profile",return_value={"ok":True}),patch.object(m.options,"run",side_effect=provider),patch.object(m.mp,"_history",return_value={"days":{}}):
+            result=m.run(now=self.now)
+            self.assertIsNone(m.status()["option_progress"])
+            self.assertEqual(m.status()["coverage_sources"]["options"]["checked_offset_date_pairs"],60)
+        self.assertEqual(result["state"],"partial")
