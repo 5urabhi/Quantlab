@@ -307,6 +307,9 @@ def request_check():
         raise ValueError("Enable and authorize automatic maintenance first")
     with LOCK:
         state=_state()
+        due,reason=_effective_schedule(state)
+        if reason=="provider_rate_limit" and due and datetime.fromisoformat(due)>_now():
+            return status()
         state["next_due_utc"]=None
         state["next_due_reason"]="manual_check_requested"
         _write("state",state)
@@ -506,7 +509,8 @@ def _equity_pass(cfg,state,now,stop,progress,should_stop):
             "batch_counts":outcome["counts"],"observed_member_session_gaps":gaps,"unavailable_sources":unavailable,
             "members":observed,"repair_dates_attempted":len(attempted),
             "retryable_member_session_gaps":sum(x.get("retryable_sessions",0) for x in observed.values()),
-            "batch_errors":bool(outcome["errors"])}
+            "batch_errors":bool(outcome["errors"]),
+            "provider_rate_limited":any(_rate_limit_message(x.get("code")) or _rate_limit_message(x.get("summary")) for x in outcome.get("failure_examples",[]))}
 
 def _panel_pass(cfg,state,now,stop,progress,should_stop):
     """Optional, independently labeled five-bank watchlist.
@@ -558,6 +562,7 @@ def _panel_pass(cfg,state,now,stop,progress,should_stop):
             "members":observed,"repair_dates_attempted":len(attempted),
             "retryable_member_session_gaps":sum(x.get("retryable_sessions",0) for x in observed.values()),
             "batch_status":outcome["status"],"batch_errors":bool(outcome["errors"]),
+            "provider_rate_limited":any(_rate_limit_message(x.get("code")) or _rate_limit_message(x.get("summary")) for x in outcome.get("failure_examples",[])),
             "warning":"Fixed research watchlist, not verified BANKNIFTY membership or index attribution."}
 
 
@@ -578,6 +583,8 @@ def run(*,progress=None,now=None):
             "backfill_mode":"live_priority" if during_priority else "standard"}
     state.update(target=_target(now),next_due_utc=(now+RETRY).isoformat(),next_due_reason="pass_running",last_run=report,schedule_version=7)
     _save_state(state)
+    def provider_limited():
+        return any(v.get("provider_rate_limited") for k,v in report["sources"].items() if k!="index")
     def should_stop():
         # Once paused, do not re-enter the same pass if pressure briefly
         # clears. The next scheduled pass rechecks current resources.
@@ -625,14 +632,14 @@ def run(*,progress=None,now=None):
                 if progress:progress(49,"Constituent history remains partially unavailable")
                 report["sources"]["constituents"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
             _save_state(state)
-        if cfg["bank_panel"] and not should_stop():
+        if cfg["bank_panel"] and not provider_limited() and not should_stop():
             if progress:progress(49,"Checking fixed major-bank research panel")
             try:
                 report["sources"]["bank_panel"]=_panel_pass(cfg,state,now,stop,progress,should_stop)
             except (ValueError,OSError,RuntimeError,KeyError,TypeError) as exc:
                 report["sources"]["bank_panel"]={"state":"blocked","reason":job_safety.scrub(exc)[:200]}
             _save_state(state)
-        if cfg["options"] and not should_stop():
+        if cfg["options"] and not provider_limited() and not should_stop():
             if progress:progress(55,"Checking saved expired-option request windows")
             try:
                 option_start=_local(now).date()-timedelta(days=cfg["option_days"])
