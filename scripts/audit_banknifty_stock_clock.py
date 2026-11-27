@@ -14,11 +14,11 @@ from pathlib import Path
 import pandas as pd
 
 from workstation_api import dhan_workspace as dw, service, dhan_checkpoint as cp
-from workstation_api import verified_equity_context as ve
+from workstation_api import verified_equity_context as ve, nse_session_policy as sessions
 from scripts.prepare_banknifty_data import audit_index, say
 
 
-def clock_summary(payload, days, rows):
+def clock_summary(payload, days, rows, identity=None, symbol=None):
     frame=pd.read_csv(BytesIO(payload),usecols=["datetime"])
     if len(frame)!=rows:raise ValueError("Original row count mismatch")
     clock=pd.to_datetime(frame["datetime"],utc=True,errors="raise").dt.tz_convert("Asia/Kolkata")
@@ -26,7 +26,9 @@ def clock_summary(payload, days, rows):
     day=clock.dt.strftime("%Y-%m-%d")
     minute=clock.dt.hour*60+clock.dt.minute
     relevant=day.isin(days)
-    regular=(minute>=555)&(minute<930)
+    expected={d:sessions.cash_bank_minutes(d,identity,symbol) for d in days}
+    closes=day.map(expected).fillna(sessions.COMPARISON_MINUTES)+sessions.OPEN_MINUTE
+    regular=(minute>=sessions.OPEN_MINUTE)&(minute<closes)
     aligned=(clock.dt.second==0)&(clock.dt.microsecond==0)&(clock.dt.nanosecond==0)
     exact=pd.DataFrame({"day":day,"minute":minute}).loc[relevant&regular&aligned]
     observed=exact.groupby("day")["minute"].agg(set).to_dict()
@@ -35,24 +37,28 @@ def clock_summary(payload, days, rows):
     missing=Counter()
     examples=[]
     empty=[]
+    complete=[]
     for d in sorted(days):
         actual=observed.get(d,set())
         sizes[len(actual)]+=1
         if not actual:
             empty.append(d)
             continue
-        absent=set(range(555,930))-actual
+        absent=set(range(sessions.OPEN_MINUTE,sessions.OPEN_MINUTE+expected[d]))-actual
+        if not absent:complete.append(d)
         if absent:
             missing.update(absent)
             if len(examples)<3:
                 examples.append({"session":d,"exact_minutes":len(actual),"first":fmt(min(actual)),
                                  "last":fmt(max(actual)),"missing":[fmt(x) for x in sorted(absent)[:10]]})
     return {"expected_index_sessions":len(days),"sessions_with_any_raw_rows":len(any_rows),
-            "complete_regular_sessions":sizes[375],"regular_minute_count_distribution":dict(sorted(sizes.items())),
+            "session_policy":sessions.BANK_POLICY,"scheduled_session_minute_counts":dict(Counter(str(n) for n in expected.values())),
+            "expected_minute_slots":sum(expected.values()),"observed_minute_slots":sum(len(v) for v in observed.values()),
+            "complete_regular_sessions":len(complete),"regular_minute_count_distribution":dict(sorted(sizes.items())),
             "raw_rows_in_range":int(relevant.sum()),"off_minute_grid_regular_rows":int((relevant&regular&~aligned).sum()),
             "outside_regular_hours_rows":int((relevant&~regular).sum()),
             "last_raw_session":max(any_rows) if any_rows else None,
-            "last_complete_regular_session":max((d for d,v in observed.items() if len(v)==375),default=None),
+            "last_complete_regular_session":max(complete,default=None),
             "most_frequent_missing_minutes_partial_sessions":[[fmt(k),v] for k,v in missing.most_common(8)],
             "zero_exact_minute_dates":empty,"partial_examples":examples}
 
@@ -91,7 +97,7 @@ def main():
             budget-=len(payload)
             if len(payload)!=size or sha256(payload).hexdigest()!=receipt["sha256"]:
                 raise ValueError("Original SHA mismatch; retry audit after current writer completes")
-            result=clock_summary(payload,days,receipt["rows"])
+            result=clock_summary(payload,days,receipt["rows"],row["id"],row["symbol"])
             result["sha256"]=receipt["sha256"]
             result["rejected_provider_bars"]=receipt.get("rejected_provider_bars",0)
         except (OSError,ValueError,TypeError,KeyError,OverflowError) as exc:
