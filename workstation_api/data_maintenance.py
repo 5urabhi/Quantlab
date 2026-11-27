@@ -16,7 +16,7 @@ import uuid
 
 from . import (service, market_patterns as mp, cockpit_sources, dhan_workspace as dw,
                pit_index, dhan_auth, historical_alpha as ha, intraday_parquet as pq,
-               options_history_sync as options, recorder_storage, job_safety)
+               options_history_sync as options, recorder_storage, job_safety, nse_session_policy as sessions)
 
 IST=ZoneInfo("Asia/Kolkata")
 DEFAULT={"enabled":False,"index":True,"constituents":True,"options":True,"bank_panel":False,
@@ -474,27 +474,8 @@ def _batch_for(state,start,stop,plan):
     _save_state(state)
     return raw
 
-# NSE/CMTR/74466 (2026-05-29): CAS-eligible cash equities end
-# continuous trading at 15:15 IST from 2026-08-03.
-# NSE/CMTR/77355 (2026-11-06): continuous trading returns to 15:30
-# from 2026-12-07. Auction prices are not continuous minute OHLCV.
-# Restricted to the named bank universe; never infer eligibility solely
-# from a shortened observation or apply the policy to index/F&O bars.
-BANK_CAS_POLICY="nse_bank_cash_cas_2026_v1"
-BANK_CAS_START="2026-08-03"
-BANK_CAS_END_EXCLUSIVE="2026-12-07"
-BANK_CAS_SYMBOLS=frozenset({
-    "AUBANK","AXISBANK","BANKBARODA","CANBK","FEDERALBNK","HDFCBANK",
-    "ICICIBANK","IDFCFIRSTB","INDUSINDBK","KOTAKBANK","PNB","SBIN",
-    "UNIONBANK","YESBANK",
-})
-
-
-def _bank_expected_minutes(day,identity,symbol):
-    if (identity.startswith("NSE_EQ:") and symbol in BANK_CAS_SYMBOLS
-            and BANK_CAS_START<=day<BANK_CAS_END_EXCLUSIVE):
-        return 360
-    return mp.MINUTES
+BANK_CAS_POLICY=sessions.BANK_POLICY
+_bank_expected_minutes=sessions.cash_bank_minutes
 
 
 def _bank_minute_evidence(days,candles,identity,state,now,*,symbol=""):
@@ -807,6 +788,8 @@ def run(*,progress=None,now=None):
                 result["source"].update({k:opt[k] for k in ("eligible_offset_date_pairs","checked_offset_date_pairs",
                     "missing_offset_date_pairs","remaining_planned_requests","batch_limit","batch_attempted","batch_completed",
                     "scope_start","scope_end","scope_wings","known_observed_minute_slots","known_expected_minute_slots","known_market_dates",
+                     "extended_audit_policy","extended_observed_minute_slots","extended_expected_minute_slots","extended_market_dates",
+                     "revision_tail_observed_slots","revision_market_dates",
                     "active_receipts_per_minute") if k in opt})
                 result["source"]["coverage_as_of"]=_now().isoformat()
                 result["source"]["rejected_windows"]=len(opt["rejected_requests"])
