@@ -110,6 +110,14 @@ case "${1:-workstation}" in
     shift
     manual_research -m scripts.run_candle_patterns "$@"
     ;;
+  banknifty-math)
+    if [ ! -x .venv/bin/python ]; then
+      printf 'Python environment missing. First run: bash run.sh setup\n' >&2
+      exit 2
+    fi
+    shift
+    manual_research -m scripts.run_banknifty_math_target "$@"
+    ;;
   cpr-research)
     if [ ! -x .venv/bin/python ]; then
       printf 'Python environment missing. First run: bash run.sh setup\n' >&2
@@ -169,6 +177,7 @@ bash run.sh verify-saved --strict  Nonzero exit if any original inputs remain mi
 bash run.sh audit-models     Read-only audit of every model and active dataset
 bash run.sh audit-models --dataset dhan_shared  Audit shared Dhan only
 bash run.sh audit-models --preflight-only  Check inputs without running models
+bash run.sh banknifty-math    Non-ML BANKNIFTY long-option +10% net target research
 bash run.sh cpr-research  CPR/EMA baseline, ML filter and offline-Q exits\nbash run.sh validate-trading  Off-hours saved-source trading validation; no broker requests\nbash run.sh archive-market --day YYYY-MM-DD  Verified non-destructive market archive (off-hours)
 bash run.sh archive-market --verify PATH  Verify archive checksums and row counts
 HELP
