@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 from threading import Lock
 from hashlib import sha256
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import os
 import json
@@ -22,6 +23,7 @@ MAX_RECEIPTS=20000
 MAX_REQUESTS=8200
 MAX_NEAR_WINGS=10
 MAX_CONSECUTIVE_REJECTIONS=66
+REQUEST_START_SPACING=.45
 MAX_REJECTIONS=132
 LOCK=Lock()
 SOURCE="Dhan v2 /charts/rollingoption"
@@ -229,8 +231,80 @@ def acquisition_lock():
         LOCK.release()
 
 
+@contextmanager
+def _window_reader(fetcher, pipeline):
+    """Bounded one-window lookahead; only the caller verifies/writes receipts.
+
+    One network worker, one pending response, and a single shared start
+    clock. The next request overlaps local normalization and atomic save,
+    not an unbounded queue. A discarded in-flight response is never marked
+    checked. A throttle response from that request still stops acquisition.
+    """
+    pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix="option-fetch") if pipeline else None
+    pending=None
+    last_start=None
+
+    def fetch(body):
+        nonlocal last_start
+        payload=exp._get_cached(body)
+        if payload is not None:
+            return payload,True
+        if fetcher is None:
+            if pipeline:
+                if last_start is not None:
+                    delay=REQUEST_START_SPACING-(time.monotonic()-last_start)
+                    if delay>0:
+                        time.sleep(delay)
+                last_start=time.monotonic()
+            else:
+                time.sleep(REQUEST_START_SPACING)
+            payload=exp._original_response_once(body)
+        else:
+            payload=fetcher(body)
+        if not isinstance(payload,dict) or not isinstance(payload.get("data"),dict):
+            raise ValueError("Invalid Dhan expired-option history payload")
+        return payload,False
+
+    def read(body):
+        nonlocal pending
+        if pool is None:
+            return fetch(body)
+        if pending is None:
+            pending=(body,pool.submit(fetch,body))
+        expected,future=pending
+        if expected!=body:
+            raise RuntimeError("Option prefetch request identity mismatch")
+        pending=None
+        return future.result()
+
+    def prefetch(body):
+        nonlocal pending
+        if pool is not None and pending is None:
+            pending=(body,pool.submit(fetch,body))
+
+    try:
+        yield read,prefetch
+    finally:
+        if pool is not None:
+            try:
+                if pending is not None:
+                    _,future=pending
+                    if not future.cancel():
+                        try:
+                            future.result()
+                        except exp.RollingRateLimitError:
+                            # A rate limit must not be hidden by cancellation
+                            # or a local verification failure.
+                            raise
+                        except Exception:
+                            # Unconsumed window remains eligible on resume.
+                            pass
+            finally:
+                pool.shutdown(wait=True,cancel_futures=True)
+
+
 def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,request_limit=None,should_stop=None,
-        priority_sessions=None,on_counts=None):
+        priority_sessions=None,on_counts=None,pipeline=None):
     today=today or exp._ist_today()
     start,stop,eligible=_scope(start_date,end_date,wings,today)
     priority_sessions=tuple(priority_sessions or ())
@@ -304,27 +378,21 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
                     raise exp.RollingRateLimitError(profile.get("provider_retry_after_seconds",0))
                 raise ValueError(profile.get("message") or "Verify Dhan historical-data access in Connections before downloading")
         begun=time.monotonic()
-        for body in requests:
-            if (request_limit is not None and attempted>=request_limit) or (should_stop is not None and should_stop()):
-                stopped_early=True
-                break
-            if progress:
-                progress(min(95,5+90*attempted/max(1,len(requests))),
-                         f"Option history {attempted}/{len(requests)}; {body['fromDate']}..{body['toDate']} {body['drvOptionType']} {body['strike']}")
-            attempted+=1
-            payload=exp._get_cached(body)
-            if payload is not None:
-                exact_reused+=1
-                rows=exp._normalize(payload,body)
-            else:
+        # Production uses one-window lookahead outside live-priority passes.
+        # Injected test transports remain sequential unless explicitly opted in.
+        use_pipeline=(fetcher is None) if pipeline is None else bool(pipeline)
+        batch=requests[:request_limit] if request_limit is not None else requests
+        with _window_reader(fetcher,use_pipeline) as (read,prefetch):
+            for i,body in enumerate(batch):
+                if should_stop is not None and should_stop():
+                    stopped_early=True
+                    break
+                if progress:
+                    progress(min(95,5+90*attempted/max(1,len(requests))),
+                             f"Option history {attempted}/{len(requests)}; {body['fromDate']}..{body['toDate']} {body['drvOptionType']} {body['strike']}")
+                attempted+=1
                 try:
-                    if fetcher is None:
-                        # The exact REST encoding succeeded with urllib and
-                        # all nine fields. Do not repeat four encodings.
-                        time.sleep(.45)
-                        payload=exp._original_response_once(body)
-                    else:
-                        payload=fetcher(body)
+                    payload,cached=read(body)
                 except exp.RollingConnectionError:
                     emit()
                     raise
@@ -333,26 +401,32 @@ def run(*,start_date,end_date,wings=3,progress=None,fetcher=None,today=None,requ
                     rejected_requests.append({"from":body["fromDate"],"through":body["toDate"],
                                               "side":body["drvOptionType"],"strike":body["strike"],
                                               "code":"DH-905"})
-                    # Do not mark rejected windows checked. Avoid flooding
-                    # the endpoint on persistent systematic rejection.
                     emit()
                     if consecutive>=MAX_CONSECUTIVE_REJECTIONS or len(rejected_requests)>=MAX_REJECTIONS:
                         stopped_early=True
                         break
                     continue
-                if not isinstance(payload,dict) or not isinstance(payload.get("data"),dict):
-                    raise ValueError("Invalid Dhan expired-option history payload")
+                # Once a response is received, overlap the next network
+                # request with local verification and atomic persistence.
+                # The next window is never dispatched after a known error.
+                if i+1<len(batch) and not (should_stop is not None and should_stop()):
+                    prefetch(batch[i+1])
                 rows=exp._normalize(payload,body)
-                exp._save_cache(body,payload)
-                downloaded+=1
-            known_minutes+=_record_observed(observed,rows,start,stop,count_days=known_days)
-            consecutive=0
-            completed+=1
-            empty+=not bool(rows)
-            usable+=sum(start_date<=r["session_ist"]<=end_date for r in rows)
-            a,b=date.fromisoformat(body["fromDate"]),date.fromisoformat(body["toDate"])+timedelta(days=1)
-            _add_checked(checked,(body["drvOptionType"],body["strike"]),max(a,start),min(b,stop),dates)
-            emit()
+                if cached:
+                    exact_reused+=1
+                else:
+                    exp._save_cache(body,payload)
+                    downloaded+=1
+                known_minutes+=_record_observed(observed,rows,start,stop,count_days=known_days)
+                consecutive=0
+                completed+=1
+                empty+=not bool(rows)
+                usable+=sum(start_date<=r["session_ist"]<=end_date for r in rows)
+                a,b=date.fromisoformat(body["fromDate"]),date.fromisoformat(body["toDate"])+timedelta(days=1)
+                _add_checked(checked,(body["drvOptionType"],body["strike"]),max(a,start),min(b,stop),dates)
+                emit()
+        if attempted<len(requests):
+            stopped_early=True
         if progress:
             progress(100,"Saved original receipts; some request windows remain" if rejected_requests or attempted<len(requests) else "Saved original receipts; inspect observed coverage")
         return {**preview(start_date,end_date,wings,today),**counts(),
