@@ -278,6 +278,44 @@ class MaintenanceTests(TestCase):
             self.assertEqual(m._state()["next_due_reason"],"normal_backoff")
 
 
+    def test_verified_credentials_immediately_release_auth_backoff(self):
+        cfg={**m.DEFAULT,"enabled":True}
+        m.configure(cfg,True)
+        for last in (
+            {"state":"blocked","profile_code":"auth_rejected"},
+            {"state":"blocked","reason":"Dhan token or historical data permission requires attention"},
+        ):
+            with self.subTest(last=last),patch.object(m,"_now",return_value=self.now),patch.object(m.WAKE,"set") as wake:
+                m._save_state({"target":m._target(self.now),"schedule_version":7,
+                               "next_due_utc":(self.now+timedelta(minutes=5)).isoformat(),
+                               "next_due_reason":"normal_backoff","last_run":last})
+                self.assertFalse(m._due(cfg,m._state(),self.now))
+                self.assertTrue(m.credentials_verified())
+                self.assertTrue(m._due(cfg,m._state(),self.now))
+                self.assertEqual(m._state()["next_due_reason"],"credentials_verified")
+                wake.assert_called_once()
+
+    def test_verified_credentials_preserve_cooldown_active_and_completed_work(self):
+        cfg={**m.DEFAULT,"enabled":True}
+        m.configure(cfg,True)
+        for last,reason in (
+            ({"state":"blocked","profile_code":"profile_rate_limited"},"provider_rate_limit"),
+            ({"state":"running"},"pass_running"),
+            ({"state":"checked"},"all_authorized_scopes_checked"),
+            ({"state":"paused"},"live_recording_priority"),
+            ({"state":"partial","sources":{"options":{"state":"partial"}}},"source_error_backoff"),
+        ):
+            with self.subTest(reason=reason),patch.object(m,"_now",return_value=self.now),patch.object(m.WAKE,"set") as wake:
+                state={"target":m._target(self.now),"schedule_version":7,
+                       "next_due_utc":(self.now+timedelta(minutes=15)).isoformat(),
+                       "next_due_reason":reason,"last_run":last}
+                m._save_state(state)
+                self.assertFalse(m.credentials_verified())
+                self.assertEqual(m._state(),state)
+                wake.assert_not_called()
+        m.configure({**cfg,"enabled":False},False)
+        self.assertFalse(m.credentials_verified())
+
     def test_documented_profile_rate_limit_blocks_every_lane(self):
         m.configure({**m.DEFAULT,"enabled":True},True)
         profile={"ok":False,"code":"profile_rate_limited","provider_retry_after_seconds":1800}
