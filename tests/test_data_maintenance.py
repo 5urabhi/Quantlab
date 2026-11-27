@@ -310,6 +310,15 @@ class MaintenanceTests(TestCase):
         self.assertEqual(m._bank_expected_minutes("2026-12-06",identity,"HDFCBANK"),360)
         self.assertEqual(m._bank_expected_minutes("2026-12-07",identity,"HDFCBANK"),375)
 
+    def test_index_contract_and_segment_closes_are_distinct(self):
+        s=m.sessions
+        self.assertEqual(s.derivatives_segment_minutes("2026-07-31"),375)
+        self.assertEqual(s.derivatives_segment_minutes("2026-08-03"),385)
+        self.assertEqual(s.derivatives_segment_minutes("2026-12-07"),390)
+        self.assertEqual(s.index_contract_minutes("2026-12-29","2026-12-29"),375)
+        self.assertEqual(s.index_contract_minutes("2026-12-29","2027-01-26"),390)
+        self.assertIsNone(s.index_contract_minutes("2026-12-29",None))
+
     def test_unattempted_equity_repairs_remain_eligible(self):
         state={}
         callback,attempted=m._repair_request_callback(state,{"NSE_EQ:1333":["2026-11-23","2026-11-24"]})
