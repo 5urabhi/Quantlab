@@ -20,14 +20,17 @@ def pooled(x,joint):
     return np.concatenate((index,mean,sd,count/max(1,peers.shape[-2])),axis=-1).astype(np.float32)
 
 
-def memory_grid(data,joint,progress=None):
+def memory_grid(data,joint,progress=None,*,known_assets=None):
     """Every completed 15m block and complete observed day, never future.
 
     Daily snapshots represent last completed source session, including its
     running day OHLC/CPR and current technical state; no session is fabricated.
     """
     grid=data["grid"];dates=data["dates"];assets=len(data["identities"])
-    channels=len(d.ASSET_FIELDS)*(4 if joint else 1)
+    fields=data.get('asset_fields',d.ASSET_FIELDS)
+    channels=len(fields)*(4 if joint else 1)
+    known=np.ones(assets,bool) if known_assets is None else np.asarray(known_assets,bool)
+    if known.shape!=(assets,) or not known[0]:raise ValueError('Invalid fold-known assets')
     session=np.full((len(dates),25,channels),np.nan,np.float32)
     daily=np.full((len(dates),channels),np.nan,np.float32)
     complete=d.ASSET_FIELDS.index("session_prefix_complete")
@@ -37,32 +40,36 @@ def memory_grid(data,joint,progress=None):
         if progress and (i%200==0 or i+1==len(dates)):progress(f"V3 memory {'joint' if joint else 'index'} {i+1}/{len(dates)}")
         x=np.array(grid[i,14::15],copy=True)
         x[~(np.isfinite(x[:,:,block])&(x[:,:,0]>0))]=np.nan
+        x[:,~known]=np.nan
         session[i]=pooled(x,joint)
         end=np.array([(sessions.cash_bank_minutes(day,identity) if identity in eq else d.MINUTES)-1
                       for identity in data["identities"]],dtype=int)
         y=np.array(grid[i,end,np.arange(assets)],copy=True)
         y[~((y[:,complete]==1)&(y[:,0]>0))]=np.nan
+        y[~known]=np.nan
         daily[i]=pooled(y[None],joint)[0]
     return session,daily
 
 
-def pack(x,allowed,*,joint):
+def pack(x,allowed,*,joint,asset_features=len(d.ASSET_FIELDS)):
     # Token validity requires at least one actual observed instrument, not a
     # numeric zero coverage marker or padded token.
     observed=x[...,0]>0
-    if joint:observed|=x[...,len(d.ASSET_FIELDS)]>0
+    if joint:observed|=x[...,asset_features]>0
     valid=observed&allowed
     ok=np.isfinite(x)&valid[...,None]
     return np.concatenate((np.where(ok,np.clip(x,-10,10),0.),ok.astype(np.float32)),axis=-1).astype(np.float32),valid
 
 
-def inputs(data,rows,joint,fit,memory):
+def inputs(data,rows,joint,fit,memory,*,known_assets=None):
     x,aux=d.windows(data,rows,joint,fit)
+    if joint and known_assets is not None:x[:,:,~np.asarray(known_assets,bool)]=0
+    features=len(data.get('asset_fields',d.ASSET_FIELDS))
     days=data["day_index"][rows];minutes=data["minutes"][rows]
     session,daily=memory
-    s,sv=pack(session[days],np.arange(25)[None,:]<(minutes[:,None]+1)//15,joint=joint)
+    s,sv=pack(session[days],np.arange(25)[None,:]<(minutes[:,None]+1)//15,joint=joint,asset_features=features)
     prior=days[:,None]-np.arange(60,0,-1)[None,:]
-    p,pv=pack(daily[np.maximum(prior,0)],prior>=0,joint=joint)
+    p,pv=pack(daily[np.maximum(prior,0)],prior>=0,joint=joint,asset_features=features)
     return x,aux,s,p,sv,pv
 
 

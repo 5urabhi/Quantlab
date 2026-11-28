@@ -216,7 +216,27 @@ def add_clock_context(features,a,day,last_complete,n):
                 features[at,col[f"completed_{duration}m_{key}_distance_pct"]]=100*(a[at,3]-value)/a[at,3]
 
 
-def labels_for_session(a,*,all_minutes=False):
+def session_volume_features(a,n):
+    """Causal OHLC typical-price VWAP proxy; not trade-by-trade VWAP.
+
+    Require continuous observed OHLC and reported nonnegative volume from
+    the open. Zero cumulative volume (e.g. many cash indices) is unknown.
+    """
+    result=np.full((MINUTES,2),np.nan,np.float32)
+    if a is None:return result
+    valid=np.isfinite(a[:n,:5]).all(axis=1)&(a[:n,:4]>0).all(axis=1)&(a[:n,4]>=0)
+    bad=np.flatnonzero(~valid);count=int(bad[0]) if len(bad) else n
+    if not count:return result
+    raw=a[:count];vol=raw[:,4];cumulative=np.cumsum(vol)
+    typical=(raw[:,1]+raw[:,2]+raw[:,3])/3.
+    known=cumulative>0
+    vwap=np.divide(np.cumsum(typical*vol),cumulative,out=np.full(count,np.nan),where=known)
+    result[:count,0]=100*(raw[:,3]-vwap)/raw[:,3]
+    result[:count,1]=np.where(known,np.log1p(cumulative)/10,np.nan)
+    return result
+
+
+def labels_for_session(a,*,all_minutes=False,horizons=HORIZONS):
     """Delayed open-to-open target and observed high/low excursions.
 
     A label requires all bars through the exit reference; excursions use
@@ -230,9 +250,26 @@ def labels_for_session(a,*,all_minutes=False):
         minutes=np.flatnonzero(present& (np.arange(n)<MINUTES-DELAY-2))
     else:minutes=np.arange(MIN_HISTORY-1,min(n,MINUTES-DELAY-2),dtype=int)
     entry=minutes+1+DELAY
-    y=np.zeros((len(minutes),len(HORIZONS),3),np.float32)
+    y=np.zeros((len(minutes),len(horizons),3),np.float32)
     mask=np.zeros(y.shape[:2],bool);scheduled=np.zeros_like(mask)
-    for k,duration in enumerate(HORIZONS):
+    for k,duration in enumerate(horizons):
+        # EOD is the completed final regular-session CLOSE, not last open.
+        # Require a valid delayed entry before/at the last minute.
+        if duration=="EOD":
+            scheduled[:,k]=entry<MINUTES
+            valid=scheduled[:,k]&(n==MINUTES)
+            rows=np.flatnonzero(valid)
+            valid[rows]&=(missing[MINUTES]-missing[minutes[rows]])==0
+            mask[:,k]=valid
+            if valid.any():
+                left=entry[valid];ref=a[left,0];exit_=a[MINUTES-1,3]
+                highs=np.maximum.accumulate(a[:MINUTES,1][::-1])[::-1][left]
+                lows=np.minimum.accumulate(a[:MINUTES,2][::-1])[::-1][left]
+                y[valid,k]=np.column_stack((10000*(exit_/ref-1),
+                    10000*np.maximum(np.maximum(highs,exit_)/ref-1,0),
+                    10000*np.maximum(1-np.minimum(lows,exit_)/ref,0)))
+            continue
+        if not isinstance(duration,int) or duration<1 or duration>=MINUTES:raise ValueError("Invalid horizon")
         end=entry+duration;scheduled[:,k]=end<MINUTES
         valid=end<n
         if all_minutes:
@@ -253,7 +290,7 @@ def labels_for_session(a,*,all_minutes=False):
 
 def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,splits,*,index_only=False,progress=None,
           all_history=False,scratch=None,option_archive=None,global_archive=None,
-          include_options=True,pretraining=False):
+          include_options=True,pretraining=False,horizons=HORIZONS,extended_features=False):
     dates=sorted(index);training=set(splits[0])
     bank_ids=[] if index_only else sorted({v for day,mp in membership.items() if day in training for v in mp.values()})
     if all_history and not index_only:
@@ -261,7 +298,8 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
             day in training and np.isfinite(values[:,3]).any() for day,values in source.items())})
     identities=["INDEX:BANKNIFTY",*bank_ids,*(() if index_only else m.f.PEERS)]
     sources=[index,*[stocks.get(x,{}) for x in bank_ids],*[peers.get(x,{}) for x in identities[1+len(bank_ids):]]]
-    channels=len(ASSET_FIELDS)
+    asset_fields=ASSET_FIELDS+(("session_vwap_proxy_distance_pct","session_log_volume") if extended_features else ())
+    channels=len(asset_fields)
     size=len(dates)*MINUTES*len(identities)*channels*4
     if not all_history and size>900_000_000:raise ValueError("Feature grid exceeds 900MB research bound")
     if all_history and scratch is None:raise ValueError("Full-history mode requires bounded disk-backed scratch")
@@ -290,8 +328,9 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
             a=source.get(day)
             if all_history or not bank or identity in active:
                 function=full_asset_features if all_history else asset_features
-                grid[i,:,j]=function(a,source.get(prev),histories[j],n=n,q=q)
+                grid[i,:,j,:len(ASSET_FIELDS)]=function(a,source.get(prev),histories[j],n=n,q=q)
                 add_clock_context(grid[i,:,j],a,day,last_complete[j],n)
+                if extended_features:grid[i,:,j,len(ASSET_FIELDS):]=session_volume_features(a,n)
                 if bank and day in membership:
                     observed=grid[i,:,j,0]>0
                     grid[i,observed,j,ASSET_FIELDS.index("dated_bank_member")]=float(identity in active)
@@ -347,7 +386,7 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
                 dv=daily.get(day,np.full(len(dn),np.nan));nv=overnight.get(day,np.full(len(on),np.nan))
                 aux[i,:,end:end+len(dn)]=dv;aux[i,:,end+len(dn):]=nv
                 avail[i,:,3]=np.isfinite(dv).sum()>=4;avail[i,:,4]=np.isfinite(nv).any()
-        ms,y,c,ok,sc=labels_for_session(a,all_minutes=all_history)
+        ms,y,c,ok,sc=labels_for_session(a,all_minutes=all_history,horizons=horizons)
         di.extend([i]*len(ms));minutes.extend(ms.tolist())
         targets.append(y);classes.append(c);masks.append(ok);scheduled.append(sc)
         audit[day]={"eligible_minutes":len(ms),"observed_index_prefix":prefix(a),
@@ -364,6 +403,7 @@ def build(index,stocks,membership,weights,peers,table,daily,overnight,dn,on,spli
     return {"grid":grid,"aux":aux,"aux_names":aux_names,"identities":identities,"days":np.asarray(dates)[di],
             "all_history":all_history,"equity_identities":bank_ids,"availability_names":availability_names,
             "pretrain_targets":pretrain_targets,"pretrain_counts":pretrain_counts.tolist(),"dates":dates,
+            "asset_fields":asset_fields,"horizons":horizons,
             "day_index":di,"minutes":np.asarray(minutes,dtype=int),"y":np.concatenate(targets),
             "classes":np.concatenate(classes),"mask":np.concatenate(masks),"scheduled":np.concatenate(scheduled),
             "available":avail,"audit":audit}
