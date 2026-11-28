@@ -40,14 +40,12 @@ def memory_grid(data,joint,progress=None,*,known_assets=None):
         if progress and (i%200==0 or i+1==len(dates)):progress(f"V3 memory {'joint' if joint else 'index'} {i+1}/{len(dates)}")
         x=np.array(grid[i,14::15],copy=True)
         x[~(np.isfinite(x[:,:,block])&(x[:,:,0]>0))]=np.nan
-        x[:,~known]=np.nan
-        session[i]=pooled(x,joint)
+        session[i]=pooled(x[:,known],joint)
         end=np.array([(sessions.cash_bank_minutes(day,identity) if identity in eq else d.MINUTES)-1
                       for identity in data["identities"]],dtype=int)
         y=np.array(grid[i,end,np.arange(assets)],copy=True)
         y[~((y[:,complete]==1)&(y[:,0]>0))]=np.nan
-        y[~known]=np.nan
-        daily[i]=pooled(y[None],joint)[0]
+        daily[i]=pooled(y[None,known],joint)[0]
     return session,daily
 
 
@@ -63,7 +61,7 @@ def pack(x,allowed,*,joint,asset_features=len(d.ASSET_FIELDS)):
 
 def inputs(data,rows,joint,fit,memory,*,known_assets=None):
     x,aux=d.windows(data,rows,joint,fit)
-    if joint and known_assets is not None:x[:,:,~np.asarray(known_assets,bool)]=0
+    if joint and known_assets is not None:x=x[:,:,np.asarray(known_assets,bool)]
     features=len(data.get('asset_fields',d.ASSET_FIELDS))
     days=data["day_index"][rows];minutes=data["minutes"][rows]
     session,daily=memory

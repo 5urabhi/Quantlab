@@ -247,7 +247,7 @@ def labels_for_session(a,*,all_minutes=False,horizons=HORIZONS):
     present=np.isfinite(a[:n,:4]).all(axis=1)&(a[:n,:4]>0).all(axis=1)
     missing=np.r_[0,np.cumsum(~present)]
     if all_minutes:
-        minutes=np.flatnonzero(present& (np.arange(n)<MINUTES-DELAY-2))
+        minutes=np.flatnonzero(present&(np.arange(n)<MINUTES-DELAY-(1 if 'EOD' in horizons else 2)))
     else:minutes=np.arange(MIN_HISTORY-1,min(n,MINUTES-DELAY-2),dtype=int)
     entry=minutes+1+DELAY
     y=np.zeros((len(minutes),len(horizons),3),np.float32)
