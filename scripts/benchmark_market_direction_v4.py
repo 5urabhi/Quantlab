@@ -34,7 +34,9 @@ CODE_FILES=("scripts/benchmark_market_direction_v4.py","scripts/market_direction
             "workstation_api/banknifty_forecast_features.py","workstation_api/historical_alpha.py",
             "workstation_api/nse_session_policy.py","workstation_api/market_context.py",
             "workstation_api/alpaca_overnight.py","workstation_api/intraday_parquet.py",
-            "workstation_api/dhan_checkpoint.py","workstation_api/cockpit_sources.py")
+            "workstation_api/dhan_checkpoint.py","workstation_api/cockpit_sources.py",
+            "scripts/benchmark_ema_levels.py","scripts/benchmark_direction_gate.py",
+            "workstation_api/cpr_hybrid_research.py","workstation_api/banknifty_sequence_forecast.py")
 
 
 def canonical(value):
@@ -179,7 +181,28 @@ def journal(data,rows,p,raw):
                    **{name+"_available":bool(data["available"][data["day_index"][row],minute,n]) for n,name in enumerate(data["availability_names"])}}
 
 
+def verified_frozen(folder,manifest_id):
+    """Never rewrite frozen artifacts; fail closed if any hash has changed."""
+    path=folder/"frozen_research_manifest.json"
+    if not path.exists():return None
+    frozen=load_json(path)
+    if frozen["manifest_sha256"]!=manifest_id:raise ValueError("Frozen V4 source manifest differs")
+    def verify(name,expected):
+        if Path(name).name!=name:raise ValueError("Invalid frozen V4 filename")
+        target=folder/name
+        if not target.is_file() or file_digest(target)!=expected:
+            raise ValueError("Frozen V4 artifact missing or changed: "+name)
+    verify("final_report.json",frozen["report_sha256"])
+    verify("ensemble_predictions.csv",frozen["prediction_sha256"])
+    if len(frozen["checkpoints"])!=len(v4.SEEDS):raise ValueError("Incomplete frozen V4 ensemble")
+    for entry in frozen["checkpoints"]:verify(entry["file"],entry["sha256"])
+    return load_json(folder/"final_report.json")
+
+
 def final(data,splits,summary,folder,manifest_id,device,batch,accumulate,progress,meta):
+    completed=verified_frozen(folder,manifest_id)
+    if completed is not None:
+        progress("REUSED frozen final report "+str(folder/"final_report.json"));return completed
     torch,_=d.seq._torch()
     selected=summary["selected"];variant=selected["variant"];width=selected["width"]
     part=v4.prepare(data,splits,stride=FINAL["stride"],progress=progress)
@@ -232,10 +255,7 @@ def final(data,splits,summary,folder,manifest_id,device,batch,accumulate,progres
             "historical_evaluation_through":part["dates"][2][-1],"research_only":True,"trade_qualified":False,
             "warning":"Frozen historical artifacts only. Future receipt-time inference/logging and prospective qualification not implemented here."}
     freeze_path=folder/"frozen_research_manifest.json"
-    if freeze_path.exists():
-        old=load_json(freeze_path);old.pop("frozen_at_utc",None)
-        if old!=frozen:raise ValueError("Frozen V4 artifacts differ; use new run-id for a different experiment")
-    else:save_json(freeze_path,{**frozen,"frozen_at_utc":datetime.now(timezone.utc).isoformat()})
+    save_json(freeze_path,{**frozen,"frozen_at_utc":datetime.now(timezone.utc).isoformat()})
     progress("V4_FINAL "+json.dumps(report["evaluation"]))
     progress("REPORT "+str(folder/"final_report.json"))
     progress("PREDICTIONS "+str(path))

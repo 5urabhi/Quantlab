@@ -130,6 +130,22 @@ class V4DataTests(TestCase):
                 with self.assertRaises(ValueError):
                     with run.exclusive_run(folder):pass
 
+    def test_frozen_artifact_verification_refuses_modified_checkpoint(self):
+        with TemporaryDirectory() as tmp:
+            folder=Path(tmp);manifest="test"
+            run.save_json(folder/"final_report.json",{"trade_qualified":False})
+            (folder/"ensemble_predictions.csv").write_text("session,probability\n2026-01-05,.5\n")
+            checkpoints=[]
+            for seed in v.SEEDS:
+                path=folder/f"final_seed_{seed}_research_only.pt";path.write_bytes(b"synthetic")
+                checkpoints.append({"file":path.name,"sha256":run.file_digest(path)})
+            run.save_json(folder/"frozen_research_manifest.json",{"manifest_sha256":manifest,
+                "report_sha256":run.file_digest(folder/"final_report.json"),
+                "prediction_sha256":run.file_digest(folder/"ensemble_predictions.csv"),"checkpoints":checkpoints})
+            self.assertFalse(run.verified_frozen(folder,manifest)["trade_qualified"])
+            (folder/checkpoints[0]["file"]).write_bytes(b"changed")
+            with self.assertRaises(ValueError):run.verified_frozen(folder,manifest)
+
     def test_sign_metrics_include_flat_and_unresolved_calls(self):
         data=toy();rows=np.arange(3)
         p=np.full((3,9),.7);data["mask"][2,0]=False
