@@ -555,6 +555,8 @@ def main():
         if not args.audit_only:
             archive_windows(stop-timedelta(days=args.context_days),stop,root,report,flush,args.alpaca_feed,parallel_live=args.parallel_live)
         report["context_inventory"]=fred.inventory()
+        from workstation_api import global_market_archive
+        report["global_market_proxy_inventory"]=global_market_archive.inventory()
         report["configured_context_feeds"]={k:v for k,v in context_feeds.status().items() if k in ("fred_key_configured","alpaca_credentials_configured","twelve_key_configured","fred_catalog")}
         report["live_inventory"]=market_inventory.collect()["sources"]
         known=set().union(*(set(v["complete_dates"]) for v in report["index"].values()))

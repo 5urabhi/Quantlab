@@ -390,6 +390,20 @@ def _loop():
         except (OSError,ValueError,TypeError):
             _record("participant_inbox","unavailable","Local authorized inbox unavailable")
         try:
+            from . import global_market_archive
+            global_result=global_market_archive.scan_live_inbox()
+            if global_result is not None:
+                _record("global_market_inbox",global_result["state"],global_result["note"],
+                        inserted=global_result["inserted"],rejected_or_paused=global_result["rejected_or_paused"])
+        except (OSError,ValueError,TypeError,KeyError,sqlite3.Error):
+            _record("global_market_inbox","unavailable","Authorized local global inbox unavailable")
+        try:
+            from . import alpaca_overnight
+            if alpaca_overnight.enabled() and alpaca_overnight.live_bounds(m._now()):
+                _task("alpaca:boats",300,alpaca_overnight.collect_recent,False)
+        except (OSError,ValueError,TypeError,KeyError,sqlite3.Error):
+            _record("alpaca:boats","unavailable","Overnight ETF configuration unavailable")
+        try:
             config=_config()
             if config["enabled"] or requested:
                 sync_once(config,force=requested,stop=_STOP)

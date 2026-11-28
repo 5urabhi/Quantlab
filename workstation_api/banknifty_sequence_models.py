@@ -105,3 +105,67 @@ def objective(output,y,event,weight,*,return_parts=False):
     parts={"candle":(candle_loss*weight).mean(),"direction_bce":(event_components[:,0]*weight).mean(),
            "tail_bce":(event_components[:,1:].mean(dim=1)*weight).mean(),"quantile":(quantile*weight).mean()}
     return total,{k:v.detach() for k,v in parts.items()}
+
+
+class MarketDynamics(nn.Module):
+    """Fixed cross-asset temporal encoder for all-minute market dynamics.
+
+    Inputs contain per-feature observation masks, not imputed market prices.
+    Asset attention is BANKNIFTY-query conditioned at each five-minute patch;
+    a GRU combines successive patches and synchronized auxiliary context.
+    """
+    def __init__(self,assets,channels,aux_channels,horizons,width=WIDTH):
+        super().__init__()
+        if min(assets,channels,aux_channels,horizons)<1 or width%HEADS:
+            raise ValueError("Invalid market dynamics architecture")
+        self.assets=assets;self.channels=channels;self.aux_channels=aux_channels
+        self.horizons=horizons;self.width=width
+        self.patch=nn.Sequential(nn.Linear(PATCH*channels,width),nn.LayerNorm(width),nn.GELU())
+        self.asset_embedding=nn.Parameter(torch.empty(1,1,assets,width))
+        nn.init.normal_(self.asset_embedding,std=.02)
+        self.cross_asset=nn.MultiheadAttention(width,HEADS,dropout=DROPOUT,batch_first=True)
+        self.cross_norm=nn.LayerNorm(width)
+        self.aux=nn.Sequential(nn.Linear(PATCH*aux_channels,width),nn.LayerNorm(width),nn.GELU())
+        self.temporal=nn.GRU(2*width,width,batch_first=True)
+        self.head=nn.Sequential(nn.Linear(2*width,2*width),nn.GELU(),nn.Dropout(DROPOUT),
+                                nn.Linear(2*width,horizons*6))
+
+    def forward(self,x,aux):
+        b,t,a,c=x.shape
+        if (a,c)!=(self.assets,self.channels) or t%PATCH or t<PATCH or aux.shape!=(b,t,self.aux_channels):
+            raise ValueError("Invalid market dynamics dimensions")
+        n=t//PATCH
+        patches=x.reshape(b,n,PATCH,a,c).permute(0,1,3,2,4)
+        observed=patches[...,0].gt(0).any(dim=3)
+        if not bool(observed[:,-1,0].all()):
+            raise ValueError("Missing current target-index patch")
+        # Earlier all-missing patches occur only at a padded session start.
+        # Unmask the index key to avoid NaNs, then explicitly zero the patch.
+        mask=~observed.reshape(b*n,a)
+        mask[:,0]=False
+        tokens=(self.patch(patches.reshape(b,n,a,PATCH*c))+self.asset_embedding).reshape(b*n,a,self.width)
+        query=tokens[:,:1]
+        cross,_=self.cross_asset(query,tokens,tokens,key_padding_mask=mask,need_weights=False)
+        z=self.cross_norm(query+cross).reshape(b,n,self.width)
+        other=self.aux(aux.reshape(b,n,PATCH*self.aux_channels))
+        present=observed[:,:,0,None].to(z.dtype)
+        sequence=torch.cat((z,other),dim=-1)*present
+        hidden,_=self.temporal(sequence)
+        mean=(hidden*present).sum(dim=1)/present.sum(dim=1).clamp_min(1)
+        output=self.head(torch.cat((hidden[:,-1],mean),dim=1)).reshape(b,self.horizons,6)
+        logits=output[:,:,:3]
+        signed=output[:,:,3:4]
+        # Up/down excursions include the endpoint, so cannot be smaller
+        # than the corresponding positive/negative endpoint movement.
+        excursions=F.softplus(output[:,:,4:6])+torch.cat((F.relu(signed),F.relu(-signed)),dim=2)
+        return logits,torch.cat((signed,excursions),dim=2)
+
+
+def dynamics_objective(output,labels,target,mask,weights):
+    logits,regression=output
+    classification=F.cross_entropy(logits.transpose(1,2),labels,reduction="none")
+    magnitude=F.smooth_l1_loss(regression,target,reduction="none").mean(dim=2)
+    # Every horizon is masked independently; no artificial close at the end
+    # of a session and no labels synthesized through a missing candle.
+    total=((classification+.25*magnitude)*mask).sum(dim=1)/mask.sum(dim=1).clamp_min(1)
+    return (total*weights).mean()

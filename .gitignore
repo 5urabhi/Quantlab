@@ -11,7 +11,6 @@ __pycache__/
 !.env.example
 results/
 data/
-!data/README.md
 *.log
 .DS_Store
 

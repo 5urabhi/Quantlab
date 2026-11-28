@@ -1,6 +1,7 @@
 """Regression tests for the next-five-minute candle research clock."""
 from datetime import date,timedelta
 from unittest import TestCase
+from unittest.mock import patch
 import numpy as np
 from workstation_api import banknifty_forecast_features as f, banknifty_candle_forecast as m
 
@@ -96,3 +97,151 @@ class ForecastTests(TestCase):
         self.assertTrue(all(p["predicted_high"]>=max(p["predicted_open"],p["predicted_close"]) for p in pred))
         self.assertTrue(all(p["predicted_low"]<=min(p["predicted_open"],p["predicted_close"]) for p in pred))
         self.assertEqual(result["validation"]["index_banks"]["state"],"insufficient_training_context")
+
+
+    def test_index_only_loader_does_not_read_optional_sources(self):
+        dates=[]
+        d=date(2025,1,1)
+        while len(dates)<80:
+            if d.weekday()<5:dates.append(d.isoformat())
+            d+=timedelta(days=1)
+        original={day:{i:tuple(row) for i,row in enumerate(bars())} for day in dates}
+        # f.dense accepts exact verified minute rows; external context readers
+        # must not be invoked even when --wings retains its default.
+        with patch.object(m.h,"shared_index_sources",return_value=(original,{"index":"hash"},{})) as src, \
+             patch.object(f,"load_membership",side_effect=AssertionError("bank loader called")), \
+             patch.object(m.p,"_load_options",side_effect=AssertionError("option loader called")):
+            index,stocks,members,weights,peers,table,meta=m.load_sources(date(2025,1,1),d,wings=3,index_only=True)
+        self.assertEqual(src.call_count,1)
+        self.assertEqual(len(index),80)
+        self.assertEqual((stocks,members,weights,peers,table),({},{},{},{},{}))
+        self.assertEqual(meta["options"]["state"],"disabled_index_only")
+        self.assertEqual(meta["index"]["observed_minutes"],80*375)
+
+    def test_core_assembly_reuses_features_and_avoids_context_matrices(self):
+        a=bars()
+        index={"2025-01-02":a,"2025-01-03":a.copy()}
+        full=m.assemble(index,{},{},{},{},{})
+        with patch.object(f,"banks_at",side_effect=AssertionError("bank features called")), \
+             patch.object(f,"peers_at",side_effect=AssertionError("peer features called")), \
+             patch.object(f,"option_at",side_effect=AssertionError("option features called")):
+            core=m.assemble(index,{},{},{},{},{},index_only=True)
+        self.assertEqual(full["names"]["index"],core["names"]["index"])
+        np.testing.assert_allclose(full["blocks"]["index"],core["blocks"]["index"],equal_nan=True)
+        for name in ("banks","peers","options"):
+            self.assertEqual(core["blocks"][name].shape,(622,0))
+            self.assertFalse(core["available"][name].any())
+        np.testing.assert_array_equal(full["minutes"],core["minutes"])
+        np.testing.assert_allclose(full["actual"],core["actual"])
+
+    def test_long_range_only_allowed_for_explicit_core(self):
+        with patch.object(m,"load_sources",side_effect=RuntimeError("loader entered")) as loader:
+            with self.assertRaises(ValueError):
+                m.run(days=1825,to_date="2025-11-27")
+            loader.assert_not_called()
+            with self.assertRaisesRegex(RuntimeError,"loader entered"):
+                m.run(days=1825,to_date="2025-11-27",index_only=True)
+            self.assertEqual(loader.call_args.args,(date(2020,11,28),date(2025,11,27)))
+            self.assertTrue(loader.call_args.kwargs["index_only"])
+            with self.assertRaises(ValueError):
+                m.run(days=1828,to_date="2025-11-27",index_only=True)
+
+
+    def test_horizon_targets_same_session_and_gap_rules(self):
+        a=bars()
+        for horizon in f.HORIZONS:
+            minutes,y,real=f.anchors(a,horizon)
+            self.assertEqual(minutes[0],59)
+            self.assertEqual(minutes[-1],374-horizon)
+            future=a[60:60+horizon]
+            np.testing.assert_allclose(real[0],[future[0,0],future[:,1].max(),future[:,2].min(),future[-1,3]])
+            np.testing.assert_allclose(m.decode(a[minutes,3],y),real,rtol=1e-12)
+            broken=a.copy();broken[60]=np.nan
+            self.assertNotIn(59,f.anchors(broken,horizon)[0])
+        with self.assertRaises(ValueError):f.anchors(a,3)
+        with self.assertRaises(ValueError):m.run(days=365,to_date="2025-11-27",horizon=15)
+
+    def test_adaptive_range_is_past_volatility_scaled_and_fit_only_on_training(self):
+        minutes=np.array([59,89,119])
+        ref=np.full(3,100.)
+        vol=np.array([.02,.02,.02])
+        truth=np.column_stack((ref,ref+.4,ref-.2,ref))
+        fit=m.adaptive_fit(truth,ref,minutes,vol,15)
+        pred=m.decode(ref,m.adaptive_predict(minutes,2*vol,15,fit))
+        np.testing.assert_allclose(pred[:,1],ref+.8)
+        np.testing.assert_allclose(pred[:,2],ref-.4)
+        np.testing.assert_allclose(pred[:,3],ref)
+        with self.assertRaises(ValueError):m.adaptive_scale(np.array([np.nan]),15)
+
+    def test_day_blocks_weight_sessions_not_overlapping_rows(self):
+        days=np.array(["a"]*100+["b"])
+        delta=np.array([1.]*100+[-1.])
+        result=m.paired_day_interval(delta,days)
+        self.assertEqual(result["mean_difference"],0.)
+        self.assertIsNone(result["interval_95"])
+        days=np.repeat([str(k).zfill(2) for k in range(20)],5)
+        result=m.paired_day_interval(np.full(100,-.25),days)
+        self.assertEqual(result["interval_95"],[-.25,-.25])
+        self.assertEqual(result["days"],20)
+
+    def test_nondefault_assessment_uses_horizon_stride_and_clock(self):
+        from datetime import datetime
+        dates=[(date(2025,1,1)+timedelta(days=i)).isoformat() for i in range(80)]
+        days=np.repeat(dates,4);minutes=np.tile([59,60,74,75],80)
+        z=np.sin(np.arange(len(days))/4)
+        x=np.column_stack((z,np.full(len(z),.02))).astype(np.float32)
+        y=np.column_stack((np.zeros(len(z)),.06*z,np.full(len(z),.02),np.full(len(z),.02)))
+        ref=np.full(len(z),63000.)
+        data={"days":days,"minutes":minutes,"ref":ref,"y":y,"actual":m.decode(ref,y),
+              "names":{"index":("signal","vol_30m_pct")},
+              "blocks":{"index":x,**{k:np.full((len(z),1),np.nan,dtype=np.float32) for k in ("banks","peers","options")}},
+              "available":{k:np.zeros(len(z),dtype=bool) for k in ("banks","peers","options")}}
+        result,pred=m.assess(data,m.split_days(dates),algorithms=("ridge",),horizon=15)
+        self.assertEqual(result["training_rows"],48*2)
+        self.assertEqual(len(pred),16*4)
+        self.assertIn("last_close_adaptive_range",result["baselines"]["evaluation"])
+        self.assertIn("brier_difference_day_blocks",result["direction_probability"]["evaluation"])
+        self.assertEqual(result["adaptive_comparison"]["evaluation"]["ohlc_mae_pct_difference"]["days"],16)
+        for row in pred:
+            self.assertEqual((datetime.fromisoformat(row["target_end_utc"])-datetime.fromisoformat(row["decision_utc"])).total_seconds(),900)
+
+
+    def test_matched_context_reserves_shorter_supported_lane_and_preserves_pairs(self):
+        dates=[(date(2025,1,1)+timedelta(days=i)).isoformat() for i in range(100)]
+        days=np.repeat(dates,25);minutes=np.tile(np.arange(59,84),100)
+        z=np.sin(np.arange(len(days))/3)
+        x=np.column_stack((np.ones(len(z)),np.full(len(z),.02))).astype(np.float32)
+        ref=np.full(len(z),63000.)
+        y=np.column_stack((np.zeros(len(z)),.06*z,np.full(len(z),.02),np.full(len(z),.02)))
+        data={"days":days,"minutes":minutes,"ref":ref,"y":y,"actual":m.decode(ref,y),
+              "names":{"index":("constant","vol_30m_pct")},
+              "blocks":{"index":x,"banks":z[:,None].astype(np.float32),
+                        "peers":z[:,None].astype(np.float32),"options":z[:,None].astype(np.float32)},
+              "available":{"banks":np.isin(days,dates[-80:]),"peers":np.isin(days,dates[-40:]),
+                           "options":np.zeros(len(z),dtype=bool)}}
+        result,pred=m.assess_matched_context(data)
+        lane=result["lanes"]["banks"]
+        self.assertEqual(lane["supported_sessions"],80)
+        self.assertEqual(lane["training_dates"],dates[20:68])
+        self.assertEqual(lane["validation_dates"],dates[68:84])
+        self.assertEqual(lane["evaluation_dates"],dates[84:])
+        self.assertEqual(lane["rows"],{"training":240,"validation":400,"evaluation":400})
+        self.assertEqual(lane["index_only"]["evaluation"]["rows"],400)
+        self.assertEqual(lane["context"]["evaluation"]["rows"],400)
+        self.assertEqual(lane["context"]["calibration_state"],"validation_sigmoid")
+        self.assertEqual(result["lanes"]["peers"]["state"],"insufficient_context_sessions")
+        self.assertEqual(result["lanes"]["options"]["state"],"insufficient_context_sessions")
+        self.assertEqual(len(pred),400)
+        self.assertEqual(len({(row["lane"],row["decision_utc"]) for row in pred}),400)
+        self.assertTrue(all(row["session"] in dates[84:] and row["lane"]=="banks" for row in pred))
+        self.assertIn("context_minus_index_calibrated_brier",lane["paired_differences"])
+
+    def test_matched_context_refuses_sparse_support_and_nondefault_clock(self):
+        days=np.repeat(["2025-01-02","2025-01-03"],25)
+        minutes=np.tile(np.arange(59,84),2)
+        data={"days":days,"minutes":minutes,"available":{"banks":np.ones(len(days),dtype=bool)}}
+        rec,masks=m.matched_context_cohort(data,"banks")
+        self.assertIsNone(masks)
+        self.assertEqual(rec["supported_sessions"],2)
+        with self.assertRaises(ValueError):m.run(index_only=True,matched_context=True)
+        with self.assertRaises(ValueError):m.run(horizon=10,matched_context=True)

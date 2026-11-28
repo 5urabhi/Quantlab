@@ -2586,19 +2586,14 @@ class LabRunRequest(BaseModel):
     params: dict[str, float | int | str] = Field(default_factory=dict)
 
 
-GUIDE_FILES = {
-    "user-guide": "QUANTLAB_USER_GUIDE.md",
-    "model-catalog": "MODEL_LABORATORY_GUIDE.md",
-    "reproducibility": "QUANTLAB_REPRODUCIBILITY.md",
-    "workspace": "RESEARCH_WORKSPACE_GUIDE.md",
-    "metrics": "METRIC_REFERENCE.md",
-}
-
-
 @app.get("/api/guide/{topic}", response_class=PlainTextResponse)
 def research_guide_document(topic: Literal["user-guide", "model-catalog", "reproducibility", "workspace", "metrics"]):
-    """Read one allowlisted repository document; no filesystem path input."""
-    doc=service.ROOT / "docs" / GUIDE_FILES[topic]
+    """All legacy allowlisted topics resolve to the single canonical README.
+
+    Keep existing clients/bookmarks working without opening arbitrary paths
+    or restoring superseded duplicate documents.
+    """
+    doc=service.ROOT / "README.md"
     if not doc.is_file() or doc.is_symlink():
         raise HTTPException(404, "QuantLab guide document not installed")
     return PlainTextResponse(doc.read_text(encoding="utf-8"),
