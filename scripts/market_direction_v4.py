@@ -126,16 +126,34 @@ def fit_model(data,part,variant,width,seed,*,pre_epochs,epochs,batch,accumulate,
     counts=np.zeros((int(known.sum()),2),np.int64)
     for block in hist.batches(pre):
         _,mask=pre_targets(block);counts+=mask.sum(axis=0,dtype=np.int64)
+    # Inspect learned routing in causal, overlapping regimes, not assigned expert names.
+    ema_col=d.ASSET_FIELDS.index('ema9_minus_21_pct');vol_col=d.ASSET_FIELDS.index('vol_15m_pct')
+    train_ema=data['grid'][data['day_index'][tr],data['minutes'][tr],0,ema_col]
+    train_vol=data['grid'][data['day_index'][tr],data['minutes'][tr],0,vol_col]
+    ema_threshold=float(np.quantile(np.abs(train_ema[np.isfinite(train_ema)]),.5)) if np.isfinite(train_ema).any() else None
+    vol_threshold=float(np.quantile(train_vol[np.isfinite(train_vol)],.8)) if np.isfinite(train_vol).any() else None
     def predict(rows):
-        model.eval();out=[];gate_sum=None
+        model.eval();out=[];gate_sum=None;regime_sums={};regime_counts={}
         with torch.no_grad():
             for start in range(0,len(rows),batch):
-                logits,gates=forward(rows[start:start+batch])
+                ix=rows[start:start+batch];logits,gates=forward(ix)
                 out.append(logits.float().sigmoid().cpu().numpy())
                 if gates is not None:
-                    mass=gates.detach().float().sum(dim=0).cpu().numpy()
+                    g=gates.detach().float().cpu().numpy();mass=g.sum(axis=0)
                     gate_sum=mass if gate_sum is None else gate_sum+mass
-        return np.concatenate(out),None if gate_sum is None else (gate_sum/len(rows)).tolist()
+                    ema=data['grid'][data['day_index'][ix],data['minutes'][ix],0,ema_col]
+                    vol=data['grid'][data['day_index'][ix],data['minutes'][ix],0,vol_col]
+                    regimes={'first_30_minutes':data['minutes'][ix]<30}
+                    if ema_threshold is not None:regimes.update(positive_ema_spread=ema>ema_threshold,negative_ema_spread=ema<-ema_threshold,small_ema_spread=np.abs(ema)<=ema_threshold)
+                    if vol_threshold is not None:regimes['high_observed_volatility']=vol>=vol_threshold
+                    for name,mask in regimes.items():
+                        if mask.any():
+                            regime_sums[name]=regime_sums.get(name,0)+g[mask].sum(axis=0)
+                            regime_counts[name]=regime_counts.get(name,0)+int(mask.sum())
+        routing=None if gate_sum is None else {'mean_mass':(gate_sum/len(rows)).tolist(),
+            'regimes':{name:{'anchors':regime_counts[name],'mean_mass':(value/regime_counts[name]).tolist()} for name,value in regime_sums.items()},
+            'train_ema_abs_median_pct':ema_threshold,'train_vol_80th_percentile_pct':vol_threshold}
+        return np.concatenate(out),routing
     def setup(rows,maximum,lr):
         opt=torch.optim.AdamW(model.parameters(),lr=lr,weight_decay=.01)
         steps=math.ceil(math.ceil(len(rows)/batch)/accumulate)*maximum
