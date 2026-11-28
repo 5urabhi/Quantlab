@@ -6,7 +6,9 @@ old evaluation period. All files stay local, no provider requests or orders.
 """
 import argparse
 import csv
-from datetime import date,datetime
+from datetime import date,datetime,timezone
+from contextlib import contextmanager
+import fcntl
 from hashlib import sha256
 import json
 import os
@@ -15,6 +17,7 @@ import re
 from tempfile import TemporaryDirectory
 
 import numpy as np
+import sklearn
 
 from scripts import benchmark_market_dynamics as d
 from scripts import market_dynamics_history as hist
@@ -27,7 +30,11 @@ FINAL={"pre_epochs":10,"epochs":30,"patience":6,"stride":1,"seeds":list(v4.SEEDS
 CODE_FILES=("scripts/benchmark_market_direction_v4.py","scripts/market_direction_v4.py",
             "scripts/benchmark_market_dynamics.py","scripts/market_dynamics_v3.py",
             "scripts/market_dynamics_history.py","workstation_api/market_direction_v4.py",
-            "workstation_api/market_dynamics_v3.py")
+            "workstation_api/market_dynamics_v3.py","workstation_api/banknifty_candle_forecast.py",
+            "workstation_api/banknifty_forecast_features.py","workstation_api/historical_alpha.py",
+            "workstation_api/nse_session_policy.py","workstation_api/market_context.py",
+            "workstation_api/alpaca_overnight.py","workstation_api/intraday_parquet.py",
+            "workstation_api/dhan_checkpoint.py","workstation_api/cockpit_sources.py")
 
 
 def canonical(value):
@@ -67,6 +74,16 @@ def bind_manifest(folder,manifest):
             raise ValueError("Existing V4 run differs in source evidence, code, settings or splits; use a new run-id")
     else:save_json(path,manifest)
     return digest(manifest)
+
+
+@contextmanager
+def exclusive_run(folder):
+    folder.mkdir(parents=True,exist_ok=True)
+    with (folder/"run.lock").open("a") as lock:
+        try:fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError as exc:raise ValueError("Another V4 process is using this run-id") from exc
+        try:yield
+        finally:fcntl.flock(lock.fileno(),fcntl.LOCK_UN)
 
 
 def record(path,identity):
@@ -208,6 +225,17 @@ def final(data,splits,summary,folder,manifest_id,device,batch,accumulate,progres
     write_atomic(path,writer)
     report["prediction_csv"]=path.name;report["prediction_sha256"]=file_digest(path)
     save_json(folder/"final_report.json",report)
+    frozen={"manifest_sha256":manifest_id,"report_sha256":file_digest(folder/"final_report.json"),
+            "prediction_sha256":report["prediction_sha256"],"selected":selected,"calibration":cal,
+            "checkpoints":[{"file":row["checkpoint"],"sha256":row["checkpoint_sha256"]} for row in seeds],
+            "training_through":part["dates"][0][-1],"validation_through":part["dates"][1][-1],
+            "historical_evaluation_through":part["dates"][2][-1],"research_only":True,"trade_qualified":False,
+            "warning":"Frozen historical artifacts only. Future receipt-time inference/logging and prospective qualification not implemented here."}
+    freeze_path=folder/"frozen_research_manifest.json"
+    if freeze_path.exists():
+        old=load_json(freeze_path);old.pop("frozen_at_utc",None)
+        if old!=frozen:raise ValueError("Frozen V4 artifacts differ; use new run-id for a different experiment")
+    else:save_json(freeze_path,{**frozen,"frozen_at_utc":datetime.now(timezone.utc).isoformat()})
     progress("V4_FINAL "+json.dumps(report["evaluation"]))
     progress("REPORT "+str(folder/"final_report.json"))
     progress("PREDICTIONS "+str(path))
@@ -224,13 +252,14 @@ def run(root,stop,run_id,stage,batch,accumulate,device_name,progress=print):
     results=root/"results";results.mkdir(exist_ok=True)
     folder=results/("market_direction_v4_"+run_id)
     code_root=Path(__file__).resolve().parent.parent
-    with TemporaryDirectory(prefix="market_direction_v4_scratch_",dir=results) as scratch:
+    with exclusive_run(folder),TemporaryDirectory(prefix="market_direction_v4_scratch_",dir=results) as scratch:
         data,splits,meta,start=get_data(root,stop,Path(scratch),progress)
         manifest={"version":VERSION,"from_inclusive":start.isoformat(),"to_exclusive":stop.isoformat(),
                   "source_digest":digest(meta),"code_hashes":{p:file_digest(code_root/p) for p in CODE_FILES},
                   "dates":[list(x) for x in splits],"screen_folds":[[list(x) for x in split] for split in v4.folds(splits[0])],
                   "candidates":[list(x) for x in v4.CANDIDATES],"screen":SCREEN,"final":FINAL,"batch":batch,
                   "accumulate":accumulate,"device":device_name,"torch_version":str(torch.__version__),
+                  "numpy_version":np.__version__,"sklearn_version":sklearn.__version__,
                   "gpu":torch.cuda.get_device_name(0) if device.type=="cuda" else None,
                   "identities":data["identities"],"asset_fields":list(data["asset_fields"]),"aux_names":list(data["aux_names"]),
                   "horizons":list(data["horizons"]),"grid_shape":list(data["grid"].shape)}

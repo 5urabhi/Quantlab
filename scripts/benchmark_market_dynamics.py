@@ -257,7 +257,8 @@ def labels_for_session(a,*,all_minutes=False,horizons=HORIZONS):
         # Require a valid delayed entry before/at the last minute.
         if duration=="EOD":
             scheduled[:,k]=entry<MINUTES
-            valid=scheduled[:,k]&(n==MINUTES)
+            if n!=MINUTES:continue
+            valid=scheduled[:,k].copy()
             rows=np.flatnonzero(valid)
             valid[rows]&=(missing[MINUTES]-missing[minutes[rows]])==0
             mask[:,k]=valid
